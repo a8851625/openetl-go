@@ -214,6 +214,32 @@ const dict: Dict = {
   'log.resume': { en: 'Resume', zh: '恢复' },
   'log.clear': { en: 'Clear', zh: '清除' },
   'log.lines': { en: 'lines', zh: '行' },
+
+  // ── Pipeline actions (context menu) ──
+  'action.logs': { en: 'Logs', zh: '日志' },
+  'action.dagAndLogs': { en: 'DAG + Logs', zh: 'DAG + 日志' },
+  'action.edit': { en: 'Edit', zh: '编辑' },
+  'action.exportYaml': { en: 'Export YAML', zh: '导出 YAML' },
+  'action.delete': { en: 'Delete', zh: '删除' },
+
+  // ── DAG node types ──
+  'node.source': { en: 'Source', zh: '数据源' },
+  'node.sink': { en: 'Sink', zh: '数据汇' },
+  'node.transform': { en: 'Transform', zh: '转换' },
+  'node.fanout': { en: 'Fanout', zh: '扇出' },
+  'node.router': { en: 'Router', zh: '路由' },
+  'node.tap': { en: 'Tap', zh: 'Tap' },
+  'node.rateLimiter': { en: 'Rate Limiter', zh: '速率限制' },
+  'node.enricher': { en: 'Enricher', zh: '数据丰富' },
+  'node.lookup': { en: 'Lookup', zh: '查找' },
+
+  // ── DAG hook labels ──
+  'hook.onInit': { en: 'On Init', zh: '初始化时' },
+  'hook.preBatch': { en: 'Pre-Batch', zh: '批处理前' },
+  'hook.postBatch': { en: 'Post-Batch', zh: '批处理后' },
+  'hook.onError': { en: 'On Error', zh: '错误时' },
+  'hook.onCheckpoint': { en: 'On Checkpoint', zh: '检查点时' },
+  'hook.onShutdown': { en: 'On Shutdown', zh: '关闭时' },
 };
 
 export function getLang(): Lang {
