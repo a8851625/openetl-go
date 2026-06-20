@@ -249,6 +249,10 @@ const dict: Dict = {
   'ui.secret': { en: 'Secret', zh: '秘密' },
   'ui.loadTemplate': { en: 'Load template', zh: '加载模板' },
   'ui.loadExample': { en: 'Load VIP order enricher example', zh: '加载 VIP 订单丰富示例' },
+  'ui.starting': { en: 'Starting', zh: '启动中' },
+  'ui.stopping': { en: 'Stopping', zh: '停止中' },
+  'ui.pipelines': { en: 'pipeline(s)', zh: '个管道' },
+  'ui.done': { en: 'Done', zh: '完成' },
 
   // ── DAG node categories ──
   'category.io': { en: 'I/O', zh: 'I/O' },

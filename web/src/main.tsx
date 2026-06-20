@@ -494,7 +494,7 @@ function DashboardPage({ t, totals, pipelines, selected, selectedMetric, onSelec
                     <span className="text-sm font-medium">{p.name}</span>
                     <span className={`badge text-[10px] px-1.5 ${
                       p.status === 'running' ? 'badge-emerald' : p.status === 'failed' ? 'badge-rose' : p.status === 'completed' ? 'badge-blue' : 'badge-slate'
-                    }`}>{p.status === 'running' ? 'Running' : p.status === 'failed' ? 'Failed' : p.status === 'completed' ? 'Done' : p.status}</span>
+                    }`}>{p.status === 'running' ? t('status.running') : p.status === 'failed' ? t('status.failed') : p.status === 'completed' ? t('ui.done') : p.status}</span>
                   </div>
                   <PipelineUptime label={t('dash.uptime')} startedAt={p.stats.started_at} fallback={p.stats.uptime || t('common.na')} />
                 </div>
@@ -1036,7 +1036,7 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
   const batchAction = (action: 'start' | 'stop', filter: (p: Pipeline) => boolean) => {
     const targets = filteredPipelines.filter(filter);
     if (!targets.length) return;
-    onShowToast?.('info', `${action === 'start' ? 'Starting' : 'Stopping'} ${targets.length} pipeline(s)...`);
+    onShowToast?.('info', `${action === 'start' ? t('ui.starting') : t('ui.stopping')} ${targets.length} ${t('ui.pipelines')}...`);
     targets.forEach((p: Pipeline) => {
       onAction(`${action} ${p.name}`, () => api(`/api/v2/pipelines/${p.name}/${action}`, { method: 'POST' }));
     });
