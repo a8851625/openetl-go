@@ -584,7 +584,7 @@ function PipelinePreviewModal({ t, name, onClose }: { t: (k: string) => string; 
 
   return (
     <Modal title={`${t('pipe.previewTitle')} · ${name}`} onClose={onClose} width="max-w-4xl">
-      {loading ? <Empty text="Loading..." /> :
+      {loading ? <Empty text={t('common.loading')} /> :
        error ? <ErrorBox message={error} /> :
        !data || (data.total_logs === 0 && (data.shard_logs?.length ?? 0) === 0) ? <Empty text={t('pipe.noPreview')} /> :
         <div className="space-y-4">
@@ -646,8 +646,8 @@ function PipelineDAGModal({ t, name, onClose }: { t: (k: string) => string; name
       </div>
 
       {tab === 'dag' ? (
-        loading ? <Empty text="Loading..." /> :
-        error ? <ErrorBox message={error} /> : !data ? <Empty text="No data" /> : (
+        loading ? <Empty text={t('common.loading')} /> :
+        error ? <ErrorBox message={error} /> : !data ? <Empty text={t('ui.noData')} /> : (
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
             {/* DAG visualization */}
             <div className="space-y-3">
@@ -737,7 +737,7 @@ function PipelineVersionsModal({ t, name, onClose, onAction }: { t: (k: string) 
 
   return (
     <Modal title={`${t('pipe.versionsTitle')} · ${name}`} onClose={onClose} width="max-w-4xl">
-      {loading ? <Empty text="Loading..." /> :
+      {loading ? <Empty text={t('common.loading')} /> :
        error ? <ErrorBox message={error} /> :
        !data?.versions?.length ? <Empty text={t('pipe.noVersions')} /> :
         <div className="space-y-3">
@@ -864,7 +864,7 @@ function PipelineActionMenu({ p, onLogs, onDAG, onEdit, onDelete, onExport }: {
   return (
     <div className="relative" ref={ref}>
       <button className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
-        ⋯<span className="hidden lg:inline"> More</span>
+        ⋯<span className="hidden lg:inline"> {t('ui.more')}</span>
       </button>
       {open && (
         <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">

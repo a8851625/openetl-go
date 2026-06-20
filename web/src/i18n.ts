@@ -240,6 +240,22 @@ const dict: Dict = {
   'hook.onError': { en: 'On Error', zh: '错误时' },
   'hook.onCheckpoint': { en: 'On Checkpoint', zh: '检查点时' },
   'hook.onShutdown': { en: 'On Shutdown', zh: '关闭时' },
+
+  // ── UI controls ──
+  'ui.more': { en: 'More', zh: '更多' },
+  'ui.noData': { en: 'No data', zh: '无数据' },
+  'ui.on': { en: 'ON', zh: '开启' },
+  'ui.off': { en: 'OFF', zh: '关闭' },
+  'ui.secret': { en: 'Secret', zh: '秘密' },
+  'ui.loadTemplate': { en: 'Load template', zh: '加载模板' },
+  'ui.loadExample': { en: 'Load VIP order enricher example', zh: '加载 VIP 订单丰富示例' },
+
+  // ── DAG node categories ──
+  'category.io': { en: 'I/O', zh: 'I/O' },
+  'category.process': { en: 'Process', zh: '处理' },
+  'category.flowControl': { en: 'Flow Control', zh: '流程控制' },
+  'category.observe': { en: 'Observe', zh: '监控' },
+  'category.enrich': { en: 'Enrich', zh: '数据丰富' },
 };
 
 export function getLang(): Lang {

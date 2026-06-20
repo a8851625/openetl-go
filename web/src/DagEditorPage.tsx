@@ -62,34 +62,34 @@ const KIND_STYLES: Record<string, { color: string; bg: string; border: string; i
 // Toolbar palette grouped by category
 const NODE_PALETTE = (t: (key: string) => string): { category: string; catLabel: string; catColor: string; nodes: { kind: string; label: string; defaultPlugin: string }[] }[] => [
   {
-    category: 'io', catLabel: 'I/O', catColor: '#0ea5e9',
+    category: 'io', catLabel: t('category.io'), catColor: '#0ea5e9',
     nodes: [
       { kind: 'source', label: t('node.source'), defaultPlugin: 'file' },
       { kind: 'sink', label: t('node.sink'), defaultPlugin: 'file_sink' },
     ],
   },
   {
-    category: 'process', catLabel: 'Process', catColor: '#8b5cf6',
+    category: 'process', catLabel: t('category.process'), catColor: '#8b5cf6',
     nodes: [
       { kind: 'transform', label: t('node.transform'), defaultPlugin: 'identity' },
     ],
   },
   {
-    category: 'flow', catLabel: 'Flow Control', catColor: '#f59e0b',
+    category: 'flow', catLabel: t('category.flowControl'), catColor: '#f59e0b',
     nodes: [
       { kind: 'fanout', label: t('node.fanout'), defaultPlugin: 'fanout' },
       { kind: 'router', label: t('node.router'), defaultPlugin: 'router' },
     ],
   },
   {
-    category: 'observe', catLabel: 'Observe', catColor: '#06b6d4',
+    category: 'observe', catLabel: t('category.observe'), catColor: '#06b6d4',
     nodes: [
       { kind: 'tap', label: t('node.tap'), defaultPlugin: 'tap' },
       { kind: 'rate_limiter', label: t('node.rateLimiter'), defaultPlugin: 'rate_limiter' },
     ],
   },
   {
-    category: 'enrich', catLabel: 'Enrich', catColor: '#ec4899',
+    category: 'enrich', catLabel: t('category.enrich'), catColor: '#ec4899',
     nodes: [
       { kind: 'enricher', label: t('node.enricher'), defaultPlugin: 'enricher' },
       { kind: 'lookup', label: t('node.lookup'), defaultPlugin: 'lookup' },
@@ -179,7 +179,7 @@ function ConfigForm({
           <label className="flex items-center gap-1 text-xs font-medium text-slate-600">
             {f.name}
             {f.required && <span className="text-rose-500">*</span>}
-            {f.secret && <span className="text-xs text-amber-500" title="Secret">🔒</span>}
+            {f.secret && <span className="text-xs text-amber-500" title={t('ui.secret')}>🔒</span>}
           </label>
         );
         let input: React.ReactNode;
@@ -193,7 +193,7 @@ function ConfigForm({
           input = (
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={!!val} onChange={(e) => update(f.name, e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
-              <span className="text-xs text-slate-500">{val ? 'Enabled' : 'Disabled'}</span>
+              <span className="text-xs text-slate-500">{val ? t('common.enabled') : t('common.disabled')}</span>
             </label>
           );
         } else if (f.type === 'int' || f.type === 'float') {
@@ -790,7 +790,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                             </div>
                             <label className="flex cursor-pointer items-center gap-1 text-[10px]">
                               <input type="checkbox" checked={enabled} onChange={(e) => updateHook(hk.key, { enabled: e.target.checked })} className="h-3 w-3 rounded border-slate-300 text-indigo-600" />
-                              {enabled ? 'ON' : 'OFF'}
+                              {enabled ? t('ui.on') : t('ui.off')}
                             </label>
                           </div>
                           {enabled && (
