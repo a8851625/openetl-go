@@ -5,6 +5,28 @@ server:
   swaggerPath: "/swagger"
   serverRoot: "resource/public"
 
+# ETL 管道模式。开启后启动 pipes/ 下声明式管道，并跳过旧的单 Canal 同步入口。
+etl:
+  enabled: true
+  address: ":8001"
+  specsDir: "./pipes"
+  checkpointDir: "./data/checkpoint"
+  dlqDir: "./data/dlq"
+  # 存储引擎：pipeline 定义、checkpoint、DLQ、audit 等元数据持久化
+  # sqlite (默认) - 零依赖，单文件数据库，适合单机部署
+  # mysql - 需提供 DSN，适合多实例共享元数据
+  # postgresql - 需提供 DSN，适合多实例共享元数据
+  storage:
+    type: "sqlite"
+    sqlite:
+      path: "./data/etl.db"
+    # mysql:
+    #   dsn: "user:password@tcp(host:3306)/etl?parseTime=true"
+    # postgresql:
+    #   dsn: "postgres://user:password@host:5432/etl?sslmode=disable"
+  alert:
+    webhook: ""
+
 # 监控配置
 monitor:
   enabled:       true    # 是否启用监控
@@ -14,11 +36,11 @@ monitor:
   maxErrors:     1000    # 内存最大错误数
   # ClickHouse 监控数据存储(可选，留空则仅使用内存)
   clickhouse:
-    host:     "127.0.0.1"
-    port:     8124
-    user:     "default"
-    password: "dzh123456"
-    database: "sync_monitor"
+    host:     "${CLICKHOUSE_HOST:-127.0.0.1}"
+    port:     ${CLICKHOUSE_PORT:-8124}
+    user:     "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD:-}"
+    database: "${CLICKHOUSE_DATABASE:-sync_monitor}"
 
 # https://goframe.org/docs/core/glog-config
 logger:
@@ -28,12 +50,19 @@ logger:
   file:    "sync-{Y-m-d}.log"
   rotate:  "daily"
   backups: 30
+  # Change to "json" for structured logging (recommended for production).
+  # GoFrame's JSON format includes level, timestamp, message, and caller.
+  # Usage: set both stdoutFormat and fileFormat to "json".
+  #
+  #   stdoutFormat: "json"
+  #   fileFormat:   "json"
 
 # 同步源配置
 database:
   default:
-    link: "mysql:sync_user:sync_password_123@tcp(127.0.0.1:13308)/dzh3136_go"
-    debug: true
+    # 使用环境变量注入凭据，避免硬编码到仓库
+    link: "mysql:${DB_USER:-sync_user}:${DB_PASSWORD:-sync_password_123}@tcp(${DB_HOST:-127.0.0.1}:${DB_PORT:-3306})/${DB_NAME:-dzh3136_go}"
+    debug: false
 
 # Canal 配置
 canal:
@@ -53,13 +82,15 @@ sync:
     - name: "clickhouse-main"
       type: "clickhouse"
       tables:
-        - "addons_customer_pro_clues"
+        - "customers"
+        - "orders"
+        - "products"
       clickhouse:
-        host:     "127.0.0.1"
-        port:     8124
-        user:     "default"
-        password: "dzh123456"
-        database: "dzh3136_go"
+        host:     "${SYNC_CLICKHOUSE_HOST:-127.0.0.1}"
+        port:     ${SYNC_CLICKHOUSE_PORT:-9000}
+        user:     "${SYNC_CLICKHOUSE_USER:-default}"
+        password: "${SYNC_CLICKHOUSE_PASSWORD:-}"
+        database: "${SYNC_CLICKHOUSE_DATABASE:-dzh3136_go}"
       # 定时 OPTIMIZE 清理
       schedule:
         enable:   true
