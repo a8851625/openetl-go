@@ -2,6 +2,13 @@
 // Canal Sync Service - Canal 同步服务
 // =================================================================================
 
+//
+// DEPRECATED: This package is frozen and scheduled for removal.
+// The canonical data-sync path is internal/etl/ with Source→Transform→Sink.
+// Use mysql_cdc source + clickhouse/mysql/postgres sinks in the ETL framework.
+// This legacy Canal sync path is retained for backward-compatibility only
+// and will not receive new features. See SPEC.md §6.3.
+//
 package sync
 
 import (
@@ -9,7 +16,7 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"sync-canal-go/internal/service"
+	"openetl-go/internal/service"
 )
 
 // sCanalSync Canal 同步服务
