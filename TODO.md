@@ -174,6 +174,15 @@
 - [2026-06-21] R3.3: Storage unification — verified deprecated file-based checkpoint/DLQ writers are no longer used outside their own packages; storage adapters handle everything
 - [2026-06-21] R1.1: Integration tests — ClickHouse sink type inference test (6 column types verified); MySQL sink type inference test (7 column types verified); both pass on real podman containers
 - [2026-06-21] ALL PLAN ITEMS COMPLETE
+- [2026-06-22] Phase 4 re-audit P0/P1 fixes (P4-1/2/5/6/7/8/9/12/15) + P4-17 retracted (false positive); committed 41d53d3
+- [2026-06-22] A11-redo (path a) COMPLETE — real distributed shard dispatch:
+  Inc0 ListTasks ST-1 fix; Inc1 TaskAssignment shard metadata + 3-backend migration;
+  Inc2 pipeline.BuildShardRunner; Inc3 master shard metadata; Inc4 worker.ExecuteShard +
+  taskExecutor signature; Inc5 distributed ParallelRunner + ShardDispatcher; Inc6 roles
+  (standalone/master/worker) + app.go wiring + startup validation; Inc7 real-worker
+  integration tests (4 shards split 2/2 no overlap; crash reassignment). Bug fix:
+  worker.register chunked-body EOF → bytes.NewReader. e2e-distributed.sh PASS.
+  Committed 86d1d0a + f5faef0.
 
 ---
 

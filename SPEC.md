@@ -41,17 +41,19 @@ The binary runs in **two modes**, selected by `etl.storage.type` in config:
 | **Demo / single-node** | `sqlite` (default, zero-dependency) | **Degraded** — shards run inline in one process; no inter-node dispatch | Local evaluation, single-host sync, CI |
 | **Scalable** | `mysql` or `postgresql` | **Enabled** — multiple binaries share metadata, master dispatches shards to workers | Production horizontal scale |
 
-> ⚠️ **Re-Audit Reality (ST-2)**: The "Scalable" row is the **contract**, not the current state.
+> ⚠️ **Re-Audit Reality (ST-2)**: The "Scalable" row was the **contract**, not the current state.
 > Today both modes execute shards in-process via `ParallelRunner` (`parallel.go:138` loops
 > `inst.Start(ctx)` for every shard). The `master/` + `worker/` dispatch stack is wired but
 > its worker executor is a no-op (`server.go:87-95`), `worker.New(Config{MasterURL})` is
 > **never instantiated by any binary**, and there is no `--role` flag. MySQL/PG storage
 > currently buys **shared metadata + HA/observability**, not horizontal execution.
 >
-> **Decision (2026-06-21): A11-redo path (a)** — make distributed execution *real*. Add
-> `--role=master|worker`, make `ParallelRunner` delegate shard execution to `task_assignments`
-> + worker poll, and verify with a true two-binary E2E. Until that lands, advertise scalable
-> mode as "shared-metadata single-process". See ROADMAP §Phase 4 / P4-A.
+> **A11-redo ✅ implemented (2026-06-22, path a)** — distributed execution is now real:
+> `etl.role` config/`ETL_ROLE` env selects `standalone` (default, unchanged) | `master` |
+> `worker`. Master-role parallel pipelines create `task_assignments` (with shard metadata)
+> and wait on workers; worker-role processes poll the master and execute claimed shards via
+> `worker.ExecuteShard`. Proven by 3 integration tests (4 shards split 2/2 no overlap; crash
+> reassignment). See ROADMAP §Phase 4 / P4-A.
 
 This dual-mode is the central architectural decision. SQLite is the zero-friction entry point; MySQL/PG is the scale-out path. **The production-ready bar applies to both modes**, with distributed guarantees only claimed in scalable mode.
 
@@ -305,7 +307,7 @@ Mapping the SPEC's bars to the remaining work. Status reflects the **2026-06-21 
 | A8 | Schema mismatch failed silently at runtime | §1.4, §3.2 | ❌ **false** — interfaces wired but **zero implementors** (SK-3); startup validation never runs |
 | A9 | Per-sink metrics only on ClickHouse | §1.5 | ❌ **false** — still ClickHouse-only (SK-4) |
 | A10 | MySQL/PG storage backends unverified | §1.5, §3.3, §5.2 | ✅ done — conformance suite passes on all 3 backends |
-| A11 | Master-worker dispatch verified end-to-end | §1.5, §3.4, §5.2 | ❌ **refuted** — dispatch is decorative; no binary runs a worker; "2-worker" test is a single-process simulation (ST-2). **Reopened as A11-redo.** |
+| A11 | Master-worker dispatch verified end-to-end | §1.5, §3.4, §5.2 | ✅ **done (A11-redo, 2026-06-22)** — real `worker.New` + `ExecuteShard` + distributed ParallelRunner (`ShardDispatcher`); roles `standalone`/`master`/`worker`. 3 integration tests PASS against MySQL: 4 shards split 2/2 with NO overlap via real HTTP worker poll, + crash reassignment (dead worker's shards re-queued, survivor completes them). Three-separate-OS-process deployment via `ETL_ROLE` is wired but not yet exercised by an automated multi-binary E2E. |
 | A12 | `make test`/CI scaffolding | §5, §2.2 | ✅ done (CI workflow itself is the one excluded deliverable, per user) |
 
 ### Tier A.1 — 🆕 Re-audit P0 gaps (data loss / security)
