@@ -176,6 +176,11 @@ func (s *Store) runVersionedMigrations() error {
 
 	migrations := []migration{
 		{1, "add duration_ms to run_history", "ALTER TABLE run_history ADD COLUMN duration_ms INTEGER DEFAULT 0"},
+		// A11-redo: shard metadata on task_assignments so a worker knows which
+		// shard to execute. SQLite cannot add multiple columns in one ALTER, so
+		// each column is its own versioned migration.
+		{2, "add shard_index to task_assignments", "ALTER TABLE task_assignments ADD COLUMN shard_index INTEGER DEFAULT 0"},
+		{3, "add shard_total to task_assignments", "ALTER TABLE task_assignments ADD COLUMN shard_total INTEGER DEFAULT 0"},
 	}
 
 	for _, m := range migrations {
@@ -622,9 +627,9 @@ func (s *Store) DeregisterWorker(ctx context.Context, workerID string) error {
 
 func (s *Store) CreateTask(ctx context.Context, task *storage.TaskAssignment) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO task_assignments (task_id, pipeline, worker_id, status, assigned_at)
-		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-		task.TaskID, task.Pipeline, task.WorkerID, task.Status)
+		`INSERT INTO task_assignments (task_id, pipeline, worker_id, status, assigned_at, shard_index, shard_total)
+		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
+		task.TaskID, task.Pipeline, task.WorkerID, task.Status, task.ShardIndex, task.ShardTotal)
 	return err
 }
 
@@ -639,13 +644,20 @@ func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.Task
 	var rows *sql.Rows
 	var err error
 	if pipeline == "" {
+		// All-pipelines view is used by dispatch (AssignNextTask,
+		// ReassignStaleTasks, worker poll) which only needs ACTIVE tasks.
+		// Filter to non-terminal statuses so completed/failed rows don't crowd
+		// out pending ones under the LIMIT (ST-1). The active-task count is
+		// bounded by total in-flight shards, so 1000 is effectively unlimited.
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, task_id, pipeline, worker_id, status, assigned_at, started_at, finished_at
-			 FROM task_assignments ORDER BY assigned_at DESC LIMIT 50`)
+			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at
+			 FROM task_assignments
+			 WHERE status IN ('pending','assigned','running')
+			 ORDER BY assigned_at DESC LIMIT 1000`)
 	} else {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, task_id, pipeline, worker_id, status, assigned_at, started_at, finished_at
-			 FROM task_assignments WHERE pipeline=? ORDER BY assigned_at DESC LIMIT 50`, pipeline)
+			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at
+			 FROM task_assignments WHERE pipeline=? ORDER BY assigned_at DESC LIMIT 1000`, pipeline)
 	}
 	if err != nil {
 		return nil, err
@@ -656,7 +668,7 @@ func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.Task
 		t := &storage.TaskAssignment{}
 		var workerID sql.NullString
 		var assignedAt, startedAt, finishedAt sql.NullTime
-		if err := rows.Scan(&t.ID, &t.TaskID, &t.Pipeline, &workerID, &t.Status, &assignedAt, &startedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.TaskID, &t.Pipeline, &t.ShardIndex, &t.ShardTotal, &workerID, &t.Status, &assignedAt, &startedAt, &finishedAt); err != nil {
 			return nil, err
 		}
 		t.WorkerID = workerID.String

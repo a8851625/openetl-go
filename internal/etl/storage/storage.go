@@ -100,6 +100,11 @@ type TaskAssignment struct {
 	ID         int64      `json:"id"`
 	TaskID     string     `json:"task_id"`
 	Pipeline   string     `json:"pipeline"`
+	// ShardIndex/ShardTotal identify which shard of a parallel pipeline this
+	// task represents, so a worker can build the correct single-shard Runner.
+	// Set once at dispatch time (A11-redo); immutable afterward.
+	ShardIndex int        `json:"shard_index"`
+	ShardTotal int        `json:"shard_total"`
 	WorkerID   string     `json:"worker_id,omitempty"`
 	Status     string     `json:"status"`
 	AssignedAt *time.Time `json:"assigned_at,omitempty"`
