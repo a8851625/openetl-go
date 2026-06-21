@@ -1,14 +1,15 @@
-package mysql
+package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"openetl-go/internal/etl/storage"
 )
@@ -16,168 +17,174 @@ import (
 const schemaVersionCode = "v1"
 
 type Store struct {
-	db *sql.DB
+	pool *pgxpool.Pool
 }
 
-func New(dsn string) (*Store, error) {
-	db, err := sql.Open("mysql", dsn)
+func New(ctx context.Context, dsn string) (*Store, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open mysql: %w", err)
+		return nil, fmt.Errorf("parse postgres config: %w", err)
 	}
-	db.SetMaxOpenConns(20)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("ping mysql: %w", err)
+	cfg.MaxConns = 20
+	cfg.MinConns = 2
+	cfg.MaxConnLifetime = 5 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("connect postgres: %w", err)
 	}
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
-		db.Close()
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+	s := &Store{pool: pool}
+	if err := s.migrate(ctx); err != nil {
+		pool.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	s.pool.Close()
+	return nil
+}
 
-func (s *Store) Ping() error { return s.db.Ping() }
+func (s *Store) Ping() error {
+	return s.pool.Ping(context.Background())
+}
 
-// DB exposes the underlying connection pool for tests / maintenance.
-func (s *Store) DB() *sql.DB { return s.db }
+// Pool exposes the underlying connection pool for tests / maintenance.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
-func (s *Store) migrate() error {
+func (s *Store) migrate(ctx context.Context) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS schema_version (
-			code       VARCHAR(32) PRIMARY KEY,
-			applied_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+			code       TEXT PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS pipelines (
-			name        VARCHAR(255) PRIMARY KEY,
-			spec_yaml   LONGTEXT NOT NULL,
-			status      VARCHAR(32) NOT NULL DEFAULT 'stopped',
-			created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+			name        TEXT PRIMARY KEY,
+			spec_yaml   TEXT NOT NULL,
+			status      TEXT NOT NULL DEFAULT 'stopped',
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS pipeline_versions (
-			id          BIGINT NOT NULL AUTO_INCREMENT,
-			pipeline    VARCHAR(255) NOT NULL,
+			id          BIGSERIAL PRIMARY KEY,
+			pipeline    TEXT NOT NULL,
 			version     INT NOT NULL,
-			spec_yaml   LONGTEXT NOT NULL,
-			created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			PRIMARY KEY (id),
-			UNIQUE KEY uq_pipeline_version (pipeline, version)
+			spec_yaml   TEXT NOT NULL,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (pipeline, version)
 		)`,
 		`CREATE TABLE IF NOT EXISTS checkpoints (
-			job_name    VARCHAR(255) PRIMARY KEY,
-			source      VARCHAR(255),
-			position    JSON,
-			timestamp   DATETIME(3),
-			updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+			job_name    TEXT PRIMARY KEY,
+			source      TEXT,
+			position    JSONB,
+			timestamp   TIMESTAMPTZ,
+			updated_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS dead_letters (
-			id           BIGINT NOT NULL AUTO_INCREMENT,
-			job_name     VARCHAR(255) NOT NULL,
-			record_json  LONGTEXT NOT NULL,
-			error        LONGTEXT,
-			error_class  VARCHAR(255),
+			id           BIGSERIAL PRIMARY KEY,
+			job_name     TEXT NOT NULL,
+			record_json  TEXT NOT NULL,
+			error        TEXT,
+			error_class  TEXT,
 			attempt      INT DEFAULT 0,
-			created_at   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			PRIMARY KEY (id),
-			KEY idx_dlq_job (job_name, created_at),
-			KEY idx_dlq_class (error_class)
+			created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_dlq_job   ON dead_letters (job_name, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_dlq_class ON dead_letters (error_class)`,
 		`CREATE TABLE IF NOT EXISTS audit_logs (
-			id          BIGINT NOT NULL AUTO_INCREMENT,
-			action      VARCHAR(255) NOT NULL,
-			method      VARCHAR(16),
-			path        VARCHAR(512),
-			target      VARCHAR(255),
-			remote      VARCHAR(64),
-			created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			PRIMARY KEY (id),
-			KEY idx_audit_created (created_at)
+			id          BIGSERIAL PRIMARY KEY,
+			action      TEXT NOT NULL,
+			method      TEXT,
+			path        TEXT,
+			target      TEXT,
+			remote      TEXT,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs (created_at)`,
 		`CREATE TABLE IF NOT EXISTS run_history (
-			id              BIGINT NOT NULL AUTO_INCREMENT,
-			job_name        VARCHAR(255) NOT NULL,
-			status          VARCHAR(32) NOT NULL,
-			started_at      DATETIME(3),
-			finished_at     DATETIME(3),
+			id              BIGSERIAL PRIMARY KEY,
+			job_name        TEXT NOT NULL,
+			status          TEXT NOT NULL,
+			started_at      TIMESTAMPTZ,
+			finished_at     TIMESTAMPTZ,
 			records_read    BIGINT DEFAULT 0,
 			records_written BIGINT DEFAULT 0,
 			records_failed  BIGINT DEFAULT 0,
-			records_dlq     BIGINT DEFAULT 0,
-			PRIMARY KEY (id),
-			KEY idx_run_job (job_name, started_at)
+			records_dlq     BIGINT DEFAULT 0
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_run_job ON run_history (job_name, started_at)`,
 		`CREATE TABLE IF NOT EXISTS workers (
-			id              VARCHAR(255) PRIMARY KEY,
-			host            VARCHAR(255) NOT NULL,
+			id              TEXT PRIMARY KEY,
+			host            TEXT NOT NULL,
 			port            INT NOT NULL,
 			slots           INT NOT NULL DEFAULT 4,
-			status          VARCHAR(32) NOT NULL DEFAULT 'online',
-			labels          JSON,
-			last_heartbeat  DATETIME(3),
-			registered_at   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+			status          TEXT NOT NULL DEFAULT 'online',
+			labels          JSONB,
+			last_heartbeat  TIMESTAMPTZ,
+			registered_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS task_assignments (
-			id          BIGINT NOT NULL AUTO_INCREMENT,
-			task_id     VARCHAR(255) NOT NULL,
-			pipeline    VARCHAR(255) NOT NULL,
-			worker_id   VARCHAR(255),
-			status      VARCHAR(32) NOT NULL DEFAULT 'pending',
-			assigned_at DATETIME(3),
-			started_at  DATETIME(3),
-			finished_at DATETIME(3),
-			PRIMARY KEY (id),
-			KEY idx_task_pipeline (pipeline, status)
+			id          BIGSERIAL PRIMARY KEY,
+			task_id     TEXT NOT NULL,
+			pipeline    TEXT NOT NULL,
+			worker_id   TEXT,
+			status      TEXT NOT NULL DEFAULT 'pending',
+			assigned_at TIMESTAMPTZ,
+			started_at  TIMESTAMPTZ,
+			finished_at TIMESTAMPTZ
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_pipeline ON task_assignments (pipeline, status)`,
 		`CREATE TABLE IF NOT EXISTS plugins (
-			name         VARCHAR(255) PRIMARY KEY,
-			kind         VARCHAR(64) NOT NULL,
-			wasm_path    VARCHAR(512) NOT NULL,
-			version      VARCHAR(32) NOT NULL DEFAULT '1.0.0',
-			enabled      TINYINT(1) DEFAULT 1,
-			installed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+			name         TEXT PRIMARY KEY,
+			kind         TEXT NOT NULL,
+			wasm_path    TEXT NOT NULL,
+			version      TEXT NOT NULL DEFAULT '1.0.0',
+			enabled      BOOLEAN DEFAULT TRUE,
+			installed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`CREATE TABLE IF NOT EXISTS settings (` +
-			"`key` VARCHAR(255) PRIMARY KEY, " +
-			`value      LONGTEXT NOT NULL,
-			updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+		`CREATE TABLE IF NOT EXISTS settings (
+			key        TEXT PRIMARY KEY,
+			value      TEXT NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS plugin_state (
-			pipeline   VARCHAR(255) NOT NULL,
-			plugin     VARCHAR(255) NOT NULL,
-			` + "`key` VARCHAR(255) NOT NULL, " + `
-			value      LONGBLOB,
-			updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			PRIMARY KEY (pipeline, plugin, ` + "`key`" + `)
+			pipeline   TEXT NOT NULL,
+			plugin     TEXT NOT NULL,
+			key        TEXT NOT NULL,
+			value      BYTEA,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (pipeline, plugin, key)
 		)`,
 	}
 	for _, stmt := range stmts {
-		if _, err := s.db.Exec(stmt); err != nil {
+		if _, err := s.pool.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("migration failed [%s]: %w", firstLine(stmt), err)
 		}
 	}
-	if _, err := s.db.Exec(
-		`INSERT IGNORE INTO schema_version (code) VALUES (?)`, schemaVersionCode,
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO schema_version (code) VALUES ($1) ON CONFLICT (code) DO NOTHING`,
+		schemaVersionCode,
 	); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 
 	// Versioned incremental migrations (additive ALTERs)
-	return s.runVersionedMigrations()
+	return s.runVersionedMigrations(ctx)
 }
 
 // runVersionedMigrations applies incremental schema changes tracked by
 // the _schema_version table.
-func (s *Store) runVersionedMigrations() error {
-	s.db.Exec(`CREATE TABLE IF NOT EXISTS _schema_version (
-		version     INT PRIMARY KEY,
-		description VARCHAR(255),
-		applied_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-	) ENGINE=InnoDB`)
+func (s *Store) runVersionedMigrations(ctx context.Context) error {
+	s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS _schema_version (
+		version     INTEGER PRIMARY KEY,
+		description TEXT,
+		applied_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+	)`)
 
 	type migration struct {
 		version     int
@@ -186,19 +193,19 @@ func (s *Store) runVersionedMigrations() error {
 	}
 
 	migrations := []migration{
-		{1, "add duration_ms to run_history", "ALTER TABLE run_history ADD COLUMN duration_ms BIGINT DEFAULT 0"},
+		{1, "add duration_ms to run_history", "ALTER TABLE run_history ADD COLUMN IF NOT EXISTS duration_ms BIGINT DEFAULT 0"},
 	}
 
 	for _, m := range migrations {
 		var exists int
-		s.db.QueryRow("SELECT COUNT(*) FROM _schema_version WHERE version = ?", m.version).Scan(&exists)
+		s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM _schema_version WHERE version = $1", m.version).Scan(&exists)
 		if exists > 0 {
 			continue
 		}
-		if _, err := s.db.Exec(m.sql); err != nil {
+		if _, err := s.pool.Exec(ctx, m.sql); err != nil {
 			return fmt.Errorf("versioned migration %d failed: %w", m.version, err)
 		}
-		s.db.Exec("INSERT INTO _schema_version (version, description) VALUES (?, ?)", m.version, m.description)
+		s.pool.Exec(ctx, "INSERT INTO _schema_version (version, description) VALUES ($1, $2)", m.version, m.description)
 	}
 	return nil
 }
@@ -210,13 +217,18 @@ func firstLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
+var errNoRows = pgx.ErrNoRows
+
 // ── Pipeline definitions ─────────────────────────────────────────────
 
 func (s *Store) SavePipeline(ctx context.Context, row *storage.PipelineRow) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.pool.Exec(ctx,
 		`INSERT INTO pipelines (name, spec_yaml, status, updated_at)
-		 VALUES (?, ?, ?, CURRENT_TIMESTAMP(3))
-		 ON DUPLICATE KEY UPDATE spec_yaml=VALUES(spec_yaml), status=VALUES(status), updated_at=CURRENT_TIMESTAMP(3)`,
+		 VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+		 ON CONFLICT (name) DO UPDATE SET
+		   spec_yaml = EXCLUDED.spec_yaml,
+		   status    = EXCLUDED.status,
+		   updated_at = CURRENT_TIMESTAMP`,
 		row.Name, row.SpecYAML, row.Status,
 	)
 	if err != nil {
@@ -227,10 +239,10 @@ func (s *Store) SavePipeline(ctx context.Context, row *storage.PipelineRow) erro
 
 func (s *Store) GetPipeline(ctx context.Context, name string) (*storage.PipelineRow, error) {
 	row := &storage.PipelineRow{}
-	err := s.db.QueryRowContext(ctx,
-		`SELECT name, spec_yaml, status, created_at, updated_at FROM pipelines WHERE name=?`, name,
+	err := s.pool.QueryRow(ctx,
+		`SELECT name, spec_yaml, status, created_at, updated_at FROM pipelines WHERE name=$1`, name,
 	).Scan(&row.Name, &row.SpecYAML, &row.Status, &row.CreatedAt, &row.UpdatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, errNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -240,7 +252,7 @@ func (s *Store) GetPipeline(ctx context.Context, name string) (*storage.Pipeline
 }
 
 func (s *Store) ListPipelines(ctx context.Context) ([]*storage.PipelineRow, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.pool.Query(ctx,
 		`SELECT name, spec_yaml, status, created_at, updated_at FROM pipelines ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list pipelines: %w", err)
@@ -258,7 +270,7 @@ func (s *Store) ListPipelines(ctx context.Context) ([]*storage.PipelineRow, erro
 }
 
 func (s *Store) DeletePipeline(ctx context.Context, name string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM pipelines WHERE name=?`, name)
+	_, err := s.pool.Exec(ctx, `DELETE FROM pipelines WHERE name=$1`, name)
 	if err != nil {
 		return fmt.Errorf("delete pipeline: %w", err)
 	}
@@ -268,7 +280,7 @@ func (s *Store) DeletePipeline(ctx context.Context, name string) error {
 // ── Pipeline versions ────────────────────────────────────────────────
 
 func (s *Store) UpdatePipelineStatus(ctx context.Context, name string, status string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE pipelines SET status=?, updated_at=NOW() WHERE name=?`, status, name)
+	_, err := s.pool.Exec(ctx, `UPDATE pipelines SET status=$1, updated_at=NOW() WHERE name=$2`, status, name)
 	if err != nil {
 		return fmt.Errorf("update pipeline status: %w", err)
 	}
@@ -276,14 +288,16 @@ func (s *Store) UpdatePipelineStatus(ctx context.Context, name string, status st
 }
 
 func (s *Store) SavePipelineVersion(ctx context.Context, name string, specYAML string) (int, error) {
-	var maxVer sql.NullInt64
-	_ = s.db.QueryRowContext(ctx, `SELECT MAX(version) FROM pipeline_versions WHERE pipeline=?`, name).Scan(&maxVer)
+	var maxVer *int
+	_ = s.pool.QueryRow(ctx,
+		`SELECT MAX(version) FROM pipeline_versions WHERE pipeline=$1`, name,
+	).Scan(&maxVer)
 	version := 1
-	if maxVer.Valid {
-		version = int(maxVer.Int64) + 1
+	if maxVer != nil {
+		version = *maxVer + 1
 	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO pipeline_versions (pipeline, version, spec_yaml) VALUES (?, ?, ?)`,
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO pipeline_versions (pipeline, version, spec_yaml) VALUES ($1, $2, $3)`,
 		name, version, specYAML)
 	if err != nil {
 		return 0, fmt.Errorf("save pipeline version: %w", err)
@@ -293,11 +307,11 @@ func (s *Store) SavePipelineVersion(ctx context.Context, name string, specYAML s
 
 func (s *Store) GetPipelineVersion(ctx context.Context, name string, version int) (*storage.PipelineVersion, error) {
 	v := &storage.PipelineVersion{}
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, pipeline, version, spec_yaml, created_at FROM pipeline_versions WHERE pipeline=? AND version=?`,
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, pipeline, version, spec_yaml, created_at FROM pipeline_versions WHERE pipeline=$1 AND version=$2`,
 		name, version,
 	).Scan(&v.ID, &v.Pipeline, &v.Version, &v.SpecYAML, &v.CreatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, errNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -307,8 +321,8 @@ func (s *Store) GetPipelineVersion(ctx context.Context, name string, version int
 }
 
 func (s *Store) ListPipelineVersions(ctx context.Context, name string) ([]*storage.PipelineVersion, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, pipeline, version, spec_yaml, created_at FROM pipeline_versions WHERE pipeline=? ORDER BY version DESC`,
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, pipeline, version, spec_yaml, created_at FROM pipeline_versions WHERE pipeline=$1 ORDER BY version DESC`,
 		name)
 	if err != nil {
 		return nil, fmt.Errorf("list pipeline versions: %w", err)
@@ -328,18 +342,15 @@ func (s *Store) ListPipelineVersions(ctx context.Context, name string) ([]*stora
 // ── Checkpoints ──────────────────────────────────────────────────────
 
 func (s *Store) SaveCheckpoint(ctx context.Context, rec *storage.CheckpointRecord) error {
-	// Normalize a zero timestamp to now. SQLite accepts the Go zero time
-	// (0001-01-01) but MySQL strict mode rejects it as '0000-00-00'; this
-	// keeps the two modes behaviorally aligned (SPEC §6.1 dual-mode parity).
-	ts := rec.Timestamp
-	if ts.IsZero() {
-		ts = time.Now()
-	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.pool.Exec(ctx,
 		`INSERT INTO checkpoints (job_name, source, position, timestamp, updated_at)
-		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3))
-		 ON DUPLICATE KEY UPDATE source=VALUES(source), position=VALUES(position), timestamp=VALUES(timestamp), updated_at=CURRENT_TIMESTAMP(3)`,
-		rec.JobName, rec.Source, json.RawMessage(rec.Position), ts,
+		 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+		 ON CONFLICT (job_name) DO UPDATE SET
+		   source     = EXCLUDED.source,
+		   position   = EXCLUDED.position,
+		   timestamp  = EXCLUDED.timestamp,
+		   updated_at = CURRENT_TIMESTAMP`,
+		rec.JobName, rec.Source, []byte(rec.Position), rec.Timestamp,
 	)
 	if err != nil {
 		return fmt.Errorf("save checkpoint: %w", err)
@@ -350,11 +361,11 @@ func (s *Store) SaveCheckpoint(ctx context.Context, rec *storage.CheckpointRecor
 func (s *Store) LoadCheckpoint(ctx context.Context, jobName string) (*storage.CheckpointRecord, error) {
 	rec := &storage.CheckpointRecord{}
 	var pos []byte
-	err := s.db.QueryRowContext(ctx,
-		`SELECT job_name, source, position, timestamp, updated_at FROM checkpoints WHERE job_name=?`,
+	err := s.pool.QueryRow(ctx,
+		`SELECT job_name, source, position, timestamp, updated_at FROM checkpoints WHERE job_name=$1`,
 		jobName,
 	).Scan(&rec.JobName, &rec.Source, &pos, &rec.Timestamp, &rec.UpdatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, errNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -365,7 +376,7 @@ func (s *Store) LoadCheckpoint(ctx context.Context, jobName string) (*storage.Ch
 }
 
 func (s *Store) DeleteCheckpoint(ctx context.Context, jobName string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM checkpoints WHERE job_name=?`, jobName)
+	_, err := s.pool.Exec(ctx, `DELETE FROM checkpoints WHERE job_name=$1`, jobName)
 	if err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
@@ -373,7 +384,7 @@ func (s *Store) DeleteCheckpoint(ctx context.Context, jobName string) error {
 }
 
 func (s *Store) ListCheckpoints(ctx context.Context) ([]*storage.CheckpointRecord, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.pool.Query(ctx,
 		`SELECT job_name, source, position, timestamp, updated_at FROM checkpoints ORDER BY job_name`)
 	if err != nil {
 		return nil, fmt.Errorf("list checkpoints: %w", err)
@@ -399,9 +410,9 @@ func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) err
 	if err != nil {
 		return fmt.Errorf("marshal dlq record: %w", err)
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = s.pool.Exec(ctx,
 		`INSERT INTO dead_letters (job_name, record_json, error, error_class, attempt, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		rec.JobName, string(recJSON), rec.Error, rec.ErrorClass, rec.Attempt, time.Now(),
 	)
 	if err != nil {
@@ -412,7 +423,7 @@ func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) err
 
 func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) ([]*storage.DLQRecord, error) {
 	qb := newDLQQueryBuilder(filter)
-	rows, err := s.db.QueryContext(ctx, qb.query, qb.args...)
+	rows, err := s.pool.Query(ctx, qb.query, qb.args...)
 	if err != nil {
 		return nil, fmt.Errorf("list dlq: %w", err)
 	}
@@ -434,15 +445,15 @@ func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) (
 
 func (s *Store) DeleteDeadLettersByFilter(ctx context.Context, filter storage.DLQFilter) (int64, error) {
 	qb := newDLQDeleteBuilder(filter)
-	res, err := s.db.ExecContext(ctx, qb.query, qb.args...)
+	ct, err := s.pool.Exec(ctx, qb.query, qb.args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete dlq by filter: %w", err)
 	}
-	return res.RowsAffected()
+	return ct.RowsAffected(), nil
 }
 
 func (s *Store) DeleteDeadLetterByID(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM dead_letters WHERE id=?`, id)
+	_, err := s.pool.Exec(ctx, `DELETE FROM dead_letters WHERE id=$1`, id)
 	if err != nil {
 		return fmt.Errorf("delete dlq by id: %w", err)
 	}
@@ -450,7 +461,7 @@ func (s *Store) DeleteDeadLetterByID(ctx context.Context, id int64) error {
 }
 
 func (s *Store) DeleteAllDeadLetters(ctx context.Context, jobName string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM dead_letters WHERE job_name=?`, jobName)
+	_, err := s.pool.Exec(ctx, `DELETE FROM dead_letters WHERE job_name=$1`, jobName)
 	if err != nil {
 		return fmt.Errorf("delete all dlq: %w", err)
 	}
@@ -460,11 +471,45 @@ func (s *Store) DeleteAllDeadLetters(ctx context.Context, jobName string) error 
 // CountDeadLetters returns the total number of DLQ rows for a job via COUNT(*).
 func (s *Store) CountDeadLetters(ctx context.Context, jobName string) (int64, error) {
 	var n int64
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dead_letters WHERE job_name=?`, jobName).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM dead_letters WHERE job_name=$1`, jobName).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("count dlq: %w", err)
 	}
 	return n, nil
+}
+
+// dlqClause holds the assembled WHERE fragment and bound args.
+type dlqClause struct {
+	where string
+	args  []any
+}
+
+func buildDLQWhere(f storage.DLQFilter) dlqClause {
+	var where []string
+	var args []any
+	n := 0
+	add := func(clause string, val any) {
+		n++
+		where = append(where, fmt.Sprintf(clause, n))
+		args = append(args, val)
+	}
+	add("job_name = $%d", f.JobName)
+	if !f.From.IsZero() {
+		add("created_at >= $%d", f.From)
+	}
+	if !f.Until.IsZero() {
+		add("created_at <= $%d", f.Until)
+	}
+	if f.ErrorClass != "" {
+		add("error_class = $%d", f.ErrorClass)
+	}
+	if f.ErrorContains != "" {
+		add("error LIKE $%d", "%"+f.ErrorContains+"%")
+	}
+	if f.Contains != "" {
+		add("record_json LIKE $%d", "%"+f.Contains+"%")
+	}
+	return dlqClause{where: strings.Join(where, " AND "), args: args}
 }
 
 type dlqQueryBuilder struct {
@@ -473,39 +518,20 @@ type dlqQueryBuilder struct {
 }
 
 func newDLQQueryBuilder(f storage.DLQFilter) *dlqQueryBuilder {
-	where := []string{"job_name = ?"}
-	args := []any{f.JobName}
-	if !f.From.IsZero() {
-		where = append(where, "created_at >= ?")
-		args = append(args, f.From)
-	}
-	if !f.Until.IsZero() {
-		where = append(where, "created_at <= ?")
-		args = append(args, f.Until)
-	}
-	if f.ErrorClass != "" {
-		where = append(where, "error_class = ?")
-		args = append(args, f.ErrorClass)
-	}
-	if f.ErrorContains != "" {
-		where = append(where, "error LIKE ?")
-		args = append(args, "%"+f.ErrorContains+"%")
-	}
-	if f.Contains != "" {
-		where = append(where, "record_json LIKE ?")
-		args = append(args, "%"+f.Contains+"%")
-	}
+	c := buildDLQWhere(f)
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 100
 	}
-	// LIMIT/OFFSET rendered as parameters (MySQL accepts placeholders here).
+	n := len(c.args)
+	limitIdx := n + 1
+	offsetIdx := n + 2
 	q := fmt.Sprintf(
 		`SELECT id, job_name, record_json, error, error_class, attempt, created_at
-		 FROM dead_letters WHERE %s ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-		strings.Join(where, " AND "),
+		 FROM dead_letters WHERE %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`,
+		c.where, limitIdx, offsetIdx,
 	)
-	args = append(args, limit, f.Offset)
+	args := append(append([]any{}, c.args...), limit, f.Offset)
 	return &dlqQueryBuilder{query: q, args: args}
 }
 
@@ -515,38 +541,17 @@ type dlqDeleteBuilder struct {
 }
 
 func newDLQDeleteBuilder(f storage.DLQFilter) *dlqDeleteBuilder {
-	where := []string{"job_name = ?"}
-	args := []any{f.JobName}
-	if !f.From.IsZero() {
-		where = append(where, "created_at >= ?")
-		args = append(args, f.From)
-	}
-	if !f.Until.IsZero() {
-		where = append(where, "created_at <= ?")
-		args = append(args, f.Until)
-	}
-	if f.ErrorClass != "" {
-		where = append(where, "error_class = ?")
-		args = append(args, f.ErrorClass)
-	}
-	if f.ErrorContains != "" {
-		where = append(where, "error LIKE ?")
-		args = append(args, "%"+f.ErrorContains+"%")
-	}
-	if f.Contains != "" {
-		where = append(where, "record_json LIKE ?")
-		args = append(args, "%"+f.Contains+"%")
-	}
-	q := fmt.Sprintf(`DELETE FROM dead_letters WHERE %s`, strings.Join(where, " AND "))
-	return &dlqDeleteBuilder{query: q, args: args}
+	c := buildDLQWhere(f)
+	q := fmt.Sprintf(`DELETE FROM dead_letters WHERE %s`, c.where)
+	return &dlqDeleteBuilder{query: q, args: c.args}
 }
 
 // ── Audit ────────────────────────────────────────────────────────────
 
 func (s *Store) WriteAudit(ctx context.Context, entry *storage.AuditEntry) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.pool.Exec(ctx,
 		`INSERT INTO audit_logs (action, method, path, target, remote, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		entry.Action, entry.Method, entry.Path, entry.Target, entry.Remote, time.Now(),
 	)
 	if err != nil {
@@ -559,9 +564,9 @@ func (s *Store) ListAudit(ctx context.Context, limit int) ([]*storage.AuditEntry
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.pool.Query(ctx,
 		`SELECT id, action, method, path, target, remote, created_at
-		 FROM audit_logs ORDER BY created_at DESC LIMIT ?`, limit)
+		 FROM audit_logs ORDER BY created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list audit: %w", err)
 	}
@@ -580,22 +585,24 @@ func (s *Store) ListAudit(ctx context.Context, limit int) ([]*storage.AuditEntry
 // ── Run history ──────────────────────────────────────────────────────
 
 func (s *Store) RecordRunStart(ctx context.Context, jobName string) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO run_history (job_name, status, started_at) VALUES (?, 'running', CURRENT_TIMESTAMP(3))`,
-		jobName)
+	var id int64
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO run_history (job_name, status, started_at)
+		 VALUES ($1, 'running', CURRENT_TIMESTAMP) RETURNING id`,
+		jobName).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("record run start: %w", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("run start last insert id: %w", err)
 	}
 	return id, nil
 }
 
 func (s *Store) RecordRunEnd(ctx context.Context, runID int64, status string, read, written, failed, dlq, durationMs int64) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE run_history SET status=?, finished_at=CURRENT_TIMESTAMP(3), duration_ms=?, records_read=?, records_written=?, records_failed=?, records_dlq=? WHERE id=?`,
+	_, err := s.pool.Exec(ctx,
+		`UPDATE run_history SET
+		   status=$1, finished_at=CURRENT_TIMESTAMP,
+		   duration_ms=$2,
+		   records_read=$3, records_written=$4, records_failed=$5, records_dlq=$6
+		 WHERE id=$7`,
 		status, durationMs, read, written, failed, dlq, runID)
 	if err != nil {
 		return fmt.Errorf("record run end: %w", err)
@@ -607,9 +614,11 @@ func (s *Store) ListRunHistory(ctx context.Context, jobName string, limit int) (
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, job_name, status, started_at, finished_at, duration_ms, records_read, records_written, records_failed, records_dlq
-		 FROM run_history WHERE job_name=? ORDER BY started_at DESC LIMIT ?`, jobName, limit)
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, job_name, status, started_at, finished_at,
+		        duration_ms,
+		        records_read, records_written, records_failed, records_dlq
+		 FROM run_history WHERE job_name=$1 ORDER BY started_at DESC LIMIT $2`, jobName, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list run history: %w", err)
 	}
@@ -617,12 +626,14 @@ func (s *Store) ListRunHistory(ctx context.Context, jobName string, limit int) (
 	var result []*storage.RunRecord
 	for rows.Next() {
 		r := &storage.RunRecord{}
-		var finishedAt sql.NullTime
-		if err := rows.Scan(&r.ID, &r.JobName, &r.Status, &r.StartedAt, &finishedAt, &r.DurationMs, &r.RecordsRead, &r.RecordsWritten, &r.RecordsFailed, &r.RecordsDLQ); err != nil {
+		var finishedAt *time.Time
+		if err := rows.Scan(&r.ID, &r.JobName, &r.Status, &r.StartedAt, &finishedAt,
+			&r.DurationMs,
+			&r.RecordsRead, &r.RecordsWritten, &r.RecordsFailed, &r.RecordsDLQ); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
-		if finishedAt.Valid {
-			r.FinishedAt = &finishedAt.Time
+		if finishedAt != nil {
+			r.FinishedAt = finishedAt
 		}
 		result = append(result, r)
 	}
@@ -632,18 +643,24 @@ func (s *Store) ListRunHistory(ctx context.Context, jobName string, limit int) (
 // ── Worker registry ──────────────────────────────────────────────────
 
 func (s *Store) RegisterWorker(ctx context.Context, info *storage.WorkerInfo) error {
-	var labelsJSON any = "{}"
+	labelsJSON := []byte("{}")
 	if info.Labels != nil {
 		b, err := json.Marshal(info.Labels)
 		if err != nil {
 			return fmt.Errorf("marshal worker labels: %w", err)
 		}
-		labelsJSON = string(b)
+		labelsJSON = b
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.pool.Exec(ctx,
 		`INSERT INTO workers (id, host, port, slots, status, labels, last_heartbeat, registered_at)
-		 VALUES (?, ?, ?, ?, 'online', ?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
-		 ON DUPLICATE KEY UPDATE host=VALUES(host), port=VALUES(port), slots=VALUES(slots), status='online', labels=VALUES(labels), last_heartbeat=CURRENT_TIMESTAMP(3)`,
+		 VALUES ($1, $2, $3, $4, 'online', $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		 ON CONFLICT (id) DO UPDATE SET
+		   host           = EXCLUDED.host,
+		   port           = EXCLUDED.port,
+		   slots          = EXCLUDED.slots,
+		   status         = 'online',
+		   labels         = EXCLUDED.labels,
+		   last_heartbeat = CURRENT_TIMESTAMP`,
 		info.ID, info.Host, info.Port, info.Slots, labelsJSON)
 	if err != nil {
 		return fmt.Errorf("register worker: %w", err)
@@ -652,8 +669,8 @@ func (s *Store) RegisterWorker(ctx context.Context, info *storage.WorkerInfo) er
 }
 
 func (s *Store) Heartbeat(ctx context.Context, workerID string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE workers SET last_heartbeat=CURRENT_TIMESTAMP(3), status='online' WHERE id=?`, workerID)
+	_, err := s.pool.Exec(ctx,
+		`UPDATE workers SET last_heartbeat=CURRENT_TIMESTAMP, status='online' WHERE id=$1`, workerID)
 	if err != nil {
 		return fmt.Errorf("heartbeat: %w", err)
 	}
@@ -661,8 +678,9 @@ func (s *Store) Heartbeat(ctx context.Context, workerID string) error {
 }
 
 func (s *Store) ListWorkers(ctx context.Context) ([]*storage.WorkerInfo, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, host, port, slots, status, labels, last_heartbeat, registered_at FROM workers ORDER BY registered_at`)
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, host, port, slots, status, labels, last_heartbeat, registered_at
+		 FROM workers ORDER BY registered_at`)
 	if err != nil {
 		return nil, fmt.Errorf("list workers: %w", err)
 	}
@@ -683,7 +701,7 @@ func (s *Store) ListWorkers(ctx context.Context) ([]*storage.WorkerInfo, error) 
 }
 
 func (s *Store) DeregisterWorker(ctx context.Context, workerID string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM workers WHERE id=?`, workerID)
+	_, err := s.pool.Exec(ctx, `DELETE FROM workers WHERE id=$1`, workerID)
 	if err != nil {
 		return fmt.Errorf("deregister worker: %w", err)
 	}
@@ -693,9 +711,9 @@ func (s *Store) DeregisterWorker(ctx context.Context, workerID string) error {
 // ── Task assignments ─────────────────────────────────────────────────
 
 func (s *Store) CreateTask(ctx context.Context, task *storage.TaskAssignment) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.pool.Exec(ctx,
 		`INSERT INTO task_assignments (task_id, pipeline, worker_id, status, assigned_at)
-		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3))`,
+		 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
 		task.TaskID, task.Pipeline, task.WorkerID, task.Status)
 	if err != nil {
 		return fmt.Errorf("create task: %w", err)
@@ -704,8 +722,10 @@ func (s *Store) CreateTask(ctx context.Context, task *storage.TaskAssignment) er
 }
 
 func (s *Store) UpdateTask(ctx context.Context, task *storage.TaskAssignment) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE task_assignments SET status=?, worker_id=?, started_at=?, finished_at=? WHERE task_id=?`,
+	_, err := s.pool.Exec(ctx,
+		`UPDATE task_assignments SET
+		   status=$1, worker_id=$2, started_at=$3, finished_at=$4
+		 WHERE task_id=$5`,
 		task.Status, task.WorkerID, task.StartedAt, task.FinishedAt, task.TaskID)
 	if err != nil {
 		return fmt.Errorf("update task: %w", err)
@@ -714,16 +734,16 @@ func (s *Store) UpdateTask(ctx context.Context, task *storage.TaskAssignment) er
 }
 
 func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.TaskAssignment, error) {
-	var rows *sql.Rows
+	var rows pgx.Rows
 	var err error
 	if pipeline == "" {
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = s.pool.Query(ctx,
 			`SELECT id, task_id, pipeline, worker_id, status, assigned_at, started_at, finished_at
 			 FROM task_assignments ORDER BY assigned_at DESC LIMIT 50`)
 	} else {
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = s.pool.Query(ctx,
 			`SELECT id, task_id, pipeline, worker_id, status, assigned_at, started_at, finished_at
-			 FROM task_assignments WHERE pipeline=? ORDER BY assigned_at DESC LIMIT 50`, pipeline)
+			 FROM task_assignments WHERE pipeline=$1 ORDER BY assigned_at DESC LIMIT 50`, pipeline)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
@@ -732,20 +752,22 @@ func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.Task
 	var result []*storage.TaskAssignment
 	for rows.Next() {
 		t := &storage.TaskAssignment{}
-		var workerID sql.NullString
-		var assignedAt, startedAt, finishedAt sql.NullTime
+		var workerID *string
+		var assignedAt, startedAt, finishedAt *time.Time
 		if err := rows.Scan(&t.ID, &t.TaskID, &t.Pipeline, &workerID, &t.Status, &assignedAt, &startedAt, &finishedAt); err != nil {
 			return nil, fmt.Errorf("scan task: %w", err)
 		}
-		t.WorkerID = workerID.String
-		if assignedAt.Valid {
-			t.AssignedAt = &assignedAt.Time
+		if workerID != nil {
+			t.WorkerID = *workerID
 		}
-		if startedAt.Valid {
-			t.StartedAt = &startedAt.Time
+		if assignedAt != nil {
+			t.AssignedAt = assignedAt
 		}
-		if finishedAt.Valid {
-			t.FinishedAt = &finishedAt.Time
+		if startedAt != nil {
+			t.StartedAt = startedAt
+		}
+		if finishedAt != nil {
+			t.FinishedAt = finishedAt
 		}
 		result = append(result, t)
 	}
@@ -755,15 +777,15 @@ func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.Task
 // ── Plugin registry ──────────────────────────────────────────────────
 
 func (s *Store) SavePlugin(ctx context.Context, p *storage.PluginEntry) error {
-	enabled := 0
-	if p.Enabled {
-		enabled = 1
-	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.pool.Exec(ctx,
 		`INSERT INTO plugins (name, kind, wasm_path, version, enabled, installed_at)
-		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))
-		 ON DUPLICATE KEY UPDATE kind=VALUES(kind), wasm_path=VALUES(wasm_path), version=VALUES(version), enabled=VALUES(enabled)`,
-		p.Name, p.Kind, p.WASMPath, p.Version, enabled)
+		 VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+		 ON CONFLICT (name) DO UPDATE SET
+		   kind      = EXCLUDED.kind,
+		   wasm_path = EXCLUDED.wasm_path,
+		   version   = EXCLUDED.version,
+		   enabled   = EXCLUDED.enabled`,
+		p.Name, p.Kind, p.WASMPath, p.Version, p.Enabled)
 	if err != nil {
 		return fmt.Errorf("save plugin: %w", err)
 	}
@@ -772,22 +794,20 @@ func (s *Store) SavePlugin(ctx context.Context, p *storage.PluginEntry) error {
 
 func (s *Store) GetPlugin(ctx context.Context, name string) (*storage.PluginEntry, error) {
 	p := &storage.PluginEntry{}
-	var enabled int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT name, kind, wasm_path, version, enabled, installed_at FROM plugins WHERE name=?`, name,
-	).Scan(&p.Name, &p.Kind, &p.WASMPath, &p.Version, &enabled, &p.InstalledAt)
-	if err == sql.ErrNoRows {
+	err := s.pool.QueryRow(ctx,
+		`SELECT name, kind, wasm_path, version, enabled, installed_at FROM plugins WHERE name=$1`, name,
+	).Scan(&p.Name, &p.Kind, &p.WASMPath, &p.Version, &p.Enabled, &p.InstalledAt)
+	if errors.Is(err, errNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get plugin: %w", err)
 	}
-	p.Enabled = enabled == 1
 	return p, nil
 }
 
 func (s *Store) ListPlugins(ctx context.Context) ([]*storage.PluginEntry, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.pool.Query(ctx,
 		`SELECT name, kind, wasm_path, version, enabled, installed_at FROM plugins ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list plugins: %w", err)
@@ -796,18 +816,16 @@ func (s *Store) ListPlugins(ctx context.Context) ([]*storage.PluginEntry, error)
 	var result []*storage.PluginEntry
 	for rows.Next() {
 		p := &storage.PluginEntry{}
-		var enabled int
-		if err := rows.Scan(&p.Name, &p.Kind, &p.WASMPath, &p.Version, &enabled, &p.InstalledAt); err != nil {
+		if err := rows.Scan(&p.Name, &p.Kind, &p.WASMPath, &p.Version, &p.Enabled, &p.InstalledAt); err != nil {
 			return nil, fmt.Errorf("scan plugin: %w", err)
 		}
-		p.Enabled = enabled == 1
 		result = append(result, p)
 	}
 	return result, rows.Err()
 }
 
 func (s *Store) DeletePlugin(ctx context.Context, name string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM plugins WHERE name=?`, name)
+	_, err := s.pool.Exec(ctx, `DELETE FROM plugins WHERE name=$1`, name)
 	if err != nil {
 		return fmt.Errorf("delete plugin: %w", err)
 	}
@@ -818,8 +836,8 @@ func (s *Store) DeletePlugin(ctx context.Context, name string) error {
 
 func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
 	var val string
-	err := s.db.QueryRowContext(ctx, "SELECT value FROM settings WHERE `key`=?", key).Scan(&val)
-	if err == sql.ErrNoRows {
+	err := s.pool.QueryRow(ctx, `SELECT value FROM settings WHERE key=$1`, key).Scan(&val)
+	if errors.Is(err, errNoRows) {
 		return "", nil
 	}
 	if err != nil {
@@ -829,9 +847,9 @@ func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
 }
 
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
-	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO settings (`key`, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP(3)) "+
-			"ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP(3)",
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP)
+		 ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=CURRENT_TIMESTAMP`,
 		key, value)
 	if err != nil {
 		return fmt.Errorf("set setting: %w", err)
@@ -840,7 +858,7 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 }
 
 func (s *Store) ListSettings(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT `key`, value FROM settings")
+	rows, err := s.pool.Query(ctx, `SELECT key, value FROM settings`)
 	if err != nil {
 		return nil, fmt.Errorf("list settings: %w", err)
 	}
