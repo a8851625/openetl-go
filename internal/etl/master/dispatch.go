@@ -8,6 +8,7 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
+	"openetl-go/internal/etl/pipeline"
 	"openetl-go/internal/etl/storage"
 )
 
@@ -29,27 +30,75 @@ type ShardSource interface {
 	InstanceCount() int
 }
 
-// DispatchShards takes a ShardSource and creates task entries for each shard
-// so workers can claim them via the poll endpoint.
-func (d *TaskDispatcher) DispatchShards(ctx context.Context, pr ShardSource, pipelineName string, labels map[string]string) error {
-	shardCount := pr.InstanceCount()
-	if shardCount <= 1 {
+// DispatchShards implements pipeline.ShardDispatcher (A11-redo). It creates
+// task_assignments for each of `count` shards of the named pipeline, each
+// carrying shard metadata (ShardIndex/ShardTotal) so a claiming worker knows
+// which single-shard Runner to build.
+func (d *TaskDispatcher) DispatchShards(ctx context.Context, pipelineName string, count int) error {
+	if count <= 1 {
 		return nil
 	}
-	g.Log().Infof(ctx, "Dispatching %d shards for pipeline %s", shardCount, pipelineName)
+	g.Log().Infof(ctx, "Dispatching %d shards for pipeline %s", count, pipelineName)
 
-	for i := 0; i < shardCount; i++ {
+	for i := 0; i < count; i++ {
 		taskID := fmt.Sprintf("%s-shard-%d", pipelineName, i)
 		task := &storage.TaskAssignment{
-			TaskID:   taskID,
-			Pipeline: pipelineName,
-			Status:   "pending",
+			TaskID:     taskID,
+			Pipeline:   pipelineName,
+			ShardIndex: i, // A11-redo: worker reads these to build the right single-shard Runner
+			ShardTotal: count,
+			Status:     "pending",
 		}
 		if err := d.store.CreateTask(ctx, task); err != nil {
 			g.Log().Warningf(ctx, "CreateTask %s: %v", taskID, err)
 		}
 	}
 	return nil
+}
+
+// DispatchRunnerShards is the ShardSource-based adapter used by the standalone
+// cosmetic-dispatch path (Master.DispatchParallelShards). It delegates to
+// DispatchShards with the count derived from the runner.
+func (d *TaskDispatcher) DispatchRunnerShards(ctx context.Context, pr ShardSource, pipelineName string, labels map[string]string) error {
+	_ = labels // reserved for future worker-selector matching
+	return d.DispatchShards(ctx, pipelineName, pr.InstanceCount())
+}
+
+// WaitShard implements pipeline.ShardDispatcher. It polls the shared store for
+// shard `idx`'s task (`{pipelineName}-shard-{idx}`) and returns when it reaches
+// a terminal state (completed/failed), or when ctx is cancelled (master Stop).
+//
+// For continuous/CDC shards the worker leaves the task "running" indefinitely,
+// so WaitShard returns only on ctx cancel — yielding StatusStopped, the honest
+// terminal state for a streaming shard. The master's ParallelRunner therefore
+// reaches StatusStopped (never StatusCompleted) for continuous pipelines.
+func (d *TaskDispatcher) WaitShard(ctx context.Context, pipelineName string, idx int) (pipeline.Status, error) {
+	taskID := fmt.Sprintf("%s-shard-%d", pipelineName, idx)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		tasks, err := d.store.ListTasks(ctx, pipelineName)
+		if err != nil {
+			return pipeline.StatusFailed, fmt.Errorf("list tasks for %s: %w", taskID, err)
+		}
+		for _, t := range tasks {
+			if t.TaskID != taskID {
+				continue
+			}
+			switch t.Status {
+			case "completed":
+				return pipeline.StatusCompleted, nil
+			case "failed":
+				return pipeline.StatusFailed, fmt.Errorf("shard %s failed", taskID)
+			}
+			// pending/assigned/running → keep waiting
+		}
+		select {
+		case <-ctx.Done():
+			return pipeline.StatusStopped, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // AssignNextTask is called by the worker poll endpoint. It searches for the

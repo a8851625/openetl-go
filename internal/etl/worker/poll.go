@@ -134,30 +134,45 @@ func (w *Worker) PollLoop(ctx context.Context) {
 			defer func() {
 				if rec := recover(); rec != nil {
 					g.Log().Errorf(ctx, "Task %s panic: %v", t.TaskID, rec)
-				}
-				finished := time.Now()
-				t.Status = "completed"
-				t.FinishedAt = &finished
-				_ = w.store.UpdateTask(ctx, t)
-				w.reportTaskDone(ctx, t.TaskID)
-				g.Log().Infof(ctx, "Task %s completed", t.TaskID)
-			}()
-
-			if w.taskExecutor != nil {
-				if err := w.taskExecutor(ctx, t.Pipeline, ""); err != nil {
-					g.Log().Errorf(ctx, "Task %s execution error: %v", t.TaskID, err)
 					finished := time.Now()
 					t.Status = "failed"
 					t.FinishedAt = &finished
 					_ = w.store.UpdateTask(ctx, t)
 				}
-			} else {
+			}()
+
+			if w.taskExecutor == nil {
 				g.Log().Warningf(ctx, "No task executor registered — task %s cannot run", t.TaskID)
 				finished := time.Now()
 				t.Status = "failed"
 				t.FinishedAt = &finished
 				_ = w.store.UpdateTask(ctx, t)
+				return
 			}
+
+			execErr := w.taskExecutor(ctx, t)
+
+			// If the worker's ctx was cancelled (shutdown), leave the task
+			// "running" so master.ReassignStaleTasks re-queues it once this
+			// worker deregisters. A shard (batch caught at shutdown OR a
+			// continuous/CDC shard) must NOT be marked completed just because
+			// the worker stopped — otherwise it would never resume elsewhere.
+			if ctx.Err() != nil {
+				g.Log().Infof(ctx, "Task %s interrupted by worker shutdown — left running for reassignment", t.TaskID)
+				return
+			}
+
+			finished := time.Now()
+			t.FinishedAt = &finished
+			if execErr != nil {
+				g.Log().Errorf(ctx, "Task %s execution error: %v", t.TaskID, execErr)
+				t.Status = "failed"
+			} else {
+				t.Status = "completed"
+				w.reportTaskDone(ctx, t.TaskID)
+			}
+			_ = w.store.UpdateTask(ctx, t)
+			g.Log().Infof(ctx, "Task %s final status: %s", t.TaskID, t.Status)
 		}(task)
 	}
 }

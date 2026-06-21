@@ -10,6 +10,24 @@ import (
 	"openetl-go/internal/etl/core"
 )
 
+// ShardDispatcher abstracts master-side shard task dispatch so ParallelRunner
+// can drive distributed execution without importing the master package (which
+// would create an import cycle). The master's TaskDispatcher implements this.
+//
+// In distributed mode (A11-redo), ParallelRunner.Start creates one task per
+// shard via DispatchShards and blocks on WaitShard per shard until the assigned
+// worker reports a terminal state.
+type ShardDispatcher interface {
+	// DispatchShards creates task_assignments for each of `count` shards of the
+	// named pipeline (carrying shard metadata). Idempotent per pipeline run.
+	DispatchShards(ctx context.Context, pipelineName string, count int) error
+	// WaitShard blocks until shard `idx` of the named pipeline reaches a
+	// terminal state, then returns it. For batch shards that is
+	// StatusCompleted/StatusFailed; for continuous (CDC) shards it returns when
+	// ctx is cancelled (StatusStopped) or the shard fails (StatusFailed).
+	WaitShard(ctx context.Context, pipelineName string, idx int) (Status, error)
+}
+
 // ParallelRunner manages N concurrent pipeline instances.
 //
 // Each instance receives `shard_index` (0..N-1) and `shard_total` (N) in its
@@ -26,6 +44,10 @@ import (
 //
 // Checkpoint isolation: each instance writes to `{pipeline}.shard-{N}`,
 // so shards never clash and can resume independently.
+//
+// Distributed mode (A11-redo): when `distributed` is true and `dispatcher` is
+// set, Start() does NOT run instances inline — it creates task_assignments and
+// waits for worker processes to execute them. See NewDistributedPipeline.
 type ParallelRunner struct {
 	spec        *Spec
 	cpStore     core.CheckpointStore
@@ -33,6 +55,13 @@ type ParallelRunner struct {
 	alertMgr    *alert.Manager
 	parallelism int
 	logBuf      *LogBuffer
+
+	// distributed, when true with a non-nil dispatcher, makes Start() delegate
+	// shard execution to worker processes instead of running instances inline
+	// (A11-redo). Set by NewDistributedPipeline; standalone leaves it false so
+	// existing single-process behavior is unchanged.
+	distributed bool
+	dispatcher  ShardDispatcher
 
 	mu             sync.RWMutex
 	status         Status
@@ -66,24 +95,9 @@ func NewParallelRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter,
 	}
 
 	for i := 0; i < cfg.Count; i++ {
-		shardSpec := *spec // shallow copy of value fields
-
-		// Deep-copy all config maps to prevent cross-shard mutation
-		shardSpec.Source.Config = cloneConfigWithShard(spec.Source.Config, i, cfg.Count, cfg.ShardStrategy)
-		shardSpec.Sink.Config = cloneConfig(spec.Sink.Config)
-		shardSpec.Transforms = make([]TransformSpec, len(spec.Transforms))
-		for j, tf := range spec.Transforms {
-			shardSpec.Transforms[j] = TransformSpec{
-				Type:   tf.Type,
-				Config: cloneConfig(tf.Config),
-			}
-		}
-
-		// Each shard gets its own checkpoint namespace
-		shardCPStore := newShardCheckpointStore(cpStore, spec.Name, i)
-		runner, err := NewRunner(&shardSpec, shardCPStore, dlqW, am)
+		runner, err := BuildShardRunner(spec, cpStore, dlqW, am, i, cfg.Count)
 		if err != nil {
-			return nil, fmt.Errorf("shard-%d: %w", i, err)
+			return nil, err
 		}
 		pr.instances[i] = runner
 	}
@@ -105,8 +119,10 @@ func cloneConfig(original map[string]any) map[string]any {
 	return out
 }
 
-// cloneConfigWithShard returns a copy of config with shard_index / shard_total / shard_strategy injected.
-func cloneConfigWithShard(original map[string]any, shardIdx, shardTotal int, strategy string) map[string]any {
+// InjectShardConfig returns a copy of config with shard_index / shard_total / shard_strategy injected.
+// Exported so a distributed worker can build a single-shard source config identical to what
+// ParallelRunner produces inline (A11-redo), keeping sharding consistent across the fleet.
+func InjectShardConfig(original map[string]any, shardIdx, shardTotal int, strategy string) map[string]any {
 	out := make(map[string]any, len(original)+2)
 	for k, v := range original {
 		out[k] = v
@@ -148,6 +164,13 @@ func (pr *ParallelRunner) Start(ctx context.Context) error {
 
 	ctx, pr.cancel = context.WithCancel(ctx)
 
+	// Distributed mode (A11-redo): don't run instances inline — create tasks
+	// and wait for worker processes to execute them. The instances built in
+	// NewParallelRunner stay unstarted (cheap; no connections opened).
+	if pr.distributed && pr.dispatcher != nil {
+		return pr.startDistributed(ctx)
+	}
+
 	for i, inst := range pr.instances {
 		if err := inst.Start(ctx); err != nil {
 			pr.stopAll()
@@ -163,6 +186,71 @@ func (pr *ParallelRunner) Start(ctx context.Context) error {
 		if pr.status == StatusRunning {
 			pr.freezeDurationLocked()
 			pr.status = StatusCompleted
+		}
+		pr.mu.Unlock()
+		close(pr.done)
+	}()
+
+	return nil
+}
+
+// startDistributed is the distributed-mode entry point (A11-redo). It creates
+// one task_assignment per shard via the dispatcher, then spawns one goroutine
+// per shard that blocks on WaitShard until the assigned worker reports a
+// terminal state. A coordinator waits on all shards, then sets the
+// ParallelRunner's terminal status and closes done.
+//
+// On Stop(), pr.cancel() cancels the ctx feeding every WaitShard, so all
+// per-shard goroutines and the coordinator unblock within one poll tick.
+//
+// Terminal status:
+//   - ctx cancelled (Stop)            → StatusStopped (continuous/CDC normal)
+//   - any shard failed                → StatusFailed
+//   - all shards StatusCompleted      → StatusCompleted (batch normal)
+func (pr *ParallelRunner) startDistributed(ctx context.Context) error {
+	if err := pr.dispatcher.DispatchShards(ctx, pr.spec.Name, pr.parallelism); err != nil {
+		pr.mu.Lock()
+		pr.status = StatusFailed
+		pr.mu.Unlock()
+		return fmt.Errorf("pipeline %s: dispatch shards: %w", pr.spec.Name, err)
+	}
+
+	go func() {
+		var wg sync.WaitGroup
+		statuses := make([]Status, pr.parallelism)
+		for i := 0; i < pr.parallelism; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				st, waitErr := pr.dispatcher.WaitShard(ctx, pr.spec.Name, idx)
+				if waitErr != nil && st == "" {
+					st = StatusFailed
+				}
+				statuses[idx] = st
+			}(i)
+		}
+		wg.Wait()
+
+		pr.mu.Lock()
+		if pr.status == StatusRunning {
+			pr.freezeDurationLocked()
+			switch {
+			case ctx.Err() != nil:
+				pr.status = StatusStopped
+			default:
+				failed := false
+				for _, s := range statuses {
+					if s == StatusFailed {
+						failed = true
+						break
+					}
+				}
+				if failed {
+					pr.status = StatusFailed
+				} else {
+					pr.status = StatusCompleted
+				}
+			}
 		}
 		pr.mu.Unlock()
 		close(pr.done)
@@ -252,7 +340,11 @@ type shardCheckpointStore struct {
 	shardIdx int
 }
 
-func newShardCheckpointStore(inner core.CheckpointStore, baseName string, shardIdx int) core.CheckpointStore {
+// NewShardCheckpointStore wraps a checkpoint store so a single shard reads/writes
+// the "{baseName}.shard-{idx}" namespace — identical to what ParallelRunner uses
+// inline. Exported for distributed workers (A11-redo) so a reassigned shard resumes
+// from the same checkpoint key regardless of which worker last held it.
+func NewShardCheckpointStore(inner core.CheckpointStore, baseName string, shardIdx int) core.CheckpointStore {
 	return &shardCheckpointStore{inner: inner, baseName: baseName, shardIdx: shardIdx}
 }
 

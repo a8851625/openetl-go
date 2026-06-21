@@ -53,17 +53,24 @@ podman build -t "$IMAGE" -f Dockerfile . >/dev/null 2>&1 || {
   echo "   Image already exists or build failed — reusing."
 }
 
-# ── 3. Run distribution test via integration test (faster + more reliable) ──
-echo "==> Run Go integration test: distributed dispatch"
+# ── 3. Run the distributed-dispatch integration tests ─────────────────
+# These prove the A11-redo claim against real MySQL:
+#   - TestDistributedDispatchMySQLReal: 1 master (HTTP) + 2 real worker.New
+#     instances polling via HTTP; 4 shards split across workers with NO overlap,
+#     all complete. Uses real AssignNextTask (mutex-serialized claiming).
+#   - TestDistributedReassignOnWorkerLossMySQL: a dead (deregistered) worker's
+#     in-flight shards are re-queued by ReassignStaleTasks and completed by a
+#     surviving worker — no shard lost.
+echo "==> Run Go integration tests: distributed dispatch (real workers + reassignment)"
 MYSQL_DSN="root:${ROOT_PASS}@tcp(host.containers.internal:${HOST_PORT})/${DB}?parseTime=true&multiStatements=true"
 
 # Use the go-dev container if available; otherwise fall back to host go.
 if podman ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
   podman exec -e MYSQL_DSN="$MYSQL_DSN" -w /workspace etl-go-dev \
-    go test -race -count=1 -v -tags=integration -run 'TestDistributedDispatchMySQL' ./internal/etl/master/
+    go test -race -count=1 -v -tags=integration -run 'TestDistributed' ./internal/etl/master/
 else
   MYSQL_DSN="$MYSQL_DSN" go test -race -count=1 -v -tags=integration \
-    -run 'TestDistributedDispatchMySQL' ./internal/etl/master/
+    -run 'TestDistributed' ./internal/etl/master/
 fi
 
 echo "==> Distributed dispatch E2E: PASS"

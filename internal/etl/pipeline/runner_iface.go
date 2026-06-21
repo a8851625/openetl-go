@@ -153,3 +153,23 @@ func NewPipeline(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *a
 	}
 	return NewRunner(spec, cpStore, dlqW, am)
 }
+
+// NewDistributedPipeline creates a ParallelRunner that delegates shard execution
+// to worker processes via the dispatcher instead of running shards inline
+// (A11-redo). Used by the master role; standalone/master-without-workers keep
+// using NewPipeline. For single-shard specs (Parallelism.Count <= 1) it falls
+// back to an inline Runner — distributed dispatch only applies to parallel
+// pipelines.
+func NewDistributedPipeline(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *alert.Manager, dispatcher ShardDispatcher) (RunnerInterface, error) {
+	if spec.Parallelism == nil || spec.Parallelism.Count <= 1 {
+		// No sharding to distribute — run inline.
+		return NewRunner(spec, cpStore, dlqW, am)
+	}
+	pr, err := NewParallelRunner(spec, cpStore, dlqW, am)
+	if err != nil {
+		return nil, err
+	}
+	pr.distributed = true
+	pr.dispatcher = dispatcher
+	return pr, nil
+}

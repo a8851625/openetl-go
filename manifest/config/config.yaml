@@ -9,6 +9,16 @@ server:
 etl:
   enabled: true
   address: ":8001"
+  # 进程角色 (A11-redo 分布式): standalone (默认, 单进程) | master | worker
+  # master/worker 要求 storage.type 为 mysql/postgresql (跨进程共享元数据)
+  # 环境变量 ETL_ROLE 覆盖此值。DAG 管道不分片, 仅线性 spec 分布式分发。
+  role: "standalone"
+  # masterURL: role=worker 时必填, 指向 master 的 HTTP API 基址。环境变量 ETL_MASTER_URL。
+  masterURL: ""
+  # workerID: 可选 worker 标识 (默认 worker-<pid>)。环境变量 ETL_WORKER_ID。
+  workerID: ""
+  # workerSlots: 单个 worker 进程最大并发分片任务数 (默认 4)。
+  workerSlots: 4
   specsDir: "./pipes"
   checkpointDir: "./data/checkpoint"
   dlqDir: "./data/dlq"

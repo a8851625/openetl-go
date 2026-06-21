@@ -10,6 +10,7 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
+	"openetl-go/internal/etl/pipeline"
 	"openetl-go/internal/etl/storage"
 )
 
@@ -30,6 +31,14 @@ func NewMaster(store storage.Storage) *Master {
 		registry: r,
 		dispatch: NewTaskDispatcher(store, r),
 	}
+}
+
+// Dispatcher returns the task dispatcher, which implements pipeline.ShardDispatcher
+// so a master-role ParallelRunner can delegate shard execution to workers
+// (A11-redo). Returned as the interface to keep server/pipeline decoupled from
+// the concrete *TaskDispatcher.
+func (m *Master) Dispatcher() pipeline.ShardDispatcher {
+	return m.dispatch
 }
 
 // Run starts the master's health monitoring loop.
@@ -155,7 +164,7 @@ func (m *Master) DispatchParallelShards(ctx context.Context, pr interface{ Insta
 	if pr == nil {
 		return nil
 	}
-	return m.dispatch.DispatchShards(ctx, pr, pipelineName, labels)
+	return m.dispatch.DispatchRunnerShards(ctx, pr, pipelineName, labels)
 }
 
 // ── HTTP API for Worker Registration ──────────────────────────────────

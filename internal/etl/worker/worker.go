@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,11 +30,12 @@ type Worker struct {
 	executors map[string]*orchestrator.DAGExecutor
 	mu        sync.RWMutex
 
-	// taskExecutor is called when the worker claims a task. In standalone
-	// mode, this is set by the server to construct a Runner from the
-	// pipeline spec. In distributed mode, the worker fetches the spec
-	// from the master via HTTP.
-	taskExecutor func(ctx context.Context, pipelineName, shardID string) error
+	// taskExecutor is called when the worker claims a task. In standalone mode
+	// this is a no-op (ParallelRunner already runs shards inline). In
+	// distributed mode (A11-redo) it is worker.ExecuteShard, which rebuilds the
+	// single-shard Runner from the stored spec. The full *TaskAssignment is
+	// passed so shard metadata (ShardIndex/ShardTotal) flows through.
+	taskExecutor func(ctx context.Context, task *storage.TaskAssignment) error
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -42,8 +44,9 @@ type Worker struct {
 }
 
 // SetTaskExecutor registers a function that can execute a pipeline task.
-// This is called by the server in standalone mode.
-func (w *Worker) SetTaskExecutor(fn func(ctx context.Context, pipelineName, shardID string) error) {
+// This is called by the server in standalone mode (no-op) and by the worker
+// binary in distributed mode (ExecuteShard).
+func (w *Worker) SetTaskExecutor(fn func(ctx context.Context, task *storage.TaskAssignment) error) {
 	w.taskExecutor = fn
 }
 
@@ -127,7 +130,13 @@ func (w *Worker) register(ctx context.Context) error {
 		"slots": w.Slots,
 	}
 	bodyJSON, _ := json.Marshal(body)
-	resp, err := http.Post(w.masterURL+"/api/v2/workers", "application/json", jsonReader(bodyJSON))
+	// Use *bytes.Reader (not the custom jsonReader) so the HTTP client sets
+	// Content-Length. With an opaque reader the client uses chunked transfer
+	// encoding; the master responds before fully draining the chunked body,
+	// closes the connection, and the client sees EOF on register (a real bug
+	// that broke the distributed worker binary). reportTaskDone already uses
+	// bytes.NewReader for the same reason.
+	resp, err := http.Post(w.masterURL+"/api/v2/workers", "application/json", bytes.NewReader(bodyJSON))
 	if err != nil {
 		return fmt.Errorf("register request: %w", err)
 	}
@@ -239,7 +248,7 @@ func NewStandalone(store storage.Storage, slots int) *StandaloneWorker {
 }
 
 // SetTaskExecutor registers a task executor on the underlying Worker.
-func (s *StandaloneWorker) SetTaskExecutor(fn func(ctx context.Context, pipelineName, shardID string) error) {
+func (s *StandaloneWorker) SetTaskExecutor(fn func(ctx context.Context, task *storage.TaskAssignment) error) {
 	s.Worker.SetTaskExecutor(fn)
 }
 
@@ -286,28 +295,6 @@ func (s *StandaloneWorker) Stop() {
 	}
 	s.Worker.store.DeregisterWorker(context.Background(), s.Worker.ID)
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────
-
-func jsonReader(data []byte) *bytesReader {
-	return &bytesReader{data: data}
-}
-
-type bytesReader struct {
-	data []byte
-	pos  int
-}
-
-func (r *bytesReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, fmt.Errorf("EOF")
-	}
-	n := copy(p, r.data[r.pos:])
-	r.pos += n
-	return n, nil
-}
-
-func (r *bytesReader) Close() error { return nil }
 
 // Ensure core is used (placeholder for future imports)
 var _ = core.OpInsert

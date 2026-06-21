@@ -53,9 +53,29 @@ type Server struct {
 	standaloneWorker *worker.StandaloneWorker
 	pluginMgr        *pluginsystem.Manager
 	restartAttempts  map[string]int
+	// distributed enables master-role shard dispatch (A11-redo): parallel
+	// pipelines delegate shard execution to worker processes instead of running
+	// inline. Set via SetDistributed when etl.role=master.
+	distributed bool
 	dlqTTL           time.Duration
 	dlqMaxCount      int
 	schemaRegistry   *SchemaRegistry
+}
+
+// SetDistributed enables master-role distributed dispatch (A11-redo): parallel
+// pipelines delegate shard execution to worker processes via the master
+// dispatcher instead of running shards inline. app.go enables it when
+// etl.role=master. Only meaningful with MySQL/PG shared storage.
+func (s *Server) SetDistributed(b bool) { s.distributed = b }
+
+// newRunner builds a runner for a spec. In distributed (master) mode, parallel
+// pipelines use NewDistributedPipeline so shards execute on workers; everything
+// else (single-shard specs, standalone role) uses inline NewPipeline unchanged.
+func (s *Server) newRunner(spec *pipeline.Spec) (pipeline.RunnerInterface, error) {
+	if s.distributed && spec.Parallelism != nil && spec.Parallelism.Count > 1 && s.masterNode != nil {
+		return pipeline.NewDistributedPipeline(spec, s.cpAdapter, s.dlqWriter, s.alertManager, s.masterNode.Dispatcher())
+	}
+	return s.newRunner(spec)
 }
 
 // NewServer creates a new ETL server backed by the given storage.
@@ -87,10 +107,12 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 	s.masterNode = master.NewMaster(store)
 	s.standaloneWorker = worker.NewStandalone(store, 4)
 	// In standalone mode, shard tasks are already executed by the
-	// ParallelRunner in-process. The worker poll loop marks claimed
-	// tasks as "completed" so they don't show as stale.
-	s.standaloneWorker.SetTaskExecutor(func(ctx context.Context, pipelineName, shardID string) error {
-		g.Log().Debugf(ctx, "Standalone mode: task for %s/%s already handled by ParallelRunner", pipelineName, shardID)
+	// ParallelRunner in-process. The worker poll loop's executor is a no-op so
+	// it doesn't double-execute; it just marks claimed tasks completed so they
+	// don't show as stale. (Distributed mode uses worker.ExecuteShard instead —
+	// wired in app.go when etl.role=worker.)
+	s.standaloneWorker.SetTaskExecutor(func(ctx context.Context, task *storage.TaskAssignment) error {
+		g.Log().Debugf(ctx, "Standalone mode: task %s (shard %d/%d) already handled by ParallelRunner", task.Pipeline, task.ShardIndex, task.ShardTotal)
 		return nil
 	})
 
@@ -226,7 +248,7 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 			continue
 		}
 
-		runner, err := pipeline.NewPipeline(&spec, s.cpAdapter, s.dlqWriter, s.alertManager)
+		runner, err := s.newRunner(&spec)
 		if err != nil {
 			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", spec.Name, err)
 			continue
@@ -293,7 +315,7 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 			continue
 		}
 
-		runner, err := pipeline.NewPipeline(spec, s.cpAdapter, s.dlqWriter, s.alertManager)
+		runner, err := s.newRunner(spec)
 		if err != nil {
 			result.Errors[entry.Name()] = err.Error()
 			g.Log().Warningf(ctx, "Skip pipeline %s: %v", spec.Name, err)
@@ -505,7 +527,7 @@ func (s *Server) restartPipeline(ctx context.Context, name string, rp *pipeline.
 		runner = orchestrator.NewDAGRunnerWrapper(exec)
 	} else if spec != nil {
 		var err error
-		runner, err = pipeline.NewPipeline(spec, s.cpAdapter, s.dlqWriter, s.alertManager)
+		runner, err = s.newRunner(spec)
 		if err != nil {
 			g.Log().Errorf(ctx, "[reconciler] rebuild pipeline %s failed: %v", name, err)
 			return
@@ -1069,7 +1091,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		runner, err := pipeline.NewPipeline(&spec, s.cpAdapter, s.dlqWriter, s.alertManager)
+		runner, err := s.newRunner(&spec)
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
@@ -1235,7 +1257,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Create new runner
-		runner, err := pipeline.NewPipeline(&spec, s.cpAdapter, s.dlqWriter, s.alertManager)
+		runner, err := s.newRunner(&spec)
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
@@ -1651,7 +1673,7 @@ func (s *Server) handlePipelineVersionRollback(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	runner, err := pipeline.NewPipeline(&spec, s.cpAdapter, s.dlqWriter, s.alertManager)
+	runner, err := s.newRunner(&spec)
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
@@ -1796,7 +1818,7 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"name": spec.Name, "action": "updated"})
 	} else {
 		// Create new
-		runner, err := pipeline.NewPipeline(&spec, s.cpAdapter, s.dlqWriter, s.alertManager)
+		runner, err := s.newRunner(&spec)
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
@@ -1823,7 +1845,7 @@ func (s *Server) handlePipelinesPut(ctx context.Context, spec *pipeline.Spec) er
 		oldRunner.Stop()
 	}
 
-	runner, err := pipeline.NewPipeline(spec, s.cpAdapter, s.dlqWriter, s.alertManager)
+	runner, err := s.newRunner(spec)
 	if err != nil {
 		return err
 	}

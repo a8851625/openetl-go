@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -20,8 +21,11 @@ import (
 	"github.com/gogf/gf/v2/os/gres"
 
 	ctlmonitor "openetl-go/internal/controller/monitor"
+	"openetl-go/internal/etl/alert"
 	etlfactory "openetl-go/internal/etl/storage/factory"
 	etlserver "openetl-go/internal/etl/server"
+	"openetl-go/internal/etl/storage"
+	"openetl-go/internal/etl/worker"
 	logicmonitor "openetl-go/internal/logic/monitor"
 	"openetl-go/internal/logic/sync"
 	"openetl-go/internal/service"
@@ -135,10 +139,36 @@ func (a *sApp) StartETLAsync(ctx context.Context) {
 	}
 	g.Log().Infof(ctx, "Storage backend initialized: type=%s", storageType)
 
+	role := readRole(ctx)
+
+	// Startup validation: distributed roles require shared (non-sqlite) storage —
+	// a file-backed sqlite DB cannot be shared across processes, so checkpoint
+	// keys written by one node would be invisible to another.
+	if (role == "master" || role == "worker") && storageType == "sqlite" {
+		g.Log().Fatalf(ctx, "etl.role=%s requires shared storage (mysql/postgresql), but etl.storage.type=sqlite. Aborting.", role)
+		return
+	}
+
+	// Worker role: no HTTP API, no pipeline loader — just register with the
+	// master, heartbeat, and execute claimed shards via ExecuteShard.
+	if role == "worker" {
+		a.startWorkerRole(ctx, store)
+		return
+	}
+
+	// role == "standalone" (default) or "master"
 	server, err := etlserver.NewServer(store, specsDir)
 	if err != nil {
 		g.Log().Fatalf(ctx, "Create ETL server failed: %v", err)
 		return
+	}
+	if role == "master" {
+		// Parallel pipelines delegate shard execution to worker processes via
+		// the master dispatcher instead of running inline (A11-redo). NOTE: a
+		// master with zero workers will leave parallel pipelines waiting — at
+		// least one worker must be running.
+		server.SetDistributed(true)
+		g.Log().Info(ctx, "ETL role=master: distributed shard dispatch enabled (ensure >=1 worker is running)")
 	}
 	if webhook := g.Cfg().MustGet(ctx, "etl.alert.webhook", "").String(); webhook != "" {
 		server.RegisterWebhookAlert(webhook)
@@ -166,7 +196,80 @@ func (a *sApp) StartETLAsync(ctx context.Context) {
 		}
 	}()
 
-	g.Log().Infof(ctx, "ETL service started: specs=%s api=%s", specsDir, address)
+	g.Log().Infof(ctx, "ETL service started: role=%s specs=%s api=%s", role, specsDir, address)
+}
+
+// readRole resolves the process role: "standalone" (default), "master", or
+// "worker". ETL_ROLE env overrides etl.role config (matches the existing
+// ETL_* env convention). DAG pipelines do not shard-distribute regardless of
+// role — distributed dispatch is linear-spec only.
+func readRole(ctx context.Context) string {
+	role := os.Getenv("ETL_ROLE")
+	if role == "" {
+		role = g.Cfg().MustGet(ctx, "etl.role", "standalone").String()
+	}
+	switch role {
+	case "standalone", "master", "worker":
+		return role
+	default:
+		g.Log().Warningf(ctx, "unknown etl.role %q, defaulting to standalone", role)
+		return "standalone"
+	}
+}
+
+// startWorkerRole boots a distributed worker (A11-redo): register with the
+// master, heartbeat, and execute claimed shards via worker.ExecuteShard. No
+// HTTP API server is started for the ETL service (the host's GoFrame server
+// from cmd.go still runs, but serves no ETL routes on the worker).
+func (a *sApp) startWorkerRole(ctx context.Context, store storage.Storage) {
+	masterURL := os.Getenv("ETL_MASTER_URL")
+	if masterURL == "" {
+		masterURL = g.Cfg().MustGet(ctx, "etl.masterURL", "").String()
+	}
+	if masterURL == "" {
+		g.Log().Fatalf(ctx, "etl.role=worker requires etl.masterURL (or ETL_MASTER_URL) pointing at the master API")
+		return
+	}
+	workerID := os.Getenv("ETL_WORKER_ID")
+	if workerID == "" {
+		workerID = g.Cfg().MustGet(ctx, "etl.workerID", "").String()
+	}
+	if workerID == "" {
+		workerID = fmt.Sprintf("worker-%d", os.Getpid())
+	}
+	slots := 4
+	if n := g.Cfg().MustGet(ctx, "etl.workerSlots", 4).Int(); n > 0 {
+		slots = n
+	}
+
+	// Build the executor deps from the shared store (same adapters the Server uses).
+	am := alert.NewManager()
+	am.Register(&alert.LogChannel{})
+	deps := worker.ExecutorDeps{
+		Store:     store,
+		CPAdapter: storage.NewCheckpointStoreAdapter(store),
+		DLQWriter: storage.NewDLQCompatWriter(store),
+		AlertMgr:  am,
+	}
+
+	w := worker.New(worker.Config{
+		ID:        workerID,
+		Host:      "localhost",
+		Slots:     slots,
+		MasterURL: masterURL,
+		Store:     store,
+	})
+	w.SetTaskExecutor(func(ctx context.Context, task *storage.TaskAssignment) error {
+		return worker.ExecuteShard(ctx, deps, task)
+	})
+
+	workerCtx, cancel := context.WithCancel(ctx)
+	a.etlCancel = cancel
+	if err := w.Start(workerCtx); err != nil {
+		g.Log().Fatalf(ctx, "Worker start failed (master=%s): %v", masterURL, err)
+		return
+	}
+	g.Log().Infof(ctx, "ETL role=worker started: id=%s master=%s slots=%d", workerID, masterURL, slots)
 }
 
 // StartCanalSyncAsync 异步启动 Canal 同步服务
