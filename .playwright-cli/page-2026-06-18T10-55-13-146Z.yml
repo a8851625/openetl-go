@@ -1,0 +1,154 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: Designer
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: DLQ
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: Built-in
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM Plugins
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: Workers
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: Audit
+    - generic [ref=e60] [cursor=pointer]:
+      - img [ref=e61]
+      - generic [ref=e64]: Settings
+  - main [ref=e65]:
+    - generic [ref=e66]:
+      - heading "Designer" [level=1] [ref=e299]
+      - generic [ref=e68]:
+        - generic [ref=e69]: Auto-refresh 5s
+        - button "中文" [ref=e183] [cursor=pointer]:
+          - img [ref=e72]
+          - text: 中文
+        - button "Reload Specs" [ref=e184] [cursor=pointer]
+    - generic [ref=e300]:
+      - generic [ref=e301]:
+        - generic [ref=e302]:
+          - generic [ref=e303]: Pipeline Name
+          - textbox [ref=e304]: my-pipeline
+        - button "+ Add Source" [ref=e306] [cursor=pointer]:
+          - generic [ref=e307]: +
+          - text: Add Source
+        - button "+ Add Transform" [ref=e308] [cursor=pointer]:
+          - generic [ref=e309]: +
+          - text: Add Transform
+        - button "+ Add Sink" [active] [ref=e310] [cursor=pointer]:
+          - generic [ref=e311]: +
+          - text: Add Sink
+        - button "🗑 Delete Node" [ref=e313] [cursor=pointer]
+        - generic [ref=e314]:
+          - button "🤖 AI" [ref=e315] [cursor=pointer]
+          - button "📅 Schedules" [ref=e316] [cursor=pointer]
+          - button "Export YAML" [ref=e317] [cursor=pointer]
+          - button "✓ Create Pipeline" [ref=e318] [cursor=pointer]
+      - generic [ref=e320]:
+        - generic [ref=e321]:
+          - generic [ref=e322]: 🏷 Tags
+          - textbox "production, critical, realtime" [ref=e323]
+          - paragraph [ref=e324]: Comma-separated
+        - generic [ref=e325]:
+          - generic [ref=e326]: 🎯 Worker Selector
+          - textbox "zone=us-east, gpu=true" [ref=e327]
+          - paragraph [ref=e328]: Label-match scheduling; empty=default pool
+        - generic [ref=e329]:
+          - generic [ref=e330]: ⚡ Parallelism
+          - generic [ref=e331]:
+            - spinbutton [ref=e332]: "1"
+            - combobox [ref=e333]:
+              - option "round_robin" [selected]
+              - option "partition (Kafka)"
+              - option "id_range (MySQL)"
+              - option "table (CDC)"
+          - paragraph [ref=e334]: 1 parallel instances, independent checkpoints
+      - generic [ref=e336]:
+        - application [ref=e338]:
+          - generic [ref=e340]:
+            - generic:
+              - generic:
+                - group [ref=e368]:
+                  - generic [ref=e369]:
+                    - generic [ref=e370]:
+                      - generic [ref=e371]: ⬛
+                      - generic [ref=e372]: source
+                    - generic [ref=e373]: source-1
+                    - generic [ref=e374]: file
+                - group [ref=e410]:
+                  - generic [ref=e411]:
+                    - generic [ref=e413]:
+                      - generic [ref=e414]: ▼
+                      - generic [ref=e415]: sink
+                    - generic [ref=e416]: sink-2
+                    - generic [ref=e417]: file_sink
+          - img
+          - generic "Control Panel" [ref=e341]:
+            - button "Zoom In" [disabled]:
+              - img
+            - button "Zoom Out" [ref=e345] [cursor=pointer]:
+              - img [ref=e346]
+            - button "Fit View" [ref=e348] [cursor=pointer]:
+              - img [ref=e349]
+          - img "Mini Map" [ref=e352]
+          - link "React Flow attribution" [ref=e354] [cursor=pointer]:
+            - /url: https://reactflow.dev
+            - text: React Flow
+        - generic [ref=e357]:
+          - generic [ref=e359]:
+            - generic [ref=e377]: sink
+            - generic [ref=e378]: sink-2
+          - generic [ref=e361]:
+            - generic [ref=e379]: Node ID
+            - textbox [ref=e380]: sink-2
+          - generic [ref=e381]:
+            - generic [ref=e382]: Plugin
+            - combobox [ref=e383]:
+              - option "clickhouse"
+              - option "es"
+              - option "mysql"
+              - option "postgresql"
+              - option "s3"
+              - option "elasticsearch"
+              - option "kafka"
+              - option "postgres"
+              - option "file_sink" [selected]
+          - generic [ref=e384]:
+            - generic [ref=e385]: Configuration (JSON)
+            - generic [ref=e386]:
+              - generic [ref=e419]:
+                - generic [ref=e420]:
+                  - text: output_dir
+                  - generic [ref=e421]: "*"
+                - textbox "Output directory path" [ref=e423]
+                - generic [ref=e424]: Output directory path
+              - generic [ref=e393]:
+                - generic [ref=e394]: format
+                - combobox [ref=e396]:
+                  - option "json" [selected]
+                  - option "jsonl"
+                  - option "csv"
+                  - option "parquet"
+                - generic [ref=e397]: Output format
+              - generic [ref=e425]:
+                - generic [ref=e426]: prefix
+                - textbox "File name prefix" [ref=e428]
+                - generic [ref=e429]: File name prefix

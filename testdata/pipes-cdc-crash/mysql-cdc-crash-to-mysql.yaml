@@ -1,0 +1,41 @@
+name: "mysql-cdc-crash-to-mysql"
+source:
+  type: mysql_cdc
+  config:
+    host: "host.containers.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    tables:
+      - "customers"
+    server_id: 1501
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: mysql
+  config:
+    host: "host.containers.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_target"
+    table: "customers"
+    batch_mode: "upsert"
+    pk_columns:
+      - "id"
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 20
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

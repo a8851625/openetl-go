@@ -1,6 +1,6 @@
 # GitHub Actions 部署教程
 
-本文档介绍如何使用 GitHub Actions 自动化构建、部署 sync-canal-go 项目。
+本文档介绍如何使用 GitHub Actions 自动化构建、部署 openetl-go 项目。
 
 ## 目录
 
@@ -39,7 +39,7 @@
 
 ### 镜像仓库
 
-- **阿里云镜像仓库**: `registry.cn-heyuan.aliyuncs.com/gzdzh/sync-canal-go`
+- **阿里云镜像仓库**: `registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go`
 - **镜像标签**: `latest` (主分支) 或 `v1.0.0` (版本标签)
 
 ---
@@ -92,7 +92,7 @@ docker login registry.cn-heyuan.aliyuncs.com
 | Secret 名称 | 说明 | 默认值 |
 |------------|------|--------|
 | `SERVER_PORT` | SSH 端口 | `22` |
-| `DEPLOY_PATH` | 服务器部署目录 | `/www/wwwroot/docker/sync-canal-go` |
+| `DEPLOY_PATH` | 服务器部署目录 | `/www/wwwroot/docker/openetl-go` |
 
 ### 获取 SSH 私钥
 
@@ -147,8 +147,8 @@ Settings
 ssh root@你的服务器IP
 
 # 创建目录 (使用默认路径)
-mkdir -p /www/wwwroot/docker/sync-canal-go/logs
-mkdir -p /www/wwwroot/docker/sync-canal-go/config
+mkdir -p /www/wwwroot/docker/openetl-go/logs
+mkdir -p /www/wwwroot/docker/openetl-go/config
 
 # 或使用自定义路径 (需要配置 DEPLOY_PATH Secret)
 mkdir -p /your/custom/path/logs
@@ -158,7 +158,7 @@ mkdir -p /your/custom/path/config
 ### 2. 准备配置文件
 
 ```bash
-cd /www/wwwroot/docker/sync-canal-go
+cd /www/wwwroot/docker/openetl-go
 
 # 创建配置文件 (从项目复制并修改)
 vim config/config.yaml
@@ -307,57 +307,57 @@ https://github.com/你的用户名/你的仓库/actions
 ssh root@你的服务器IP
 
 # 查看容器状态
-docker ps | grep sync-canal-go
+docker ps | grep openetl-go
 
 # 查看日志
-docker logs -f sync-canal-go
+docker logs -f openetl-go
 
 # 查看最近 100 行日志
-docker logs --tail 100 sync-canal-go
+docker logs --tail 100 openetl-go
 ```
 
 ### 手动重启容器
 
 ```bash
-docker restart sync-canal-go
+docker restart openetl-go
 ```
 
 ### 手动更新镜像
 
 ```bash
 # 拉取最新镜像
-docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/sync-canal-go:latest
+docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:latest
 
 # 停止旧容器
-docker stop sync-canal-go
-docker rm sync-canal-go
+docker stop openetl-go
+docker rm openetl-go
 
 # 启动新容器
 docker run -d \
-  --name sync-canal-go \
+  --name openetl-go \
   --restart always \
   -p 8000:8000 \
-  -v /www/wwwroot/docker/sync-canal-go/config/config.yaml:/app/manifest/config/config.yaml:ro \
-  -v /www/wwwroot/docker/sync-canal-go/logs:/app/logs \
-  registry.cn-heyuan.aliyuncs.com/gzdzh/sync-canal-go:latest
+  -v /www/wwwroot/docker/openetl-go/config/config.yaml:/app/manifest/config/config.yaml:ro \
+  -v /www/wwwroot/docker/openetl-go/logs:/app/logs \
+  registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:latest
 ```
 
 ### 回滚到指定版本
 
 ```bash
 # 使用指定版本镜像
-docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/sync-canal-go:v1.0.0
+docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:v1.0.0
 
-docker stop sync-canal-go
-docker rm sync-canal-go
+docker stop openetl-go
+docker rm openetl-go
 
 docker run -d \
-  --name sync-canal-go \
+  --name openetl-go \
   --restart always \
   -p 8000:8000 \
-  -v /www/wwwroot/docker/sync-canal-go/config/config.yaml:/app/manifest/config/config.yaml:ro \
-  -v /www/wwwroot/docker/sync-canal-go/logs:/app/logs \
-  registry.cn-heyuan.aliyuncs.com/gzdzh/sync-canal-go:v1.0.0
+  -v /www/wwwroot/docker/openetl-go/config/config.yaml:/app/manifest/config/config.yaml:ro \
+  -v /www/wwwroot/docker/openetl-go/logs:/app/logs \
+  registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:v1.0.0
 ```
 
 ---
@@ -398,7 +398,7 @@ cat ~/.ssh/authorized_keys
 **解决**:
 ```bash
 # 查看容器日志
-docker logs sync-canal-go
+docker logs openetl-go
 
 # 常见原因:
 # 1. 配置文件路径不正确
@@ -406,7 +406,7 @@ docker logs sync-canal-go
 # 3. 端口被占用
 
 # 检查配置文件
-ls -la /www/wwwroot/docker/sync-canal-go/config/config.yaml
+ls -la /www/wwwroot/docker/openetl-go/config/config.yaml
 
 # 检查端口
 netstat -tlnp | grep 8000
@@ -414,7 +414,7 @@ netstat -tlnp | grep 8000
 
 ### Q4: 镜像拉取失败
 
-**错误**: `Error: image gzdzh/sync-canal-go:latest not found`
+**错误**: `Error: image gzdzh/openetl-go:latest not found`
 
 **解决**:
 ```bash
@@ -422,7 +422,7 @@ netstat -tlnp | grep 8000
 # 检查 GitHub Actions 是否成功完成
 
 # 手动拉取测试
-docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/sync-canal-go:latest
+docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:latest
 ```
 
 ### Q5: 配置文件修改后不生效
@@ -430,8 +430,8 @@ docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/sync-canal-go:latest
 **解决**:
 ```bash
 # 修改配置文件后重启容器
-vim /www/wwwroot/docker/sync-canal-go/config/config.yaml
-docker restart sync-canal-go
+vim /www/wwwroot/docker/openetl-go/config/config.yaml
+docker restart openetl-go
 ```
 
 ### Q6: 如何查看部署历史
@@ -450,7 +450,7 @@ https://github.com/你的用户名/你的仓库/actions
 ### 目录结构
 
 ```
-sync-canal-go/
+openetl-go/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml          # CI 工作流
@@ -466,7 +466,7 @@ sync-canal-go/
 ### 服务器目录结构
 
 ```
-/www/wwwroot/docker/sync-canal-go/
+/www/wwwroot/docker/openetl-go/
 ├── config/
 │   └── config.yaml    # 配置文件（挂载到容器 /app/manifest/config/config.yaml）
 └── logs/              # 日志目录（挂载到容器 /app/logs）
@@ -479,10 +479,10 @@ sync-canal-go/
 
 部署时通过 Docker volume 挂载:
 ```bash
--v /www/wwwroot/docker/sync-canal-go/config/config.yaml:/app/manifest/config/config.yaml:ro
+-v /www/wwwroot/docker/openetl-go/config/config.yaml:/app/manifest/config/config.yaml:ro
 ```
 
-这样服务器上的 `/www/wwwroot/docker/sync-canal-go/config/config.yaml` 会覆盖容器内的默认配置。
+这样服务器上的 `/www/wwwroot/docker/openetl-go/config/config.yaml` 会覆盖容器内的默认配置。
 
 ### 相关链接
 

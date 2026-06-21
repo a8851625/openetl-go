@@ -1,0 +1,88 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: Designer
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e36]: DAG Editor
+      - generic [ref=e37] [cursor=pointer]:
+        - img [ref=e38]
+        - generic [ref=e41]: Schedules
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e45]: DLQ
+      - generic [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e51]: Plugins
+      - generic [ref=e52] [cursor=pointer]:
+        - img [ref=e53]
+        - generic [ref=e57]: My Plugins
+      - generic [ref=e58] [cursor=pointer]:
+        - img [ref=e59]
+        - generic [ref=e63]: Workers
+      - generic [ref=e64] [cursor=pointer]:
+        - img [ref=e65]
+        - generic [ref=e68]: Audit
+    - group [ref=e70]:
+      - generic "Settings" [ref=e194] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e75]: Settings
+      - generic [ref=e452]:
+        - generic [ref=e453]:
+          - generic [ref=e454]: Language
+          - generic [ref=e455]:
+            - button "English" [ref=e456] [cursor=pointer]
+            - button "中文" [ref=e457] [cursor=pointer]
+        - generic [ref=e458]:
+          - generic [ref=e459]: API Token
+          - textbox "API Token" [ref=e460]: my-token-456
+          - button "Save Token" [ref=e461] [cursor=pointer]
+  - main [ref=e76]:
+    - generic [ref=e77]:
+      - heading "Audit" [level=1] [ref=e432]
+      - generic [ref=e79]:
+        - generic [ref=e80]: Auto-refresh 5s
+        - button "中文" [ref=e196] [cursor=pointer]:
+          - img [ref=e83]
+          - text: 中文
+        - button "Reload Specs" [active] [ref=e197] [cursor=pointer]
+    - generic [ref=e467]:
+      - generic [ref=e468]: ✓
+      - generic [ref=e469]: Reload specs
+    - generic [ref=e433]:
+      - heading "Audit Trail" [level=2] [ref=e435]
+      - table [ref=e437]:
+        - rowgroup [ref=e438]:
+          - row "Action Method Path / Target Time" [ref=e439]:
+            - columnheader "Action" [ref=e440]
+            - columnheader "Method" [ref=e441]
+            - columnheader "Path / Target" [ref=e442]
+            - columnheader "Time" [ref=e443]
+        - rowgroup [ref=e444]:
+          - row "specs.reload POST ./pipes 2026/6/16 23:21:20" [ref=e470]:
+            - cell "specs.reload" [ref=e471]:
+              - generic [ref=e447]: specs.reload
+            - cell "POST" [ref=e448]:
+              - generic [ref=e449]: POST
+            - cell "./pipes" [ref=e472]
+            - cell "2026/6/16 23:21:20" [ref=e473]
+          - row "pipeline.start POST auth-file-to-file 2026/6/16 23:19:56" [ref=e474]:
+            - cell "pipeline.start" [ref=e475]:
+              - generic [ref=e476]: pipeline.start
+            - cell "POST" [ref=e477]:
+              - generic [ref=e478]: POST
+            - cell "auth-file-to-file" [ref=e479]
+            - cell "2026/6/16 23:19:56" [ref=e480]

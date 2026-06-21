@@ -1,0 +1,24 @@
+{
+  "name": "@etl/sdk",
+  "version": "2.0.0",
+  "description": "Plugin SDK for ETL Platform - develop custom transforms, sources, and sinks in TypeScript that compile to WebAssembly",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "build:wasm": "extism-js compile src/index.ts -o dist/plugin.wasm",
+    "build:wasm:watch": "extism-js compile src/index.ts -o dist/plugin.wasm -w",
+    "example:transform": "extism-js compile examples/transform.ts -o examples/transform.wasm",
+    "example:source": "extism-js compile examples/source.ts -o examples/source.wasm",
+    "example:sink": "extism-js compile examples/sink.ts -o examples/sink.wasm"
+  },
+  "keywords": ["etl", "plugin", "wasm", "transform", "data-pipeline", "extism"],
+  "license": "MIT",
+  "dependencies": {
+    "@extism/js-pdk": "^1.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

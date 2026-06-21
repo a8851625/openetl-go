@@ -1,0 +1,52 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: Designer
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e32]: DLQ
+      - generic [ref=e33] [cursor=pointer]:
+        - img [ref=e34]
+        - generic [ref=e38]: Plugins
+      - generic [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - generic [ref=e43]: Audit
+    - group [ref=e45]:
+      - generic "Settings" [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e50]: Settings
+  - main [ref=e51]:
+    - generic [ref=e52]:
+      - heading "DLQ Workbench" [level=1] [ref=e261]
+      - generic [ref=e54]:
+        - generic [ref=e55]: Auto-refresh 5s
+        - button "中文" [ref=e57] [cursor=pointer]:
+          - img [ref=e58]
+          - text: 中文
+        - button "Reload Specs" [ref=e61] [cursor=pointer]
+    - generic [ref=e262]:
+      - generic [ref=e263]:
+        - heading "Select Pipeline" [level=2] [ref=e265]
+        - generic [ref=e269] [cursor=pointer]: auth-file-to-file
+      - generic [ref=e270]:
+        - generic [ref=e271]:
+          - heading "Dead-Letter Queue · auth-file-to-file" [level=2] [ref=e272]
+          - generic [ref=e273]:
+            - textbox "Filter..." [ref=e274]
+            - button "Refresh" [ref=e275] [cursor=pointer]
+            - button "Replay" [ref=e276] [cursor=pointer]
+            - button "Delete" [ref=e277] [cursor=pointer]
+        - generic [ref=e279]: No DLQ records for this pipeline

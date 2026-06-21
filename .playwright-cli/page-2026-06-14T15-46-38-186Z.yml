@@ -1,0 +1,142 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: Designer
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e32]: DLQ
+      - generic [ref=e33] [cursor=pointer]:
+        - img [ref=e34]
+        - generic [ref=e38]: Plugins
+      - generic [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - generic [ref=e43]: Audit
+    - group [ref=e45]:
+      - generic "Settings" [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e50]: Settings
+  - main [ref=e51]:
+    - generic [ref=e52]:
+      - heading "Pipelines" [level=1] [ref=e163]
+      - generic [ref=e54]:
+        - generic [ref=e55]: Auto-refresh 5s
+        - button "中文" [ref=e57] [cursor=pointer]:
+          - img [ref=e58]
+          - text: 中文
+        - button "Reload Specs" [ref=e61] [cursor=pointer]
+    - generic [ref=e164]:
+      - generic [ref=e165]:
+        - generic [ref=e166]:
+          - heading "All Pipelines" [level=2] [ref=e167]
+          - generic [ref=e168]: 5 pipelines
+        - generic [ref=e169]:
+          - generic [ref=e205] [cursor=pointer]:
+            - generic [ref=e207]:
+              - generic [ref=e208]: mysql-to-postgres
+              - generic [ref=e209]: completed · uptime 1m1s
+            - generic [ref=e210]:
+              - generic [ref=e211]: 9 written
+              - generic [ref=e212]: 9 read
+            - generic [ref=e213]:
+              - button "Start" [ref=e214]
+              - button "Stop" [ref=e215]
+          - generic [ref=e216] [cursor=pointer]:
+            - generic [ref=e218]:
+              - generic [ref=e219]: file-to-file
+              - generic [ref=e220]: failed · uptime 1m2s
+            - generic [ref=e221]:
+              - generic [ref=e222]: 0 written
+              - generic [ref=e223]: 0 read
+            - generic [ref=e224]:
+              - button "Start" [ref=e225]
+              - button "Stop" [ref=e226]
+          - generic [ref=e170] [cursor=pointer]:
+            - generic [ref=e172]:
+              - generic [ref=e173]: mysql-batch-to-file
+              - generic [ref=e174]: completed · uptime 1m2s
+            - generic [ref=e175]:
+              - generic [ref=e176]: 9 written
+              - generic [ref=e177]: 9 read
+            - generic [ref=e178]:
+              - button "Start" [ref=e179]
+              - button "Stop" [ref=e180]
+          - generic [ref=e181] [cursor=pointer]:
+            - generic [ref=e183]:
+              - generic [ref=e184]: mysql-batch-to-mysql
+              - generic [ref=e185]: completed · uptime 1m2s
+            - generic [ref=e186]:
+              - generic [ref=e187]: 0 written
+              - generic [ref=e188]: 9 read
+              - generic [ref=e189]: "9"
+              - generic [ref=e190]: "9"
+            - generic [ref=e191]:
+              - button "Start" [ref=e192]
+              - button "Stop" [ref=e193]
+          - generic [ref=e194] [cursor=pointer]:
+            - generic [ref=e196]:
+              - generic [ref=e197]: mysql-to-clickhouse
+              - generic [ref=e198]: failed · uptime 1m2s
+            - generic [ref=e199]:
+              - generic [ref=e200]: 0 written
+              - generic [ref=e201]: 0 read
+            - generic [ref=e202]:
+              - button "Start" [ref=e203]
+              - button "Stop" [ref=e204]
+      - generic [ref=e227]:
+        - generic [ref=e228]:
+          - heading "Details · mysql-to-postgres" [level=2] [ref=e280]
+          - generic [ref=e232]:
+            - generic [ref=e234]:
+              - generic [ref=e235]: Write Success Rate
+              - generic [ref=e236]: 100%
+            - generic [ref=e240]:
+              - generic [ref=e241]: DLQ Pressure
+              - generic [ref=e242]: 0%
+            - generic [ref=e244]:
+              - generic [ref=e245]:
+                - generic [ref=e246]: Read Latency
+                - generic [ref=e247]: 1.2ms
+              - generic [ref=e248]:
+                - generic [ref=e249]: Write Latency
+                - generic [ref=e250]: 10.4ms
+              - generic [ref=e251]:
+                - generic [ref=e252]: Last Batch
+                - generic [ref=e253]: "9"
+              - generic [ref=e254]:
+                - generic [ref=e255]: Avg Batch
+                - generic [ref=e256]: "9"
+              - generic [ref=e257]:
+                - generic [ref=e258]: Batch Count
+                - generic [ref=e259]: "1"
+              - generic [ref=e260]:
+                - generic [ref=e261]: CP Age
+                - generic [ref=e262]: 61s
+              - generic [ref=e263]:
+                - generic [ref=e264]: DLQ Files
+                - generic [ref=e265]: "0"
+        - generic [ref=e266]:
+          - heading "Checkpoints" [level=2] [ref=e268]
+          - generic [ref=e269]:
+            - generic [ref=e270]:
+              - generic [ref=e271]:
+                - generic [ref=e272]: mysql-batch-to-file
+                - generic [ref=e273]: mysql_batch · 2026/6/14 23:45:34
+              - button "Reset" [ref=e274] [cursor=pointer]
+            - generic [ref=e275]:
+              - generic [ref=e276]:
+                - generic [ref=e277]: mysql-to-postgres
+                - generic [ref=e278]: mysql_batch · 2026/6/14 23:45:35
+              - button "Reset" [ref=e279] [cursor=pointer]

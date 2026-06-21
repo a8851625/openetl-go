@@ -1,0 +1,135 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: Designer
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: DLQ
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: Built-in
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM Plugins
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: Workers
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: Audit
+    - group [ref=e60]:
+      - generic "Settings" [ref=e184] [cursor=pointer]:
+        - img [ref=e62]
+        - generic [ref=e65]: Settings
+  - main [ref=e66]:
+    - generic [ref=e67]:
+      - heading "Designer" [level=1] [ref=e291]
+      - generic [ref=e69]:
+        - generic [ref=e70]: Auto-refresh 5s
+        - button "中文" [ref=e186] [cursor=pointer]:
+          - img [ref=e73]
+          - text: 中文
+        - button "Reload Specs" [ref=e187] [cursor=pointer]
+    - generic [ref=e292]:
+      - generic [ref=e293]:
+        - generic [ref=e294]:
+          - generic [ref=e295]: Pipeline Name
+          - textbox [ref=e296]: my-pipeline
+        - button "+ Add Source" [ref=e298] [cursor=pointer]:
+          - generic [ref=e299]: +
+          - text: Add Source
+        - button "+ Add Transform" [ref=e300] [cursor=pointer]:
+          - generic [ref=e301]: +
+          - text: Add Transform
+        - button "+ Add Sink" [active] [ref=e302] [cursor=pointer]:
+          - generic [ref=e303]: +
+          - text: Add Sink
+        - button "🗑 Delete Node" [ref=e305] [cursor=pointer]
+        - generic [ref=e306]:
+          - button "📅 Schedules" [ref=e307] [cursor=pointer]
+          - button "Export YAML" [ref=e308] [cursor=pointer]
+          - button "✓ Create Pipeline" [ref=e309] [cursor=pointer]
+      - generic [ref=e311]:
+        - application [ref=e313]:
+          - generic [ref=e315]:
+            - generic:
+              - generic:
+                - group [ref=e343]:
+                  - generic [ref=e344]:
+                    - generic [ref=e345]:
+                      - generic [ref=e346]: ⬛
+                      - generic [ref=e347]: source
+                    - generic [ref=e348]: source-1
+                    - generic [ref=e349]: file
+                - group [ref=e385]:
+                  - generic [ref=e386]:
+                    - generic [ref=e388]:
+                      - generic [ref=e389]: ▼
+                      - generic [ref=e390]: sink
+                    - generic [ref=e391]: sink-2
+                    - generic [ref=e392]: file_sink
+          - img
+          - generic "Control Panel" [ref=e316]:
+            - button "Zoom In" [disabled]:
+              - img
+            - button "Zoom Out" [ref=e320] [cursor=pointer]:
+              - img [ref=e321]
+            - button "Fit View" [ref=e323] [cursor=pointer]:
+              - img [ref=e324]
+          - img "Mini Map" [ref=e327]
+          - link "React Flow attribution" [ref=e329] [cursor=pointer]:
+            - /url: https://reactflow.dev
+            - text: React Flow
+        - generic [ref=e332]:
+          - generic [ref=e334]:
+            - generic [ref=e352]: sink
+            - generic [ref=e353]: sink-2
+          - generic [ref=e336]:
+            - generic [ref=e354]: Node ID
+            - textbox [ref=e355]: sink-2
+          - generic [ref=e356]:
+            - generic [ref=e357]: Plugin
+            - combobox [ref=e358]:
+              - option "s3"
+              - option "clickhouse"
+              - option "es"
+              - option "mysql"
+              - option "file_sink" [selected]
+              - option "elasticsearch"
+              - option "kafka"
+              - option "postgres"
+              - option "postgresql"
+          - generic [ref=e359]:
+            - generic [ref=e360]: Configuration (JSON)
+            - generic [ref=e361]:
+              - generic [ref=e394]:
+                - generic [ref=e395]:
+                  - text: output_dir
+                  - generic [ref=e396]: "*"
+                - textbox "Output directory path" [ref=e398]
+                - generic [ref=e399]: Output directory path
+              - generic [ref=e368]:
+                - generic [ref=e369]: format
+                - combobox [ref=e371]:
+                  - option "json" [selected]
+                  - option "jsonl"
+                  - option "csv"
+                  - option "parquet"
+                - generic [ref=e372]: Output format
+              - generic [ref=e400]:
+                - generic [ref=e401]: prefix
+                - textbox "File name prefix" [ref=e403]
+                - generic [ref=e404]: File name prefix

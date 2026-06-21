@@ -6,11 +6,11 @@ gfcli:
     build: "-a amd64 -s linux -p temp -ew"
     tagPrefixes:
       - registry.cn-heyuan.aliyuncs.com/gzdzh
-    tagName: "sync-canal-go:v3.0.3"
+    tagName: "openetl-go:v3.0.3"
     push: true
   build:
     # 构建名称
-    # name: "sync-canal-go"
+    # name: "openetl-go"
     # 输出目录
     path: "./bin"
     # 额外构建参数

@@ -1,0 +1,34 @@
+name: "file-to-missing-mysql"
+source:
+  type: file
+  config:
+    path: "/app/testdata/files/dlq_customers.jsonl"
+    format: "json"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: mysql
+  config:
+    host: "host.containers.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_target"
+    table: "dlq_customers"
+    pk_columns:
+      - "id"
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 1
+  initial_interval_ms: 100
+  max_interval_ms: 100
+
+dlq:
+  enable: true

@@ -1,0 +1,157 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: Designer
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: DLQ
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: Built-in
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM Plugins
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: Workers
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: Audit
+    - generic [ref=e60] [cursor=pointer]:
+      - img [ref=e61]
+      - generic [ref=e64]: Settings
+  - main [ref=e65]:
+    - generic [ref=e66]:
+      - heading "Designer" [level=1] [ref=e317]
+      - generic [ref=e68]:
+        - generic [ref=e69]: Auto-refresh 5s
+        - button "中文" [ref=e183] [cursor=pointer]:
+          - img [ref=e72]
+          - text: 中文
+        - button "Reload Specs" [ref=e184] [cursor=pointer]
+    - generic [ref=e318]:
+      - generic [ref=e319]:
+        - generic [ref=e320]:
+          - generic [ref=e321]: Pipeline Name
+          - textbox [ref=e322]: my-pipeline
+        - button "+ Add Source" [ref=e324] [cursor=pointer]:
+          - generic [ref=e325]: +
+          - text: Add Source
+        - button "+ Add Transform" [ref=e326] [cursor=pointer]:
+          - generic [ref=e327]: +
+          - text: Add Transform
+        - button "+ Add Sink" [ref=e328] [cursor=pointer]:
+          - generic [ref=e329]: +
+          - text: Add Sink
+        - button "🗑 Delete Node" [ref=e331] [cursor=pointer]
+        - generic [ref=e332]:
+          - button "🤖 AI" [ref=e333] [cursor=pointer]
+          - button "📅 Schedules" [ref=e334] [cursor=pointer]
+          - button "Export YAML" [ref=e335] [cursor=pointer]
+          - button "✓ Create Pipeline" [ref=e336] [cursor=pointer]
+      - generic [ref=e338]:
+        - generic [ref=e339]:
+          - generic [ref=e340]: 🏷 Tags
+          - textbox "production, critical, realtime" [ref=e341]
+          - paragraph [ref=e342]: Comma-separated
+        - generic [ref=e343]:
+          - generic [ref=e344]: 🎯 Worker Selector
+          - textbox "zone=us-east, gpu=true" [ref=e345]
+          - paragraph [ref=e346]: Label-match scheduling; empty=default pool
+        - generic [ref=e347]:
+          - generic [ref=e348]: ⚡ Parallelism
+          - generic [ref=e349]:
+            - spinbutton [ref=e350]: "1"
+            - combobox [ref=e351]:
+              - option "round_robin" [selected]
+              - option "partition (Kafka)"
+              - option "id_range (MySQL)"
+              - option "table (CDC)"
+          - paragraph [ref=e352]: 1 parallel instances, independent checkpoints
+      - generic [ref=e354]:
+        - application [ref=e356]:
+          - generic [ref=e358]:
+            - generic:
+              - generic:
+                - group [active] [ref=e386]:
+                  - generic [ref=e387]:
+                    - generic [ref=e388]:
+                      - generic [ref=e389]: ⬛
+                      - generic [ref=e390]: source
+                    - generic [ref=e391]: source-1
+                    - generic [ref=e392]: file
+                - group [ref=e428]:
+                  - generic [ref=e429]:
+                    - generic [ref=e431]:
+                      - generic [ref=e432]: ▼
+                      - generic [ref=e433]: sink
+                    - generic [ref=e434]: sink-2
+                    - generic [ref=e435]: file_sink
+          - img
+          - generic "Control Panel" [ref=e359]:
+            - button "Zoom In" [disabled]:
+              - img
+            - button "Zoom Out" [ref=e363] [cursor=pointer]:
+              - img [ref=e364]
+            - button "Fit View" [ref=e366] [cursor=pointer]:
+              - img [ref=e367]
+          - img "Mini Map" [ref=e370]
+          - link "React Flow attribution" [ref=e372] [cursor=pointer]:
+            - /url: https://reactflow.dev
+            - text: React Flow
+        - generic [ref=e375]:
+          - generic [ref=e377]:
+            - generic [ref=e395]: source
+            - generic [ref=e396]: source-1
+          - generic [ref=e379]:
+            - generic [ref=e397]: Node ID
+            - textbox [ref=e398]: source-1
+          - generic [ref=e399]:
+            - generic [ref=e400]: Plugin
+            - combobox [ref=e401]:
+              - option "mysql_batch"
+              - option "mysql_cdc"
+              - option "mysql_snapshot_cdc"
+              - option "postgres_cdc"
+              - option "demo"
+              - option "file" [selected]
+              - option "http"
+              - option "kafka"
+          - generic [ref=e402]:
+            - generic [ref=e403]: Configuration (JSON)
+            - generic [ref=e404]:
+              - generic [ref=e448]:
+                - generic [ref=e449]:
+                  - text: path
+                  - generic [ref=e450]: "*"
+                - textbox "/app/data/customers.jsonl" [ref=e452]
+                - generic [ref=e453]: File path inside the container
+              - generic [ref=e411]:
+                - generic [ref=e412]: format
+                - combobox [ref=e414]:
+                  - option "csv" [selected]
+                  - option "json"
+                - generic [ref=e415]: "File format: csv or json"
+              - generic [ref=e454]:
+                - generic [ref=e455]: delimiter
+                - textbox "CSV delimiter" [ref=e457]: ","
+                - generic [ref=e458]: CSV delimiter
+              - generic [ref=e459]:
+                - generic [ref=e460]: has_header
+                - generic [ref=e462]:
+                  - checkbox "Enabled" [checked] [ref=e463]
+                  - generic [ref=e464]: Enabled
+                - generic [ref=e465]: Whether CSV first row contains column names

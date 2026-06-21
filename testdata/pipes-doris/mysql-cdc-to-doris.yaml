@@ -1,0 +1,45 @@
+name: "mysql-cdc-to-doris"
+source:
+  type: mysql_cdc
+  config:
+    host: "host.containers.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    server_id: 2502
+    tables:
+      - "customers"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: doris
+  config:
+    host: "host.containers.internal"
+    port: 9030
+    http_port: 8030
+    user: "root"
+    password: ""
+    database: "dzh3136_go"
+    table: ""
+    write_mode: "stream_load"
+    stream_load_format: "json"
+    pk_columns:
+      - "id"
+    auto_create: true
+    schema_drift: "add_columns"
+
+batch_size: 500
+checkpoint_interval_sec: 1
+backpressure_buffer: 1000
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

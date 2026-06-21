@@ -12,8 +12,8 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
 
-	"sync-canal-go/internal/model/entity"
-	"sync-canal-go/internal/service"
+	"openetl-go/internal/model/entity"
+	"openetl-go/internal/service"
 )
 
 // Controller 监控控制器

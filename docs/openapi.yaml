@@ -1,0 +1,363 @@
+# ETL Platform OpenAPI 3.0 Specification
+# This file describes the ETL API v2 endpoints. It can be imported into
+# Swagger UI, Postman, or any OpenAPI-compatible tool.
+# Served at: /api/v2/ (base path)
+
+openapi: 3.0.3
+info:
+  title: Sync Canal ETL API
+  version: "3.0"
+  description: |
+    Declarative ETL/CDC platform API for pipeline management, monitoring,
+    dead-letter queue operations, and plugin management.
+    
+    ## Authentication
+    All endpoints require `X-API-Token` header or `Authorization: Bearer <token>`.
+    The token is set via `ETL_API_TOKEN` environment variable.
+
+servers:
+  - url: http://localhost:8000/api/v2
+    description: Local development
+  - url: /api/v2
+    description: Same-origin (via reverse proxy)
+
+security:
+  - ApiToken: []
+
+components:
+  securitySchemes:
+    ApiToken:
+      type: apiKey
+      in: header
+      name: X-API-Token
+  schemas:
+    PipelineSpec:
+      type: object
+      properties:
+        name: { type: string, example: "mysql-to-clickhouse" }
+        source: { $ref: '#/components/schemas/PluginConfig' }
+        sink: { $ref: '#/components/schemas/PluginConfig' }
+        transforms:
+          type: array
+          items: { $ref: '#/components/schemas/PluginConfig' }
+        batch_size: { type: integer, default: 1000 }
+        flush_interval_ms: { type: integer, default: 1000 }
+        checkpoint_interval_sec: { type: integer, default: 30 }
+        parallelism:
+          type: object
+          properties:
+            count: { type: integer }
+            shard_strategy: { type: string, enum: [round_robin, partition, id_range, table] }
+    PluginConfig:
+      type: object
+      properties:
+        type: { type: string, example: "mysql_cdc" }
+        config: { type: object }
+    PipelineStatus:
+      type: object
+      properties:
+        name: { type: string }
+        status: { type: string, enum: [running, stopped, failed, paused, completed] }
+        stats:
+          type: object
+          properties:
+            records_read: { type: integer }
+            records_written: { type: integer }
+            records_failed: { type: integer }
+            records_dlq: { type: integer }
+            started_at: { type: string, format: date-time }
+            uptime: { type: string }
+            last_error: { type: string }
+
+tags:
+  - name: Pipelines
+  - name: Checkpoints
+  - name: DLQ
+  - name: Plugins
+  - name: Specs
+  - name: Connections
+  - name: Transforms
+  - name: Monitoring
+  - name: Audit
+  - name: Schemas
+  - name: Workers
+
+paths:
+  /pipelines:
+    get:
+      tags: [Pipelines]
+      summary: List all pipelines
+      responses:
+        '200':
+          description: Pipeline list
+    post:
+      tags: [Pipelines]
+      summary: Create a new pipeline
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                spec: { $ref: '#/components/schemas/PipelineSpec' }
+      responses:
+        '200': { description: Created }
+        '409': { description: Already exists }
+    put:
+      tags: [Pipelines]
+      summary: Update an existing pipeline
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                spec: { $ref: '#/components/schemas/PipelineSpec' }
+                reset_checkpoint: { type: boolean }
+      responses:
+        '200': { description: Updated }
+
+  /pipelines/{name}:
+    get:
+      tags: [Pipelines]
+      summary: Get pipeline status
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Pipeline status
+    delete:
+      tags: [Pipelines]
+      summary: Delete pipeline
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+
+  /pipelines/{name}/start:
+    post:
+      tags: [Pipelines]
+      summary: Start pipeline
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Started }
+
+  /pipelines/{name}/stop:
+    post:
+      tags: [Pipelines]
+      summary: Stop pipeline
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Stopped }
+
+  /pipelines/{name}/pause:
+    post:
+      tags: [Pipelines]
+      summary: Pause pipeline (suspend source reading, keep checkpoint)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Paused }
+
+  /pipelines/{name}/resume:
+    post:
+      tags: [Pipelines]
+      summary: Resume pipeline from pause
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Resumed }
+
+  /pipelines/{name}/spec:
+    get:
+      tags: [Pipelines]
+      summary: Get pipeline spec (secrets masked)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Spec with masked secrets }
+
+  /pipelines/{name}/log:
+    get:
+      tags: [Pipelines]
+      summary: Get recent pipeline logs
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: since, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: Log entries }
+
+  /pipelines/{name}/shards:
+    get:
+      tags: [Pipelines]
+      summary: Get per-shard stats
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Shard info }
+
+  /pipelines/{name}/checkpoint/set:
+    post:
+      tags: [Pipelines, Checkpoints]
+      summary: Set checkpoint position (for exact replay)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Checkpoint saved }
+
+  /pipelines/{name}/checkpoint/reset:
+    post:
+      tags: [Pipelines, Checkpoints]
+      summary: Reset checkpoint (start from beginning)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Checkpoint reset }
+
+  /metrics:
+    get:
+      tags: [Monitoring]
+      summary: Get JSON metrics for all pipelines
+      responses:
+        '200': { description: Metrics JSON }
+
+  /health:
+    get:
+      tags: [Monitoring]
+      summary: Health check (returns 503 if unhealthy)
+      security: []
+      responses:
+        '200': { description: Healthy }
+        '503': { description: Unhealthy }
+
+  /dlq/{name}:
+    get:
+      tags: [DLQ]
+      summary: List dead-letter records
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: contains, in: query, schema: { type: string } }
+      responses:
+        '200': { description: DLQ items }
+    delete:
+      tags: [DLQ]
+      summary: Delete DLQ records
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+
+  /dlq/{name}/replay:
+    post:
+      tags: [DLQ]
+      summary: Replay DLQ records
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Replayed }
+
+  /connections/test:
+    post:
+      tags: [Connections]
+      summary: Test a source/sink connection and optionally get sample records
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: { type: string, enum: [source, sink, transform] }
+                type: { type: string }
+                config: { type: object }
+                open: { type: boolean, default: true }
+      responses:
+        '200': { description: Test result with optional sample records }
+
+  /transforms/dry-run:
+    post:
+      tags: [Transforms]
+      summary: Dry-run transforms against a sample record
+      responses:
+        '200': { description: Transformed record }
+
+  /specs/validate:
+    post:
+      tags: [Specs]
+      summary: Validate a pipeline spec (returns warnings)
+      responses:
+        '200': { description: Validation result }
+
+  /specs/reload:
+    post:
+      tags: [Specs]
+      summary: Reload specs from disk
+      responses:
+        '200': { description: Reloaded }
+
+  /plugins:
+    get:
+      tags: [Plugins]
+      summary: List registered plugins
+      responses:
+        '200': { description: Plugin list }
+
+  /plugins/schema:
+    get:
+      tags: [Plugins]
+      summary: Get config field schemas for all plugins
+      responses:
+        '200': { description: Plugin schemas }
+
+  /plugins/install:
+    post:
+      tags: [Plugins]
+      summary: Install a WASM plugin (multipart upload)
+      responses:
+        '200': { description: Installed }
+
+  /schemas:
+    get:
+      tags: [Schemas]
+      summary: List registered data schemas
+      responses:
+        '200': { description: Schema list }
+
+  /schemas/{name}:
+    get:
+      tags: [Schemas]
+      summary: Get a specific schema
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Schema }
+
+  /workers:
+    get:
+      tags: [Workers]
+      summary: List registered workers
+      responses:
+        '200': { description: Worker list }
+
+  /audit:
+    get:
+      tags: [Audit]
+      summary: List audit events
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200': { description: Audit events }
+
+  /settings:
+    get:
+      tags: [Settings]
+      summary: Get system settings
+      responses:
+        '200': { description: Settings }
+    put:
+      tags: [Settings]
+      summary: Update system settings
+      responses:
+        '200': { description: Updated }

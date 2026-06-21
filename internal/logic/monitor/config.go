@@ -9,7 +9,7 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"sync-canal-go/internal/model/entity"
+	"openetl-go/internal/model/entity"
 )
 
 // LoadConfig 加载监控配置

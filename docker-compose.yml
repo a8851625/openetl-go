@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  sync-canal-go:
-    image: registry.cn-heyuan.aliyuncs.com/gzdzh/sync-canal-go:latest
-    container_name: sync-canal-go
+  openetl-go:
+    image: registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:latest
+    container_name: openetl-go
     restart: always
     ports:
       - "8000:8000"

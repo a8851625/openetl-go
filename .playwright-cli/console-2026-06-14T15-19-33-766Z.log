@@ -1,0 +1,6 @@
+[     102ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:7000/favicon.ico:0
+[ 1560080ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:7000/api/v2/pipelines:0
+[ 1560081ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:7000/api/v2/plugins:0
+[ 1560081ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:7000/api/v2/metrics:0
+[ 1560081ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:7000/api/v2/checkpoints:0
+[ 1560081ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:7000/api/v2/audit?limit=50:0

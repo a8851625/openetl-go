@@ -1,0 +1,168 @@
+version: '3.8'
+
+services:
+  mysql-source:
+    image: docker.io/library/mysql:8.0
+    container_name: etl-mysql-source
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_DATABASE: dzh3136_go
+      MYSQL_USER: sync_user
+      MYSQL_PASSWORD: sync_password_123
+      TZ: Asia/Shanghai
+    ports:
+      - "13306:3306"
+    volumes:
+      - mysql-source-data:/var/lib/mysql
+      - ./testdata/mysql/init:/docker-entrypoint-initdb.d
+      - ./testdata/mysql/conf.d:/etc/mysql/conf.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot123456"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    command: >
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --binlog-row-image=FULL
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --binlog-expire-logs-seconds=604800
+      --default-authentication-plugin=mysql_native_password
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:24.3-alpine
+    container_name: etl-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: dzh123456
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      TZ: Asia/Shanghai
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./testdata/clickhouse/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-07-16T23-46-41Z
+    container_name: etl-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+      TZ: Asia/Shanghai
+    ports:
+      - "9001:9000"
+      - "9002:9001"
+    volumes:
+      - minio-data:/data
+    command: ["server", "/data", "--console-address", ":9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  redpanda:
+    image: docker.io/redpandadata/redpanda:v24.1.1
+    container_name: etl-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 512M
+      - --reserve-memory
+      - 0M
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - internal://etl-redpanda:9092,external://host.containers.internal:19092
+    ports:
+      - "19092:19092"
+      - "19644:9644"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  openetl-go:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: etl-openetl-go
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./pipes:/app/pipes:ro
+      - ./testdata:/app/testdata:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./manifest/config/config.yaml:/app/manifest/config/config.yaml:ro
+    depends_on:
+      mysql-source:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  go-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: etl-go-dev
+    restart: unless-stopped
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - go-cache:/go
+      - go-build-cache:/root/.cache/go-build
+    environment:
+      TZ: Asia/Shanghai
+      GOPATH: /go
+      GOMODCACHE: /go/pkg/mod
+    depends_on:
+      mysql-source:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    command: ["sleep", "infinity"]
+
+volumes:
+  mysql-source-data:
+  clickhouse-data:
+  go-cache:
+  go-build-cache:
+  minio-data:

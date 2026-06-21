@@ -1,0 +1,38 @@
+name: order-aggregation-demo
+tags: [quickstart, window, aggregation]
+
+source:
+  type: mysql_batch
+  config:
+    host: quickstart-mysql
+    port: 3306
+    user: root
+    password: root123
+    database: dzh3136_go
+    query: "SELECT id, customer_id, total, created_at FROM orders ORDER BY id"
+    batch_size: 100
+
+transforms:
+  # Window aggregation: group orders by customer, sum totals per minute
+  - type: window
+    config:
+      window_type: tumbling
+      window_size_seconds: 60
+      group_by: [customer_id]
+      aggregates:
+        total_revenue: { func: sum, field: total }
+        order_count: { func: count }
+        avg_order: { func: avg, field: total }
+        max_order: { func: max, field: total }
+
+sink:
+  type: clickhouse
+  config:
+    host: quickstart-clickhouse:9000
+    user: default
+    password: ""
+    database: dzh3136_go
+    table: order_window_agg
+    auto_create: true
+
+batch_size: 200

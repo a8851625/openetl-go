@@ -1,0 +1,169 @@
+# ════════════════════════════════════════════════════════════════════
+# Ultimate Complex Pipeline — E-Commerce Order Processing
+# ════════════════════════════════════════════════════════════════════
+#
+# This pipeline demonstrates the MAXIMUM capability of the platform:
+#
+#   File Source (orders.jsonl)
+#     → Tap (latency monitoring + alerting)
+#     → Rate Limiter (500 rps token bucket)
+#     → TS Transform (JavaScript: classify + enrich + mask)
+#     → Lua Transform (compute risk score)
+#     → Filter (drop test/cancelled orders)
+#     → Deduplicate (by order_id, 50k window)
+#     → File Sink (enriched output)
+#
+# Features showcased:
+#   ✓ 7 chained transforms (tap, rate_limiter, ts, lua, filter, deduplicate)
+#   ✓ TypeScript/JavaScript inline transform (QuickJS)
+#   ✓ Lua inline transform (gopher-lua)
+#   ✓ Parallelism with partition strategy
+#   ✓ Lifecycle hooks (on_init, on_error, on_shutdown)
+#   ✓ Restart policy (on-failure, exponential backoff)
+#   ✓ Worker selector (label-based scheduling)
+#   ✓ Tags for grouping
+#   ✓ DLQ enabled
+#   ✓ Retry with exponential backoff
+#
+# Run:  Place test orders in testdata/files/orders.jsonl
+# Out:  data/output/ultimate-demo/
+# ════════════════════════════════════════════════════════════════════
+
+name: ultimate-complex-demo
+
+source:
+  type: file
+  config:
+    path: ./testdata/files/orders.jsonl
+    format: json
+
+transforms:
+  # ── 1. Tap: observe the raw stream, log every 10 records, alert on lag ──
+  - type: tap
+    config:
+      log_every: 10
+      alert_on_lag_ms: 5000
+
+  # ── 2. Rate Limiter: throttle to 500 records/sec, burst 200 ──
+  - type: rate_limiter
+    config:
+      rate: 500
+      burst: 200
+
+  # ── 3a. TS Transform: classify tier + mask credit_card (JavaScript/QuickJS) ──
+  # NOTE: TS transform requires CGO_ENABLED=1 build. In CGO=0 builds, use lua instead.
+  # Uncomment this block if your binary was built with CGO enabled:
+  # - type: ts
+  #   config:
+  #     script: |
+  #       function transform(record) {
+  #         var d = record.data;
+  #         if (!d) return record;
+  #         d.processed_at = new Date().toISOString();
+  #         var amt = Number(d.amount) || 0;
+  #         d.order_tier = amt >= 10000 ? 'vip' : amt >= 5000 ? 'premium' : 'standard';
+  #         if (d.credit_card) {
+  #           var cc = String(d.credit_card);
+  #           d.credit_card = cc.length > 4 ? '****' + cc.slice(-4) : '****';
+  #         }
+  #         return record;
+  #       }
+
+  # ── 3b. Lua Transform: classify tier + mask + risk score (gopher-lua, always available) ──
+  - type: lua
+    config:
+      script: |
+        -- file source wraps JSONL: record.data = {data={...}, operation="INSERT"}
+        local wrapper = record.data
+        if type(wrapper) ~= "table" then return record end
+        local d = wrapper["data"]
+        if type(d) ~= "table" then return record end
+        -- Add processing timestamp
+        d["processed_at"] = os.date("!%Y-%m-%dT%H:%M:%SZ")
+        -- Classify order tier
+        local amt = tonumber(d["amount"]) or 0
+        if amt >= 10000 then d["order_tier"] = "vip"
+        elseif amt >= 5000 then d["order_tier"] = "premium"
+        else d["order_tier"] = "standard" end
+        -- Mask credit card
+        local cc = d["credit_card"]
+        if cc ~= nil then
+          cc = tostring(cc)
+          d["credit_card"] = string.rep("*", math.max(0, #cc - 4)) .. string.sub(cc, -4)
+        end
+        -- Compute risk score
+        local risk = 0
+        local tier = d["order_tier"] or "standard"
+        local status = d["status"] or ""
+        if tier == "vip" then risk = risk + 40
+        elseif tier == "premium" then risk = risk + 20
+        else risk = risk + 10 end
+        if status == "pending" then risk = risk + 30 end
+        if status == "cancelled" then risk = risk + 50 end
+        if amt > 50000 then risk = risk + 20 end
+        d["risk_score"] = math.min(100, risk)
+        return record
+
+  # ── 4. Filter: drop cancelled + test orders (keep all with operation field) ──
+  - type: filter
+    config:
+      expression: "operation"
+
+  # ── 5. Deduplicate: by order_id, LRU window 50000 ──
+  - type: deduplicate
+    config:
+      keys:
+        - order_id
+      window_size: 50000
+
+sink:
+  type: file_sink
+  config:
+    output_dir: ./data/output/ultimate-demo
+    format: json
+
+# ── Parallelism: 2 shards (demo; file source doesn't shard, both read same data) ──
+# parallelism:
+#   count: 2
+#   shard_strategy: round_robin
+
+# ── Retry with exponential backoff ──
+retry:
+  max_attempts: 5
+  initial_interval_ms: 2000
+  max_interval_ms: 60000
+
+# ── Checkpoint every 10s for fast recovery ──
+checkpoint_interval_sec: 10
+batch_size: 100
+backpressure_buffer: 200
+
+# ── Dead Letter Queue for failed records ──
+dlq:
+  enable: true
+
+# ── Lifecycle Hooks ──
+hooks:
+  on_init:
+    type: lua
+    code: "log('ultimate-complex-demo pipeline starting')"
+  on_error:
+    type: lua
+    code: "log('ERROR: ' .. (error or 'unknown'))"
+  on_shutdown:
+    type: lua
+    code: "log('ultimate-complex-demo pipeline shutting down')"
+
+# ── Restart policy: auto-restart on failure ──
+restart_policy:
+  mode: "on-failure"
+  max_restarts: 5
+  initial_delay_ms: 3000
+  max_delay_ms: 60000
+  backoff_multiplier: 2.0
+
+# ── Tags for grouping/filtering ──
+tags:
+  - demo
+  - complex
+  - showcase

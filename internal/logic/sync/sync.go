@@ -16,8 +16,8 @@ import (
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/gogf/gf/v2/frame/g"
 
-	"sync-canal-go/internal/model/entity"
-	"sync-canal-go/internal/service"
+	"openetl-go/internal/model/entity"
+	"openetl-go/internal/service"
 )
 
 func init() {

@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f1f5f9;
+  color: #0f172a;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Sidebar ── */
+.sidebar-item {
+  @apply flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition cursor-pointer;
+}
+.sidebar-item:hover { @apply bg-slate-100 text-slate-900; }
+.sidebar-item.active { @apply bg-indigo-50 text-indigo-700; }
+.sidebar-item.active .sidebar-icon { @apply text-indigo-600; }
+
+/* ── Buttons ── */
+.btn {
+  @apply inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3.5 text-sm font-medium transition;
+}
+.btn:disabled { @apply cursor-not-allowed opacity-50; }
+.btn-primary { @apply bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 active:bg-indigo-800; }
+.btn-secondary { @apply border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 active:bg-slate-100; }
+.btn-danger { @apply bg-rose-600 text-white shadow-sm hover:bg-rose-700; }
+.btn-warning { @apply border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100; }
+.btn-ghost { @apply text-slate-500 hover:bg-slate-100 hover:text-slate-900; }
+.btn-sm { @apply h-7 px-2.5 text-xs; }
+
+/* ── Inputs ── */
+.input {
+  @apply h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition;
+}
+.input:focus { @apply border-indigo-500 ring-2 ring-indigo-100; }
+.input::placeholder { @apply text-slate-400; }
+
+/* ── Cards ── */
+.card { @apply rounded-xl border border-slate-200 bg-white shadow-sm; }
+.card-header { @apply border-b border-slate-100 px-5 py-4; }
+.card-body { @apply p-5; }
+
+/* ── Status ── */
+.status-dot { @apply inline-block h-2 w-2 rounded-full; }
+.status-running { @apply bg-emerald-500; }
+.status-completed { @apply bg-blue-500; }
+.status-failed { @apply bg-rose-500; }
+.status-stopped { @apply bg-slate-400; }
+.status-starting { @apply bg-amber-400 animate-pulse; }
+.status-paused { @apply bg-amber-500; }
+.status-error { @apply bg-rose-600; }
+
+/* ── Badges ── */
+.badge { @apply inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium; }
+.badge-emerald { @apply bg-emerald-50 text-emerald-700; }
+.badge-blue { @apply bg-blue-50 text-blue-700; }
+.badge-amber { @apply bg-amber-50 text-amber-700; }
+.badge-rose { @apply bg-rose-50 text-rose-700; }
+.badge-slate { @apply bg-slate-100 text-slate-600; }
+.badge-violet { @apply bg-violet-50 text-violet-700; }
+.badge-cyan { @apply bg-cyan-50 text-cyan-700; }
+.badge-indigo { @apply bg-indigo-50 text-indigo-700; }
+.badge-purple { @apply bg-purple-50 text-purple-700; }
+
+/* ── Pipeline row ── */
+.pipeline-row {
+  @apply flex w-full items-center gap-4 rounded-lg border border-slate-200 bg-white p-4 text-left transition cursor-pointer;
+}
+.pipeline-row:hover { @apply border-indigo-300 bg-indigo-50/30; }
+.pipeline-row.selected { @apply border-indigo-500 bg-indigo-50/50 ring-1 ring-indigo-200; }
+
+/* ── Progress bar ── */
+.progress-track { @apply h-2 w-full rounded-full bg-slate-100; }
+.progress-fill { @apply h-2 rounded-full transition-all duration-500; }
+
+/* ── Toast ── */
+.toast-enter { animation: toast-in 0.3s ease-out; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Code blocks ── */
+.code-block {
+  @apply rounded-lg bg-slate-900 p-4 font-mono text-xs leading-relaxed text-slate-300;
+}
+.code-block textarea {
+  @apply w-full resize-none bg-transparent text-slate-300 outline-none;
+}
+
+/* ── Tables ── */
+.tbl { @apply w-full text-sm; }
+.tbl th { @apply border-b border-slate-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500; }
+.tbl td { @apply border-b border-slate-50 px-4 py-3 text-slate-700; }
+.tbl tr:hover td { @apply bg-slate-50; }
+
+/* ── Misc ── */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.spin { animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

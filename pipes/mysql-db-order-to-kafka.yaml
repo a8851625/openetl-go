@@ -1,0 +1,38 @@
+name: "mysql-db-order-to-kafka"
+source:
+  type: mysql_cdc
+  config:
+    host: "etl-mysql-source"
+    port: 3306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "db_order"
+    server_id: 1002
+    tables:
+      - "user"
+      - "order"
+
+transforms:
+  - type: lua
+    config:
+      script: |
+        record._source_table = metadata.table
+
+sink:
+  type: kafka
+  config:
+    brokers:
+      - "etl-redpanda:9092"
+    topic: "db_order.entity"
+
+batch_size: 100
+checkpoint_interval_sec: 5
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 500
+  max_interval_ms: 10000
+
+dlq:
+  enable: true

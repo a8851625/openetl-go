@@ -1,0 +1,9 @@
+{
+  "id": "mysql-to-elasticsearch-1781281405501918048",
+  "job_name": "mysql-to-elasticsearch",
+  "source": "mysql_batch",
+  "position": {
+    "last_id": 9403
+  },
+  "timestamp": "2026-06-12T16:23:25.501936507Z"
+}

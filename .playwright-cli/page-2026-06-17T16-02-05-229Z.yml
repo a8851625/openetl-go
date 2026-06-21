@@ -1,0 +1,131 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: Designer
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: DLQ
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: Built-in
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM Plugins
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: Workers
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: Audit
+    - generic [ref=e60] [cursor=pointer]:
+      - img [ref=e61]
+      - generic [ref=e64]: Settings
+  - main [ref=e65]:
+    - generic [ref=e66]:
+      - heading "Pipelines" [level=1] [ref=e217]
+      - generic [ref=e68]:
+        - generic [ref=e69]: Auto-refresh 5s
+        - button "中文" [ref=e183] [cursor=pointer]:
+          - img [ref=e72]
+          - text: 中文
+        - button "Reload Specs" [ref=e184] [cursor=pointer]
+    - generic [ref=e308]:
+      - generic [ref=e309]: ✓
+      - generic [ref=e310]: Start auth-file-to-file
+    - generic [ref=e218]:
+      - generic [ref=e219]:
+        - generic [ref=e220]:
+          - heading "All Pipelines" [level=2] [ref=e221]
+          - generic [ref=e222]: 1 pipelines
+        - generic [ref=e224] [cursor=pointer]:
+          - generic [ref=e226]:
+            - generic [ref=e227]: auth-file-to-file
+            - generic [ref=e228]: failed · uptime 0s
+          - generic [ref=e229]:
+            - generic [ref=e230]: 0 written
+            - generic [ref=e231]: 0 read
+          - generic [ref=e232]:
+            - button "Start" [active] [ref=e233]
+            - button "Stop" [ref=e234]
+      - generic [ref=e235]:
+        - generic [ref=e236]:
+          - generic [ref=e237]:
+            - heading "Details · auth-file-to-file" [level=2] [ref=e238]
+            - button "✏️ Edit" [ref=e239] [cursor=pointer]
+          - generic [ref=e241]:
+            - generic [ref=e243]:
+              - generic [ref=e244]: Write Success Rate
+              - generic [ref=e245]: 0%
+            - generic [ref=e249]:
+              - generic [ref=e250]: DLQ Pressure
+              - generic [ref=e251]: 0%
+            - generic [ref=e253]:
+              - generic [ref=e254]:
+                - generic [ref=e255]: Read Latency
+                - generic [ref=e256]: 0.0ms
+              - generic [ref=e257]:
+                - generic [ref=e258]: Write Latency
+                - generic [ref=e259]: 2.0ms
+              - generic [ref=e260]:
+                - generic [ref=e261]: Last Batch
+                - generic [ref=e262]: "3"
+              - generic [ref=e263]:
+                - generic [ref=e264]: Avg Batch
+                - generic [ref=e265]: "3"
+              - generic [ref=e266]:
+                - generic [ref=e267]: Batch Count
+                - generic [ref=e268]: "1"
+              - generic [ref=e269]:
+                - generic [ref=e270]: CP Age
+                - generic [ref=e271]: 46s
+              - generic [ref=e272]:
+                - generic [ref=e273]: DLQ Files
+                - generic [ref=e274]: "0"
+            - generic [ref=e311]: "pipeline panic: close of closed channel"
+        - generic [ref=e275]:
+          - generic [ref=e276]:
+            - heading "Logs" [level=2] [ref=e277]
+            - generic [ref=e278]:
+              - button "⏸" [ref=e279] [cursor=pointer]
+              - button "✕" [ref=e280] [cursor=pointer]
+          - generic [ref=e281]:
+            - generic [ref=e282]:
+              - generic [ref=e283]: 16:01:16
+              - generic [ref=e284]: INFO
+              - generic [ref=e285]: Pipeline started (file → file_sink)
+            - generic [ref=e286]:
+              - generic [ref=e287]: 16:01:16
+              - generic [ref=e288]: INFO
+              - generic [ref=e289]: Source exhausted (EOF). written=0 read=3
+            - generic [ref=e290]:
+              - generic [ref=e291]: 16:01:16
+              - generic [ref=e292]: DEBUG
+              - generic [ref=e293]: "Flushed: 3 records (total w=3 r=3)"
+            - generic [ref=e294]:
+              - generic [ref=e295]: 16:01:16
+              - generic [ref=e296]: INFO
+              - generic [ref=e297]: Pipeline finished. written=3 read=3 failed=0
+            - generic [ref=e312]:
+              - generic [ref=e313]: 16:02:03
+              - generic [ref=e314]: INFO
+              - generic [ref=e315]: Pipeline finished. written=0 read=0 failed=0
+        - generic [ref=e298]:
+          - heading "Checkpoints" [level=2] [ref=e300]
+          - generic [ref=e302]:
+            - generic [ref=e303]:
+              - generic [ref=e304]: auth-file-to-file
+              - generic [ref=e305]: file · 2026/6/18 00:01:16
+            - button "Reset" [ref=e306] [cursor=pointer]

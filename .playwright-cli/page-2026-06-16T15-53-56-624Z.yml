@@ -1,0 +1,116 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: 设计器
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e36]: DAG 编辑器
+      - generic [ref=e37] [cursor=pointer]:
+        - img [ref=e38]
+        - generic [ref=e41]: 调度管理
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e45]: 死信队列
+      - generic [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e51]: 插件
+      - generic [ref=e52] [cursor=pointer]:
+        - img [ref=e53]
+        - generic [ref=e57]: WASM 插件
+      - generic [ref=e58] [cursor=pointer]:
+        - img [ref=e59]
+        - generic [ref=e63]: 工作节点
+      - generic [ref=e64] [cursor=pointer]:
+        - img [ref=e65]
+        - generic [ref=e68]: 审计
+    - group [ref=e70]:
+      - generic "设置" [ref=e483] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e75]: 设置
+      - generic [ref=e454]:
+        - generic [ref=e455]:
+          - generic [ref=e456]: 语言
+          - generic [ref=e457]:
+            - button "English" [ref=e458] [cursor=pointer]
+            - button "中文" [ref=e459] [cursor=pointer]
+        - generic [ref=e460]:
+          - generic [ref=e461]: API 令牌
+          - textbox "API 令牌" [ref=e484]: my-token-456
+          - button "保存令牌" [ref=e485] [cursor=pointer]
+  - main [ref=e76]:
+    - generic [ref=e77]:
+      - heading "管道" [level=1] [ref=e565]
+      - generic [ref=e79]:
+        - generic [ref=e80]: 自动刷新 5秒
+        - button "EN" [ref=e487] [cursor=pointer]:
+          - img [ref=e83]
+          - text: EN
+        - button "重载配置" [ref=e488] [cursor=pointer]
+    - generic [ref=e566]:
+      - generic [ref=e567]:
+        - generic [ref=e568]:
+          - heading "所有管道" [level=2] [ref=e569]
+          - generic [ref=e570]: 1 个管道
+        - generic [ref=e572] [cursor=pointer]:
+          - generic [ref=e574]:
+            - generic [ref=e575]: auth-file-to-file
+            - generic [ref=e576]: failed · 运行时长 1m53s
+          - generic [ref=e577]:
+            - generic [ref=e578]: 0 已写入
+            - generic [ref=e579]: 0 已读取
+          - generic [ref=e580]:
+            - button "启动" [ref=e581]
+            - button "停止" [ref=e582]
+      - generic [ref=e583]:
+        - generic [ref=e584]:
+          - heading "详情 · auth-file-to-file" [level=2] [ref=e586]
+          - generic [ref=e588]:
+            - generic [ref=e590]:
+              - generic [ref=e591]: 写入成功率
+              - generic [ref=e592]: 0%
+            - generic [ref=e595]:
+              - generic [ref=e596]: 死信压力
+              - generic [ref=e597]: 0%
+            - generic [ref=e599]:
+              - generic [ref=e600]:
+                - generic [ref=e601]: 读取延迟
+                - generic [ref=e602]: 0.0ms
+              - generic [ref=e603]:
+                - generic [ref=e604]: 写入延迟
+                - generic [ref=e605]: 0.7ms
+              - generic [ref=e606]:
+                - generic [ref=e607]: 最近批次
+                - generic [ref=e608]: "3"
+              - generic [ref=e609]:
+                - generic [ref=e610]: 平均批次
+                - generic [ref=e611]: "3"
+              - generic [ref=e612]:
+                - generic [ref=e613]: 批次总数
+                - generic [ref=e614]: "1"
+              - generic [ref=e615]:
+                - generic [ref=e616]: 断点时长
+                - generic [ref=e617]: 156s
+              - generic [ref=e618]:
+                - generic [ref=e619]: 死信文件
+                - generic [ref=e620]: "0"
+            - generic [ref=e621]: "pipeline panic: close of closed channel"
+        - generic [ref=e622]:
+          - heading "检查点" [level=2] [ref=e624]
+          - generic [ref=e626]:
+            - generic [ref=e627]:
+              - generic [ref=e628]: auth-file-to-file
+              - generic [ref=e629]: file · 2026/6/16 23:51:20
+            - button "重置" [ref=e630] [cursor=pointer]

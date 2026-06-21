@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────
+# Order Realtime Analytics Pipeline (Demo)
+# ─────────────────────────────────────────────────────────────────────
+# Showcases multiple advanced DAG node types in a single pipeline:
+#   File → Tap → Rate Limiter → Lua → Filter → Deduplicate → File
+#
+# This demo runs standalone (no MySQL/Kafka required).
+# It demonstrates:
+#   1. Tap — observe stream for latency monitoring
+#   2. Rate Limiter — token-bucket throttle
+#   3. Lua — add computed fields (order tier)
+#   4. Filter — drop test orders
+#   5. Deduplicate — drop duplicate order IDs
+# ─────────────────────────────────────────────────────────────────────
+
+name: order-realtime-analytics
+
+source:
+  type: file
+  config:
+    path: ./testdata/files/orders.jsonl
+    format: json
+
+transforms:
+  # 1. Tap — observe the raw stream for latency monitoring (no data change)
+  - type: tap
+    config:
+      log_every: 1
+      alert_on_lag_ms: 5000
+
+  # 2. Rate Limiter — token-bucket throttle (100 rps, burst 50)
+  - type: rate_limiter
+    config:
+      rate: 100
+      burst: 50
+
+  # 3. Lua — add computed fields: processing timestamp + order tier
+  - type: lua
+    config:
+      script: |
+        -- record maps to rec.Data; file source wraps the JSONL line
+        -- The inner "data" key holds the actual order fields
+        local inner = record["data"]
+        if type(inner) == "table" then
+          inner["processed_at"] = os.date("!%Y-%m-%dT%H:%M:%SZ")
+          local amt = tonumber(inner["amount"]) or 0
+          if amt > 10000 then
+            inner["order_tier"] = "vip"
+          else
+            inner["order_tier"] = "standard"
+          end
+        end
+        return record
+
+  # 4. Filter — keep only records with an order_id (drops malformed)
+  - type: filter
+    config:
+      expression: "operation"
+
+  # 5. Deduplicate — drop duplicate orders by order_id
+  - type: deduplicate
+    config:
+      keys:
+        - order_id
+      window_size: 10000
+
+sink:
+  type: file_sink
+  config:
+    output_dir: ./data/output/orders_enriched
+    format: json
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 30000
+
+checkpoint_interval_sec: 30
+batch_size: 100
+backpressure_buffer: 50
+
+dlq:
+  enable: true
+
+tags:
+  - demo
+  - analytics

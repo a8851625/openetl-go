@@ -1,0 +1,101 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: 可视化设计器
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: 死信队列
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: 内置
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM 插件
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: 工作节点
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: 审计
+    - generic [ref=e60] [cursor=pointer]:
+      - img [ref=e61]
+      - generic [ref=e64]: 设置
+  - main [ref=e65]:
+    - generic [ref=e66]:
+      - heading "管道" [level=1] [ref=e920]
+      - generic [ref=e68]:
+        - generic [ref=e69]: 自动刷新 5秒
+        - button "EN" [ref=e842] [cursor=pointer]:
+          - img [ref=e72]
+          - text: EN
+        - button "重载配置" [ref=e843] [cursor=pointer]
+    - generic [ref=e921]:
+      - generic [ref=e922]:
+        - generic [ref=e923]:
+          - heading "所有管道" [level=2] [ref=e924]
+          - generic [ref=e925]: 1 个管道
+        - generic [ref=e927] [cursor=pointer]:
+          - generic [ref=e929]:
+            - generic [ref=e930]: auth-file-to-file
+            - generic [ref=e931]: failed · 运行时长 1m47s
+          - generic [ref=e932]:
+            - generic [ref=e933]: 0 已写入
+            - generic [ref=e934]: 0 已读取
+          - generic [ref=e935]:
+            - button "启动" [ref=e936]
+            - button "停止" [ref=e937]
+      - generic [ref=e938]:
+        - generic [ref=e939]:
+          - generic [ref=e940]:
+            - heading "详情 · auth-file-to-file" [level=2] [ref=e941]
+            - button "✏️ 编辑" [ref=e942] [cursor=pointer]
+          - generic [ref=e944]:
+            - generic [ref=e946]:
+              - generic [ref=e947]: 写入成功率
+              - generic [ref=e948]: 0%
+            - generic [ref=e951]:
+              - generic [ref=e952]: 死信压力
+              - generic [ref=e953]: 0%
+            - generic [ref=e955]:
+              - generic [ref=e956]:
+                - generic [ref=e957]: 读取延迟
+                - generic [ref=e958]: 0.0ms
+              - generic [ref=e959]:
+                - generic [ref=e960]: 写入延迟
+                - generic [ref=e961]: 1.1ms
+              - generic [ref=e962]:
+                - generic [ref=e963]: 最近批次
+                - generic [ref=e964]: "3"
+              - generic [ref=e965]:
+                - generic [ref=e966]: 平均批次
+                - generic [ref=e967]: "3"
+              - generic [ref=e968]:
+                - generic [ref=e969]: 批次总数
+                - generic [ref=e970]: "1"
+              - generic [ref=e971]:
+                - generic [ref=e972]: 断点时长
+                - generic [ref=e973]: 151s
+              - generic [ref=e974]:
+                - generic [ref=e975]: 死信文件
+                - generic [ref=e976]: "0"
+            - generic [ref=e977]: "pipeline panic: close of closed channel"
+        - generic [ref=e978]:
+          - heading "检查点" [level=2] [ref=e980]
+          - generic [ref=e982]:
+            - generic [ref=e983]:
+              - generic [ref=e984]: auth-file-to-file
+              - generic [ref=e985]: file · 2026/6/17 22:22:15
+            - button "重置" [ref=e986] [cursor=pointer]

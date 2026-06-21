@@ -1,0 +1,9 @@
+{
+  "id": "mysql-batch-to-file-1781530036747235545",
+  "job_name": "mysql-batch-to-file",
+  "source": "mysql_batch",
+  "position": {
+    "last_id": 9403
+  },
+  "timestamp": "2026-06-15T13:27:16.747236878Z"
+}

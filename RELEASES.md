@@ -13,12 +13,12 @@
 
 | 平台 | 架构 | 下载链接 |
 |------|------|----------|
-| **Linux** | amd64 | [sync-canal-go_v3.0.0_linux_amd64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v3.0.0/sync-canal-go_v3.0.0_linux_amd64.tar.gz) |
-| **Linux** | arm64 | [sync-canal-go_v3.0.0_linux_arm64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v3.0.0/sync-canal-go_v3.0.0_linux_arm64.tar.gz) |
-| **macOS** | amd64 | [sync-canal-go_v3.0.0_darwin_amd64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v3.0.0/sync-canal-go_v3.0.0_darwin_amd64.tar.gz) |
-| **macOS** | arm64 (M1/M2) | [sync-canal-go_v3.0.0_darwin_arm64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v3.0.0/sync-canal-go_v3.0.0_darwin_arm64.tar.gz) |
-| **Windows** | amd64 | [sync-canal-go_v3.0.0_windows_amd64.zip](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v3.0.0/sync-canal-go_v3.0.0_windows_amd64.zip) |
-| **Windows** | arm64 | [sync-canal-go_v3.0.0_windows_arm64.zip](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v3.0.0/sync-canal-go_v3.0.0_windows_arm64.zip) |
+| **Linux** | amd64 | [openetl-go_v3.0.0_linux_amd64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v3.0.0/openetl-go_v3.0.0_linux_amd64.tar.gz) |
+| **Linux** | arm64 | [openetl-go_v3.0.0_linux_arm64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v3.0.0/openetl-go_v3.0.0_linux_arm64.tar.gz) |
+| **macOS** | amd64 | [openetl-go_v3.0.0_darwin_amd64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v3.0.0/openetl-go_v3.0.0_darwin_amd64.tar.gz) |
+| **macOS** | arm64 (M1/M2) | [openetl-go_v3.0.0_darwin_arm64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v3.0.0/openetl-go_v3.0.0_darwin_arm64.tar.gz) |
+| **Windows** | amd64 | [openetl-go_v3.0.0_windows_amd64.zip](https://github.com/gzdzh-cn/openetl-go/releases/download/v3.0.0/openetl-go_v3.0.0_windows_amd64.zip) |
+| **Windows** | arm64 | [openetl-go_v3.0.0_windows_arm64.zip](https://github.com/gzdzh-cn/openetl-go/releases/download/v3.0.0/openetl-go_v3.0.0_windows_arm64.zip) |
 
 ### 安装说明
 
@@ -26,30 +26,30 @@
 
 ```bash
 # 下载（以 Linux amd64 为例）
-wget https://github.com/gzdzh-cn/sync-canal-go/releases/download/v3.0.0/sync-canal-go_v3.0.0_linux_amd64.tar.gz
+wget https://github.com/gzdzh-cn/openetl-go/releases/download/v3.0.0/openetl-go_v3.0.0_linux_amd64.tar.gz
 
 # 解压
-tar -xzf sync-canal-go_v3.0.0_linux_amd64.tar.gz
+tar -xzf openetl-go_v3.0.0_linux_amd64.tar.gz
 
 # 进入目录
-cd sync-canal-go
+cd openetl-go
 
 # 修改配置
 vim manifest/config/config.yaml
 
 # 运行
-./sync-canal-go
+./openetl-go
 ```
 
 #### Windows
 
 ```powershell
-# 下载并解压 sync-canal-go_v3.0.0_windows_amd64.zip
+# 下载并解压 openetl-go_v3.0.0_windows_amd64.zip
 
 # 进入目录，修改配置文件 manifest/config/config.yaml
 
 # 运行
-.\sync-canal-go.exe
+.\openetl-go.exe
 ```
 
 ---
@@ -65,12 +65,12 @@ vim manifest/config/config.yaml
 
 | 平台 | 架构 | 下载链接 |
 |------|------|----------|
-| **Linux** | amd64 | [sync-canal-go_v2.0.0_linux_amd64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v2.0.0/sync-canal-go_v2.0.0_linux_amd64.tar.gz) |
-| **Linux** | arm64 | [sync-canal-go_v2.0.0_linux_arm64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v2.0.0/sync-canal-go_v2.0.0_linux_arm64.tar.gz) |
-| **macOS** | amd64 | [sync-canal-go_v2.0.0_darwin_amd64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v2.0.0/sync-canal-go_v2.0.0_darwin_amd64.tar.gz) |
-| **macOS** | arm64 | [sync-canal-go_v2.0.0_darwin_arm64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v2.0.0/sync-canal-go_v2.0.0_darwin_arm64.tar.gz) |
-| **Windows** | amd64 | [sync-canal-go_v2.0.0_windows_amd64.zip](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v2.0.0/sync-canal-go_v2.0.0_windows_amd64.zip) |
-| **Windows** | arm64 | [sync-canal-go_v2.0.0_windows_arm64.zip](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v2.0.0/sync-canal-go_v2.0.0_windows_arm64.zip) |
+| **Linux** | amd64 | [openetl-go_v2.0.0_linux_amd64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v2.0.0/openetl-go_v2.0.0_linux_amd64.tar.gz) |
+| **Linux** | arm64 | [openetl-go_v2.0.0_linux_arm64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v2.0.0/openetl-go_v2.0.0_linux_arm64.tar.gz) |
+| **macOS** | amd64 | [openetl-go_v2.0.0_darwin_amd64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v2.0.0/openetl-go_v2.0.0_darwin_amd64.tar.gz) |
+| **macOS** | arm64 | [openetl-go_v2.0.0_darwin_arm64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v2.0.0/openetl-go_v2.0.0_darwin_arm64.tar.gz) |
+| **Windows** | amd64 | [openetl-go_v2.0.0_windows_amd64.zip](https://github.com/gzdzh-cn/openetl-go/releases/download/v2.0.0/openetl-go_v2.0.0_windows_amd64.zip) |
+| **Windows** | arm64 | [openetl-go_v2.0.0_windows_arm64.zip](https://github.com/gzdzh-cn/openetl-go/releases/download/v2.0.0/openetl-go_v2.0.0_windows_arm64.zip) |
 
 ---
 
@@ -84,9 +84,9 @@ vim manifest/config/config.yaml
 
 | 平台 | 架构 | 下载链接 |
 |------|------|----------|
-| **Linux** | amd64 | [sync-canal-go_v1.1.0_linux_amd64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v1.1.0/sync-canal-go_v1.1.0_linux_amd64.tar.gz) |
-| **macOS** | amd64 | [sync-canal-go_v1.1.0_darwin_amd64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v1.1.0/sync-canal-go_v1.1.0_darwin_amd64.tar.gz) |
-| **Windows** | amd64 | [sync-canal-go_v1.1.0_windows_amd64.zip](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v1.1.0/sync-canal-go_v1.1.0_windows_amd64.zip) |
+| **Linux** | amd64 | [openetl-go_v1.1.0_linux_amd64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v1.1.0/openetl-go_v1.1.0_linux_amd64.tar.gz) |
+| **macOS** | amd64 | [openetl-go_v1.1.0_darwin_amd64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v1.1.0/openetl-go_v1.1.0_darwin_amd64.tar.gz) |
+| **Windows** | amd64 | [openetl-go_v1.1.0_windows_amd64.zip](https://github.com/gzdzh-cn/openetl-go/releases/download/v1.1.0/openetl-go_v1.1.0_windows_amd64.zip) |
 
 ---
 
@@ -100,9 +100,9 @@ vim manifest/config/config.yaml
 
 | 平台 | 架构 | 下载链接 |
 |------|------|----------|
-| **Linux** | amd64 | [sync-canal-go_v1.0.0_linux_amd64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v1.0.0/sync-canal-go_v1.0.0_linux_amd64.tar.gz) |
-| **macOS** | amd64 | [sync-canal-go_v1.0.0_darwin_amd64.tar.gz](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v1.0.0/sync-canal-go_v1.0.0_darwin_amd64.tar.gz) |
-| **Windows** | amd64 | [sync-canal-go_v1.0.0_windows_amd64.zip](https://github.com/gzdzh-cn/sync-canal-go/releases/download/v1.0.0/sync-canal-go_v1.0.0_windows_amd64.zip) |
+| **Linux** | amd64 | [openetl-go_v1.0.0_linux_amd64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v1.0.0/openetl-go_v1.0.0_linux_amd64.tar.gz) |
+| **macOS** | amd64 | [openetl-go_v1.0.0_darwin_amd64.tar.gz](https://github.com/gzdzh-cn/openetl-go/releases/download/v1.0.0/openetl-go_v1.0.0_darwin_amd64.tar.gz) |
+| **Windows** | amd64 | [openetl-go_v1.0.0_windows_amd64.zip](https://github.com/gzdzh-cn/openetl-go/releases/download/v1.0.0/openetl-go_v1.0.0_windows_amd64.zip) |
 
 ---
 
@@ -113,8 +113,8 @@ vim manifest/config/config.yaml
 每个 Release 包含：
 
 ```
-sync-canal-go_vX.X.X_平台_架构.tar.gz
-├── sync-canal-go          # 可执行文件
+openetl-go_vX.X.X_平台_架构.tar.gz
+├── openetl-go          # 可执行文件
 ├── manifest/
 │   └── config/
 │       └── config.yaml    # 配置文件
@@ -125,8 +125,8 @@ sync-canal-go_vX.X.X_平台_架构.tar.gz
 
 ```bash
 # 克隆仓库
-git clone https://github.com/gzdzh-cn/sync-canal-go.git
-cd sync-canal-go
+git clone https://github.com/gzdzh-cn/openetl-go.git
+cd openetl-go
 
 # 多平台构建
 gf build

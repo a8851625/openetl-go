@@ -1,0 +1,91 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: Designer
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e32]: DLQ
+      - generic [ref=e33] [cursor=pointer]:
+        - img [ref=e34]
+        - generic [ref=e38]: Plugins
+      - generic [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - generic [ref=e43]: Audit
+    - group [ref=e45]:
+      - generic "Settings" [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e50]: Settings
+  - main [ref=e51]:
+    - generic [ref=e52]:
+      - heading "Designer" [level=1] [ref=e203]
+      - generic [ref=e54]:
+        - generic [ref=e55]: Auto-refresh 5s
+        - button "中文" [ref=e57] [cursor=pointer]:
+          - img [ref=e58]
+          - text: 中文
+        - button "Reload Specs" [ref=e61] [cursor=pointer]
+    - generic [ref=e204]:
+      - generic [ref=e205]:
+        - generic [ref=e206]:
+          - heading "Pipeline Canvas" [level=2] [ref=e208]
+          - generic [ref=e209]:
+            - generic [ref=e210]:
+              - generic [ref=e211]: Pipeline Name
+              - textbox [ref=e212]: visual-file-to-file
+            - generic [ref=e213]:
+              - generic [ref=e214]:
+                - generic [ref=e215]: Source
+                - generic [ref=e216]: file
+              - generic [ref=e217]: →
+              - generic [ref=e218]:
+                - generic [ref=e219]: Transform
+                - generic [ref=e220]: identity
+              - generic [ref=e221]: →
+              - generic [ref=e222]:
+                - generic [ref=e223]: Sink
+                - generic [ref=e224]: file_sink
+        - generic [ref=e225]:
+          - generic [ref=e226]:
+            - generic [ref=e227]: Source
+            - combobox [ref=e228]:
+              - option "file" [selected]
+          - generic [ref=e229]:
+            - generic [ref=e230]: Transform
+            - combobox [ref=e231]:
+              - option "identity" [selected]
+          - generic [ref=e232]:
+            - generic [ref=e233]: Sink
+            - combobox [ref=e234]:
+              - option "file_sink" [selected]
+        - generic [ref=e235]:
+          - button "Generate YAML" [ref=e236] [cursor=pointer]
+          - button "Validate" [ref=e237] [cursor=pointer]
+          - button "Test Source" [ref=e238] [cursor=pointer]
+          - button "Test Sink" [ref=e239] [cursor=pointer]
+          - button "Create Pipeline" [ref=e240] [cursor=pointer]
+      - generic [ref=e241]:
+        - generic [ref=e242]:
+          - generic [ref=e243]:
+            - heading "YAML Spec" [level=2] [ref=e244]
+            - button "Copy" [ref=e245] [cursor=pointer]
+          - textbox [ref=e247]: "name: \"visual-file-to-file\" source: type: file config: path: \"/app/testdata/files/customers.jsonl\" format: \"json\" transforms: - type: identity config: {} sink: type: file_sink config: output_dir: \"/app/data/output/visual-file-to-file\" format: \"jsonl\" batch_size: 1000 checkpoint_interval_sec: 5 backpressure_buffer: 1000 retry: max_attempts: 3 initial_interval_ms: 500 max_interval_ms: 5000 dlq: enable: true"
+        - generic [ref=e248]:
+          - generic [ref=e249]:
+            - heading "Transform Dry Run" [level=2] [ref=e250]
+            - button "Run" [ref=e251] [cursor=pointer]
+          - generic [ref=e253]:
+            - generic [ref=e254]: Sample Record (JSON)
+            - textbox [ref=e255]: "{ \"operation\": \"INSERT\", \"data\": { \"id\": 1, \"name\": \"Ada\" }, \"metadata\": {} }"

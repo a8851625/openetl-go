@@ -1,0 +1,66 @@
+name: "kafka-order-aggregate-to-clickhouse"
+source:
+  type: kafka
+  config:
+    brokers:
+      - "etl-redpanda:9092"
+    topic: "db_order.entity"
+    group_id: "etl-order-aggregator-v2"
+    initial_offset: "oldest"
+
+transforms:
+  - type: lua
+    config:
+      script: |
+        users = users or {}
+        local t = record._source_table or metadata.table or ""
+        if t == "user" then
+          users[tostring(record.id)] = {
+            id = record.id,
+            name = record.name,
+            email = record.email
+          }
+          record._skip = true
+          return
+        end
+        if t == "order" then
+          local uid = tostring(record.user_id)
+          local u = users[uid]
+          if u then
+            record.user_name = u.name
+            record.user_email = u.email
+          end
+        end
+  - type: filter
+    config:
+      expression: "!_skip"
+  - type: drop_field
+    config:
+      fields:
+        - "_skip"
+        - "_source_table"
+
+sink:
+  type: clickhouse
+  config:
+    host: "etl-clickhouse"
+    port: 9000
+    user: "default"
+    password: "dzh123456"
+    database: "db_order"
+    table: "order_denormalized"
+    pk_columns:
+      - "id"
+    version_column: "_version"
+
+batch_size: 100
+checkpoint_interval_sec: 5
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 30000
+
+dlq:
+  enable: true

@@ -1,0 +1,3 @@
+{"id":1,"first":"Ada","last":"Lovelace","status":"active","deleted_at":null}
+{"id":2,"first":"Alan","last":"Turing","status":"active","deleted_at":null}
+{"id":3,"first":"Grace","last":"Hopper","status":"deleted","deleted_at":"2024-01-01 00:00:00"}

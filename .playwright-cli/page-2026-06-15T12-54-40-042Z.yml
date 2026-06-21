@@ -1,0 +1,101 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: 设计器
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e32]: 死信队列
+      - generic [ref=e33] [cursor=pointer]:
+        - img [ref=e34]
+        - generic [ref=e38]: 插件
+      - generic [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - generic [ref=e43]: 审计
+    - group [ref=e45]:
+      - generic "设置" [ref=e781] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e50]: 设置
+      - generic [ref=e752]:
+        - generic [ref=e753]:
+          - generic [ref=e754]: 语言
+          - generic [ref=e755]:
+            - button "English" [ref=e756] [cursor=pointer]
+            - button "中文" [ref=e757] [cursor=pointer]
+        - generic [ref=e758]:
+          - generic [ref=e759]: API 令牌
+          - textbox "API 令牌" [ref=e782]: my-token-456
+          - button "保存令牌" [ref=e783] [cursor=pointer]
+  - main [ref=e51]:
+    - generic [ref=e52]:
+      - heading "仪表盘" [level=1] [ref=e793]
+      - generic [ref=e54]:
+        - generic [ref=e55]: 自动刷新 5秒
+        - button "EN" [ref=e785] [cursor=pointer]:
+          - img [ref=e58]
+          - text: EN
+        - button "重载配置" [ref=e786] [cursor=pointer]
+    - generic [ref=e794]:
+      - generic [ref=e795]:
+        - generic [ref=e796]:
+          - generic [ref=e798]: 运行中
+          - generic [ref=e800]: "0"
+          - generic [ref=e801]: 1 总计
+        - generic [ref=e802]:
+          - generic [ref=e804]: 读取记录
+          - generic [ref=e806]: "0"
+          - generic [ref=e807]: 累计
+        - generic [ref=e808]:
+          - generic [ref=e810]: 写入记录
+          - generic [ref=e812]: "0"
+          - generic [ref=e813]: 累计
+        - generic [ref=e814]:
+          - generic [ref=e816]: 失败
+          - generic [ref=e818]: "0"
+          - generic [ref=e819]: 健康
+        - generic [ref=e820]:
+          - generic [ref=e822]: 死信
+          - generic [ref=e824]: "0"
+          - generic [ref=e825]: 空
+      - generic [ref=e826]:
+        - generic [ref=e827]:
+          - heading "管道总览" [level=2] [ref=e829]
+          - generic [ref=e831] [cursor=pointer]:
+            - generic [ref=e833]:
+              - generic [ref=e834]: auth-file-to-file
+              - generic [ref=e835]: failed · 运行时长 1m47s
+            - generic [ref=e837]: 0 已写入
+        - generic [ref=e838]:
+          - heading "关键指标 · auth-file-to-file" [level=2] [ref=e840]
+          - generic [ref=e841]:
+            - generic [ref=e843]:
+              - generic [ref=e844]: 写入成功率
+              - generic [ref=e845]: 0%
+            - generic [ref=e847]:
+              - generic [ref=e848]:
+                - generic [ref=e849]: 读取延迟
+                - generic [ref=e850]: 0.0ms
+              - generic [ref=e851]:
+                - generic [ref=e852]: 写入延迟
+                - generic [ref=e853]: 0.7ms
+              - generic [ref=e854]:
+                - generic [ref=e855]: 平均批次
+                - generic [ref=e856]: "3"
+              - generic [ref=e857]:
+                - generic [ref=e858]: 断点时长
+                - generic [ref=e859]: 150s
+              - generic [ref=e860]:
+                - generic [ref=e861]: 死信文件
+                - generic [ref=e862]: "0"

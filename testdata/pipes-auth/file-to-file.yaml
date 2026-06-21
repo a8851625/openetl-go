@@ -1,0 +1,29 @@
+name: "auth-file-to-file"
+source:
+  type: file
+  config:
+    path: "/app/testdata/files/customers.jsonl"
+    format: "json"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: file_sink
+  config:
+    output_dir: "/app/data/output/auth"
+    format: "jsonl"
+    prefix: "auth_"
+
+batch_size: 3
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

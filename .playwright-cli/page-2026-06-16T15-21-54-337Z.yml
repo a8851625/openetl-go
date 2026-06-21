@@ -1,0 +1,151 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: 设计器
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e36]: DAG 编辑器
+      - generic [ref=e37] [cursor=pointer]:
+        - img [ref=e38]
+        - generic [ref=e41]: 调度管理
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e45]: 死信队列
+      - generic [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e51]: 插件
+      - generic [ref=e52] [cursor=pointer]:
+        - img [ref=e53]
+        - generic [ref=e57]: 我的插件
+      - generic [ref=e58] [cursor=pointer]:
+        - img [ref=e59]
+        - generic [ref=e63]: 工作节点
+      - generic [ref=e64] [cursor=pointer]:
+        - img [ref=e65]
+        - generic [ref=e68]: 审计
+    - group [ref=e70]:
+      - generic "设置" [ref=e481] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e75]: 设置
+      - generic [ref=e452]:
+        - generic [ref=e453]:
+          - generic [ref=e454]: 语言
+          - generic [ref=e455]:
+            - button "English" [ref=e456] [cursor=pointer]
+            - button "中文" [ref=e457] [cursor=pointer]
+        - generic [ref=e458]:
+          - generic [ref=e459]: API 令牌
+          - textbox "API 令牌" [ref=e482]: my-token-456
+          - button "保存令牌" [ref=e483] [cursor=pointer]
+  - main [ref=e76]:
+    - generic [ref=e77]:
+      - heading "设计器" [level=1] [ref=e629]
+      - generic [ref=e79]:
+        - generic [ref=e80]: 自动刷新 5秒
+        - button "EN" [ref=e485] [cursor=pointer]:
+          - img [ref=e83]
+          - text: EN
+        - button "重载配置" [ref=e486] [cursor=pointer]
+    - generic [ref=e630]:
+      - generic [ref=e631]:
+        - generic [ref=e632]:
+          - heading "管道画布" [level=2] [ref=e634]
+          - generic [ref=e635]:
+            - generic [ref=e636]:
+              - generic [ref=e637]: 管道名称
+              - textbox [ref=e638]: visual-file-to-file
+            - generic [ref=e639]:
+              - generic [ref=e640]:
+                - generic [ref=e641]: 数据源
+                - generic [ref=e642]: file
+              - generic [ref=e643]: →
+              - generic [ref=e644]:
+                - generic [ref=e645]: 转换
+                - generic [ref=e646]: identity
+              - generic [ref=e647]: →
+              - generic [ref=e648]:
+                - generic [ref=e649]: 数据汇
+                - generic [ref=e650]: file_sink
+        - generic [ref=e651]:
+          - generic [ref=e652]:
+            - generic [ref=e653]: 数据源
+            - combobox [ref=e654]:
+              - option "file" [selected]
+              - option "http"
+              - option "kafka"
+              - option "mysql_batch"
+              - option "mysql_cdc"
+              - option "mysql_snapshot_cdc"
+              - option "postgres_cdc"
+            - generic [ref=e655]:
+              - generic [ref=e656] [cursor=pointer]: file
+              - generic [ref=e657] [cursor=pointer]: http
+              - generic [ref=e658] [cursor=pointer]: kafka
+              - generic [ref=e659] [cursor=pointer]: mysql_batch
+              - generic [ref=e660] [cursor=pointer]: mysql_cdc
+          - generic [ref=e661]:
+            - generic [ref=e662]: 转换
+            - combobox [ref=e663]:
+              - option "lua"
+              - option "rename"
+              - option "drop_field"
+              - option "add_field"
+              - option "type_convert"
+              - option "filter"
+              - option "identity" [selected]
+            - generic [ref=e664]:
+              - generic [ref=e665] [cursor=pointer]: lua
+              - generic [ref=e666] [cursor=pointer]: rename
+              - generic [ref=e667] [cursor=pointer]: drop_field
+              - generic [ref=e668] [cursor=pointer]: add_field
+              - generic [ref=e669] [cursor=pointer]: type_convert
+          - generic [ref=e670]:
+            - generic [ref=e671]: 数据汇
+            - combobox [ref=e672]:
+              - option "clickhouse"
+              - option "elasticsearch"
+              - option "es"
+              - option "kafka"
+              - option "mysql"
+              - option "s3"
+              - option "file_sink" [selected]
+              - option "postgres"
+              - option "postgresql"
+            - generic [ref=e673]:
+              - generic [ref=e674] [cursor=pointer]: clickhouse
+              - generic [ref=e675] [cursor=pointer]: elasticsearch
+              - generic [ref=e676] [cursor=pointer]: es
+              - generic [ref=e677] [cursor=pointer]: kafka
+              - generic [ref=e678] [cursor=pointer]: mysql
+        - generic [ref=e679]:
+          - button "生成 YAML" [ref=e680] [cursor=pointer]
+          - button "验证" [ref=e681] [cursor=pointer]
+          - button "测试数据源" [ref=e682] [cursor=pointer]
+          - button "测试数据汇" [ref=e683] [cursor=pointer]
+          - button "创建管道" [ref=e684] [cursor=pointer]
+      - generic [ref=e685]:
+        - generic [ref=e686]:
+          - generic [ref=e687]:
+            - heading "YAML 配置" [level=2] [ref=e688]
+            - button "复制" [ref=e689] [cursor=pointer]
+          - textbox [ref=e691]: "name: \"visual-file-to-file\" source: type: file config: path: \"/app/testdata/files/customers.jsonl\" format: \"json\" transforms: - type: identity config: {} sink: type: file_sink config: output_dir: \"/app/data/output/visual-file-to-file\" format: \"jsonl\" batch_size: 1000 checkpoint_interval_sec: 5 backpressure_buffer: 1000 retry: max_attempts: 3 initial_interval_ms: 500 max_interval_ms: 5000 dlq: enable: true"
+        - generic [ref=e692]:
+          - generic [ref=e693]:
+            - heading "转换试运行" [level=2] [ref=e694]
+            - button "运行" [ref=e695] [cursor=pointer]
+          - generic [ref=e697]:
+            - generic [ref=e698]: 样例记录 (JSON)
+            - textbox [ref=e699]: "{ \"operation\": \"INSERT\", \"data\": { \"id\": 1, \"name\": \"Ada\" }, \"metadata\": {} }"

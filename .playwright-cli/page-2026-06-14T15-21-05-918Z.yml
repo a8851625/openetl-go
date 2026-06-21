@@ -1,0 +1,129 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: Designer
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e32]: DLQ
+      - generic [ref=e33] [cursor=pointer]:
+        - img [ref=e34]
+        - generic [ref=e38]: Plugins
+      - generic [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - generic [ref=e43]: Audit
+    - group [ref=e45]:
+      - generic "Settings" [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e50]: Settings
+  - main [ref=e51]:
+    - generic [ref=e52]:
+      - heading "Designer" [level=1] [ref=e157]
+      - generic [ref=e54]:
+        - generic [ref=e55]: Auto-refresh 5s
+        - button "中文" [ref=e57] [cursor=pointer]:
+          - img [ref=e58]
+          - text: 中文
+        - button "Reload Specs" [ref=e61] [cursor=pointer]
+    - generic [ref=e158]:
+      - generic [ref=e159]:
+        - generic [ref=e160]:
+          - heading "Pipeline Canvas" [level=2] [ref=e162]
+          - generic [ref=e163]:
+            - generic [ref=e164]:
+              - generic [ref=e165]: Pipeline Name
+              - textbox [active] [ref=e166]: mysql-to-postgres
+            - generic [ref=e167]:
+              - generic [ref=e168]:
+                - generic [ref=e169]: Source
+                - generic [ref=e170]: mysql_batch
+              - generic [ref=e171]: →
+              - generic [ref=e172]:
+                - generic [ref=e173]: Transform
+                - generic [ref=e174]: identity
+              - generic [ref=e175]: →
+              - generic [ref=e176]:
+                - generic [ref=e177]: Sink
+                - generic [ref=e178]: file_sink
+        - generic [ref=e179]:
+          - generic [ref=e180]:
+            - generic [ref=e181]: Source
+            - combobox [ref=e182]:
+              - option "postgres_cdc"
+              - option "file"
+              - option "http"
+              - option "kafka"
+              - option "mysql_batch" [selected]
+              - option "mysql_cdc"
+              - option "mysql_snapshot_cdc"
+            - generic [ref=e183]:
+              - generic [ref=e253] [cursor=pointer]: postgres_cdc
+              - generic [ref=e254] [cursor=pointer]: file
+              - generic [ref=e242] [cursor=pointer]: http
+              - generic [ref=e255] [cursor=pointer]: kafka
+              - generic [ref=e256] [cursor=pointer]: mysql_batch
+          - generic [ref=e189]:
+            - generic [ref=e190]: Transform
+            - combobox [ref=e191]:
+              - option "filter"
+              - option "identity" [selected]
+              - option "lua"
+              - option "rename"
+              - option "drop_field"
+              - option "add_field"
+              - option "type_convert"
+            - generic [ref=e192]:
+              - generic [ref=e247] [cursor=pointer]: filter
+              - generic [ref=e257] [cursor=pointer]: identity
+              - generic [ref=e258] [cursor=pointer]: lua
+              - generic [ref=e194] [cursor=pointer]: rename
+              - generic [ref=e259] [cursor=pointer]: drop_field
+          - generic [ref=e198]:
+            - generic [ref=e199]: Sink
+            - combobox [ref=e200]:
+              - option "elasticsearch"
+              - option "mysql"
+              - option "postgres"
+              - option "s3"
+              - option "clickhouse"
+              - option "es"
+              - option "kafka"
+              - option "postgresql"
+              - option "file_sink" [selected]
+            - generic [ref=e201]:
+              - generic [ref=e260] [cursor=pointer]: elasticsearch
+              - generic [ref=e261] [cursor=pointer]: mysql
+              - generic [ref=e262] [cursor=pointer]: postgres
+              - generic [ref=e263] [cursor=pointer]: s3
+              - generic [ref=e264] [cursor=pointer]: clickhouse
+        - generic [ref=e207]:
+          - button "Generate YAML" [ref=e208] [cursor=pointer]
+          - button "Validate" [ref=e209] [cursor=pointer]
+          - button "Test Source" [ref=e210] [cursor=pointer]
+          - button "Test Sink" [ref=e211] [cursor=pointer]
+          - button "Create Pipeline" [ref=e212] [cursor=pointer]
+      - generic [ref=e213]:
+        - generic [ref=e214]:
+          - generic [ref=e215]:
+            - heading "YAML Spec" [level=2] [ref=e216]
+            - button "Copy" [ref=e217] [cursor=pointer]
+          - textbox [ref=e219]: "name: \"visual-file-to-file\" source: type: file config: path: \"/app/testdata/files/customers.jsonl\" format: \"json\" transforms: - type: identity config: {} sink: type: file_sink config: output_dir: \"/app/data/output/visual-file-to-file\" format: \"jsonl\" batch_size: 1000 checkpoint_interval_sec: 5 backpressure_buffer: 1000 retry: max_attempts: 3 initial_interval_ms: 500 max_interval_ms: 5000 dlq: enable: true"
+        - generic [ref=e220]:
+          - generic [ref=e221]:
+            - heading "Transform Dry Run" [level=2] [ref=e222]
+            - button "Run" [ref=e223] [cursor=pointer]
+          - generic [ref=e225]:
+            - generic [ref=e226]: Sample Record (JSON)
+            - textbox [ref=e227]: "{ \"operation\": \"INSERT\", \"data\": { \"id\": 1, \"name\": \"Ada\" }, \"metadata\": {} }"

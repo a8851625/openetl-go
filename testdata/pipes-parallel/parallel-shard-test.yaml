@@ -1,0 +1,24 @@
+name: parallel-shard-test
+description: "2-shard parallel mysql_batch -> file sink for e2e"
+source:
+  type: mysql_batch
+  config:
+    host: ${MYSQL_HOST}
+    port: 3306
+    user: root
+    password: ${MYSQL_PASSWORD:-root}
+    database: test
+    table: users
+    pk_column: id
+    batch_size: 100
+sink:
+  type: file_sink
+  config:
+    path: /app/data/output/parallel-shard-${SHARD_INDEX}.jsonl
+    format: json
+parallelism:
+  count: 2
+  shard_strategy: pk_mod
+  shard_key: id
+batch_size: 100
+checkpoint_interval_sec: 5

@@ -1,0 +1,123 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: Designer
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e36]: DAG Editor
+      - generic [ref=e37] [cursor=pointer]:
+        - img [ref=e38]
+        - generic [ref=e41]: Schedules
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e45]: DLQ
+      - generic [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e51]: Built-in
+      - generic [ref=e52] [cursor=pointer]:
+        - img [ref=e53]
+        - generic [ref=e57]: WASM Plugins
+      - generic [ref=e58] [cursor=pointer]:
+        - img [ref=e59]
+        - generic [ref=e63]: Workers
+      - generic [ref=e64] [cursor=pointer]:
+        - img [ref=e65]
+        - generic [ref=e68]: Audit
+    - group [ref=e70]:
+      - generic "Settings" [ref=e71] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e75]: Settings
+  - main [ref=e76]:
+    - generic [ref=e77]:
+      - heading "Schedules" [level=1] [ref=e282]
+      - generic [ref=e79]:
+        - generic [ref=e80]: Auto-refresh 5s
+        - button "中文" [ref=e82] [cursor=pointer]:
+          - img [ref=e83]
+          - text: 中文
+        - button "Reload Specs" [ref=e86] [cursor=pointer]
+    - generic [ref=e283]:
+      - generic [ref=e284]:
+        - generic [ref=e285]:
+          - text: Streaming (continuous)
+          - generic [ref=e286]: "0"
+        - generic [ref=e287]:
+          - text: Once
+          - generic [ref=e288]: "0"
+        - generic [ref=e289]:
+          - text: Dependency
+          - generic [ref=e290]: "0"
+      - generic [ref=e291]:
+        - heading "Cron Expression" [level=2] [ref=e293]
+        - generic [ref=e294]:
+          - textbox "*/5 * * * *" [ref=e295]
+          - button "Parse" [ref=e296] [cursor=pointer]
+        - generic [ref=e297]:
+          - paragraph [ref=e298]: Schedule types control when pipelines are triggered for execution
+          - generic [ref=e299]:
+            - code [ref=e300]: "*/5 * * * *"
+            - generic [ref=e301]: Every 5 min
+            - code [ref=e302]: 0 */6 * * *
+            - generic [ref=e303]: Every 6 hours
+            - code [ref=e304]: 0 2 * * *
+            - generic [ref=e305]: Daily at 2am
+            - code [ref=e306]: 0 0 * * 1
+            - generic [ref=e307]: Weekly on Monday
+      - generic [ref=e308]:
+        - generic [ref=e309]:
+          - heading "Pipeline Schedules" [level=2] [ref=e310]
+          - generic [ref=e311]:
+            - button "All" [ref=e312] [cursor=pointer]
+            - button "Streaming (continuous)" [ref=e313] [cursor=pointer]
+            - button "Once" [ref=e314] [cursor=pointer]
+            - button "Once" [ref=e315] [cursor=pointer]
+        - table [ref=e317]:
+          - rowgroup [ref=e318]:
+            - row "Pipeline Trigger Type Expression / Interval Status Description" [ref=e319]:
+              - columnheader "Pipeline" [ref=e320]
+              - columnheader "Trigger Type" [ref=e321]
+              - columnheader "Expression / Interval" [ref=e322]
+              - columnheader "Status" [ref=e323]
+              - columnheader "Description" [ref=e324]
+          - rowgroup [ref=e325]:
+            - row "file-to-file unknown — failed Not configured" [ref=e326]:
+              - cell "file-to-file" [ref=e327]
+              - cell "unknown" [ref=e328]:
+                - generic [ref=e329]: unknown
+              - cell "—" [ref=e330]
+              - cell "failed" [ref=e331]: failed
+              - cell "Not configured" [ref=e333]
+            - row "mysql-batch-to-file unknown — failed Not configured" [ref=e334]:
+              - cell "mysql-batch-to-file" [ref=e335]
+              - cell "unknown" [ref=e336]:
+                - generic [ref=e337]: unknown
+              - cell "—" [ref=e338]
+              - cell "failed" [ref=e339]: failed
+              - cell "Not configured" [ref=e341]
+            - row "mysql-batch-to-mysql unknown — failed Not configured" [ref=e342]:
+              - cell "mysql-batch-to-mysql" [ref=e343]
+              - cell "unknown" [ref=e344]:
+                - generic [ref=e345]: unknown
+              - cell "—" [ref=e346]
+              - cell "failed" [ref=e347]: failed
+              - cell "Not configured" [ref=e349]
+            - row "mysql-to-clickhouse unknown — failed Not configured" [ref=e350]:
+              - cell "mysql-to-clickhouse" [ref=e351]
+              - cell "unknown" [ref=e352]:
+                - generic [ref=e353]: unknown
+              - cell "—" [ref=e354]
+              - cell "failed" [ref=e355]: failed
+              - cell "Not configured" [ref=e357]

@@ -1,0 +1,64 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: Designer
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e36]: DAG Editor
+      - generic [ref=e37] [cursor=pointer]:
+        - img [ref=e38]
+        - generic [ref=e41]: Schedules
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e45]: DLQ
+      - generic [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e51]: Plugins
+      - generic [ref=e52] [cursor=pointer]:
+        - img [ref=e53]
+        - generic [ref=e57]: My Plugins
+      - generic [ref=e58] [cursor=pointer]:
+        - img [ref=e59]
+        - generic [ref=e63]: Workers
+      - generic [ref=e64] [cursor=pointer]:
+        - img [ref=e65]
+        - generic [ref=e68]: Audit
+    - group [ref=e70]:
+      - generic "Settings" [ref=e194] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e75]: Settings
+  - main [ref=e76]:
+    - generic [ref=e77]:
+      - heading "DLQ Workbench" [level=1] [ref=e406]
+      - generic [ref=e79]:
+        - generic [ref=e80]: Auto-refresh 5s
+        - button "中文" [ref=e196] [cursor=pointer]:
+          - img [ref=e83]
+          - text: 中文
+        - button "Reload Specs" [ref=e197] [cursor=pointer]
+    - generic [ref=e407]:
+      - generic [ref=e408]:
+        - heading "Select Pipeline" [level=2] [ref=e410]
+        - generic [ref=e414] [cursor=pointer]: auth-file-to-file
+      - generic [ref=e415]:
+        - generic [ref=e416]:
+          - heading "Dead-Letter Queue · auth-file-to-file" [level=2] [ref=e417]
+          - generic [ref=e418]:
+            - textbox "Filter..." [ref=e419]
+            - button "Refresh" [ref=e420] [cursor=pointer]
+            - button "Replay" [ref=e421] [cursor=pointer]
+            - button "Delete" [ref=e422] [cursor=pointer]
+        - generic [ref=e424]: No DLQ records for this pipeline

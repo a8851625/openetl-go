@@ -1,0 +1,108 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: 可视化设计器
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: 死信队列
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: 内置
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM 插件
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: 工作节点
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: 审计
+    - generic [ref=e60] [cursor=pointer]:
+      - img [ref=e61]
+      - generic [ref=e64]: 设置
+  - main [ref=e65]:
+    - generic [ref=e66]:
+      - heading "可视化设计器" [level=1] [ref=e974]
+      - generic [ref=e68]:
+        - generic [ref=e69]: 自动刷新 5秒
+        - button "EN" [ref=e838] [cursor=pointer]:
+          - img [ref=e72]
+          - text: EN
+        - button "重载配置" [ref=e839] [cursor=pointer]
+    - generic [ref=e975]:
+      - generic [ref=e976]:
+        - generic [ref=e977]:
+          - generic [ref=e978]: 管道名称
+          - textbox [ref=e979]: my-pipeline
+        - button "+ 添加数据源" [ref=e981] [cursor=pointer]:
+          - generic [ref=e982]: +
+          - text: 添加数据源
+        - button "+ 添加转换" [ref=e983] [cursor=pointer]:
+          - generic [ref=e984]: +
+          - text: 添加转换
+        - button "+ 添加数据汇" [ref=e985] [cursor=pointer]:
+          - generic [ref=e986]: +
+          - text: 添加数据汇
+        - button "🗑 删除节点" [disabled] [ref=e988]
+        - generic [ref=e989]:
+          - button "🤖 AI" [ref=e990] [cursor=pointer]
+          - button "📅 调度管理" [ref=e991] [cursor=pointer]
+          - button "导出 YAML" [ref=e992] [cursor=pointer]
+          - button "✓ 创建管道" [ref=e993] [cursor=pointer]
+      - generic [ref=e995]:
+        - generic [ref=e996]:
+          - generic [ref=e997]: 🏷 Tags
+          - textbox "production, critical, realtime" [ref=e998]
+          - paragraph [ref=e999]: 逗号分隔
+        - generic [ref=e1000]:
+          - generic [ref=e1001]: 🎯 Worker Selector
+          - textbox "zone=us-east, gpu=true" [ref=e1002]
+          - paragraph [ref=e1003]: 按标签调度 Worker；留空=默认池
+        - generic [ref=e1004]:
+          - generic [ref=e1005]: ⚡ Parallelism
+          - generic [ref=e1006]:
+            - spinbutton [ref=e1007]: "1"
+            - combobox [ref=e1008]:
+              - option "round_robin" [selected]
+              - option "partition (Kafka)"
+              - option "id_range (MySQL)"
+              - option "table (CDC)"
+          - paragraph [ref=e1009]: 1 个并行实例，各自独立 checkpoint
+      - generic [ref=e1011]:
+        - application [ref=e1013]:
+          - img
+          - generic "Control Panel" [ref=e1016]:
+            - button "Zoom In" [ref=e1017] [cursor=pointer]:
+              - img [ref=e1018]
+            - button "Zoom Out" [ref=e1020] [cursor=pointer]:
+              - img [ref=e1021]
+            - button "Fit View" [ref=e1023] [cursor=pointer]:
+              - img [ref=e1024]
+          - img "Mini Map" [ref=e1027]
+          - link "React Flow attribution" [ref=e1029] [cursor=pointer]:
+            - /url: https://reactflow.dev
+            - text: React Flow
+        - generic [ref=e1032]:
+          - generic [ref=e1033]:
+            - generic [ref=e1034]: 选择一个节点编辑属性
+            - generic [ref=e1035]: 💡 从工具栏添加节点，拖拽节点底部圆点到下一个节点顶部进行连线
+          - generic [ref=e1036]:
+            - generic [ref=e1037]: 如何连线
+            - list [ref=e1038]:
+              - listitem [ref=e1039]: 添加一个 Source 节点和一个 Sink 节点
+              - listitem [ref=e1040]: 从 Source 底部的蓝色圆点拖拽
+              - listitem [ref=e1041]: 拖到 Sink 顶部的圆点释放
+              - listitem [ref=e1042]: 选中节点后按 Delete 键删除

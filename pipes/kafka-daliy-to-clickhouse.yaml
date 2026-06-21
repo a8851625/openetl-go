@@ -1,0 +1,44 @@
+name: "kafka-daliy-to-clickhouse"
+source:
+  type: kafka
+  config:
+    brokers:
+      - "etl-redpanda:9092"
+    topic: "db_order.daliy"
+    group_id: "etl-daliy-aggregator-v2"
+    initial_offset: "oldest"
+
+transforms:
+  - type: drop_field
+    config:
+      fields:
+        - "_partition_date"
+
+sink:
+  type: clickhouse
+  config:
+    host: "etl-clickhouse"
+    port: 9000
+    user: "default"
+    password: "dzh123456"
+    database: "db_order"
+    table: "dayliy_order"
+    pk_columns:
+      - "id"
+    version_column: "_version"
+
+parallelism:
+  count: 4
+  shard_strategy: "partition"
+
+batch_size: 100
+checkpoint_interval_sec: 5
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 30000
+
+dlq:
+  enable: true

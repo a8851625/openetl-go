@@ -1,0 +1,106 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: 可视化设计器
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: 死信队列
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: 内置
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM 插件
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: 工作节点
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: 审计
+    - group [ref=e60]:
+      - generic "设置" [ref=e830] [cursor=pointer]:
+        - img [ref=e62]
+        - generic [ref=e65]: 设置
+      - generic [ref=e795]:
+        - generic [ref=e796]:
+          - generic [ref=e797]: 语言
+          - generic [ref=e798]:
+            - button "English" [ref=e799] [cursor=pointer]
+            - button "中文" [ref=e800] [cursor=pointer]
+        - generic [ref=e801]:
+          - generic [ref=e802]: API 令牌
+          - textbox "API 令牌" [ref=e831]: my-token-456
+          - button "保存令牌" [ref=e832] [cursor=pointer]
+        - generic [ref=e805]:
+          - generic [ref=e806]: AI / LLM 配置
+          - textbox "如 https://api.openai.com/v1" [ref=e833]
+          - textbox "如 gpt-4o" [ref=e834]
+          - textbox "sk-..." [ref=e809]
+          - button "保存 LLM 配置" [ref=e835] [cursor=pointer]
+  - main [ref=e66]:
+    - generic [ref=e67]:
+      - heading "可视化设计器" [level=1] [ref=e982]
+      - generic [ref=e69]:
+        - generic [ref=e70]: 自动刷新 5秒
+        - button "EN" [ref=e837] [cursor=pointer]:
+          - img [ref=e73]
+          - text: EN
+        - button "重载配置" [ref=e838] [cursor=pointer]
+    - generic [ref=e983]:
+      - generic [ref=e984]:
+        - generic [ref=e985]:
+          - generic [ref=e986]: 管道名称
+          - textbox [ref=e987]: my-pipeline
+        - button "+ 添加数据源" [ref=e989] [cursor=pointer]:
+          - generic [ref=e990]: +
+          - text: 添加数据源
+        - button "+ 添加转换" [ref=e991] [cursor=pointer]:
+          - generic [ref=e992]: +
+          - text: 添加转换
+        - button "+ 添加数据汇" [ref=e993] [cursor=pointer]:
+          - generic [ref=e994]: +
+          - text: 添加数据汇
+        - button "🗑 删除节点" [disabled] [ref=e996]
+        - generic [ref=e997]:
+          - button "🤖 AI" [ref=e998] [cursor=pointer]
+          - button "📅 调度管理" [ref=e999] [cursor=pointer]
+          - button "导出 YAML" [ref=e1000] [cursor=pointer]
+          - button "✓ 创建管道" [ref=e1001] [cursor=pointer]
+      - generic [ref=e1003]:
+        - application [ref=e1005]:
+          - img
+          - generic "Control Panel" [ref=e1008]:
+            - button "Zoom In" [ref=e1009] [cursor=pointer]:
+              - img [ref=e1010]
+            - button "Zoom Out" [ref=e1012] [cursor=pointer]:
+              - img [ref=e1013]
+            - button "Fit View" [ref=e1015] [cursor=pointer]:
+              - img [ref=e1016]
+          - img "Mini Map" [ref=e1019]
+          - link "React Flow attribution" [ref=e1021] [cursor=pointer]:
+            - /url: https://reactflow.dev
+            - text: React Flow
+        - generic [ref=e1024]:
+          - generic [ref=e1025]:
+            - generic [ref=e1026]: 选择一个节点编辑属性
+            - generic [ref=e1027]: 💡 从工具栏添加节点，拖拽节点底部圆点到下一个节点顶部进行连线
+          - generic [ref=e1028]:
+            - generic [ref=e1029]: 如何连线
+            - list [ref=e1030]:
+              - listitem [ref=e1031]: 添加一个 Source 节点和一个 Sink 节点
+              - listitem [ref=e1032]: 从 Source 底部的蓝色圆点拖拽
+              - listitem [ref=e1033]: 拖到 Sink 顶部的圆点释放
+              - listitem [ref=e1034]: 选中节点后按 Delete 键删除

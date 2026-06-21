@@ -1,0 +1,73 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: 设计器
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e32]: 死信队列
+      - generic [ref=e33] [cursor=pointer]:
+        - img [ref=e34]
+        - generic [ref=e38]: 插件
+      - generic [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - generic [ref=e43]: 审计
+    - group [ref=e45]:
+      - generic "设置" [ref=e781] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e50]: 设置
+      - generic [ref=e752]:
+        - generic [ref=e753]:
+          - generic [ref=e754]: 语言
+          - generic [ref=e755]:
+            - button "English" [ref=e756] [cursor=pointer]
+            - button "中文" [ref=e757] [cursor=pointer]
+        - generic [ref=e758]:
+          - generic [ref=e759]: API 令牌
+          - textbox "API 令牌" [ref=e782]: my-token-456
+          - button "保存令牌" [ref=e783] [cursor=pointer]
+  - main [ref=e51]:
+    - generic [ref=e52]:
+      - heading "审计" [level=1] [ref=e1324]
+      - generic [ref=e54]:
+        - generic [ref=e55]: 自动刷新 5秒
+        - button "EN" [ref=e785] [cursor=pointer]:
+          - img [ref=e58]
+          - text: EN
+        - button "重载配置" [ref=e786] [cursor=pointer]
+    - generic [ref=e1325]:
+      - heading "审计日志" [level=2] [ref=e1327]
+      - table [ref=e1329]:
+        - rowgroup [ref=e1330]:
+          - row "操作 方法 路径 / 目标 时间" [ref=e1331]:
+            - columnheader "操作" [ref=e1332]
+            - columnheader "方法" [ref=e1333]
+            - columnheader "路径 / 目标" [ref=e1334]
+            - columnheader "时间" [ref=e1335]
+        - rowgroup [ref=e1336]:
+          - row "specs.reload POST ./pipes 2026/6/15 20:54:12" [ref=e1337]:
+            - cell "specs.reload" [ref=e1338]:
+              - generic [ref=e1339]: specs.reload
+            - cell "POST" [ref=e1340]:
+              - generic [ref=e1341]: POST
+            - cell "./pipes" [ref=e1342]
+            - cell "2026/6/15 20:54:12" [ref=e1343]
+          - row "pipeline.start POST auth-file-to-file 2026/6/15 20:52:51" [ref=e1344]:
+            - cell "pipeline.start" [ref=e1345]:
+              - generic [ref=e1346]: pipeline.start
+            - cell "POST" [ref=e1347]:
+              - generic [ref=e1348]: POST
+            - cell "auth-file-to-file" [ref=e1349]
+            - cell "2026/6/15 20:52:51" [ref=e1350]

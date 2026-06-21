@@ -1,13 +1,13 @@
 package main
 
 import (
-	_ "sync-canal-go/internal/packed"
+	_ "openetl-go/internal/packed"
 
-	_ "sync-canal-go/internal/logic"
+	_ "openetl-go/internal/logic"
 
 	"github.com/gogf/gf/v2/os/gctx"
 
-	"sync-canal-go/internal/cmd"
+	"openetl-go/internal/cmd"
 )
 
 func main() {

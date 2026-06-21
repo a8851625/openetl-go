@@ -8,7 +8,7 @@ package service
 import (
 	"context"
 	"os"
-	"sync-canal-go/internal/model/entity"
+	"openetl-go/internal/model/entity"
 
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"

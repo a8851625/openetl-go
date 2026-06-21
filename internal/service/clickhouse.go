@@ -9,7 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
-	"sync-canal-go/internal/model/entity"
+	"openetl-go/internal/model/entity"
 )
 
 // IClickHouse ClickHouse 同步目标接口

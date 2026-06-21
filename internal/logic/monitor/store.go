@@ -16,8 +16,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/gogf/gf/v2/frame/g"
 
-	"sync-canal-go/internal/model/entity"
-	"sync-canal-go/internal/service"
+	"openetl-go/internal/model/entity"
+	"openetl-go/internal/service"
 )
 
 // sStore 指标存储实现

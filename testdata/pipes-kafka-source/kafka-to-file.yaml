@@ -1,0 +1,32 @@
+name: "kafka-to-file"
+source:
+  type: kafka
+  config:
+    brokers:
+      - "host.containers.internal:19092"
+    topic: "etl-source-topic"
+    group_id: "etl-source-e2e"
+    format: "json"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: file_sink
+  config:
+    output_dir: "/app/data/output/kafka"
+    format: "jsonl"
+    prefix: "kafka_"
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

@@ -1,0 +1,2 @@
+{"action":"pipeline.create","method":"POST","path":"/api/v2/pipelines","remote":"127.0.0.1:50702","target":"mysql-to-postgres","timestamp":"2026-06-15T13:27:17.945255012Z"}
+{"action":"pipeline.start","method":"POST","path":"/api/v2/pipelines/mysql-to-postgres/start","remote":"127.0.0.1:50702","target":"mysql-to-postgres","timestamp":"2026-06-15T13:27:18.012235638Z"}

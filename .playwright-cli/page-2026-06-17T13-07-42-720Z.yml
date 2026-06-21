@@ -1,0 +1,58 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: Designer
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: DLQ
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: Built-in
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM Plugins
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: Workers
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: Audit
+    - group [ref=e60]:
+      - generic "Settings" [ref=e184] [cursor=pointer]:
+        - img [ref=e62]
+        - generic [ref=e65]: Settings
+  - main [ref=e66]:
+    - generic [ref=e67]:
+      - heading "DLQ Workbench" [level=1] [ref=e343]
+      - generic [ref=e69]:
+        - generic [ref=e70]: Auto-refresh 5s
+        - button "中文" [ref=e186] [cursor=pointer]:
+          - img [ref=e73]
+          - text: 中文
+        - button "Reload Specs" [ref=e187] [cursor=pointer]
+    - generic [ref=e344]:
+      - generic [ref=e345]:
+        - heading "Select Pipeline" [level=2] [ref=e347]
+        - generic [ref=e351] [cursor=pointer]: auth-file-to-file
+      - generic [ref=e352]:
+        - generic [ref=e353]:
+          - heading "Dead-Letter Queue · auth-file-to-file" [level=2] [ref=e354]
+          - generic [ref=e355]:
+            - textbox "Filter..." [ref=e356]
+            - button "Refresh" [ref=e357] [cursor=pointer]
+            - button "Replay" [ref=e358] [cursor=pointer]
+            - button "Delete" [ref=e359] [cursor=pointer]
+        - generic [ref=e361]: No DLQ records for this pipeline

@@ -1,0 +1,28 @@
+name: "mysql-to-elasticsearch"
+source:
+  type: mysql_batch
+  config:
+    host: "host.containers.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    table: "customers"
+    pk_column: "id"
+    limit: 100
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: elasticsearch
+  config:
+    hosts:
+      - "http://host.containers.internal:9200"
+    index: "customers"
+    id_column: "id"
+
+batch_size: 100
+checkpoint_interval_sec: 5
+backpressure_buffer: 100

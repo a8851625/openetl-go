@@ -1,0 +1,113 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: 可视化设计器
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: 死信队列
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: 内置
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM 插件
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: 工作节点
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: 审计
+    - group [ref=e60]:
+      - generic "设置" [ref=e830] [cursor=pointer]:
+        - img [ref=e62]
+        - generic [ref=e65]: 设置
+      - generic [ref=e795]:
+        - generic [ref=e796]:
+          - generic [ref=e797]: 语言
+          - generic [ref=e798]:
+            - button "English" [ref=e799] [cursor=pointer]
+            - button "中文" [ref=e800] [cursor=pointer]
+        - generic [ref=e801]:
+          - generic [ref=e802]: API 令牌
+          - textbox "API 令牌" [ref=e831]: my-token-456
+          - button "保存令牌" [ref=e832] [cursor=pointer]
+        - generic [ref=e805]:
+          - generic [ref=e806]: AI / LLM 配置
+          - textbox "如 https://api.openai.com/v1" [ref=e833]
+          - textbox "如 gpt-4o" [ref=e834]
+          - textbox "sk-..." [ref=e809]
+          - button "保存 LLM 配置" [ref=e835] [cursor=pointer]
+  - main [ref=e66]:
+    - generic [ref=e67]:
+      - heading "仪表盘" [level=1] [ref=e845]
+      - generic [ref=e69]:
+        - generic [ref=e70]: 自动刷新 5秒
+        - button "EN" [ref=e837] [cursor=pointer]:
+          - img [ref=e73]
+          - text: EN
+        - button "重载配置" [ref=e838] [cursor=pointer]
+    - generic [ref=e846]:
+      - generic [ref=e847]:
+        - generic [ref=e848]:
+          - generic [ref=e850]: 运行中
+          - generic [ref=e852]: "0"
+          - generic [ref=e853]: 1 总计
+        - generic [ref=e854]:
+          - generic [ref=e856]: 读取记录
+          - generic [ref=e858]: "0"
+          - generic [ref=e859]: 累计
+        - generic [ref=e860]:
+          - generic [ref=e862]: 写入记录
+          - generic [ref=e864]: "0"
+          - generic [ref=e865]: 累计
+        - generic [ref=e866]:
+          - generic [ref=e868]: 失败
+          - generic [ref=e870]: "0"
+          - generic [ref=e871]: 健康
+        - generic [ref=e872]:
+          - generic [ref=e874]: 死信
+          - generic [ref=e876]: "0"
+          - generic [ref=e877]: 空
+      - generic [ref=e878]:
+        - generic [ref=e879]:
+          - heading "管道总览" [level=2] [ref=e881]
+          - generic [ref=e883] [cursor=pointer]:
+            - generic [ref=e885]:
+              - generic [ref=e886]: auth-file-to-file
+              - generic [ref=e887]: failed · 运行时长 1m43s
+            - generic [ref=e889]: 0 已写入
+        - generic [ref=e890]:
+          - heading "关键指标 · auth-file-to-file" [level=2] [ref=e892]
+          - generic [ref=e893]:
+            - generic [ref=e895]:
+              - generic [ref=e896]: 写入成功率
+              - generic [ref=e897]: 0%
+            - generic [ref=e899]:
+              - generic [ref=e900]:
+                - generic [ref=e901]: 读取延迟
+                - generic [ref=e902]: 0.3ms
+              - generic [ref=e903]:
+                - generic [ref=e904]: 写入延迟
+                - generic [ref=e905]: 1.1ms
+              - generic [ref=e906]:
+                - generic [ref=e907]: 平均批次
+                - generic [ref=e908]: "3"
+              - generic [ref=e909]:
+                - generic [ref=e910]: 断点时长
+                - generic [ref=e911]: 145s
+              - generic [ref=e912]:
+                - generic [ref=e913]: 死信文件
+                - generic [ref=e914]: "0"

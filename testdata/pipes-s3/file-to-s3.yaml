@@ -1,0 +1,33 @@
+name: "file-to-s3"
+source:
+  type: file
+  config:
+    path: "/app/testdata/files/customers.jsonl"
+    format: "json"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: s3
+  config:
+    endpoint: "http://host.containers.internal:9001"
+    region: "us-east-1"
+    bucket: "etl-bucket"
+    access_key: "minio"
+    secret_key: "minio123"
+    format: "jsonl"
+    prefix: "s3-e2e/"
+
+batch_size: 3
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

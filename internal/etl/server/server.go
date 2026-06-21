@@ -2187,6 +2187,11 @@ func (s *Server) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.FormValue("name")
+	if err := validPluginName(name); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
 	kind := r.FormValue("kind")
 	version := r.FormValue("version")
 	if version == "" {
@@ -2242,6 +2247,11 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 	if source == "" || name == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"error": "source and name are required"})
+		return
+	}
+	if err := validPluginName(name); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
 	if kind == "" {
@@ -2306,19 +2316,67 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// validPluginName enforces a safe plugin name before it is joined into a
+// filesystem path. Plugin names flow into `filepath.Join(tmpDir, name+".wasm")`
+// and `filepath.Join(pluginsDir, name+".wasm")`; an unchecked user-supplied
+// name like "../../etc/x" would escape the target directory (TF-3 path
+// traversal). Allow alphanumerics, underscore, dash, and dot only.
+func validPluginName(name string) error {
+	if name == "" {
+		return fmt.Errorf("plugin name is required")
+	}
+	if len(name) > 128 {
+		return fmt.Errorf("plugin name too long (max 128 chars)")
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+		default:
+			return fmt.Errorf("plugin name %q contains invalid character %q (allowed: A-Z a-z 0-9 _ - .)", name, string(r))
+		}
+	}
+	// No path separators are allowed by the char set above, so directory
+	// traversal is already impossible; reject ".." explicitly as defense in
+	// depth.
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("plugin name must not contain \"..\"")
+	}
+	return nil
+}
+
 // compileWithExtismJS attempts to compile a TS file to WASM using the extism-js CLI.
 // Returns the wasm bytes on success, or an error if the tool is unavailable or fails.
 func compileWithExtismJS(tmpDir, srcFile, name string) ([]byte, error) {
-	outFile := filepath.Join(tmpDir, name+".wasm")
+	// Defense in depth: even though the handler validates `name`, ensure the
+	// output path cannot escape tmpDir (TF-3).
+	outFile := filepath.Join(tmpDir, filepath.Base(name)+".wasm")
 
-	// First check if extism-js is available.
-	if _, err := exec.LookPath("extism-js"); err != nil {
-		// Also try npx extism-js
-		if _, err2 := exec.LookPath("npx"); err2 != nil {
-			return nil, fmt.Errorf("extism-js not found: install with 'npm install -g @extism/js-pdk'")
+	// extismJSPackage is the npm package providing the `extism-js` compiler,
+	// used only in the npx fallback when a pre-installed binary is absent.
+	// Pin a version in production via OPENETL_EXTISM_JS_PKG (e.g.
+	// "@extism/js-pdk@1.1.0") so `npx --yes` does not auto-fetch the latest
+	// at request time (TF-3 supply-chain/availability risk).
+	extismPkg := os.Getenv("OPENETL_EXTISM_JS_PKG")
+	if extismPkg == "" {
+		extismPkg = "@extism/js-pdk"
+	}
+
+	// First check if extism-js is available as a pre-installed binary
+	// (preferred — no network fetch, no supply-chain exposure).
+	if extismPath, err := exec.LookPath("extism-js"); err == nil {
+		cmd := exec.Command(extismPath, "compile", srcFile, "-o", outFile)
+		cmd.Dir = tmpDir
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("extism-js compile failed: %v\nstderr: %s", err, stderr.String())
 		}
-		// npx is available, try using it.
-		cmd := exec.Command("npx", "--yes", "extism-js", "compile", srcFile, "-o", outFile)
+	} else if _, err2 := exec.LookPath("npx"); err2 == nil {
+		// Fallback: npx. This fetches from npm at request time — log it so the
+		// supply-chain exposure is observable, and use an explicit pinned
+		// package rather than resolving an ambiguous bin name.
+		g.Log().Warningf(context.Background(), "extism-js not pre-installed; falling back to npx --yes -p %s (network fetch at request time — pin OPENETL_EXTISM_JS_PKG and/or pre-install extism-js in production)", extismPkg)
+		cmd := exec.Command("npx", "--yes", "-p", extismPkg, "extism-js", "compile", srcFile, "-o", outFile)
 		cmd.Dir = tmpDir
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
@@ -2326,13 +2384,7 @@ func compileWithExtismJS(tmpDir, srcFile, name string) ([]byte, error) {
 			return nil, fmt.Errorf("npx extism-js compile failed: %v\nstderr: %s", err, stderr.String())
 		}
 	} else {
-		cmd := exec.Command("extism-js", "compile", srcFile, "-o", outFile)
-		cmd.Dir = tmpDir
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("extism-js compile failed: %v\nstderr: %s", err, stderr.String())
-		}
+		return nil, fmt.Errorf("extism-js not found: install with 'npm install -g @extism/js-pdk' or set OPENETL_EXTISM_JS_PKG")
 	}
 
 	wasmBytes, err := os.ReadFile(outFile)

@@ -19,8 +19,8 @@ import (
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/gogf/gf/v2/frame/g"
 
-	"sync-canal-go/internal/model/entity"
-	"sync-canal-go/internal/service"
+	"openetl-go/internal/model/entity"
+	"openetl-go/internal/service"
 )
 
 func init() {
@@ -134,26 +134,28 @@ func (t *sClickHouseTarget) handleInsert(e *canal.RowsEvent) error {
 func (t *sClickHouseTarget) handleUpdate(e *canal.RowsEvent) error {
 	ctx := context.Background()
 
+	sql := fmt.Sprintf("INSERT INTO %s.%s", t.config.ClickHouse.Database, e.Table.Name)
+	batch, err := t.chConn.PrepareBatch(ctx, sql)
+	if err != nil {
+		g.Log().Errorf(ctx, "Prepare batch failed: %v", err)
+		return err
+	}
+
 	for i := 0; i < len(e.Rows); i += 2 {
-		newRow := e.Rows[i+1]
-
-		sql := fmt.Sprintf("INSERT INTO %s.%s", t.config.ClickHouse.Database, e.Table.Name)
-		batch, err := t.chConn.PrepareBatch(ctx, sql)
-		if err != nil {
-			g.Log().Errorf(ctx, "Prepare batch failed: %v", err)
-			continue
+		if i+1 >= len(e.Rows) {
+			break
 		}
-
+		newRow := e.Rows[i+1]
 		values := convertRow(newRow)
 		if err := batch.Append(values...); err != nil {
 			g.Log().Errorf(ctx, "Append row failed: %v", err)
 			continue
 		}
+	}
 
-		if err := batch.Send(); err != nil {
-			g.Log().Errorf(ctx, "Send batch failed: %v", err)
-			continue
-		}
+	if err := batch.Send(); err != nil {
+		g.Log().Errorf(ctx, "Send batch failed: %v", err)
+		return err
 	}
 
 	g.Log().Infof(ctx, "[%s] Updated %d rows in %s.%s",
@@ -164,16 +166,35 @@ func (t *sClickHouseTarget) handleUpdate(e *canal.RowsEvent) error {
 // handleDelete 处理 DELETE 事件
 func (t *sClickHouseTarget) handleDelete(e *canal.RowsEvent) error {
 	ctx := context.Background()
-	pkIndex := findPrimaryKeyIndex(e.Table)
+	pkCols := getPrimaryKeyColumns(e.Table)
 
 	for _, row := range e.Rows {
-		sql := fmt.Sprintf(
-			"ALTER TABLE %s.%s DELETE WHERE id = ?",
+		var conditions []string
+		var values []any
+		for _, col := range pkCols {
+			for i, tableCol := range e.Table.Columns {
+				if tableCol.Name == col && i < len(row) {
+					conditions = append(conditions, fmt.Sprintf("%s = ?", col))
+					values = append(values, row[i])
+					break
+				}
+			}
+		}
+		if len(conditions) == 0 {
+			g.Log().Errorf(ctx, "No primary key found for table %s", e.Table.Name)
+			continue
+		}
+
+		sql := fmt.Sprintf("ALTER TABLE %s.%s DELETE WHERE %s",
 			t.config.ClickHouse.Database,
 			e.Table.Name,
+			conditions[0],
 		)
+		for i := 1; i < len(conditions); i++ {
+			sql += " AND " + conditions[i]
+		}
 
-		if err := t.chConn.Exec(ctx, sql, row[pkIndex]); err != nil {
+		if err := t.chConn.Exec(ctx, sql, values...); err != nil {
 			g.Log().Errorf(ctx, "Delete failed: %v", err)
 			continue
 		}
@@ -254,11 +275,38 @@ func (t *sClickHouseTarget) String() string {
 	return fmt.Sprintf("ClickHouse:%s", t.config.Name)
 }
 
-// findPrimaryKeyIndex 查找主键索引
+// getPrimaryKeyColumns returns the primary key column names from the table schema.
+func getPrimaryKeyColumns(table *schema.Table) []string {
+	if table == nil {
+		return []string{"id"}
+	}
+
+	if len(table.PKColumns) > 0 {
+		var pkCols []string
+		for _, idx := range table.PKColumns {
+			if idx >= 0 && idx < len(table.Columns) {
+				pkCols = append(pkCols, table.Columns[idx].Name)
+			}
+		}
+		return pkCols
+	}
+
+	// Fallback to first column
+	if len(table.Columns) > 0 {
+		return []string{table.Columns[0].Name}
+	}
+	return []string{"id"}
+}
+
+// findPrimaryKeyIndex is kept for backward compatibility but no longer used in new code.
+// Use getPrimaryKeyColumns instead for multi-column PK support.
 func findPrimaryKeyIndex(table *schema.Table) int {
-	for i, col := range table.Columns {
-		if col.Name == "id" {
-			return i
+	cols := getPrimaryKeyColumns(table)
+	if len(cols) > 0 {
+		for i, col := range table.Columns {
+			if col.Name == cols[0] {
+				return i
+			}
 		}
 	}
 	return 0

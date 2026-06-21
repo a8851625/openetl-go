@@ -15,6 +15,8 @@ type (
 		SetupStaticFiles()
 		// InitMonitor 初始化监控系统
 		InitMonitor(ctx context.Context)
+		// StartETLAsync 异步启动 ETL 管道服务
+		StartETLAsync(ctx context.Context)
 		// StartCanalSyncAsync 异步启动 Canal 同步服务
 		StartCanalSyncAsync()
 		// Stop 优雅停止服务

@@ -10,9 +10,9 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcmd"
 
-	_ "sync-canal-go/internal/logic/app"
-	"sync-canal-go/internal/consts"
-	"sync-canal-go/internal/service"
+	_ "openetl-go/internal/logic/app"
+	"openetl-go/internal/consts"
+	"openetl-go/internal/service"
 )
 
 var (
@@ -22,7 +22,7 @@ var (
 		Brief: "start mysql binlog sync service",
 		Func: func(ctx context.Context, parser *gcmd.Parser) (err error) {
 			// 打印版本号
-			g.Log().Infof(ctx, "Sync Canal Go Version: %s", consts.Version)
+			g.Log().Infof(ctx, "OpenETL-Go Version: %s", consts.Version)
 
 			a := service.App()
 
@@ -32,8 +32,12 @@ var (
 			// 配置静态文件服务（前端 UI，后注册以确保 API 路由优先）
 			a.SetupStaticFiles()
 
-			// 异步启动 Canal 同步服务
-			a.StartCanalSyncAsync()
+			if g.Cfg().MustGet(ctx, "etl.enabled", false).Bool() {
+				a.StartETLAsync(ctx)
+			} else {
+				// 异步启动 Canal 同步服务
+				a.StartCanalSyncAsync()
+			}
 
 			// 注册优雅关闭
 			go a.WaitForShutdown()

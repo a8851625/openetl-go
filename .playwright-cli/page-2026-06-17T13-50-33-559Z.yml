@@ -1,0 +1,101 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: Designer
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: DLQ
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: Built-in
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM Plugins
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: Workers
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: Audit
+    - group [ref=e60]:
+      - generic "Settings" [ref=e184] [cursor=pointer]:
+        - img [ref=e62]
+        - generic [ref=e65]: Settings
+  - main [ref=e66]:
+    - generic [ref=e67]:
+      - heading "Pipelines" [level=1] [ref=e220]
+      - generic [ref=e69]:
+        - generic [ref=e70]: Auto-refresh 5s
+        - button "中文" [ref=e186] [cursor=pointer]:
+          - img [ref=e73]
+          - text: 中文
+        - button "Reload Specs" [ref=e187] [cursor=pointer]
+    - generic [ref=e221]:
+      - generic [ref=e222]:
+        - generic [ref=e223]:
+          - heading "All Pipelines" [level=2] [ref=e224]
+          - generic [ref=e225]: 1 pipelines
+        - generic [ref=e227] [cursor=pointer]:
+          - generic [ref=e229]:
+            - generic [ref=e230]: auth-file-to-file
+            - generic [ref=e231]: completed · uptime 30s
+          - generic [ref=e232]:
+            - generic [ref=e233]: 3 written
+            - generic [ref=e234]: 3 read
+          - generic [ref=e235]:
+            - button "Start" [ref=e236]
+            - button "Stop" [ref=e237]
+      - generic [ref=e238]:
+        - generic [ref=e239]:
+          - generic [ref=e240]:
+            - heading "Details · auth-file-to-file" [level=2] [ref=e241]
+            - button "✏️ Edit" [ref=e242] [cursor=pointer]
+          - generic [ref=e244]:
+            - generic [ref=e246]:
+              - generic [ref=e247]: Write Success Rate
+              - generic [ref=e248]: 100%
+            - generic [ref=e252]:
+              - generic [ref=e253]: DLQ Pressure
+              - generic [ref=e254]: 0%
+            - generic [ref=e256]:
+              - generic [ref=e257]:
+                - generic [ref=e258]: Read Latency
+                - generic [ref=e259]: 0.3ms
+              - generic [ref=e260]:
+                - generic [ref=e261]: Write Latency
+                - generic [ref=e262]: 1.1ms
+              - generic [ref=e263]:
+                - generic [ref=e264]: Last Batch
+                - generic [ref=e265]: "3"
+              - generic [ref=e266]:
+                - generic [ref=e267]: Avg Batch
+                - generic [ref=e268]: "3"
+              - generic [ref=e269]:
+                - generic [ref=e270]: Batch Count
+                - generic [ref=e271]: "1"
+              - generic [ref=e272]:
+                - generic [ref=e273]: CP Age
+                - generic [ref=e274]: 30s
+              - generic [ref=e275]:
+                - generic [ref=e276]: DLQ Files
+                - generic [ref=e277]: "0"
+        - generic [ref=e278]:
+          - heading "Checkpoints" [level=2] [ref=e280]
+          - generic [ref=e282]:
+            - generic [ref=e283]:
+              - generic [ref=e284]: auth-file-to-file
+              - generic [ref=e285]: file · 2026/6/17 21:50:00
+            - button "Reset" [ref=e286] [cursor=pointer]

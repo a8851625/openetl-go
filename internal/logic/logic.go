@@ -5,7 +5,7 @@
 package logic
 
 import (
-	_ "sync-canal-go/internal/logic/app"
-	_ "sync-canal-go/internal/logic/monitor"
-	_ "sync-canal-go/internal/logic/sync"
+	_ "openetl-go/internal/logic/app"
+	_ "openetl-go/internal/logic/monitor"
+	_ "openetl-go/internal/logic/sync"
 )

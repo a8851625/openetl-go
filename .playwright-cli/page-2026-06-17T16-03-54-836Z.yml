@@ -1,0 +1,96 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: 可视化设计器
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: 死信队列
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: 内置
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM 插件
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: 工作节点
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: 审计
+    - generic [ref=e60] [cursor=pointer]:
+      - img [ref=e61]
+      - generic [ref=e64]: 设置
+  - main [ref=e65]:
+    - generic [ref=e66]:
+      - heading "仪表盘" [level=1] [ref=e883]
+      - generic [ref=e68]:
+        - generic [ref=e69]: 自动刷新 5秒
+        - button "EN" [ref=e875] [cursor=pointer]:
+          - img [ref=e72]
+          - text: EN
+        - button "重载配置" [ref=e876] [cursor=pointer]
+    - generic [ref=e884]:
+      - generic [ref=e885]:
+        - generic [ref=e886]:
+          - generic [ref=e888]: 运行中
+          - generic [ref=e890]: "0"
+          - generic [ref=e891]: 1 总计
+        - generic [ref=e892]:
+          - generic [ref=e894]: 读取记录
+          - generic [ref=e896]: "0"
+          - generic [ref=e897]: 累计
+        - generic [ref=e898]:
+          - generic [ref=e900]: 写入记录
+          - generic [ref=e902]: "0"
+          - generic [ref=e903]: 累计
+        - generic [ref=e904]:
+          - generic [ref=e906]: 失败
+          - generic [ref=e908]: "0"
+          - generic [ref=e909]: 健康
+        - generic [ref=e910]:
+          - generic [ref=e912]: 死信
+          - generic [ref=e914]: "0"
+          - generic [ref=e915]: 空
+      - generic [ref=e916]:
+        - generic [ref=e917]:
+          - heading "管道总览" [level=2] [ref=e919]
+          - generic [ref=e921] [cursor=pointer]:
+            - generic [ref=e923]:
+              - generic [ref=e924]: auth-file-to-file
+              - generic [ref=e925]: failed · 运行时长 1m49s
+            - generic [ref=e927]: 0 已写入
+        - generic [ref=e928]:
+          - heading "关键指标 · auth-file-to-file" [level=2] [ref=e930]
+          - generic [ref=e931]:
+            - generic [ref=e933]:
+              - generic [ref=e934]: 写入成功率
+              - generic [ref=e935]: 0%
+            - generic [ref=e937]:
+              - generic [ref=e938]:
+                - generic [ref=e939]: 读取延迟
+                - generic [ref=e940]: 0.0ms
+              - generic [ref=e941]:
+                - generic [ref=e942]: 写入延迟
+                - generic [ref=e943]: 2.0ms
+              - generic [ref=e944]:
+                - generic [ref=e945]: 平均批次
+                - generic [ref=e946]: "3"
+              - generic [ref=e947]:
+                - generic [ref=e948]: 断点时长
+                - generic [ref=e949]: 156s
+              - generic [ref=e950]:
+                - generic [ref=e951]: 死信文件
+                - generic [ref=e952]: "0"

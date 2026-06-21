@@ -1,0 +1,68 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e31]: 可视化设计器
+      - generic [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - generic [ref=e35]: 死信队列
+      - generic [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+        - generic [ref=e41]: 内置
+      - generic [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e47]: WASM 插件
+      - generic [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: 工作节点
+      - generic [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+        - generic [ref=e58]: 审计
+    - generic [ref=e60] [cursor=pointer]:
+      - img [ref=e61]
+      - generic [ref=e64]: 设置
+  - main [ref=e65]:
+    - generic [ref=e66]:
+      - heading "审计" [level=1] [ref=e837]
+      - generic [ref=e68]:
+        - generic [ref=e69]: 自动刷新 5秒
+        - button "EN" [active] [ref=e838] [cursor=pointer]:
+          - img [ref=e72]
+          - text: EN
+        - button "重载配置" [ref=e839] [cursor=pointer]
+    - generic [ref=e779]:
+      - heading "审计日志" [level=2] [ref=e840]
+      - table [ref=e783]:
+        - rowgroup [ref=e784]:
+          - row "操作 方法 路径 / 目标 时间" [ref=e841]:
+            - columnheader "操作" [ref=e842]
+            - columnheader "方法" [ref=e843]
+            - columnheader "路径 / 目标" [ref=e844]
+            - columnheader "时间" [ref=e845]
+        - rowgroup [ref=e790]:
+          - row "specs.reload POST ./pipes 2026/6/18 00:18:15" [ref=e826]:
+            - cell "specs.reload" [ref=e827]:
+              - generic [ref=e793]: specs.reload
+            - cell "POST" [ref=e794]:
+              - generic [ref=e795]: POST
+            - cell "./pipes" [ref=e828]
+            - cell "2026/6/18 00:18:15" [ref=e829]
+          - row "pipeline.start POST auth-file-to-file 2026/6/18 00:16:53" [ref=e830]:
+            - cell "pipeline.start" [ref=e831]:
+              - generic [ref=e832]: pipeline.start
+            - cell "POST" [ref=e833]:
+              - generic [ref=e834]: POST
+            - cell "auth-file-to-file" [ref=e835]
+            - cell "2026/6/18 00:16:53" [ref=e836]

@@ -1,0 +1,40 @@
+name: "mysql-batch-to-mysql"
+source:
+  type: mysql_batch
+  config:
+    host: "host.containers.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    table: "customers"
+    pk_column: "id"
+    limit: 100
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: mysql
+  config:
+    host: "host.containers.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_target"
+    table: "customers"
+    pk_columns:
+      - "id"
+
+batch_size: 2
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 2
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

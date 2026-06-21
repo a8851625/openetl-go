@@ -1,0 +1,41 @@
+name: "mysql-cdc-to-clickhouse"
+source:
+  type: mysql_cdc
+  config:
+    host: "host.containers.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    server_id: 1301
+    tables:
+      - "customers"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: clickhouse
+  config:
+    host: "host.containers.internal"
+    port: 9000
+    user: "default"
+    password: "dzh123456"
+    database: "dzh3136_go"
+    table: "customers"
+    pk_columns:
+      - "id"
+    version_column: "_version"
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

@@ -1,0 +1,35 @@
+name: "file-to-file"
+source:
+  type: file
+  config:
+    path: "/app/testdata/files/customers.jsonl"
+    format: "json"
+
+transforms:
+  - type: lua
+    config:
+      script: |
+        record.full_name = record.first .. " " .. record.last
+  - type: drop_field
+    config:
+      fields:
+        - "deleted_at"
+
+sink:
+  type: file_sink
+  config:
+    output_dir: "/app/data/output"
+    format: "jsonl"
+    prefix: "customers_"
+
+batch_size: 2
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 2
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

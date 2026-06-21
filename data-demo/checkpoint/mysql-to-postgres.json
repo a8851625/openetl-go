@@ -1,0 +1,9 @@
+{
+  "id": "mysql-to-postgres-1781530038026856184",
+  "job_name": "mysql-to-postgres",
+  "source": "mysql_batch",
+  "position": {
+    "last_id": 9
+  },
+  "timestamp": "2026-06-15T13:27:18.026857476Z"
+}

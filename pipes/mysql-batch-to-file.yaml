@@ -1,0 +1,41 @@
+name: "mysql-batch-to-file"
+source:
+  type: mysql_batch
+  config:
+    host: "host.containers.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    table: "customers"
+    pk_column: "id"
+    limit: 100
+
+transforms:
+  - type: lua
+    config:
+      script: |
+        record.full_name = record.name
+  - type: drop_field
+    config:
+      fields:
+        - "deleted_at"
+
+sink:
+  type: file_sink
+  config:
+    output_dir: "/app/data/output"
+    format: "jsonl"
+    prefix: "mysql_customers_"
+
+batch_size: 3
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 2
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

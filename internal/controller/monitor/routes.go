@@ -9,9 +9,9 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
 
-	"sync-canal-go/internal/logic/monitor"
-	"sync-canal-go/internal/model/entity"
-	"sync-canal-go/internal/service"
+	"openetl-go/internal/logic/monitor"
+	"openetl-go/internal/model/entity"
+	"openetl-go/internal/service"
 )
 
 // CollectorWrapper 采集器包装器，实现 sync.ICollector 接口

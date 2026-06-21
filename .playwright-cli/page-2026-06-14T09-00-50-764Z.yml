@@ -1,0 +1,137 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL 平台
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: 仪表盘
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: 管道
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: 设计器
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e32]: 死信队列
+      - generic [ref=e33] [cursor=pointer]:
+        - img [ref=e34]
+        - generic [ref=e38]: 插件
+      - generic [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - generic [ref=e43]: 审计
+    - group [ref=e45]:
+      - generic "设置" [ref=e754] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e50]: 设置
+      - generic [ref=e725]:
+        - generic [ref=e726]:
+          - generic [ref=e727]: 语言
+          - generic [ref=e728]:
+            - button "English" [ref=e729] [cursor=pointer]
+            - button "中文" [ref=e730] [cursor=pointer]
+        - generic [ref=e731]:
+          - generic [ref=e732]: API 令牌
+          - textbox "API 令牌" [ref=e755]: my-token-456
+          - button "保存令牌" [ref=e756] [cursor=pointer]
+  - main [ref=e51]:
+    - generic [ref=e52]:
+      - heading "设计器" [level=1] [ref=e901]
+      - generic [ref=e54]:
+        - generic [ref=e55]: 自动刷新 5秒
+        - button "EN" [ref=e758] [cursor=pointer]:
+          - img [ref=e58]
+          - text: EN
+        - button "重载配置" [ref=e759] [cursor=pointer]
+    - generic [ref=e902]:
+      - generic [ref=e903]:
+        - generic [ref=e904]:
+          - heading "管道画布" [level=2] [ref=e906]
+          - generic [ref=e907]:
+            - generic [ref=e908]:
+              - generic [ref=e909]: 管道名称
+              - textbox [ref=e910]: visual-file-to-file
+            - generic [ref=e911]:
+              - generic [ref=e912]:
+                - generic [ref=e913]: 数据源
+                - generic [ref=e914]: file
+              - generic [ref=e915]: →
+              - generic [ref=e916]:
+                - generic [ref=e917]: 转换
+                - generic [ref=e918]: identity
+              - generic [ref=e919]: →
+              - generic [ref=e920]:
+                - generic [ref=e921]: 数据汇
+                - generic [ref=e922]: file_sink
+        - generic [ref=e923]:
+          - generic [ref=e924]:
+            - generic [ref=e925]: 数据源
+            - combobox [ref=e926]:
+              - option "postgres_cdc"
+              - option "file" [selected]
+              - option "http"
+              - option "kafka"
+              - option "mysql_batch"
+              - option "mysql_cdc"
+              - option "mysql_snapshot_cdc"
+            - generic [ref=e927]:
+              - generic [ref=e928] [cursor=pointer]: postgres_cdc
+              - generic [ref=e929] [cursor=pointer]: file
+              - generic [ref=e930] [cursor=pointer]: http
+              - generic [ref=e931] [cursor=pointer]: kafka
+              - generic [ref=e932] [cursor=pointer]: mysql_batch
+          - generic [ref=e933]:
+            - generic [ref=e934]: 转换
+            - combobox [ref=e935]:
+              - option "drop_field"
+              - option "add_field"
+              - option "type_convert"
+              - option "filter"
+              - option "identity" [selected]
+              - option "lua"
+              - option "rename"
+            - generic [ref=e936]:
+              - generic [ref=e937] [cursor=pointer]: drop_field
+              - generic [ref=e938] [cursor=pointer]: add_field
+              - generic [ref=e939] [cursor=pointer]: type_convert
+              - generic [ref=e940] [cursor=pointer]: filter
+              - generic [ref=e941] [cursor=pointer]: identity
+          - generic [ref=e942]:
+            - generic [ref=e943]: 数据汇
+            - combobox [ref=e944]:
+              - option "kafka"
+              - option "mysql"
+              - option "s3"
+              - option "file_sink" [selected]
+              - option "clickhouse"
+              - option "elasticsearch"
+              - option "es"
+            - generic [ref=e945]:
+              - generic [ref=e946] [cursor=pointer]: kafka
+              - generic [ref=e947] [cursor=pointer]: mysql
+              - generic [ref=e948] [cursor=pointer]: s3
+              - generic [ref=e949] [cursor=pointer]: file_sink
+              - generic [ref=e950] [cursor=pointer]: clickhouse
+        - generic [ref=e951]:
+          - button "生成 YAML" [ref=e952] [cursor=pointer]
+          - button "验证" [ref=e953] [cursor=pointer]
+          - button "测试数据源" [ref=e954] [cursor=pointer]
+          - button "测试数据汇" [ref=e955] [cursor=pointer]
+          - button "创建管道" [ref=e956] [cursor=pointer]
+      - generic [ref=e957]:
+        - generic [ref=e958]:
+          - generic [ref=e959]:
+            - heading "YAML 配置" [level=2] [ref=e960]
+            - button "复制" [ref=e961] [cursor=pointer]
+          - textbox [ref=e963]: "name: \"visual-file-to-file\" source: type: file config: path: \"/app/testdata/files/customers.jsonl\" format: \"json\" transforms: - type: identity config: {} sink: type: file_sink config: output_dir: \"/app/data/output/visual-file-to-file\" format: \"jsonl\" batch_size: 1000 checkpoint_interval_sec: 5 backpressure_buffer: 1000 retry: max_attempts: 3 initial_interval_ms: 500 max_interval_ms: 5000 dlq: enable: true"
+        - generic [ref=e964]:
+          - generic [ref=e965]:
+            - heading "转换试运行" [level=2] [ref=e966]
+            - button "运行" [ref=e967] [cursor=pointer]
+          - generic [ref=e969]:
+            - generic [ref=e970]: 样例记录 (JSON)
+            - textbox [ref=e971]: "{ \"operation\": \"INSERT\", \"data\": { \"id\": 1, \"name\": \"Ada\" }, \"metadata\": {} }"

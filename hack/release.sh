@@ -21,14 +21,14 @@ for dir in bin/$VERSION/*/; do
         os=$(echo "$platform" | sed 's/_.*//')
         arch=$(echo "$platform" | sed 's/.*_//')
         
-        binary="sync-canal-go"
+        binary="openetl-go"
         if [ "$os" = "windows" ]; then
-            binary="sync-canal-go.exe"
+            binary="openetl-go.exe"
         fi
         
         if [ -f "$dir$binary" ]; then
             echo "Packaging $os/$arch..."
-            pkgname="sync-canal-go_${VERSION_NUM}_${os}_${arch}"
+            pkgname="openetl-go_${VERSION_NUM}_${os}_${arch}"
             
             mkdir -p "release/$pkgname"
             cp "$dir$binary" "release/$pkgname/"

@@ -1,0 +1,39 @@
+name: "mysql-daliy-to-kafka"
+source:
+  type: mysql_cdc
+  config:
+    host: "etl-mysql-source"
+    port: 3306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "db_order"
+    server_id: 1003
+    tables:
+      - "daliy_order_20260617"
+
+transforms:
+  - type: lua
+    config:
+      script: |
+        local t = metadata.table or ""
+        local date = t:match("daliy_order_(%d+)")
+        record._partition_date = date or "unknown"
+
+sink:
+  type: kafka
+  config:
+    brokers:
+      - "etl-redpanda:9092"
+    topic: "db_order.daliy"
+
+batch_size: 100
+checkpoint_interval_sec: 5
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 500
+  max_interval_ms: 10000
+
+dlq:
+  enable: true

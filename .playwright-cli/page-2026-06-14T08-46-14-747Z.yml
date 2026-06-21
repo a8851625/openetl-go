@@ -1,0 +1,66 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - generic [ref=e10]: Sync Canal
+        - generic [ref=e11]: ETL Platform
+    - navigation [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+        - generic [ref=e19]: Dashboard
+      - generic [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - generic [ref=e23]: Pipelines
+      - generic [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e28]: Designer
+      - generic [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e32]: DLQ
+      - generic [ref=e33] [cursor=pointer]:
+        - img [ref=e34]
+        - generic [ref=e38]: Plugins
+      - generic [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - generic [ref=e43]: Audit
+    - group [ref=e45]:
+      - generic "Settings" [active] [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e50]: Settings
+      - generic [ref=e607]:
+        - generic [ref=e608]:
+          - generic [ref=e609]: Language
+          - generic [ref=e610]:
+            - button "English" [ref=e611] [cursor=pointer]
+            - button "中文" [ref=e612] [cursor=pointer]
+        - generic [ref=e613]:
+          - generic [ref=e614]: API Token
+          - textbox "API Token" [ref=e615]
+          - button "Save Token" [ref=e616] [cursor=pointer]
+  - main [ref=e51]:
+    - generic [ref=e52]:
+      - heading "Audit" [level=1] [ref=e587]
+      - generic [ref=e54]:
+        - generic [ref=e55]: Auto-refresh 5s
+        - button "中文" [ref=e57] [cursor=pointer]:
+          - img [ref=e58]
+          - text: 中文
+        - button "Reload Specs" [ref=e61] [cursor=pointer]
+    - generic [ref=e588]:
+      - heading "Audit Trail" [level=2] [ref=e590]
+      - table [ref=e592]:
+        - rowgroup [ref=e593]:
+          - row "Action Method Path / Target Time" [ref=e594]:
+            - columnheader "Action" [ref=e595]
+            - columnheader "Method" [ref=e596]
+            - columnheader "Path / Target" [ref=e597]
+            - columnheader "Time" [ref=e598]
+        - rowgroup [ref=e599]:
+          - row "pipeline.start POST auth-file-to-file 2026/6/14 16:45:01" [ref=e600]:
+            - cell "pipeline.start" [ref=e601]:
+              - generic [ref=e602]: pipeline.start
+            - cell "POST" [ref=e603]:
+              - generic [ref=e604]: POST
+            - cell "auth-file-to-file" [ref=e605]
+            - cell "2026/6/14 16:45:01" [ref=e606]

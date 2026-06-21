@@ -1,0 +1,19 @@
+name: parallel-demo-test
+description: "3-shard demo source -> file sink to validate parallel runner"
+source:
+  type: demo
+  config:
+    interval_ms: 50
+    fields:
+      - { name: value, type: counter }
+sink:
+  type: file_sink
+  config:
+    path: /tmp/parallel-demo-${SHARD}.jsonl
+    format: json
+parallelism:
+  count: 3
+  shard_strategy: round_robin
+batch_size: 10
+checkpoint_interval_sec: 1
+max_records: 30
