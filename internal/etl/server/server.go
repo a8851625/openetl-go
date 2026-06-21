@@ -2445,7 +2445,7 @@ func pluginMetadata() map[string]any {
 			"mysql_cdc":          pluginInfo([]string{"host", "user", "database", "tables"}, []string{"cdc", "checkpoint"}, "stable"),
 			"mysql_snapshot_cdc": pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "cdc", "checkpoint"}, "stable"),
 			"kafka":              pluginInfo([]string{"brokers", "topic"}, []string{"stream", "checkpoint"}, "stable"),
-			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot"}, "stable"),
+			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot", "checkpoint"}, "stable"),
 			"redis":              pluginInfo([]string{"addr"}, []string{"stream", "checkpoint"}, "stable"),
 		},
 		"sinks": map[string]any{
