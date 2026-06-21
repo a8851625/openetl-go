@@ -7,7 +7,7 @@
 ## 仓库地址
 
 - **前端仓库**: https://github.com/gzdzh-cn/sync-canal-admin
-- **后端仓库**: https://github.com/gzdzh-cn/sync-canal-go
+- **后端仓库**: https://github.com/gzdzh-cn/openetl-go
 
 ## 目录
 
@@ -128,7 +128,7 @@ SHOW VARIABLES LIKE 'binlog_row_image';  # 必须为 FULL
 ### 1. 项目结构
 
 ```
-sync-canal-go/
+openetl-go/
 ├── main.go                    # 主程序入口
 ├── internal/
 │   ├── cmd/                   # 命令入口
@@ -170,7 +170,7 @@ sync-canal-go/
 ### 2. 安装依赖
 
 ```bash
-cd sync-canal-go
+cd openetl-go
 go mod tidy
 ```
 
@@ -287,36 +287,36 @@ SETTINGS index_granularity = 8192;
 
 ```bash
 # 下载对应平台的 Release 包（以 Linux amd64 为例）
-wget https://github.com/gzdzh-cn/sync-canal-go/releases/download/v3.0.0/sync-canal-go_3.0.0_linux_amd64.tar.gz
+wget https://github.com/gzdzh-cn/openetl-go/releases/download/v3.0.0/openetl-go_3.0.0_linux_amd64.tar.gz
 
 # 解压
-tar -xzf sync-canal-go_3.0.0_linux_amd64.tar.gz
+tar -xzf openetl-go_3.0.0_linux_amd64.tar.gz
 
 # 进入目录
-cd sync-canal-go_3.0.0_linux_amd64
+cd openetl-go_3.0.0_linux_amd64
 
 # 修改配置文件
 vim manifest/config/config.yaml
 
 # 运行
-./sync-canal-go
+./openetl-go
 ```
 
 #### 方式二：从源码编译运行
 
 ```bash
 # 下载仓库到本地
-git clone https://github.com/gzdzh-cn/sync-canal-go.git
-cd sync-canal-go
+git clone https://github.com/gzdzh-cn/openetl-go.git
+cd openetl-go
 
 # 本地编译
-go build -o bin/sync-canal-go .
+go build -o bin/openetl-go .
 
 # 或使用 GoFrame 命令，一键生成多平台版本（配置文件在 hack/config.yaml）
 gf build
 
 # 运行 （以 Linux amd64 为例）
-./bin/v3.0.0/linux_amd64/sync-canal-go
+./bin/v3.0.0/linux_amd64/openetl-go
 
 # 或直接运行
 go run main.go
@@ -376,10 +376,10 @@ curl -s "http://127.0.0.1:8123/?user=default&password=dzh123456" \
 
 ```bash
 # 克隆仓库
-git clone https://github.com/gzdzh-cn/sync-canal-go.git
+git clone https://github.com/gzdzh-cn/openetl-go.git
 
 # 进入项目目录
-cd sync-canal-go
+cd openetl-go
 
 # 安装依赖
 go mod tidy
@@ -391,25 +391,25 @@ vim manifest/config/config.yaml
 go run .
 
 # 或编译后运行
-go build -o bin/sync-canal-go .
-./bin/sync-canal-go
+go build -o bin/openetl-go .
+./bin/openetl-go
 ```
 
 ### 方式二: Systemd 服务
 
 ```bash
 # 从仓库克隆
-git clone https://github.com/gzdzh-cn/sync-canal-go.git
-cd sync-canal-go
+git clone https://github.com/gzdzh-cn/openetl-go.git
+cd openetl-go
 
 # 编译程序
-go build -o /opt/sync-canal-go/sync-canal-go .
+go build -o /opt/openetl-go/openetl-go .
 
 # 复制配置文件
-cp -r manifest/config /opt/sync-canal-go/
+cp -r manifest/config /opt/openetl-go/
 
 # 创建 systemd 服务
-cat > /etc/systemd/system/sync-canal-go.service << EOF
+cat > /etc/systemd/system/openetl-go.service << EOF
 [Unit]
 Description=MySQL to Multi-Target Sync Service
 After=network.target mysql.service clickhouse.service
@@ -417,8 +417,8 @@ After=network.target mysql.service clickhouse.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/sync-canal-go
-ExecStart=/opt/sync-canal-go/sync-canal-go
+WorkingDirectory=/opt/openetl-go
+ExecStart=/opt/openetl-go/openetl-go
 Restart=on-failure
 RestartSec=10
 
@@ -428,32 +428,32 @@ EOF
 
 # 启动服务
 systemctl daemon-reload
-systemctl start sync-canal-go
-systemctl enable sync-canal-go
+systemctl start openetl-go
+systemctl enable openetl-go
 
 # 查看状态
-systemctl status sync-canal-go
+systemctl status openetl-go
 ```
 
 ### 方式三: Docker 部署
 
 ```bash
 # 从仓库克隆
-git clone https://github.com/gzdzh-cn/sync-canal-go.git
-cd sync-canal-go
+git clone https://github.com/gzdzh-cn/openetl-go.git
+cd openetl-go
 
 # 构建 Docker 镜像
-docker build -t sync-canal-go .
+docker build -t openetl-go .
 
 # 运行容器
-docker run -d --name sync-canal-go \
+docker run -d --name openetl-go \
   -v /path/to/config:/app/manifest/config \
   -p 8000:8000 \
-  sync-canal-go
+  openetl-go
 
 # 构建多平台镜像并推送
 docker buildx build --platform linux/amd64,linux/arm64 \
-  --tag registry.cn-heyuan.aliyuncs.com/gzdzh/sync-canal-go:v3.0.0 \
+  --tag registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:v3.0.0 \
   --push .
 ```
 
@@ -801,6 +801,62 @@ SET wait_for_async_insert = 0;
 
 ## 故障排查
 
+### Quickstart: 容器未启动
+
+```bash
+# 检查所有服务是否运行
+podman ps --format "{{.Names}} {{.Status}}"
+
+# 查看 ETL 日志
+podman logs quickstart-etl
+
+# 查看 MySQL 日志
+podman logs quickstart-mysql
+
+# 重新启动
+podman compose -f docker-compose.quickstart.yml down -v
+podman compose -f docker-compose.quickstart.yml up -d
+```
+
+### Quickstart: 端口冲突
+
+```bash
+# 如果 13306 或 8123 已被占用
+lsof -i :13306   # MySQL
+lsof -i :8123    # ClickHouse HTTP
+
+# 修改 docker-compose.quickstart.yml 中的端口映射
+# 然后重启
+```
+
+### Quickstart: MySQL binlog 格式不是 ROW
+
+```bash
+# 验证
+podman exec quickstart-mysql mysql -u root -proot123 -e "SHOW VARIABLES LIKE 'binlog_format';"
+
+# 如果显示 STATEMENT 或 MIXED，需要在 my.cnf 中设置
+# 或在启动 docker-compose 之前修改 testdata/mysql/conf.d/custom.cnf
+```
+
+### Quickstart: ClickHouse 连接失败
+
+```bash
+# 验证 HTTP 端口
+curl http://localhost:8123/ping
+
+# 验证 TCP 端口
+podman exec quickstart-clickhouse clickhouse-client -q "SELECT 1"
+
+# 如果 ClickHouse 启动慢（首次需要 10-30 秒），等待后重试
+```
+
+### Quickstart: 表已存在但 schema 不匹配
+
+如果 ClickHouse 表中的结构与 MySQL 源表不一致：
+- 删除错误的表：`podman exec quickstart-clickhouse clickhouse-client -q "DROP TABLE dzh3136_go.bad_table"`
+- 重启 ETL：`podman restart quickstart-etl`（auto_create 会自动建表）
+
 ### 连接 MySQL 失败
 
 ```bash
@@ -882,17 +938,17 @@ func (t *ElasticsearchTarget) String() string { ... }
 
 ```bash
 # 查看进程
-ps aux | grep sync-canal-go
+ps aux | grep openetl-go
 
 # 停止服务
-pkill -f sync-canal-go
+pkill -f openetl-go
 # 或
-systemctl stop sync-canal-go
+systemctl stop openetl-go
 
 # 查看日志
 tail -f logs/sync-{Y-m-d}.log
 # 或
-journalctl -u sync-canal-go -f
+journalctl -u openetl-go -f
 
 # 使用 Makefile
 make build        # 编译

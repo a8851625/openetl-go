@@ -1,0 +1,36 @@
+name: mysql-to-clickhouse
+tags: [quickstart, cdc]
+
+# Source: MySQL binlog CDC — captures INSERT/UPDATE/DELETE in real time.
+source:
+  type: mysql_cdc
+  config:
+    host: quickstart-mysql
+    port: 3306
+    user: root
+    password: root123
+    server_id: 100
+    database: dzh3136_go
+    tables: [customers, orders, products]
+
+# Sink: ClickHouse — auto-creates tables with ReplacingMergeTree dedup.
+sink:
+  type: clickhouse
+  config:
+    host: quickstart-clickhouse
+    port: 9000
+    user: default
+    password: ""
+    database: dzh3136_go
+    auto_create: true
+    batch_size: 500
+
+batch_size: 500
+checkpoint_interval_sec: 10
+
+# Auto-restart on failure — self-healing.
+restart_policy:
+  mode: on-failure
+  max_restarts: 5
+  initial_delay_ms: 5000
+  max_delay_ms: 60000

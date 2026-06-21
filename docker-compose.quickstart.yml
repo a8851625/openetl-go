@@ -1,0 +1,93 @@
+version: '3.8'
+
+# ════════════════════════════════════════════════════════════════════
+# Sync Canal ETL — Quick Start
+#
+# One-command demo: MySQL CDC → ClickHouse
+#
+#   podman compose -f docker-compose.quickstart.yml up -d
+#
+# Then open: http://localhost:8000
+#
+# Cleanup: podman compose -f docker-compose.quickstart.yml down -v
+# ════════════════════════════════════════════════════════════════════
+
+services:
+  # ── MySQL Source (CDC) ────────────────────────────────────────────
+  mysql:
+    image: docker.io/library/mysql:8.0
+    container_name: quickstart-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: demo
+      MYSQL_USER: etl
+      MYSQL_PASSWORD: etl123
+      TZ: UTC
+    ports:
+      - "13306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./testdata/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    command: >
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --binlog-row-image=FULL
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+
+  # ── ClickHouse Sink ──────────────────────────────────────────────
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:24.3-alpine
+    container_name: quickstart-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      TZ: UTC
+    ports:
+      - "8124:8123"
+      - "9001:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./testdata/clickhouse/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ── Sync Canal ETL App ───────────────────────────────────────────
+  etl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quickstart-etl
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "8000:8000"   # Web UI + API (proxied)
+      - "8001:8001"   # ETL API (direct)
+    environment:
+      TZ: UTC
+      ETL_API_TOKEN: ""   # Set to enable API auth
+    volumes:
+      - etl-data:/app/data
+      - ./pipes-quickstart:/app/pipes:ro
+    # Config is embedded; override via env if needed
+
+volumes:
+  mysql-data:
+  clickhouse-data:
+  etl-data:
