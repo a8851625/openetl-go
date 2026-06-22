@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/gogf/gf/v2/frame/g"
@@ -95,10 +96,8 @@ func (w *Worker) PollLoop(ctx context.Context) {
 		default:
 		}
 
-		w.mu.RLock()
-		slotsUsed := len(w.executors)
-		slotsMax := w.Slots
-		w.mu.RUnlock()
+		slotsUsed := atomic.LoadInt64(&w.inFlight)
+		slotsMax := int64(w.Slots)
 
 		if slotsUsed >= slotsMax {
 			time.Sleep(2 * time.Second)
@@ -130,7 +129,9 @@ func (w *Worker) PollLoop(ctx context.Context) {
 		g.Log().Infof(ctx, "Worker %s claimed task %s (pipeline=%s)",
 			w.ID, taskID, pipelineName)
 
+		atomic.AddInt64(&w.inFlight, 1)
 		go func(t *storage.TaskAssignment) {
+			defer atomic.AddInt64(&w.inFlight, -1)
 			defer func() {
 				if rec := recover(); rec != nil {
 					g.Log().Errorf(ctx, "Task %s panic: %v", t.TaskID, rec)

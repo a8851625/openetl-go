@@ -458,8 +458,13 @@ func (r *pgCDCReader) handleWALData(ctx context.Context, data []byte) {
 			// so unrecognised messages don't halt the stream.
 			data = r.skipTruncateMsg(data[1:])
 		default:
-			// Unknown message type — log as warning and try to continue.
-			g.Log().Warningf(r.ctx, "postgres_cdc: unknown pgoutput message type '%c' (0x%x) — skipping frame", data[0], data[0])
+			// Unknown pgoutput message type. pgoutput messages do not carry a
+			// uniform length prefix, so we cannot safely skip this byte and
+			// continue (advancing data would mis-parse the rest of the frame;
+			// not advancing would loop forever on the same byte). Stop parsing
+			// this frame and surface it at ERROR level — a future PG message
+			// type we don't handle must not be silently dropped (P5-7).
+			g.Log().Errorf(r.ctx, "postgres_cdc: unknown pgoutput message type '%c' (0x%x) — aborting frame parse; remaining messages in this frame are skipped. Update the parser to handle this message type.", data[0], data[0])
 			return
 		}
 	}

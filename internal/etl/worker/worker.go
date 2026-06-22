@@ -37,6 +37,12 @@ type Worker struct {
 	// passed so shard metadata (ShardIndex/ShardTotal) flows through.
 	taskExecutor func(ctx context.Context, task *storage.TaskAssignment) error
 
+	// inFlight counts PollLoop-spawned task goroutines (ExecuteShard runs).
+	// PollLoop gates new claims on it against Slots. (P5-11: previously it used
+	// len(w.executors) — the legacy AssignPipeline map, never touched by
+	// ExecuteShard — so distributed workers over-subscribed beyond Slots.)
+	inFlight int64
+
 	ctx       context.Context
 	cancel    context.CancelFunc
 	stopCh    chan struct{}

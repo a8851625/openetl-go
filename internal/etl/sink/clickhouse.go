@@ -79,6 +79,7 @@ type ClickHouseSink struct {
 	rowsWritten    int64
 	batchesSent    int64
 	writeLatencyNs int64
+	writeErrors    int64
 	// versionCounter ensures monotonic _version values even with clock drift.
 	versionCounter atomic.Int64
 }
@@ -224,6 +225,7 @@ func (s *ClickHouseSink) SinkMetrics() core.SinkMetrics {
 		RowsWritten:  atomic.LoadInt64(&s.rowsWritten),
 		BatchesSent:  atomic.LoadInt64(&s.batchesSent),
 		WriteLatency: wl,
+		Errors:       atomic.LoadInt64(&s.writeErrors),
 	}
 }
 
@@ -374,7 +376,8 @@ func (s *ClickHouseSink) optimizeLoop(ctx context.Context) {
 	}
 }
 
-func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) error {
+func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err error) {
+	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
 	// Separate DDL records — they are applied directly, not batched.
 	var ddlRecords []core.Record
 	var dataRecords []core.Record
@@ -765,6 +768,9 @@ func (s *ClickHouseSink) recordMetrics(rows int, latency time.Duration) {
 	atomic.AddInt64(&s.batchesSent, 1)
 	atomic.AddInt64(&s.writeLatencyNs, latency.Nanoseconds())
 }
+
+// recordError increments the write-error counter (call on write failure). P5-12.
+func (s *ClickHouseSink) recordError() { atomic.AddInt64(&s.writeErrors, 1) }
 
 func (s *ClickHouseSink) ensureColumns(ctx context.Context, tableName string, records []core.Record) ([]clickhouseColumn, error) {
 	columns, err := s.columns(ctx, tableName)

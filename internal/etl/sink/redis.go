@@ -182,7 +182,8 @@ func (s *RedisSink) Open(ctx context.Context) error {
 	return nil
 }
 
-func (s *RedisSink) Write(ctx context.Context, records []core.Record) error {
+func (s *RedisSink) Write(ctx context.Context, records []core.Record) (err error) {
+	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
 	start := time.Now()
 	chunkSize := s.pipelineChunkSize
 	if chunkSize <= 0 {

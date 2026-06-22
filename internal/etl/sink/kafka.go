@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/gogf/gf/v2/frame/g"
 	"golang.org/x/crypto/pbkdf2"
 
 	"openetl-go/internal/etl/core"
@@ -198,7 +199,11 @@ func (s *KafkaSink) Open(ctx context.Context) error {
 
 	producer, err := sarama.NewSyncProducer(s.brokers, cfg)
 	if err != nil {
-		// Fall back to non-idempotent if broker doesn't support it
+		// Fall back to non-idempotent if the broker doesn't support idempotent
+		// producers (broker < 0.11, or in-flight-requests mismatch). Warn loudly:
+		// without idempotency, a partial-network-failure retry can duplicate
+		// records (P5-6) — rely on an idempotent downstream or accept dups.
+		g.Log().Warningf(ctx, "kafka sink (topic=%s): idempotent producer unavailable (%v); falling back to non-idempotent mode — duplicates are possible on retry", s.topic, err)
 		cfg.Producer.Idempotent = false
 		cfg.Net.MaxOpenRequests = 5
 		producer, err = sarama.NewSyncProducer(s.brokers, cfg)
@@ -234,7 +239,8 @@ func (s *KafkaSink) Open(ctx context.Context) error {
 	return nil
 }
 
-func (s *KafkaSink) Write(ctx context.Context, records []core.Record) error {
+func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error) {
+	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
 	start := time.Now()
 	messages := make([]*sarama.ProducerMessage, 0, len(records))
 	for _, rec := range records {

@@ -158,7 +158,8 @@ func (s *ElasticsearchSink) Open(ctx context.Context) error {
 	return fmt.Errorf("connect elasticsearch: no reachable hosts from %v", s.hosts)
 }
 
-func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) error {
+func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (err error) {
+	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
 	if len(records) == 0 {
 		return nil
 	}
@@ -306,16 +307,21 @@ func (s *ElasticsearchSink) bulkWithRetry(ctx context.Context, body []byte) erro
 		}
 
 		var result map[string]any
-		if json.Unmarshal(respBody, &result) == nil {
-			if errs, ok := result["errors"]; ok {
-				if hasErrors, ok := errs.(bool); ok && hasErrors {
-					summary := summarizeBulkErrors(result)
-					if summary == "" {
-						summary = responseSnippet(respBody)
-					}
-					lastErr = fmt.Errorf("elasticsearch bulk has errors: %s", summary)
-					continue
+		if json.Unmarshal(respBody, &result) != nil {
+			// 2xx but the body is not valid JSON (e.g. an HTML proxy/error page).
+			// The commit state is unknown — never treat this as success, or a
+			// failed batch would advance the checkpoint (silent data loss).
+			return fmt.Errorf("elasticsearch bulk: unparseable response body (status %d): %s",
+				resp.StatusCode, responseSnippet(respBody))
+		}
+		if errs, ok := result["errors"]; ok {
+			if hasErrors, ok := errs.(bool); ok && hasErrors {
+				summary := summarizeBulkErrors(result)
+				if summary == "" {
+					summary = responseSnippet(respBody)
 				}
+				lastErr = fmt.Errorf("elasticsearch bulk has errors: %s", summary)
+				continue
 			}
 		}
 

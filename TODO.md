@@ -196,4 +196,6 @@
 - [2026-06-21] B4: postgres_cdc TRUNCATE fix — was silently stopping CDC loop; now skips with warning
 - [2026-06-21] B5: S3/ES sink audit — ES already has round-robin+429 Retry-After; S3 has retry
 - [2026-06-21] Phase 3: legacy canal.go frozen with deprecation notice; SPEC → Stable v1; ROADMAP complete
-- [2026-06-21] ALL PHASES COMPLETE — production-ready for v4 release
+- [2026-06-22] ALL PHASES COMPLETE — production-ready for v4 release
+- [2026-06-22] Phase 5 Wave 0 (P5-1/2/17/20): newRunner recursion + file byte-offset + quickstart fixes; committed 9107b12
+- [2026-06-22] Phase 5 Wave 1 (reliability P1): P5-3 DAG readers RLock, P5-4 ParallelRunner cancel race, P5-5 ES unparseable-response error, P5-6 Kafka idempotent-fallback warn, P5-7 postgres_cdc unknown-msg error-level, P5-9 linear DLQ-fail breaker, P5-10 no-DLQ escalation (linear+DAG), P5-11 worker inFlight slot cap, P5-12 sink write-error metrics (9 sinks). P5-8 retracted (false-positive). go build + go test -race ./internal/etl/... green.

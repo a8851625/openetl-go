@@ -186,7 +186,8 @@ func (s *JDBCSink) Open(ctx context.Context) error {
 	return nil
 }
 
-func (s *JDBCSink) Write(ctx context.Context, records []core.Record) error {
+func (s *JDBCSink) Write(ctx context.Context, records []core.Record) (err error) {
+	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
 	if len(records) == 0 {
 		return nil
 	}

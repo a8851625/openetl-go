@@ -160,9 +160,11 @@ func (pr *ParallelRunner) Start(ctx context.Context) error {
 	pr.status = StatusRunning
 	pr.frozenDuration = 0
 	pr.startedAt = time.Now()
-	pr.mu.Unlock()
-
+	// Assign pr.cancel while still holding pr.mu so a concurrent Stop() — which
+	// reads pr.cancel under the same lock — cannot observe a zeroed cancel
+	// (P5-4: previously this ran after Unlock, racing Start/Stop).
 	ctx, pr.cancel = context.WithCancel(ctx)
+	pr.mu.Unlock()
 
 	// Distributed mode (A11-redo): don't run instances inline — create tasks
 	// and wait for worker processes to execute them. The instances built in

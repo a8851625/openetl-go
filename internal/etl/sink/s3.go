@@ -185,7 +185,8 @@ func (s *FileSink) Open(ctx context.Context) error {
 	return os.MkdirAll(s.config.OutputDir, 0755)
 }
 
-func (s *FileSink) Write(ctx context.Context, records []core.Record) error {
+func (s *FileSink) Write(ctx context.Context, records []core.Record) (err error) {
+	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

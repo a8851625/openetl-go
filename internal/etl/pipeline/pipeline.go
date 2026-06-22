@@ -911,7 +911,12 @@ func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err er
 			ErrorClass: string(core.ClassifyError(err)),
 		}
 		if dlqErr := r.dlqWriter.WriteDLQ(ctx, entry); dlqErr != nil {
-			// DLQ write failed — this is a data-loss risk. Log loudly and alert.
+			// DLQ write failed — this is a data-loss risk. Log loudly, alert,
+			// and trip the circuit breaker so a persistently-down DLQ backend
+			// triggers cooldown rather than losing every record at full tilt.
+			if r.circuitBreaker != nil {
+				r.circuitBreaker.RecordFailure(ctx, dlqErr)
+			}
 			r.logError(fmt.Sprintf("DLQ write FAILED for record (table=%s): %v | original error: %v",
 				rec.Metadata.Table, dlqErr, err))
 			r.alertManager.Send(ctx, alert.Event{
@@ -923,6 +928,18 @@ func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err er
 		} else {
 			r.addRecordsDLQ(1)
 		}
+	} else {
+		// No DLQ writer configured — the record can neither reach the sink nor
+		// the DLQ. Surface it loudly (never silent) per the zero-loss rule
+		// (§6.1). The server always wires a DLQ writer; this path is for
+		// direct/SDK usage where the caller opted out of a DLQ.
+		r.logError(fmt.Sprintf("record failed with no DLQ configured (table=%s): %v", rec.Metadata.Table, err))
+		r.alertManager.Send(ctx, alert.Event{
+			Level:   alert.LevelError,
+			Title:   "Record dropped — no DLQ configured",
+			Message: fmt.Sprintf("Pipeline %s: record failed (table=%s) with no DLQ writer; record could not be stored. Error: %v", r.spec.Name, rec.Metadata.Table, err),
+			JobName: r.spec.Name,
+		})
 	}
 }
 

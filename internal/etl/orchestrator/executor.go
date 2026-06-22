@@ -575,7 +575,9 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 
 // checkpointForRecord generates a checkpoint from the source's reader based on the last committed record.
 func (e *DAGExecutor) checkpointForRecord(ctx context.Context, sourceID string, rec core.Record) (core.Checkpoint, error) {
+	e.mu.RLock()
 	reader := e.readers[sourceID]
+	e.mu.RUnlock()
 	if reader == nil {
 		return core.Checkpoint{}, fmt.Errorf("no reader for source %s", sourceID)
 	}
@@ -588,6 +590,17 @@ func (e *DAGExecutor) checkpointForRecord(ctx context.Context, sourceID string, 
 func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err error) {
 	atomic.AddInt64(&e.stats.RecordsFailed, 1)
 	if e.dlqWriter == nil {
+		// No DLQ configured — never drop silently. Surface at error level so a
+		// record that can reach neither sink nor DLQ is visible to operators
+		// (§6.1). The server always wires a DLQ writer; this is the direct/SDK
+		// path.
+		g.Log().Errorf(ctx, "DAG pipeline %s: record failed with no DLQ configured (source=%s): %v", e.spec.Name, rec.Metadata.Source, err)
+		e.alertMgr.Send(ctx, alert.Event{
+			Level:   alert.LevelError,
+			Title:   "DAG record dropped — no DLQ configured",
+			Message: fmt.Sprintf("pipeline %s: record failed (source=%s) with no DLQ writer: %v", e.spec.Name, rec.Metadata.Source, err),
+			JobName: e.spec.Name,
+		})
 		return
 	}
 	entry := pipeline.DLQEntry{
