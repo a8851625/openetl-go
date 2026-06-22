@@ -10,9 +10,9 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcmd"
 
-	"openetl-go/internal/logic/app"
-	"openetl-go/internal/consts"
-	"openetl-go/internal/service"
+	"github.com/a8851625/openetl-go/internal/logic/app"
+	"github.com/a8851625/openetl-go/internal/consts"
+	"github.com/a8851625/openetl-go/internal/service"
 )
 
 var (

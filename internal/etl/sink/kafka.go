@@ -20,8 +20,8 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"golang.org/x/crypto/pbkdf2"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
 )
 
 func init() {

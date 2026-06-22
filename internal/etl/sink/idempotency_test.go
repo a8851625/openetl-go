@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // TestMySQLSinkUpsertIdempotency verifies that re-running an upsert sink with

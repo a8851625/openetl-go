@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 )
 
 // DAGRunnerWrapper adapts DAGExecutor to implement pipeline.RunnerInterface,

@@ -20,16 +20,16 @@ import (
 	"github.com/gogf/gf/v2/net/ghttp"
 	"github.com/gogf/gf/v2/os/gres"
 
-	"openetl-go/internal/etl/alert"
-	etlfactory "openetl-go/internal/etl/storage/factory"
-	etlserver "openetl-go/internal/etl/server"
-	"openetl-go/internal/etl/storage"
-	"openetl-go/internal/etl/worker"
-	"openetl-go/internal/service"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
+	etlfactory "github.com/a8851625/openetl-go/internal/etl/storage/factory"
+	etlserver "github.com/a8851625/openetl-go/internal/etl/server"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/worker"
+	"github.com/a8851625/openetl-go/internal/service"
 
-	_ "openetl-go/internal/etl/sink"
-	_ "openetl-go/internal/etl/source"
-	_ "openetl-go/internal/etl/transform"
+	_ "github.com/a8851625/openetl-go/internal/etl/sink"
+	_ "github.com/a8851625/openetl-go/internal/etl/source"
+	_ "github.com/a8851625/openetl-go/internal/etl/transform"
 )
 
 // sApp 应用实例

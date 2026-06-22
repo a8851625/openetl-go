@@ -10,8 +10,8 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gogf/gf/v2/frame/g"
 
-	"openetl-go/internal/etl/pipeline"
-	"openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
 )
 
 // PreflightIssue describes a single check failure with remediation.

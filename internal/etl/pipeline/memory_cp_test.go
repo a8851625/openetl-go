@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // memoryCPStore is an in-memory CheckpointStore for testing.

@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"openetl-go/internal/etl/storage"
-	"openetl-go/internal/etl/storage/mysql"
-	"openetl-go/internal/etl/storage/postgres"
-	"openetl-go/internal/etl/storage/sqlite"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage/mysql"
+	"github.com/a8851625/openetl-go/internal/etl/storage/postgres"
+	"github.com/a8851625/openetl-go/internal/etl/storage/sqlite"
 )
 
 // ── SQLite (hermetic, always runs — the default/demo mode per SPEC §1.2) ──

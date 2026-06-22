@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"openetl-go/internal/etl/sink/typing"
+	"github.com/a8851625/openetl-go/internal/etl/sink/typing"
 )
 
 // Dialect identifies the source or target SQL dialect.

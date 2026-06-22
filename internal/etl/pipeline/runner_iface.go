@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"openetl-go/internal/etl/alert"
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // RunnerInterface is a unified interface for single and parallel runners.

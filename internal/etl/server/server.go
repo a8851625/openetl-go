@@ -19,17 +19,17 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"openetl-go/internal/etl/alert"
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/master"
-	"openetl-go/internal/etl/orchestrator"
-	"openetl-go/internal/etl/pipeline"
-	"openetl-go/internal/etl/plugin/pluginsystem"
-	"openetl-go/internal/etl/registry"
-	"openetl-go/internal/etl/retry"
-	"openetl-go/internal/etl/storage"
-	"openetl-go/internal/etl/telemetry"
-	"openetl-go/internal/etl/worker"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/master"
+	"github.com/a8851625/openetl-go/internal/etl/orchestrator"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/plugin/pluginsystem"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/retry"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/telemetry"
+	"github.com/a8851625/openetl-go/internal/etl/worker"
 
 	"gopkg.in/yaml.v3"
 )

@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 const schemaVersionCode = "v1"

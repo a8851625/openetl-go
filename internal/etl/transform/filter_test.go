@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 func applyFilter(t *testing.T, expr string, data map[string]any) (core.Record, bool) {

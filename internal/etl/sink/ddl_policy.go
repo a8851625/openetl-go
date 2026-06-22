@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // DDLPolicy controls how a sink handles OpDDL records.

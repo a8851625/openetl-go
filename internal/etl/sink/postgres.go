@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/registry"
-	"openetl-go/internal/etl/sink/typing"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/sink/typing"
 )
 
 func init() {

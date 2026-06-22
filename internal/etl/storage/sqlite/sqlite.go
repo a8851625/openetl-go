@@ -10,7 +10,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 // Store implements storage.Storage backed by SQLite.

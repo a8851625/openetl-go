@@ -3,7 +3,7 @@
 ## Commands
 - `make build` is the safest build path: it installs the GoFrame CLI if missing, then runs `gf build -ew` using `hack/config.yaml`.
 - Do not assume plain `go build ./...` works from a fresh checkout: `main.go` imports generated `openetl-go/internal/packed`, and `hack/config.yaml` packs `resource/` into `internal/packed/packed.go` during GoFrame builds.
-- Go module is `openetl-go`, with `go 1.24.0` and `toolchain go1.24.13` in `go.mod`.
+- Go module is `github.com/a8851625/openetl-go`, with `go 1.24.0` and `toolchain go1.24.13` in `go.mod`.
 - Local Go may be unavailable; use `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c "go test ./..."` for tests.
 - `hack/e2e.sh` builds the app image and validates file->file, MySQL batch->file, and MySQL batch->MySQL via Podman.
 - `hack/e2e-cdc-mysql.sh` validates MySQL CDC->MySQL.

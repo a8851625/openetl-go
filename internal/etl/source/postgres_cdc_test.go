@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 func buildRelationMsg(relID uint32, ns, table string, cols []pgColumnInfo) []byte {

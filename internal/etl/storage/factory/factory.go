@@ -8,10 +8,10 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"openetl-go/internal/etl/storage"
-	"openetl-go/internal/etl/storage/mysql"
-	"openetl-go/internal/etl/storage/postgres"
-	"openetl-go/internal/etl/storage/sqlite"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage/mysql"
+	"github.com/a8851625/openetl-go/internal/etl/storage/postgres"
+	"github.com/a8851625/openetl-go/internal/etl/storage/sqlite"
 )
 
 // StoreType constants for supported storage backends.

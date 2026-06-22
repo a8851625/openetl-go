@@ -9,7 +9,7 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/robfig/cron/v3"
 
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 // Scheduler manages the lifecycle of pipeline triggers.

@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"openetl-go/internal/etl/master"
-	"openetl-go/internal/etl/storage"
-	"openetl-go/internal/etl/storage/mysql"
-	"openetl-go/internal/etl/storage/sqlite"
-	"openetl-go/internal/etl/worker"
+	"github.com/a8851625/openetl-go/internal/etl/master"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage/mysql"
+	"github.com/a8851625/openetl-go/internal/etl/storage/sqlite"
+	"github.com/a8851625/openetl-go/internal/etl/worker"
 )
 
 // mockShardSource implements master.ShardSource for testing.

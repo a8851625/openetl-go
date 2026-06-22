@@ -12,9 +12,9 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/orchestrator"
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/orchestrator"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 // Worker represents a task execution node that registers with a Master.

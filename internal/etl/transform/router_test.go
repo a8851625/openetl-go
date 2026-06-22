@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // TestDeduplicatorDropsKnownKey verifies basic dedup semantics: the first

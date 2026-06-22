@@ -10,7 +10,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 const schemaVersionCode = "v1"

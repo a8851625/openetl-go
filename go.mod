@@ -1,4 +1,4 @@
-module openetl-go
+module github.com/a8851625/openetl-go
 
 go 1.24.9
 

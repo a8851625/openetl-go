@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"fmt"
 
-	"openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 )
 
 // ConvertLinearSpec converts the legacy linear pipeline.Spec (1 source → N transforms → 1 sink)

@@ -19,10 +19,10 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/shopspring/decimal"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/registry"
-	"openetl-go/internal/etl/sink/ddl"
-	"openetl-go/internal/etl/sink/typing"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/sink/ddl"
+	"github.com/a8851625/openetl-go/internal/etl/sink/typing"
 )
 
 func init() {

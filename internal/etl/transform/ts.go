@@ -11,8 +11,8 @@ import (
 
 	"github.com/buke/quickjs-go"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
 )
 
 func init() {

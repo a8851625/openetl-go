@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 func envDefault(key, def string) string {

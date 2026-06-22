@@ -11,7 +11,7 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // ── Hook Builder ─────────────────────────────────────────────────────

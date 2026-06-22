@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"openetl-go/internal/etl/alert"
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // ShardDispatcher abstracts master-side shard task dispatch so ParallelRunner

@@ -3,8 +3,8 @@ package pipeline
 import (
 	"fmt"
 
-	"openetl-go/internal/etl/alert"
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // BuildShardRunner constructs a single unstarted *Runner for shard `idx` of

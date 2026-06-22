@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
 
-	_ "openetl-go/internal/etl/sink"
-	_ "openetl-go/internal/etl/source"
+	_ "github.com/a8851625/openetl-go/internal/etl/sink"
+	_ "github.com/a8851625/openetl-go/internal/etl/source"
 )
 
 // noopDLQ satisfies DLQWriter.

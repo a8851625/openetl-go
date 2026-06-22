@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"openetl-go/internal/etl/alert"
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 
-	_ "openetl-go/internal/etl/sink"
-	_ "openetl-go/internal/etl/source"
+	_ "github.com/a8851625/openetl-go/internal/etl/sink"
+	_ "github.com/a8851625/openetl-go/internal/etl/source"
 )
 
 // recordingSink counts Write calls and optionally returns an error on every call.

@@ -1,13 +1,13 @@
 package main
 
 import (
-	_ "openetl-go/internal/packed"
+	_ "github.com/a8851625/openetl-go/internal/packed"
 
-	_ "openetl-go/internal/logic"
+	_ "github.com/a8851625/openetl-go/internal/logic"
 
 	"github.com/gogf/gf/v2/os/gctx"
 
-	"openetl-go/internal/cmd"
+	"github.com/a8851625/openetl-go/internal/cmd"
 )
 
 func main() {

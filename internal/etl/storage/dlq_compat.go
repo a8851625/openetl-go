@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 )
 
 // DeadLetter mirrors dlq.DeadLetter for the adapter interface.

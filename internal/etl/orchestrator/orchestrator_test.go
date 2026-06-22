@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"testing"
 
-	"openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 )
 
 func TestDAGValidation(t *testing.T) {

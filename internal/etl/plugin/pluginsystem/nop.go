@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 // Manager is a no-op manager used when the binary is built without WASM support

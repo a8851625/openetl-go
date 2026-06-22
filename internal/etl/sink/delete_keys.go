@@ -3,7 +3,7 @@ package sink
 import (
 	"fmt"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // ResolveDeleteKeys extracts primary-key values for a CDC DELETE record.

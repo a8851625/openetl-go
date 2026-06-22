@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	_ "openetl-go/internal/etl/sink"
-	_ "openetl-go/internal/etl/source"
-	_ "openetl-go/internal/etl/transform"
+	_ "github.com/a8851625/openetl-go/internal/etl/sink"
+	_ "github.com/a8851625/openetl-go/internal/etl/source"
+	_ "github.com/a8851625/openetl-go/internal/etl/transform"
 )
 
 func TestExpandEnvSupportsDefaultsAndMissing(t *testing.T) {

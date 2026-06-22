@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/storage"
-	"openetl-go/internal/etl/storage/sqlite"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage/sqlite"
 )
 
 func tempDB(t *testing.T) (*sqlite.Store, func()) {

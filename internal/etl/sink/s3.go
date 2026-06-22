@@ -20,8 +20,8 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/parquet-go/parquet-go"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
 )
 
 func init() {

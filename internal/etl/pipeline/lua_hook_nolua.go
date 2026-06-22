@@ -5,7 +5,7 @@ package pipeline
 import (
 	"fmt"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // NewLuaHook stub for -tags=nolua builds (P5-22): gopher-lua is excluded, so a

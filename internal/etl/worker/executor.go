@@ -7,10 +7,10 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"gopkg.in/yaml.v3"
 
-	"openetl-go/internal/etl/alert"
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/pipeline"
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 // ExecutorDeps bundles the dependencies a distributed worker needs to rebuild

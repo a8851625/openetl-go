@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"openetl-go/internal/etl/pipeline"
-	_ "openetl-go/internal/etl/sink"   // register sinks (file_sink) for registry.BuildSink
-	_ "openetl-go/internal/etl/source" // register sources (file) for registry.BuildSource
-	"openetl-go/internal/etl/storage/factory"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
+	_ "github.com/a8851625/openetl-go/internal/etl/sink"   // register sinks (file_sink) for registry.BuildSink
+	_ "github.com/a8851625/openetl-go/internal/etl/source" // register sources (file) for registry.BuildSource
+	"github.com/a8851625/openetl-go/internal/etl/storage/factory"
 )
 
 // TestNewRunnerNotRecursive (P5-1) guards against the infinite-self-recursion

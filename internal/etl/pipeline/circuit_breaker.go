@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
 )
 
 // CircuitBreaker tracks consecutive sink-write failures and trips after

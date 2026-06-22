@@ -13,7 +13,7 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 // specEncryption provides AES-256-GCM encryption for sensitive spec data at rest.

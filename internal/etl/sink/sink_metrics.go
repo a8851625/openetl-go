@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // sinkCounters tracks per-sink write metrics. Sinks embed it and call

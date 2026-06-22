@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // TestFileCSVCheckpointResume verifies that after a checkpoint is saved,

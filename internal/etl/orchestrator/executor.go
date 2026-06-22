@@ -11,12 +11,12 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"openetl-go/internal/etl/alert"
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/pipeline"
-	"openetl-go/internal/etl/registry"
-	"openetl-go/internal/etl/retry"
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/retry"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 // ExecutionConfig controls how a DAG pipeline executes.

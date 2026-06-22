@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 func TestDorisConfigParsing(t *testing.T) {

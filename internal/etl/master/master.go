@@ -10,8 +10,8 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"openetl-go/internal/etl/pipeline"
-	"openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 // Master manages worker registration, health monitoring, and task dispatch.

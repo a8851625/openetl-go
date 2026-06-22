@@ -5,5 +5,5 @@
 package logic
 
 import (
-	_ "openetl-go/internal/logic/app"
+	_ "github.com/a8851625/openetl-go/internal/logic/app"
 )

@@ -17,8 +17,8 @@ import (
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/gogf/gf/v2/frame/g"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
 )
 
 func init() {

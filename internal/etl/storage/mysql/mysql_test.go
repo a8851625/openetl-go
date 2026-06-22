@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"openetl-go/internal/etl/core"
-	"openetl-go/internal/etl/storage"
-	"openetl-go/internal/etl/storage/mysql"
+	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage/mysql"
 )
 
 func dsn(t *testing.T) string {
