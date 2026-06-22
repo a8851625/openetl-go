@@ -1,0 +1,113 @@
+# Goreleaser configuration for OpenETL-Go.
+# Run locally: goreleaser build --snapshot --clean
+version: 1
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  # ── Default build (pure Go, Lua included, no WASM) ──
+  - id: default
+    main: .
+    binary: openetl-go
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # darwin/arm64 covers Apple Silicon; drop the unlikely darwin/amd64-on-arm64.
+      - goarch: arm64
+        goos: windows
+    ldflags:
+      - -s -w
+      - -X github.com/a8851625/openetl-go/internal/consts.Version={{.Version}}
+    flags:
+      - -trimpath
+
+  # ── Extism variant (WASM plugin runtime, still pure Go via wazero) ──
+  - id: extism
+    main: .
+    binary: openetl-go-extism
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goarch: arm64
+        goos: windows
+    ldflags:
+      - -s -w
+      - -X github.com/a8851625/openetl-go/internal/consts.Version={{.Version}}
+    flags:
+      - -trimpath
+      - -tags=extism
+
+# nolua variant omitted — Lua is lightweight (gopher-lua is pure Go) and most
+# users need it. Users who want the absolute smallest binary can build locally:
+#   go build -tags=nolua -ldflags="-s -w" -o openetl-go .
+# CGO/QuickJS variant omitted — cross-compile hostile. Build locally:
+#   CGO_ENABLED=1 go build -ldflags="-s -w" -o openetl-go .
+
+archives:
+  - id: default
+    builds:
+      - default
+    name_template: >-
+      openetl-go_{{ .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - manifest/*
+      - README.md
+      - LICENSE
+
+  - id: extism
+    builds:
+      - extism
+    name_template: >-
+      openetl-go-extism_{{ .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - manifest/*
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  use: github
+
+dockers:
+  - image_templates:
+      - ghcr.io/a8851625/openetl-go:{{ .Version }}
+      - ghcr.io/a8851625/openetl-go:latest
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - --platform=linux/amd64
+    skip_push: auto
+
+release:
+  github:
+    owner: a8851625
+    name: openetl-go
+  prerelease: auto
