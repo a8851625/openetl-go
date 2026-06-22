@@ -69,7 +69,7 @@ archives:
       {{- .Arch }}
     format_overrides:
       - goos: windows
-        formats: [zip]
+        format: zip
     files:
       - manifest/*
       - README.md
@@ -84,7 +84,7 @@ archives:
       {{- .Arch }}
     format_overrides:
       - goos: windows
-        formats: [zip]
+        format: zip
     files:
       - manifest/*
       - README.md
