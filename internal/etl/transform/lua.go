@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 
@@ -25,7 +26,24 @@ func init() {
 				script = vs
 			}
 		}
-		return NewLuaTransform(script)
+		// Per-record execution budget (TF-1). A runaway script (while-true) or
+		// unbounded allocation loop is aborted when this fires (or the pipeline
+		// ctx cancels), converting a process hang/OOM into a per-record error
+		// that routes to DLQ. Default 5s.
+		timeoutMs := 5000
+		if v, ok := config["timeout_ms"]; ok {
+			if n, ok := toInt(v); ok && n > 0 {
+				timeoutMs = n
+			}
+		}
+		lt, err := NewLuaTransform(script)
+		if err != nil {
+			return nil, err
+		}
+		if timeoutMs != 5000 {
+			lt.timeout = time.Duration(timeoutMs) * time.Millisecond
+		}
+		return lt, nil
 	})
 }
 
@@ -35,9 +53,15 @@ func init() {
 //   - The Lua state is created ONCE at construction time and reused for every
 //     Apply() call (10-100x faster than recreating per record).
 //   - Per-record Apply holds a mutex (gopher-lua is not goroutine-safe).
-//   - The state is sandboxed: os, io, loadfile, dofile, loadlib, and package
-//     are stripped so untrusted scripts can't touch the filesystem or execute
-//     subprocesses.
+//   - The state is sandboxed: io, loadfile, dofile, loadlib, package, and
+//     require are stripped entirely; os is field-pruned to leave only
+//     time/date/clock/difftime for time math (execute/exit/remove/rename/
+//     getenv/tmpname/setlocale are nilled) so untrusted scripts can't touch
+//     the filesystem or spawn processes.
+//   - Each Apply runs under a per-record timeout ctx (gopher-lua SetContext):
+//     a runaway script is aborted instead of hanging or OOMing the process.
+//     (gopher-lua's SetMx memory cap is deliberately NOT used — it calls
+//     os.Exit on overflow, killing the whole server.)
 type LuaTransform struct {
 	script string
 
@@ -45,13 +69,16 @@ type LuaTransform struct {
 	mu sync.Mutex
 	L  *lua.LState
 	fn *lua.LFunction // compiled script as a callable function
+
+	// timeout is the per-record execution budget. See init() docstring.
+	timeout time.Duration
 }
 
 func NewLuaTransform(script string) (*LuaTransform, error) {
 	if script == "" {
 		return nil, fmt.Errorf("lua transform: script (or code) is required")
 	}
-	t := &LuaTransform{script: script}
+	t := &LuaTransform{script: script, timeout: 5 * time.Second}
 
 	// Initialize the sandboxed Lua state.
 	L := lua.NewState()
@@ -72,17 +99,13 @@ func NewLuaTransform(script string) (*LuaTransform, error) {
 
 // sandbox removes dangerous builtins from the Lua state.
 func sandbox(L *lua.LState) {
-	// Remove os (except clock/date for time math), io, package, loadfile,
-	// dofile, loadlib, require — anything that touches the filesystem or
-	// can spawn processes.
-	osTbl := L.GetGlobal("os")
-	if osTbl != lua.LNil {
-		osTbl.(*lua.LTable).RawSetString("execute", lua.LNil)
-		osTbl.(*lua.LTable).RawSetString("exit", lua.LNil)
-		osTbl.(*lua.LTable).RawSetString("remove", lua.LNil)
-		osTbl.(*lua.LTable).RawSetString("rename", lua.LNil)
-		osTbl.(*lua.LTable).RawSetString("getenv", lua.LNil)
-		osTbl.(*lua.LTable).RawSetString("tmpname", lua.LNil)
+	// Field-prune os (keep date/time/clock/difftime for time math; nil the
+	// dangerous ones). Use comma-ok so a non-table `os` global can't panic
+	// (TF-12) — previously a bare .(*lua.LTable) assertion.
+	if osTbl, ok := L.GetGlobal("os").(*lua.LTable); ok {
+		for _, field := range []string{"execute", "exit", "remove", "rename", "getenv", "tmpname", "setlocale"} {
+			osTbl.RawSetString(field, lua.LNil)
+		}
 	}
 	L.SetGlobal("io", lua.LNil)
 	L.SetGlobal("loadfile", lua.LNil)
@@ -97,6 +120,15 @@ func (t *LuaTransform) Name() string { return "lua" }
 func (t *LuaTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Per-record execution budget (TF-1). gopher-lua's SetContext makes the VM
+	// check ctx.Done() in its main loop and abort with the ctx error. Derive a
+	// child ctx with the per-record timeout so a runaway script (while-true) or
+	// unbounded allocation loop is converted into a per-record error → DLQ
+	// instead of hanging or OOMing the process. Also propagates pipeline cancel.
+	execCtx, cancel := context.WithTimeout(ctx, t.timeout)
+	defer cancel()
+	t.L.SetContext(execCtx)
 
 	// Reset record + metadata globals for this call.
 	t.L.SetGlobal("record", mapToLuaTable(t.L, rec.Data))

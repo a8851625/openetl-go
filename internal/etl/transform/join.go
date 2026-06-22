@@ -30,6 +30,10 @@ func init() {
 //	join_fields:    List of fields from the matched record to copy
 //	join_prefix:    Prefix for joined fields (default "joined_")
 //	where:          Optional filter expression for the join side
+//	on_miss:        Inner-join behavior when a record has no match:
+//	                "drop" (default, silent — indistinguishable from a filter)
+//	                | "dlq" (route the unmatched record to the DLQ so misses
+//	                are visible — useful for catching schema/data drift)
 type JoinTransform struct {
 	name       string
 	joinType   string
@@ -38,6 +42,7 @@ type JoinTransform struct {
 	joinFields []string
 	prefix     string
 	whereExpr  string
+	onMiss     string
 
 	mu    sync.RWMutex
 	state map[string][]joinEntry // key → buffered records
@@ -92,6 +97,17 @@ func NewJoinTransform(config map[string]any) (*JoinTransform, error) {
 			t.whereExpr = s
 		}
 	}
+	t.onMiss = "drop"
+	if v, ok := config["on_miss"]; ok {
+		if s, ok := v.(string); ok {
+			switch s {
+			case "drop", "dlq", "error":
+				t.onMiss = s
+			default:
+				return nil, fmt.Errorf("join: on_miss must be drop|dlq|error, got %q", s)
+			}
+		}
+	}
 	if t.joinKey == "" {
 		return nil, fmt.Errorf("join transform requires join_key")
 	}
@@ -111,20 +127,31 @@ func NewJoinTransform(config map[string]any) (*JoinTransform, error) {
 
 func (t *JoinTransform) Name() string { return "join" }
 
+// handleMiss routes an inner-join miss per on_miss: "drop" (default) returns
+// ErrRecordFiltered so the runner drops it silently; "dlq"/"error" return a
+// real error so the pipeline routes the record to the DLQ — making misses
+// visible instead of indistinguishable from a filter (TF-7).
+func (t *JoinTransform) handleMiss(rec core.Record) (core.Record, error) {
+	if t.onMiss == "dlq" || t.onMiss == "error" {
+		return rec, fmt.Errorf("join: no match for key=%v (on_miss=%s)", rec.Data[t.joinKey], t.onMiss)
+	}
+	return rec, core.ErrRecordFiltered
+}
+
 // Apply processes each record through the stream-stream join.
 func (t *JoinTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
 	keyVal, ok := rec.Data[t.joinKey]
 	if !ok {
-		// No join key → pass through unchanged for left join, drop for inner.
+		// No join key → pass through unchanged for left join, drop/dlq for inner.
 		if t.joinType == "inner" {
-			return rec, core.ErrRecordFiltered
+			return t.handleMiss(rec)
 		}
 		return rec, nil
 	}
 	key := fmt.Sprint(keyVal)
 	if key == "" {
 		if t.joinType == "inner" {
-			return rec, core.ErrRecordFiltered
+			return t.handleMiss(rec)
 		}
 		return rec, nil
 	}
@@ -155,7 +182,7 @@ func (t *JoinTransform) Apply(ctx context.Context, rec core.Record) (core.Record
 
 	if matched == nil {
 		if t.joinType == "inner" {
-			return rec, core.ErrRecordFiltered
+			return t.handleMiss(rec)
 		}
 		// left join, no match: explicitly populate the configured join
 		// fields with nil so downstream nodes can distinguish "no match"

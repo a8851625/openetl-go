@@ -31,11 +31,12 @@ func init() {
 // Uses QuickJS (requires CGO). When built with CGO_ENABLED=0, this transform
 // is unavailable and the stub in ts_nocgo.go is used instead.
 type TSTransform struct {
-	code    string
-	fnName  string
-	mu      sync.Mutex
-	runtime *quickjs.Runtime
-	ctx     *quickjs.Context
+	code      string
+	fnName    string
+	mu        sync.Mutex
+	runtime   *quickjs.Runtime
+	ctx       *quickjs.Context
+	timeoutSec uint64 // per-record execution budget in seconds (TF-2)
 }
 
 func NewTSTransform(config map[string]any) (*TSTransform, error) {
@@ -47,7 +48,22 @@ func NewTSTransform(config map[string]any) (*TSTransform, error) {
 		return nil, fmt.Errorf("ts: script or code is required")
 	}
 
-	t := &TSTransform{code: code}
+	// Per-record execution budget in seconds (TF-2). QuickJS's
+	// SetExecuteTimeout (a wall-clock deadline set before each eval) aborts a
+	// runaway script (while(true){}) — converting a hang into a per-record
+	// error → DLQ. quickjs-go's timeout is integer-seconds (time_t), min 1.
+	timeoutSec := uint64(5)
+	if v, ok := config["timeout_ms"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			s := uint64(n) / 1000
+			if s == 0 {
+				s = 1
+			}
+			timeoutSec = s
+		}
+	}
+
+	t := &TSTransform{code: code, timeoutSec: timeoutSec}
 
 	for _, name := range []string{"transform", "apply", "filter", "process"} {
 		if strings.Contains(code, "function "+name) || strings.Contains(code, name+"(record") {
@@ -113,6 +129,11 @@ func (t *TSTransform) Name() string { return "ts" }
 func (t *TSTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Per-record wall-clock budget (TF-2): set a fresh deadline before each
+	// eval so a runaway script (while(true){}) is aborted → exception → DLQ.
+	// (SetExecuteTimeout sets now+timeout; must be refreshed per Apply.)
+	t.runtime.SetExecuteTimeout(t.timeoutSec)
 
 	// The script body is evaluated once in the constructor; the transform
 	// function is already defined on the persistent context.

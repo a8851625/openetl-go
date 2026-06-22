@@ -43,6 +43,17 @@ type WindowTransform struct {
 	groupByFields []string
 	aggregators   map[string]*aggDef
 
+	// Event-time watermark support (TF-14). When allowedLateness > 0:
+	//   - maxEventTime tracks the newest event timestamp seen;
+	//   - records older than maxEventTime-allowedLateness are dropped (too late);
+	//   - lastEmittedWindow guards against re-emitting a window that already
+	//     closed (a late record can't reopen and double-count an emitted window).
+	// When allowedLateness == 0 (default) none of this applies and behavior is
+	// exactly the original processing-time tumbling window.
+	allowedLateness   time.Duration
+	maxEventTime      time.Time
+	lastEmittedWindow int64
+
 	mu      sync.Mutex
 	buffer  map[int64]map[string]*aggState // windowStart → groupKey → state
 	pending []core.Record                  // records accumulated since last emit
@@ -78,6 +89,18 @@ func NewWindowTransform(config map[string]any) (*WindowTransform, error) {
 		sizeSec = 60
 	}
 	wt.windowSize = time.Duration(sizeSec) * time.Second
+
+	// Optional event-time lateness budget (TF-14). Default 0 = processing-time
+	// tumbling window (original behavior, unchanged). When > 0, late records
+	// (older than maxEventSeen - allowedLateness) are dropped and already-
+	// emitted windows can't be reopened, preventing duplicate aggregates on
+	// out-of-order CDC streams.
+	if v, ok := config["allowed_lateness_seconds"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			wt.allowedLateness = time.Duration(n) * time.Second
+		}
+	}
+	_ = config["window_type"] // sliding/session remain unsupported; accepted for forward-compat
 
 	if rawGB, ok := config["group_by"].([]any); ok {
 		for _, g := range rawGB {
@@ -142,11 +165,13 @@ func (w *WindowTransform) ApplyBatch(ctx context.Context, recs []core.Record) ([
 	now := time.Now()
 	currentWindow := now.Truncate(w.windowSize).Unix()
 
-	// Emit all windows that have closed (windowStart < currentWindow).
+	// Emit all windows that have closed (windowStart < currentWindow), skipping
+	// any window at or before lastEmittedWindow so a late record can't reopen
+	// and double-emit an already-closed window (TF-14).
 	var emitted []core.Record
 	var closedWindows []int64
 	for ws := range w.buffer {
-		if ws < currentWindow {
+		if ws < currentWindow && ws > w.lastEmittedWindow {
 			closedWindows = append(closedWindows, ws)
 		}
 	}
@@ -158,6 +183,9 @@ func (w *WindowTransform) ApplyBatch(ctx context.Context, recs []core.Record) ([
 			emitted = append(emitted, w.buildOutputRecord(ws, state))
 		}
 		delete(w.buffer, ws)
+		if ws > w.lastEmittedWindow {
+			w.lastEmittedWindow = ws
+		}
 	}
 
 	return emitted, nil
@@ -183,6 +211,20 @@ func (w *WindowTransform) accumulate(rec core.Record) {
 	if !rec.Metadata.Timestamp.IsZero() {
 		ts = rec.Metadata.Timestamp
 	}
+
+	// Event-time lateness check (TF-14): when allowedLateness is configured,
+	// drop records that arrive too late (older than the watermark). This
+	// prevents stale records from polluting/reopening windows. Skipped when
+	// allowedLateness == 0 (default) so behavior is unchanged.
+	if w.allowedLateness > 0 && !rec.Metadata.Timestamp.IsZero() {
+		if w.maxEventTime.IsZero() || ts.After(w.maxEventTime) {
+			w.maxEventTime = ts
+		} else if ts.Before(w.maxEventTime.Add(-w.allowedLateness)) {
+			// Too late — drop silently (would otherwise double-count or reopen).
+			return
+		}
+	}
+
 	windowStart := ts.Truncate(w.windowSize).Unix()
 
 	groupKey := w.makeGroupKey(rec)

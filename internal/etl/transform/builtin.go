@@ -65,7 +65,16 @@ func init() {
 		if v, ok := config["expression"]; ok {
 			expression = v.(string)
 		}
-		return &FilterTransform{expression: expression}, nil
+		// strict_types (TF-14): when true, a numeric comparison against a
+		// non-numeric field value returns an error (→ DLQ) instead of silently
+		// filtering the record out — surfaces schema drift. Default false.
+		strictTypes := false
+		if v, ok := config["strict_types"]; ok {
+			if b, ok := v.(bool); ok {
+				strictTypes = b
+			}
+		}
+		return &FilterTransform{expression: expression, strictTypes: strictTypes}, nil
 	})
 
 	registry.RegisterTransform("identity", func(config map[string]any) (core.Transform, error) {
@@ -177,8 +186,9 @@ func convertType(v any, targetType string) (any, error) {
 }
 
 type FilterTransform struct {
-	expression string
-	pred       *filterPredicate // compiled predicate for the expression
+	expression  string
+	pred        *filterPredicate // compiled predicate for the expression
+	strictTypes bool             // TF-14: error on numeric/non-numeric mismatch
 }
 
 // filterPredicate is a compiled boolean evaluator over a record map.
@@ -220,75 +230,99 @@ func (t *FilterTransform) Apply(ctx context.Context, rec core.Record) (core.Reco
 		t.pred = p
 	}
 
-	if !t.pred.eval(rec.Data) {
+	match, err := t.pred.eval(rec.Data, t.strictTypes)
+	if err != nil {
+		return rec, err // strict_types: type mismatch → DLQ instead of silent drop
+	}
+	if !match {
 		return rec, core.ErrRecordFiltered
 	}
 	return rec, nil
 }
 
-// eval returns true if the record passes the predicate.
-func (p *filterPredicate) eval(data map[string]any) bool {
+// eval returns true if the record passes the predicate. When strict is true, a
+// numeric comparison against a non-numeric value returns an error so the caller
+// can route the record to the DLQ (TF-14) instead of silently dropping it.
+func (p *filterPredicate) eval(data map[string]any, strict bool) (bool, error) {
 	switch p.kind {
 	case predTrue:
-		return true
+		return true, nil
 	case predField:
 		v, ok := data[p.field]
-		return ok && v != nil
+		return ok && v != nil, nil
 	case predNot:
-		return !p.left.eval(data)
+		res, err := p.left.eval(data, strict)
+		return !res, err
 	case predCompare:
 		v, ok := data[p.field]
 		if !ok || v == nil {
-			return false
+			return false, nil
 		}
-		return compareValues(v, p.op, p.isNum, p.numVal, p.strVal)
+		return compareValues(v, p.op, p.isNum, p.numVal, p.strVal, strict)
 	case predAnd:
-		return p.left.eval(data) && p.right.eval(data)
+		l, err := p.left.eval(data, strict)
+		if err != nil {
+			return false, err
+		}
+		if !l {
+			return false, nil
+		}
+		return p.right.eval(data, strict)
 	case predOr:
-		return p.left.eval(data) || p.right.eval(data)
+		l, err := p.left.eval(data, strict)
+		if err != nil {
+			return false, err
+		}
+		if l {
+			return true, nil
+		}
+		return p.right.eval(data, strict)
 	}
-	return false
+	return false, nil
 }
 
 // compareValues applies the operator to a record value vs the predicate constant.
-func compareValues(actual any, op string, isNum bool, numVal float64, strVal string) bool {
+func compareValues(actual any, op string, isNum bool, numVal float64, strVal string, strict bool) (bool, error) {
 	if isNum {
 		f, ok := toFloat(actual)
 		if !ok {
-			return false
+			if strict {
+				return false, fmt.Errorf("filter: numeric %q comparison against non-numeric value %v (strict_types=true)", op, actual)
+			}
+			return false, nil
 		}
 		switch op {
 		case "==", "=":
-			return f == numVal
+			return f == numVal, nil
 		case "!=":
-			return f != numVal
+			return f != numVal, nil
 		case ">":
-			return f > numVal
+			return f > numVal, nil
 		case "<":
-			return f < numVal
+			return f < numVal, nil
 		case ">=":
-			return f >= numVal
+			return f >= numVal, nil
 		case "<=":
-			return f <= numVal
+			return f <= numVal, nil
 		}
-		return false
+		return false, nil
 	}
 	s := fmt.Sprintf("%v", actual)
 	switch op {
 	case "==", "=":
-		return s == strVal
+		return s == strVal, nil
 	case "!=":
-		return s != strVal
+		return s != strVal, nil
 	case ">":
-		return s > strVal
+		return s > strVal, nil
 	case "<":
-		return s < strVal
+		return s < strVal, nil
 	case ">=":
-		return s >= strVal
+		return s >= strVal, nil
 	case "<=":
-		return s <= strVal
+		return s <= strVal, nil
 	}
-	return false
+	return false, nil
 }
 
 // toFloat attempts to convert any numeric-like value to float64.

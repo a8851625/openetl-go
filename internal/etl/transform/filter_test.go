@@ -190,3 +190,40 @@ func TestFilterBackwardsCompatDeletedAt(t *testing.T) {
 		t.Error("backwards-compat: !deleted_at should pass for record without deleted_at")
 	}
 }
+
+// TestFilterStrictTypes guards TF-14: with strict_types=false (default) a
+// numeric comparison against a non-numeric value silently drops the record
+// (returns false); with strict_types=true it returns an error so the pipeline
+// can route the record to DLQ instead. Also verifies the eval/compareValues
+// refactor still passes normal numeric/string comparisons.
+func TestFilterStrictTypes(t *testing.T) {
+	ctx := context.Background()
+
+	// Default (non-strict): numeric predicate vs string value → silent drop.
+	tr := &FilterTransform{expression: "amount > 100"}
+	out, err := tr.Apply(ctx, core.Record{Data: map[string]any{"amount": "not-a-number"}})
+	if !errors.Is(err, core.ErrRecordFiltered) {
+		t.Fatalf("non-strict numeric/non-numeric: expected ErrRecordFiltered, got out=%v err=%v", out.Data, err)
+	}
+
+	// Strict: same input → error (→ DLQ).
+	tr = &FilterTransform{expression: "amount > 100", strictTypes: true}
+	_, err = tr.Apply(ctx, core.Record{Data: map[string]any{"amount": "not-a-number"}})
+	if err == nil || errors.Is(err, core.ErrRecordFiltered) {
+		t.Fatalf("strict numeric/non-numeric: expected real error, got %v", err)
+	}
+
+	// Sanity: normal numeric match still works under strict.
+	tr = &FilterTransform{expression: "amount > 100", strictTypes: true}
+	out, err = tr.Apply(ctx, core.Record{Data: map[string]any{"amount": 250}})
+	if err != nil || out.Data == nil {
+		t.Fatalf("strict numeric match: expected pass, got out=%v err=%v", out.Data, err)
+	}
+
+	// Sanity: string equality still works (no numeric coercion).
+	tr = &FilterTransform{expression: `status == "paid"`, strictTypes: true}
+	out, err = tr.Apply(ctx, core.Record{Data: map[string]any{"status": "paid"}})
+	if err != nil {
+		t.Fatalf("strict string match: expected pass, got err=%v", err)
+	}
+}

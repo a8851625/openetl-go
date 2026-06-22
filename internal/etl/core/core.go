@@ -30,6 +30,11 @@ type Metadata struct {
 	Partition  int32     `json:"partition,omitempty"`
 	Offset     int64     `json:"offset,omitempty"`
 	DDL        string    `json:"ddl,omitempty"`
+	// Route is set by the router transform to a downstream route tag (TF-5).
+	// Separate from Source so provenance (which pipeline/source produced the
+	// record, used by DLQ entries + metrics) is preserved while edges have a
+	// dedicated field to match on.
+	Route string `json:"route,omitempty"`
 }
 
 type Record struct {
@@ -144,6 +149,11 @@ type Flusher interface {
 type TransformChain []Transform
 
 func (tc TransformChain) Apply(ctx context.Context, rec Record) (Record, error) {
+	// Defensive copy of Data so one transform's in-place mutation can't leak
+	// into another's state (e.g. join buffers the record pointer) or back into
+	// the source's batch (TF-11). A shallow map copy isolates keyed writes;
+	// nested values are shared but the documented hazard is top-level mutation.
+	rec.Data = cloneDataMap(rec.Data)
 	var err error
 	for _, t := range tc {
 		rec, err = t.Apply(ctx, rec)
@@ -152,6 +162,18 @@ func (tc TransformChain) Apply(ctx context.Context, rec Record) (Record, error) 
 		}
 	}
 	return rec, nil
+}
+
+// cloneDataMap returns a shallow copy of m (new map, same values). nil-safe.
+func cloneDataMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // ApplyBatch processes a batch through the chain. If any transform implements

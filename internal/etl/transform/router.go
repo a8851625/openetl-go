@@ -76,16 +76,16 @@ func (t *RouterTransform) Apply(ctx context.Context, rec core.Record) (core.Reco
 	val, ok := rec.Data[t.field]
 	if !ok {
 		if t.defaultRoute != "" {
-			rec.Metadata.Source = t.defaultRoute // reuse Source as route tag
+			rec.Metadata.Route = t.defaultRoute // dedicated route field, preserves Source provenance (TF-5)
 		}
 		return rec, nil
 	}
 
 	valStr := fmt.Sprintf("%v", val)
 	if route, found := t.routes[valStr]; found {
-		rec.Metadata.Source = route
+		rec.Metadata.Route = route
 	} else if t.defaultRoute != "" {
-		rec.Metadata.Source = t.defaultRoute
+		rec.Metadata.Route = t.defaultRoute
 	}
 
 	return rec, nil

@@ -60,6 +60,7 @@ type EnricherTransform struct {
 	targetField string
 	cacheTTL    time.Duration
 	timeout     time.Duration
+	onError     string // "pass" (default, silent) | "error" (route failed record to DLQ)
 
 	// SQL mode
 	dsn       string
@@ -71,7 +72,8 @@ type EnricherTransform struct {
 	client *http.Client
 
 	// Cache: lookupKey → {value, expiry}
-	cache sync.Map
+	cache  sync.Map
+	stopCh chan struct{} // stops the background eviction loop (TF-13)
 }
 
 type enricherCacheEntry struct {
@@ -88,6 +90,8 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 		timeout:     5 * time.Second,
 		headers:     make(map[string]string),
 		client:      &http.Client{Timeout: 5 * time.Second},
+		onError:     "pass",
+		stopCh:      make(chan struct{}),
 	}
 
 	if v, ok := config["mode"].(string); ok {
@@ -140,7 +144,47 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 		t.db = db
 	}
 
+	// on_error: "pass" (default — enrichment failure is non-fatal, record
+	// passes through unenriched) | "error" (return the error so the pipeline
+	// routes the record to DLQ — surfaces flaky enrichment endpoints). (TF-13)
+	t.onError = "pass"
+	if v, ok := config["on_error"].(string); ok {
+		switch v {
+		case "pass", "error":
+			t.onError = v
+		}
+	}
+
+	// Background cache eviction (TF-13): without this, expired entries lingered
+	// in the sync.Map forever, unbounded on high-cardinality keys.
+	go t.evictLoop()
+
 	return t, nil
+}
+
+// evictLoop periodically deletes expired cache entries so the sync.Map doesn't
+// grow without bound on high-cardinality lookup keys. Stops on Close.
+func (t *EnricherTransform) evictLoop() {
+	interval := t.cacheTTL
+	if interval <= 0 || interval > time.Minute {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			t.cache.Range(func(k, v any) bool {
+				if entry, ok := v.(enricherCacheEntry); ok && !now.Before(entry.expiry) {
+					t.cache.Delete(k)
+				}
+				return true
+			})
+		case <-t.stopCh:
+			return
+		}
+	}
 }
 
 func (t *EnricherTransform) Name() string { return "enricher" }
@@ -163,6 +207,8 @@ func (t *EnricherTransform) Apply(ctx context.Context, rec core.Record) (core.Re
 			rec.Data[t.targetField] = entry.value
 			return rec, nil
 		}
+		// Lazy eviction of the expired entry (in addition to the background sweep).
+		t.cache.Delete(lookupKey)
 	}
 
 	// Fetch enrichment data.
@@ -177,8 +223,11 @@ func (t *EnricherTransform) Apply(ctx context.Context, rec core.Record) (core.Re
 		return rec, nil
 	}
 	if err != nil {
-		// Enrichment failure is non-fatal; log and continue.
-		return rec, nil
+		// TF-13: surface the failure instead of silently passing through.
+		if t.onError == "error" {
+			return rec, fmt.Errorf("enricher: lookup failed: %w", err)
+		}
+		return rec, nil // default: non-fatal, record passes through unenriched
 	}
 
 	// Cache and apply.
@@ -331,6 +380,7 @@ func (t *EnricherTransform) fetchSQL(ctx context.Context, data map[string]any) (
 }
 
 func (t *EnricherTransform) Close() error {
+	close(t.stopCh) // stop the background cache-eviction loop
 	if t.db != nil {
 		return t.db.Close()
 	}
