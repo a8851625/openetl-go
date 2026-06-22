@@ -472,17 +472,17 @@ Carried-forward v2 items keep their `P4-n` ID. Evidence and fix sketches are sum
 
 | ID | Gap | Fix sketch | Size | Impact |
 |----|-----|------------|------|--------|
-| **P5-22** | **Lua (`gopher-lua`) linked into the default binary** — `lua.go` + `pipeline/hooks.go` have no build tag; the only opt-in runtime not gated (§6.1 violation). | Mirror the WASM split: move Lua impl behind `//go:build lua` + a `lua_nop.go` registration stub. | 1d | H |
-| P5-23 | Legacy GoFrame HTTP server always boots alongside the ETL API (`:8000` + `:8001`) — two listeners whether the user wants Canal or not (`cmd.go:46`). | Add a standalone-only fast path (run only the ETL server when Canal disabled). | 0.5d | H |
-| P5-25 | `manifest/config/config.yaml` is ~50% legacy Canal config (`canal:`/`sync:`/`database:` with example targets) a lightweight user must ignore. | Ship `config.etl.yaml` (minimal) + `config.canal.yaml` (legacy); default to ETL. | 0.5d | M |
-| P5-26 | Default `extismPkg = "@extism/js-pdk"` unpinned (`server.go:2389`); P4-5 delegated pinning to env. | Pin a default version; env overrides. | 0.1d | L |
+| P5-22 | Lua (`gopher-lua`) linked into the default binary (`lua.go` + `pipeline/hooks.go`). | **Deferred (not rushed)**: a clean gate needs build-tag-conditional wiring across 2 packages (`LuaHook` is intertwined with `webhook`/`fireHook` in `hooks.go`), AND it flips the default build — existing `type: lua` transforms break without `-tags=lua`, a backward-compat change §6.1 / the risk table say needs a deprecation cycle. P4-3 per-record budget verified present (`lua.go:29-38`). Planned approach: opt-out `//go:build !nolua` (default keeps Lua) + `nolua` nop stubs, so轻量 users can build `-tags=nolua` without breaking existing specs. | — | deferred |
+| P5-23 | GoFrame HTTP server boots alongside the ETL API. | **Retracted/deferred**: the GoFrame server (`:8000`) serves the UI (`resource/public`) AND proxies `/api/v2/*` to `:8001` — "skipping" it removes the UI. The dual-listener is intentional (unified port). A headless API-only mode is a feature, not a fix. | — | retracted |
+| P5-25 | `config.yaml` is ~50% legacy Canal config. | ✅ Added `manifest/config/config.etl.yaml` — minimal single-node ETL template (server+etl+logger, SQLite, no Canal/sync/database). `config.yaml` unchanged for backward compat. | 0.5d | done |
+| P5-26 | Default `extismPkg` unpinned. | ✅ Pinned `@extism/js-pdk@1.1.0` (Wave 2); env overrides. | 0.1d | done |
 | P5-24 *(optional/defer)* | All 9 sink connectors linked unconditionally (~77MB binary is sink-dominated). | Per-sink build tags with no-op stubs, or a `sinks_all` default. | 2–3d | M |
 
 ### Tier E — Carry-forward (verify open / finish)
 
 | ID | Gap | Note | Size |
 |----|-----|------|------|
-| P4-3 | Lua transform per-record CPU/memory budget (v2 TF-1). | Verify landed as part of P5-22 (when Lua is re-tagged, confirm `SetMState`/debug-hook budget is present); finish if partial. | 0.5d |
+| P4-3 | Lua transform per-record CPU/memory budget (v2 TF-1). | ✅ **Verified present** (`lua.go:29-38`, `timeout_ms` per-record budget). | done |
 | P3 polish | v2 §9 P3 list (alert-queue overflow via `fmt.Printf`, MySQL `VALUES()` deprecation, SQLite `LIMIT` parameterization, redis checkpoint non-determinism, dead `inferColumnType`, Doris stream-load label collision, etc.). | Catalogued in v2 §9; not blocking. Tackle opportunistically. | — |
 
 ### Sequencing
