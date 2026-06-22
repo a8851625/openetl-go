@@ -10,7 +10,7 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcmd"
 
-	_ "openetl-go/internal/logic/app"
+	"openetl-go/internal/logic/app"
 	"openetl-go/internal/consts"
 	"openetl-go/internal/service"
 )
@@ -21,6 +21,8 @@ var (
 		Usage: "main",
 		Brief: "start mysql binlog sync service",
 		Func: func(ctx context.Context, parser *gcmd.Parser) (err error) {
+			// Structured (JSON stdout) logging before any g.Log() call (P5-16).
+			app.ConfigureStructuredLogging()
 			// 打印版本号
 			g.Log().Infof(ctx, "OpenETL-Go Version: %s", consts.Version)
 

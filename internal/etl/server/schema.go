@@ -137,6 +137,9 @@ func sinkConfigSchemas() map[string][]ConfigField {
 			{Name: "pk_columns", Type: FieldStringArray, Required: false, Description: "Primary key columns for upsert mode"},
 			{Name: "tls", Type: FieldBool, Required: false, Default: false, Description: "Enable TLS for MySQL connection"},
 			{Name: "tls_skip_verify", Type: FieldBool, Required: false, Default: false, Description: "Skip TLS certificate verification"},
+			{Name: "auto_create", Type: FieldBool, Required: false, Default: false, Description: "Auto-create target table if missing"},
+			{Name: "schema_drift", Type: FieldString, Required: false, Default: "ignore", Description: "Schema drift handling", Enum: []string{"ignore", "fail", "add_columns"}},
+			{Name: "insert_chunk_size", Type: FieldInt, Required: false, Default: 500, Description: "Rows per INSERT chunk"},
 		},
 		"clickhouse": {
 			{Name: "host", Type: FieldString, Required: true, Description: "ClickHouse host"},
@@ -169,6 +172,9 @@ func sinkConfigSchemas() map[string][]ConfigField {
 			{Name: "table", Type: FieldString, Required: true, Description: "Target table name"},
 			{Name: "batch_mode", Type: FieldString, Required: false, Default: "insert", Description: "Write mode", Enum: []string{"insert", "upsert"}},
 			{Name: "pk_columns", Type: FieldStringArray, Required: false, Description: "Primary key columns for upsert mode"},
+			{Name: "auto_create", Type: FieldBool, Required: false, Default: false, Description: "Auto-create target table if missing"},
+			{Name: "schema_drift", Type: FieldString, Required: false, Default: "ignore", Description: "Schema drift handling", Enum: []string{"ignore", "fail", "add_columns"}},
+			{Name: "insert_chunk_size", Type: FieldInt, Required: false, Default: 500, Description: "Rows per INSERT chunk"},
 		},
 		"kafka": {
 			{Name: "brokers", Type: FieldStringArray, Required: true, Description: "Kafka broker addresses"},

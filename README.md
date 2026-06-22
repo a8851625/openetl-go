@@ -1,4 +1,33 @@
-# MySQL 到多目标同步方案
+# OpenETL-Go — 轻量级 ETL/CDC 引擎(单二进制)
+
+> **OpenETL-Go** 是一个单二进制、插件化的 ETL/CDC 引擎:`Source → Transform → Sink`。
+> 支持 MySQL binlog / PostgreSQL 逻辑复制 / Kafka / 文件 / HTTP / Redis 作为源,
+> ClickHouse / MySQL / PostgreSQL / Doris / Elasticsearch / Kafka / Redis / S3 / JDBC 作为目标。
+> 单机用 SQLite(零外部依赖);可扩展用 MySQL/PostgreSQL 共享存储 + master-worker 分片。
+
+## 🚀 5 分钟快速开始(ETL 框架)
+
+```bash
+# 1. 启动依赖(MySQL 源 + ClickHouse 目标)
+podman compose -f docker-compose.quickstart.yml up -d
+# 2. 示例管道 MySQL CDC -> ClickHouse(自动建表)已在 pipes-quickstart/ 提供
+#    也可以直接用: pipes/mysql-cdc-to-clickhouse.yaml
+# 3. 打开管理界面: http://localhost:8000   (REST API: /api/v2/*)
+```
+
+- **示例 spec**:`pipes-quickstart/mysql-to-clickhouse.yaml`、`pipes/mysql-cdc-to-clickhouse.yaml`
+- **文档**:`docs/quickstart.md`、`docs/etl-config-schema.md`、`docs/etl-idempotency.md`
+- **架构与生产就绪标准**:`SPEC.md`(含 Phase 5 计划)、`ROADMAP.md`
+- **两种运行模式**:单机 SQLite(默认,零依赖)/ 可扩展 MySQL·PG(master-worker 真分布式,经 A11-redo 验证)
+- **可靠性**:at-least-once + 幂等 sink + DLQ + 三态断路器 + 指数退避重试;零静默数据丢失(SPEC §6.1)
+- **轻量**:默认构建不含 WASM/QuickJS(CGO)等可选运行时(均由 build tag 门控)
+
+> ℹ️ 本 README 下方的“Canal 模式”章节是**早期 go-mysql 同步方案**,仅作向后兼容保留。
+> 新用户请使用上面的 ETL 框架;完整入门见 [`docs/quickstart.md`](./docs/quickstart.md)。
+
+---
+
+## (Legacy) Canal 模式 — MySQL 到多目标同步
 
 使用 [go-mysql](https://github.com/go-mysql-org/go-mysql) 实现 MySQL Binlog 增量数据同步，支持同时同步到 ClickHouse、Elasticsearch、MySQL 等多个目标。
 

@@ -1101,6 +1101,21 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Run preflight at create time so misconfigurations (wrong binlog format,
+		// missing grants/tables, unreachable sink) surface immediately instead
+		// of failing late and opaque at /start (P5-14). Non-blocking: the
+		// pipeline is still created; warnings + preflight_valid are returned.
+		createWarnings := []string{}
+		preflightValid := true
+		if pr := s.RunPreflight(r.Context(), &spec); pr != nil {
+			for _, issue := range pr.Issues {
+				createWarnings = append(createWarnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
+				if issue.Level == "error" {
+					preflightValid = false
+				}
+			}
+		}
+
 		runner, err := s.newRunner(&spec)
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -1127,8 +1142,10 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		s.audit(r, "pipeline.create", spec.Name)
 
 		json.NewEncoder(w).Encode(map[string]any{
-			"name":   spec.Name,
-			"status": runner.Status(),
+			"name":               spec.Name,
+			"status":             runner.Status(),
+			"preflight_valid":    preflightValid,
+			"preflight_warnings": createWarnings,
 		})
 
 	case http.MethodPut:
@@ -2390,7 +2407,7 @@ func compileWithExtismJS(tmpDir, srcFile, name string) ([]byte, error) {
 	// at request time (TF-3 supply-chain/availability risk).
 	extismPkg := os.Getenv("OPENETL_EXTISM_JS_PKG")
 	if extismPkg == "" {
-		extismPkg = "@extism/js-pdk"
+		extismPkg = "@extism/js-pdk@1.1.0" // pinned default (P5-26); override via OPENETL_EXTISM_JS_PKG
 	}
 
 	// First check if extism-js is available as a pre-installed binary

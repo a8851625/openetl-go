@@ -89,7 +89,7 @@ checkpoint_interval_sec: 30
 curl -X POST http://localhost:8000/api/v2/pipelines \
   -H "Content-Type: application/json" \
   -H "X-API-Token: $ETL_API_TOKEN" \
-  -d '{"spec": {"name": "my-pipeline", "source": {"type": "file", "config": {"path": "/tmp/in.jsonl"}}, "sink": {"type": "file_sink", "config": {"path": "/tmp/out.jsonl"}}}}'
+  -d '{"spec": {"name": "my-pipeline", "source": {"type": "file", "config": {"path": "/tmp/in.jsonl"}}, "sink": {"type": "file_sink", "config": {"output_dir": "/tmp"}}}}'
 ```
 
 ---
