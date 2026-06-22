@@ -122,6 +122,15 @@ services:
       - "8001:8001"
     environment:
       TZ: Asia/Shanghai
+      # Source DB reachable inside the compose network (config.yaml database.default.link).
+      # Defaults (127.0.0.1) do not resolve inside the container.
+      DB_HOST: mysql-source
+      DB_PORT: "3306"
+      # Monitor ClickHouse (config.yaml monitor.clickhouse) — the default 127.0.0.1:8124 is
+      # unreachable inside the container; point at the clickhouse service.
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_PASSWORD: dzh123456
     volumes:
       - ./pipes:/app/pipes:ro
       - ./testdata:/app/testdata:ro

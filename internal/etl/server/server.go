@@ -75,7 +75,11 @@ func (s *Server) newRunner(spec *pipeline.Spec) (pipeline.RunnerInterface, error
 	if s.distributed && spec.Parallelism != nil && spec.Parallelism.Count > 1 && s.masterNode != nil {
 		return pipeline.NewDistributedPipeline(spec, s.cpAdapter, s.dlqWriter, s.alertManager, s.masterNode.Dispatcher())
 	}
-	return s.newRunner(spec)
+	// Non-distributed path: single-shard specs run inline via NewRunner; multi-shard
+	// specs run inline via NewParallelRunner. NewPipeline selects between them.
+	// (P5-1: this previously read `return s.newRunner(spec)` — an infinite
+	// self-recursion that stack-overflowed every standalone/single-shard pipeline.)
+	return pipeline.NewPipeline(spec, s.cpAdapter, s.dlqWriter, s.alertManager)
 }
 
 // NewServer creates a new ETL server backed by the given storage.

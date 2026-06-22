@@ -178,7 +178,7 @@ func (s *FileSource) openJSON(ctx context.Context, cp *core.Checkpoint) (core.Re
 		scanner:        scanner,
 		tableName:      filepath.Base(s.path[:len(s.path)-len(filepath.Ext(s.path))]),
 		offset:         lastRecordOffset,
-		byteOffset:     startByteOffset,
+		byteOffset:     0,
 		byteOffsetBase: startByteOffset,
 	}, nil
 }

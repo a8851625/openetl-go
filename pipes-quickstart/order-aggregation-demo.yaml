@@ -28,7 +28,8 @@ transforms:
 sink:
   type: clickhouse
   config:
-    host: quickstart-clickhouse:9000
+    host: quickstart-clickhouse
+    port: 9000
     user: default
     password: ""
     database: dzh3136_go

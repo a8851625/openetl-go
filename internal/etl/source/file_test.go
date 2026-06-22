@@ -197,3 +197,90 @@ func mustMarshal(v any) []byte {
 	}
 	return b
 }
+
+// TestFileJSONCheckpointNoCompoundOnRestart (P5-2) guards against the
+// byte-offset-compounding regression in jsonReader: byteOffset was seeded with
+// the absolute resume offset (should be 0), while Snapshot emitted
+// byteOffsetBase+byteOffset — so the stored offset roughly DOUBLED on every
+// restart and f.Seek skipped real records. The existing single-resume test does
+// NOT catch this (reading is driven by Seek, and one resume happens to land
+// correctly); this test restarts TWICE and asserts no skip + no compounding.
+func TestFileJSONCheckpointNoCompoundOnRestart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.jsonl")
+	content := `{"id":1}
+{"id":2}
+{"id":3}
+{"id":4}
+{"id":5}
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	src, err := NewFileSource(map[string]any{"path": path, "format": "json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass 1: read 2 records (id 1,2), snapshot cp1, close.
+	r1, err := src.Open(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r1.ReadBatch(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	cp1, err := r1.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r1.Close()
+
+	// Pass 2: resume from cp1, read 1 record (id 3), snapshot cp2, close.
+	r2, err := src.Open(context.Background(), &cp1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs2, err := r2.ReadBatch(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs2) != 1 || recs2[0].Data["id"] != float64(3) {
+		t.Fatalf("pass2: got %v, want id=3", recs2)
+	}
+	cp2, err := r2.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r2.Close()
+
+	// cp2 must NOT be ~2x cp1 (the compounding signature of the bug).
+	var p1, p2 filePosition
+	if err := json.Unmarshal(cp1.Position, &p1); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(cp2.Position, &p2); err != nil {
+		t.Fatal(err)
+	}
+	if p1.ByteOffset > 0 && p2.ByteOffset >= 2*p1.ByteOffset {
+		t.Errorf("offset compounded across restart: cp1=%d cp2=%d (cp2 should be ~cp1+1 record, not ~2x cp1)",
+			p1.ByteOffset, p2.ByteOffset)
+	}
+
+	// Pass 3: resume from cp2 — must read exactly id 4 and 5 (no skip).
+	r3, err := src.Open(context.Background(), &cp2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r3.Close()
+	got, err := r3.ReadBatch(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("pass3: got %d records, want 2 (ids 4,5) — records were skipped by a compounded offset", len(got))
+	}
+	if got[0].Data["id"] != float64(4) || got[1].Data["id"] != float64(5) {
+		t.Errorf("pass3: got ids %v, %v; want 4, 5", got[0].Data["id"], got[1].Data["id"])
+	}
+}
