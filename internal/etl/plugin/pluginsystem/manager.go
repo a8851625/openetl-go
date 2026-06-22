@@ -1,3 +1,5 @@
+//go:build extism
+
 package pluginsystem
 
 import (
@@ -14,24 +16,6 @@ import (
 	"openetl-go/internal/etl/core"
 	"openetl-go/internal/etl/storage"
 )
-
-// PluginKind classifies plugin types.
-type PluginKind string
-
-const (
-	KindTransform PluginKind = "transform"
-	KindSource    PluginKind = "source"
-	KindSink      PluginKind = "sink"
-)
-
-// PluginMeta describes an installed plugin.
-type PluginMeta struct {
-	Name    string     `json:"name"`
-	Kind    PluginKind `json:"kind"`
-	Version string     `json:"version"`
-	Enabled bool       `json:"enabled"`
-	Path    string     `json:"path"`
-}
 
 // Manager manages the lifecycle of extism WASM plugins.
 type Manager struct {

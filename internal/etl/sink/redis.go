@@ -54,6 +54,7 @@ type RedisSink struct {
 	skipCounter uint64
 
 	client *redis.Client
+	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewRedisSink(config map[string]any) (*RedisSink, error) {
@@ -154,6 +155,9 @@ func NewRedisSink(config map[string]any) (*RedisSink, error) {
 
 func (s *RedisSink) Name() string { return "redis" }
 
+// SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
+func (s *RedisSink) SinkMetrics() core.SinkMetrics { return s.metricsFor("redis") }
+
 func (s *RedisSink) Open(ctx context.Context) error {
 	opts := &redis.Options{
 		Addr:         fmt.Sprintf("%s:%d", s.host, s.port),
@@ -179,6 +183,7 @@ func (s *RedisSink) Open(ctx context.Context) error {
 }
 
 func (s *RedisSink) Write(ctx context.Context, records []core.Record) error {
+	start := time.Now()
 	chunkSize := s.pipelineChunkSize
 	if chunkSize <= 0 {
 		chunkSize = 1000
@@ -253,6 +258,7 @@ func (s *RedisSink) Write(ctx context.Context, records []core.Record) error {
 			return err
 		}
 	}
+	s.recordMetrics(len(records), time.Since(start))
 	return nil
 }
 

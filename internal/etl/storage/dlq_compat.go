@@ -11,6 +11,7 @@ import (
 // DeadLetter mirrors dlq.DeadLetter for the adapter interface.
 // Keeping this as a structural alias avoids a circular import.
 type DeadLetter struct {
+	ID         int64       `json:"id"`
 	JobName    string      `json:"job_name"`
 	Record     core.Record `json:"record"`
 	Error      string      `json:"error"`
@@ -44,6 +45,7 @@ func (w *DLQCompatWriter) Read(ctx context.Context, jobName string, limit int) (
 	result := make([]DeadLetter, len(recs))
 	for i, rec := range recs {
 		result[i] = DeadLetter{
+			ID:         rec.ID,
 			JobName:    rec.JobName,
 			Record:     rec.Record,
 			Error:      rec.Error,
@@ -77,6 +79,7 @@ func (w *DLQCompatWriter) ReadFiltered(ctx context.Context, filter DLQFilter) ([
 	result := make([]DeadLetter, len(recs))
 	for i, rec := range recs {
 		result[i] = DeadLetter{
+			ID:         rec.ID,
 			JobName:    rec.JobName,
 			Record:     rec.Record,
 			Error:      rec.Error,
@@ -101,4 +104,12 @@ func (w *DLQCompatWriter) Count(ctx context.Context, jobName string) int {
 // DeleteAll removes all dead-letter records for a job.
 func (w *DLQCompatWriter) DeleteAll(ctx context.Context, jobName string) error {
 	return w.adapter.DeleteAll(ctx, jobName)
+}
+
+// DeleteByID removes a single dead-letter record by its primary key.
+// This is the preferred method for replay cleanup — it targets exactly the
+// replayed record, unlike timestamp-based deletion which is imprecise when
+// multiple DLQ entries share the same second (P4-10, SV-1).
+func (w *DLQCompatWriter) DeleteByID(ctx context.Context, id int64) error {
+	return w.adapter.DeleteByID(ctx, id)
 }

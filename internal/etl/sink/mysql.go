@@ -47,6 +47,7 @@ type MySQLSink struct {
 	tlsSkipVerify bool
 	// schemaCache avoids repeated information_schema queries.
 	schemaCache *core.SchemaCache
+	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewMySQLSink(config map[string]any) (*MySQLSink, error) {
@@ -142,6 +143,9 @@ func NewMySQLSink(config map[string]any) (*MySQLSink, error) {
 
 func (s *MySQLSink) Name() string { return s.name }
 
+// SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
+func (s *MySQLSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
+
 func (s *MySQLSink) Open(ctx context.Context) error {
 	tlsParam := ""
 	if s.tlsEnabled {
@@ -171,6 +175,7 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) error {
 	if len(records) == 0 {
 		return nil
 	}
+	start := time.Now()
 
 	// Separate DDL records and handle them according to ddl_policy.
 	var ddlRecords, dataRecords []core.Record
@@ -297,6 +302,7 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+	s.recordMetrics(len(records), time.Since(start))
 	return nil
 }
 

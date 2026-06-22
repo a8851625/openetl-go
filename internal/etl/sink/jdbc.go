@@ -47,6 +47,7 @@ type JDBCSink struct {
 	tlsSkipVerify          bool
 	tlsCAFile              string
 	allowUnsupportedDriver bool
+	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewJDBCSink(config map[string]any) (*JDBCSink, error) {
@@ -153,6 +154,9 @@ func NewJDBCSink(config map[string]any) (*JDBCSink, error) {
 
 func (s *JDBCSink) Name() string { return s.name }
 
+// SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
+func (s *JDBCSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
+
 func (s *JDBCSink) Open(ctx context.Context) error {
 	driver, nativeDSN, database, err := parseDSN(s.dsnRaw, s)
 	if err != nil {
@@ -186,6 +190,7 @@ func (s *JDBCSink) Write(ctx context.Context, records []core.Record) error {
 	if len(records) == 0 {
 		return nil
 	}
+	start := time.Now()
 
 	// Separate DDL records and handle them according to ddl_policy.
 	var ddlRecords, dataRecords []core.Record
@@ -303,6 +308,7 @@ func (s *JDBCSink) Write(ctx context.Context, records []core.Record) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+	s.recordMetrics(len(records), time.Since(start))
 	return nil
 }
 

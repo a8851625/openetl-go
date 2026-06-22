@@ -20,6 +20,7 @@ import (
 
 	"openetl-go/internal/etl/core"
 	"openetl-go/internal/etl/registry"
+	"openetl-go/internal/etl/sink/typing"
 )
 
 func init() {
@@ -86,6 +87,7 @@ type DorisSink struct {
 	db          *sql.DB
 	httpClient  *http.Client
 	schemaCache *core.SchemaCache
+	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewDorisSink(config map[string]any) (*DorisSink, error) {
@@ -221,6 +223,9 @@ func NewDorisSink(config map[string]any) (*DorisSink, error) {
 
 func (s *DorisSink) Name() string { return s.name }
 
+// SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
+func (s *DorisSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
+
 func (s *DorisSink) Open(ctx context.Context) error {
 	// MySQL protocol connection (for DDL + DELETE + fallback INSERT)
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&loc=Local",
@@ -253,6 +258,7 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) error {
 	if len(records) == 0 {
 		return nil
 	}
+	start := time.Now()
 
 	// Separate DDL records from data records.
 	var ddlRecords, dataRecords []core.Record
@@ -325,6 +331,7 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) error {
 			return err
 		}
 	}
+	s.recordMetrics(len(records), time.Since(start))
 	return nil
 }
 
@@ -832,10 +839,10 @@ func (s *DorisSink) createTableFromFields(ctx context.Context, table string, col
 		b.WriteString(" ")
 
 		if keySet[c] {
-			b.WriteString(inferDorisKeyType(c))
+			b.WriteString(inferDorisKeyType(c, fieldValues[c]))
 			b.WriteString(" NOT NULL")
 		} else {
-			b.WriteString(inferDorisType(c))
+			b.WriteString(inferDorisType(c, fieldValues[c]))
 		}
 	}
 
@@ -869,42 +876,21 @@ func (s *DorisSink) createTableFromFields(ctx context.Context, table string, col
 // Doris supports lightweight schema changes for ADD COLUMN.
 func (s *DorisSink) addColumn(ctx context.Context, table, column string, fieldValues map[string]any) error {
 	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
-		quoteIdentMySQL(table), quoteIdentMySQL(column), inferDorisType(column))
+		quoteIdentMySQL(table), quoteIdentMySQL(column), inferDorisType(column, fieldValues[column]))
 	_, err := s.db.ExecContext(ctx, ddl)
 	return err
 }
 
-// inferDorisType maps column names and Go types to Doris column types.
-// Doris types: BOOLEAN, TINYINT, SMALLINT, INT, BIGINT, LARGEINT, FLOAT,
-// DOUBLE, DECIMAL, DATE, DATETIME, CHAR, VARCHAR, STRING, JSON, BITMAP, HLL.
-func inferDorisType(colName string) string {
-	lc := strings.ToLower(colName)
-	// Common ID patterns
-	if lc == "id" || strings.HasSuffix(lc, "_id") || strings.HasSuffix(lc, "id") {
-		return "BIGINT"
-	}
-	switch lc {
-	case "amount", "price", "total", "balance", "salary":
-		return "DECIMAL(18,2)"
-	case "quantity", "count", "age", "status", "level":
-		return "INT"
-	case "score", "rating", "ratio", "percent":
-		return "DOUBLE"
-	case "created_at", "updated_at", "deleted_at", "timestamp", "ts":
-		return "DATETIME"
-	case "date", "birthday":
-		return "DATE"
-	case "is_active", "is_deleted", "enabled", "active", "deleted", "flag":
-		return "BOOLEAN"
-	case "data", "metadata", "config", "payload", "extra", "tags":
-		return "JSON"
-	}
-	// Default to STRING (Doris's large text type, replaces VARCHAR(65533))
-	return "STRING"
+// inferDorisType delegates to the unified typing engine so auto-created
+// Doris tables get name-hinted + value-driven types (id→BIGINT, amount→
+// DECIMAL, _at→DATETIME, …) consistent with the other relational sinks,
+// instead of the old name-only local inference (P4-22, SK-1).
+func inferDorisType(colName string, v any) string {
+	return typing.InferFromValue(typing.DialectDoris, colName, v)
 }
 
-func inferDorisKeyType(colName string) string {
-	t := inferDorisType(colName)
+func inferDorisKeyType(colName string, v any) string {
+	t := inferDorisType(colName, v)
 	// Doris UNIQUE KEY columns should avoid non-comparable or oversized types.
 	switch t {
 	case "JSON", "STRING":

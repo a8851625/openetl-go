@@ -22,6 +22,7 @@ import (
 	"openetl-go/internal/etl/core"
 	"openetl-go/internal/etl/registry"
 	"openetl-go/internal/etl/sink/ddl"
+	"openetl-go/internal/etl/sink/typing"
 )
 
 func init() {
@@ -797,12 +798,12 @@ func (s *ClickHouseSink) ensureColumns(ctx context.Context, tableName string, re
 			if col, ok := existing[name]; ok {
 				// Check if the value type is compatible with the column type.
 				// If not, and schema_drift is "sync", we'll ALTER the column type.
-				desiredType := inferClickHouseType(value)
+				desiredType := inferClickHouseType(name, value)
 				if s.schemaDrift == "sync" && !chTypeCompatible(col.Type, desiredType, value) {
 					typeMismatches[name] = desiredType
 				}
 			} else {
-				missing[name] = inferClickHouseType(value)
+				missing[name] = inferClickHouseType(name, value)
 			}
 		}
 	}
@@ -877,7 +878,7 @@ func (s *ClickHouseSink) createTable(ctx context.Context, tableName string, reco
 				continue
 			}
 			if _, ok := types[name]; !ok {
-				types[name] = inferClickHouseType(value)
+				types[name] = inferClickHouseType(name, value)
 			}
 		}
 	}
@@ -1158,28 +1159,12 @@ func convertNestedValue(v any) any {
 	return []any{v}
 }
 
-func inferClickHouseType(v any) string {
-	switch value := v.(type) {
-	case nil:
-		return "Nullable(String)"
-	case bool:
-		return "UInt8"
-	case int, int8, int16, int32, int64:
-		return "Int64"
-	case uint, uint8, uint16, uint32, uint64:
-		return "UInt64"
-	case float32, float64:
-		return "Float64"
-	case time.Time:
-		return "DateTime64(3)"
-	case string:
-		if _, err := time.Parse(time.RFC3339, value); err == nil {
-			return "DateTime64(3)"
-		}
-		return "String"
-	default:
-		return "String"
-	}
+// inferClickHouseType delegates to the unified typing engine so auto-created
+// ClickHouse tables get name-hinted + value-driven types (id→Int64, amount→
+// Decimal, _at→DateTime64, …) consistent with the other relational sinks,
+// instead of the old name-blind local inference (P4-22, SK-1).
+func inferClickHouseType(name string, v any) string {
+	return typing.InferFromValue(typing.DialectClickHouse, name, v)
 }
 
 func quoteIdent(name string) string {

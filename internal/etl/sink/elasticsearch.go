@@ -41,6 +41,7 @@ type ElasticsearchSink struct {
 	tlsSkipVerify bool
 	client        *http.Client
 	hostCounter   uint32
+	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
@@ -135,6 +136,9 @@ func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
 
 func (s *ElasticsearchSink) Name() string { return s.name }
 
+// SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
+func (s *ElasticsearchSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
+
 func (s *ElasticsearchSink) Open(ctx context.Context) error {
 	for _, host := range s.hosts {
 		req, err := http.NewRequestWithContext(ctx, "GET", host+"/_cluster/health", nil)
@@ -158,6 +162,7 @@ func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) er
 	if len(records) == 0 {
 		return nil
 	}
+	start := time.Now()
 
 	// Chunk to avoid exceeding ES http.max_content_length (~100MB default).
 	for offset := 0; offset < len(records); offset += s.chunkSize {
@@ -239,6 +244,7 @@ func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) er
 		}
 	}
 
+	s.recordMetrics(len(records), time.Since(start))
 	return nil
 }
 

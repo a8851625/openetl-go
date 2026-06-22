@@ -1,3 +1,5 @@
+//go:build extism
+
 package pluginsystem
 
 import (

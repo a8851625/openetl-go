@@ -55,6 +55,7 @@ type FileSink struct {
 	buf    *bytes.Buffer
 	mu     sync.Mutex
 	client *minio.Client
+	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewS3Sink(config map[string]any) (*FileSink, error) {
@@ -157,6 +158,9 @@ func NewFileSink(config map[string]any) (*FileSink, error) {
 
 func (s *FileSink) Name() string { return s.name }
 
+// SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
+func (s *FileSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
+
 func (s *FileSink) Open(ctx context.Context) error {
 	if s.config.Endpoint != "" && s.config.Bucket != "" {
 		endpoint := strings.TrimPrefix(strings.TrimPrefix(s.config.Endpoint, "http://"), "https://")
@@ -198,6 +202,7 @@ func (s *FileSink) Write(ctx context.Context, records []core.Record) error {
 	if len(writable) == 0 {
 		return nil
 	}
+	start := time.Now()
 
 	payload, err := s.encode(writable)
 	if err != nil {
@@ -212,7 +217,11 @@ func (s *FileSink) Write(ctx context.Context, records []core.Record) error {
 	objectName := fmt.Sprintf("%s%s%s.%s", s.config.Prefix, datePrefix, hex.EncodeToString(sum[:16]), s.config.Format)
 
 	if s.client != nil {
-		return s.uploadWithRetry(ctx, objectName, payload)
+		if err := s.uploadWithRetry(ctx, objectName, payload); err != nil {
+			return err
+		}
+		s.recordMetrics(len(writable), time.Since(start))
+		return nil
 	}
 
 	// Atomic file write: write to temp file then rename
@@ -225,7 +234,11 @@ func (s *FileSink) Write(ctx context.Context, records []core.Record) error {
 		os.Remove(tmpFilename)
 		return err
 	}
-	return os.Rename(tmpFilename, filename)
+	if err := os.Rename(tmpFilename, filename); err != nil {
+		return err
+	}
+	s.recordMetrics(len(writable), time.Since(start))
+	return nil
 }
 
 func (s *FileSink) uploadWithRetry(ctx context.Context, objectName string, payload []byte) error {
@@ -343,9 +356,16 @@ func (s *FileSink) encodeParquet(records []core.Record) ([]byte, error) {
 	}
 	sort.Strings(cols)
 
+	// Infer each column's type from its first non-nil sample value so the
+	// Parquet schema is typed (int/double/bool/timestamp) instead of every
+	// column being String (P4-21, SK-5). Columns are Optional so sparse rows
+	// (a record missing a column) encode as null rather than failing.
+	colKind := make(map[string]parquetTypeKind, len(cols))
 	node := parquet.Group{}
 	for _, col := range cols {
-		node[col] = parquet.String()
+		k := inferParquetKind(records, col)
+		colKind[col] = k
+		node[col] = parquet.Optional(parquetNodeFor(k))
 	}
 	pschema := parquet.NewSchema("record", node)
 
@@ -353,10 +373,10 @@ func (s *FileSink) encodeParquet(records []core.Record) ([]byte, error) {
 	pwriter := parquet.NewWriter(buf, pschema)
 
 	for _, rec := range records {
-		row := make(map[string]string, len(cols))
+		row := make(map[string]any, len(cols))
 		for _, col := range cols {
 			if v, ok := rec.Data[col]; ok {
-				row[col] = fmt.Sprintf("%v", v)
+				row[col] = coerceParquetValue(v, colKind[col])
 			}
 		}
 		if err := pwriter.Write(row); err != nil {
@@ -369,4 +389,117 @@ func (s *FileSink) encodeParquet(records []core.Record) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// parquetTypeKind classifies a parquet column's logical type.
+type parquetTypeKind int
+
+const (
+	pqString parquetTypeKind = iota
+	pqInt
+	pqDouble
+	pqBool
+	pqTimestamp
+)
+
+// inferParquetKind samples the first non-nil value of a column to pick its
+// parquet type. Unknown types fall back to String (lossy, but never wrong).
+func inferParquetKind(records []core.Record, col string) parquetTypeKind {
+	for _, rec := range records {
+		v, ok := rec.Data[col]
+		if !ok || v == nil {
+			continue
+		}
+		switch v.(type) {
+		case bool:
+			return pqBool
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			return pqInt
+		case float32, float64:
+			return pqDouble
+		case time.Time:
+			return pqTimestamp
+		default:
+			return pqString
+		}
+	}
+	return pqString
+}
+
+func parquetNodeFor(k parquetTypeKind) parquet.Node {
+	switch k {
+	case pqBool:
+		return parquet.Leaf(parquet.BooleanType)
+	case pqInt:
+		return parquet.Int(64)
+	case pqDouble:
+		return parquet.Leaf(parquet.DoubleType)
+	case pqTimestamp:
+		return parquet.Timestamp(parquet.Millisecond)
+	default:
+		return parquet.String()
+	}
+}
+
+// coerceParquetValue converts a record value to the Go type matching the column
+// node so parquet-go encodes it under the typed schema (not as a string).
+func coerceParquetValue(v any, k parquetTypeKind) any {
+	if v == nil {
+		return nil
+	}
+	switch k {
+	case pqInt:
+		if n, ok := toInt64Value(v); ok {
+			return n
+		}
+	case pqDouble:
+		if f, ok := toFloat64Value(v); ok {
+			return f
+		}
+	case pqBool:
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	case pqTimestamp:
+		if t, ok := v.(time.Time); ok {
+			return t
+		}
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+func toInt64Value(v any) (int64, bool) {
+	switch x := v.(type) {
+	case int:
+		return int64(x), true
+	case int8:
+		return int64(x), true
+	case int16:
+		return int64(x), true
+	case int32:
+		return int64(x), true
+	case int64:
+		return x, true
+	case uint:
+		return int64(x), true
+	case uint8:
+		return int64(x), true
+	case uint16:
+		return int64(x), true
+	case uint32:
+		return int64(x), true
+	case uint64:
+		return int64(x), true
+	}
+	return 0, false
+}
+
+func toFloat64Value(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float32:
+		return float64(x), true
+	case float64:
+		return x, true
+	}
+	return 0, false
 }

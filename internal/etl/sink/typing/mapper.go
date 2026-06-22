@@ -16,6 +16,7 @@ const (
 	DialectMySQL      Dialect = "mysql"
 	DialectPostgreSQL Dialect = "postgresql"
 	DialectClickHouse Dialect = "clickhouse"
+	DialectDoris      Dialect = "doris"
 )
 
 // InferFromValue returns the DDL type string for a value with the given column name.
@@ -73,6 +74,8 @@ func nameHint(dialect Dialect, name string) string {
 			return "BIGINT"
 		case DialectClickHouse:
 			return "Int64"
+		case DialectDoris:
+			return "BIGINT"
 		}
 	}
 
@@ -88,6 +91,8 @@ func nameHint(dialect Dialect, name string) string {
 			return "TIMESTAMP(3)"
 		case DialectClickHouse:
 			return "DateTime64(3)"
+		case DialectDoris:
+			return "DATETIME"
 		}
 	}
 
@@ -102,6 +107,8 @@ func nameHint(dialect Dialect, name string) string {
 			return "BOOLEAN"
 		case DialectClickHouse:
 			return "UInt8"
+		case DialectDoris:
+			return "BOOLEAN"
 		}
 	}
 
@@ -117,6 +124,8 @@ func nameHint(dialect Dialect, name string) string {
 			return "DECIMAL(18,2)"
 		case DialectClickHouse:
 			return "Decimal(18,2)"
+		case DialectDoris:
+			return "DECIMAL(18,2)"
 		}
 	}
 
@@ -129,6 +138,8 @@ func nameHint(dialect Dialect, name string) string {
 			return "VARCHAR(255)"
 		case DialectClickHouse:
 			return "String"
+		case DialectDoris:
+			return "VARCHAR(255)"
 		}
 	}
 
@@ -143,6 +154,8 @@ func nameHint(dialect Dialect, name string) string {
 			return "JSONB"
 		case DialectClickHouse:
 			return "String"
+		case DialectDoris:
+			return "JSON"
 		}
 	}
 
@@ -160,6 +173,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 			return "BOOLEAN"
 		case DialectClickHouse:
 			return "UInt8"
+		case DialectDoris:
+			return "BOOLEAN"
 		}
 	case int, int8, int16, int32:
 		switch dialect {
@@ -169,6 +184,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 			return "INTEGER"
 		case DialectClickHouse:
 			return "Int32"
+		case DialectDoris:
+			return "INT"
 		}
 	case int64:
 		switch dialect {
@@ -178,6 +195,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 			return "BIGINT"
 		case DialectClickHouse:
 			return "Int64"
+		case DialectDoris:
+			return "BIGINT"
 		}
 	case uint, uint8, uint16, uint32:
 		switch dialect {
@@ -187,6 +206,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 			return "INTEGER"
 		case DialectClickHouse:
 			return "UInt32"
+		case DialectDoris:
+			return "INT"
 		}
 	case uint64:
 		switch dialect {
@@ -196,6 +217,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 			return "BIGINT"
 		case DialectClickHouse:
 			return "UInt64"
+		case DialectDoris:
+			return "BIGINT"
 		}
 	case float32, float64:
 		switch dialect {
@@ -205,6 +228,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 			return "DOUBLE PRECISION"
 		case DialectClickHouse:
 			return "Float64"
+		case DialectDoris:
+			return "DOUBLE"
 		}
 	case time.Time:
 		switch dialect {
@@ -214,6 +239,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 			return "TIMESTAMP(3)"
 		case DialectClickHouse:
 			return "DateTime64(3)"
+		case DialectDoris:
+			return "DATETIME"
 		}
 	case string:
 		// Check if the string looks like a timestamp.
@@ -225,6 +252,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 				return "TIMESTAMP(3)"
 			case DialectClickHouse:
 				return "DateTime64(3)"
+			case DialectDoris:
+				return "DATETIME"
 			}
 		}
 		// String length heuristic.
@@ -236,6 +265,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 				return "VARCHAR(255)"
 			case DialectClickHouse:
 				return "String"
+			case DialectDoris:
+				return "VARCHAR(255)"
 			}
 		}
 		switch dialect {
@@ -245,6 +276,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 			return "TEXT"
 		case DialectClickHouse:
 			return "String"
+		case DialectDoris:
+			return "STRING"
 		}
 	case []byte:
 		switch dialect {
@@ -254,6 +287,8 @@ func inferFromGoType(dialect Dialect, value any) string {
 			return "BYTEA"
 		case DialectClickHouse:
 			return "String"
+		case DialectDoris:
+			return "STRING"
 		}
 	case nil:
 		return nullableStringType(dialect)
@@ -272,6 +307,8 @@ func defaultStringType(dialect Dialect) string {
 		return "TEXT"
 	case DialectClickHouse:
 		return "String"
+	case DialectDoris:
+		return "STRING"
 	}
 	return "TEXT"
 }

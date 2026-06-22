@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gogf/gf/v2/frame/g"
@@ -175,10 +176,8 @@ func (s *Server) checkMySQLCDC(ctx context.Context, spec *pipeline.Spec, result 
 // ── Sink: reachability check ─────────────────────────────────────────
 
 func (s *Server) checkSinkReachable(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
-	// For now, just verify the plugin is registered and config is parseable.
-	// Full connectivity checks (Ping) happen at pipeline start.
-	// We delegate to the registry to build the plugin (which validates config).
-	_, err := registry.BuildSink(spec.Sink.Type, spec.Sink.Config)
+	// Build the sink to validate config parseability.
+	sink, err := registry.BuildSink(spec.Sink.Type, spec.Sink.Config)
 	if err != nil {
 		result.Issues = append(result.Issues, PreflightIssue{
 			Level:       "error",
@@ -187,6 +186,30 @@ func (s *Server) checkSinkReachable(ctx context.Context, spec *pipeline.Spec, re
 			Remediation: "fix the sink config in the pipeline spec",
 		})
 		result.Passed = false
+		return
+	}
+
+	// Test actual sink reachability with a short timeout so preflight
+	// doesn't block indefinitely when the target is unreachable (P4-11, SV-2).
+	// The timeout is kept short because this runs synchronously during spec
+	// validation; a longer probe belongs in the dedicated connection-test endpoint.
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if err := sink.Open(probeCtx); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "sink-reachable",
+			Message:     fmt.Sprintf("sink %q is not reachable: %v", spec.Sink.Type, err),
+			Remediation: "verify the sink target is running and network is accessible from the ETL process",
+		})
+		// Reachability failure is a warning, not an error — the pipeline may
+		// still start when the sink becomes available.
+	} else {
+		// Best-effort cleanup: if the sink is a closer, close it now.
+		if closer, ok := sink.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
 	}
 }
 

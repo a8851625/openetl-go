@@ -43,6 +43,7 @@ type KafkaSink struct {
 	autoCreateTopic bool
 	retryBackoff    time.Duration
 	producer        sarama.SyncProducer
+	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
 // kafkaEnvelope wraps CDC records with operation metadata so downstream
@@ -139,6 +140,9 @@ func NewKafkaSink(config map[string]any) (*KafkaSink, error) {
 
 func (s *KafkaSink) Name() string { return s.name }
 
+// SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
+func (s *KafkaSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
+
 func (s *KafkaSink) Open(ctx context.Context) error {
 	cfg := sarama.NewConfig()
 	cfg.Producer.Return.Successes = true
@@ -231,6 +235,7 @@ func (s *KafkaSink) Open(ctx context.Context) error {
 }
 
 func (s *KafkaSink) Write(ctx context.Context, records []core.Record) error {
+	start := time.Now()
 	messages := make([]*sarama.ProducerMessage, 0, len(records))
 	for _, rec := range records {
 		// Deterministic event id from source metadata so downstream consumers
@@ -280,7 +285,11 @@ func (s *KafkaSink) Write(ctx context.Context, records []core.Record) error {
 		return ctx.Err()
 	default:
 	}
-	return s.producer.SendMessages(messages)
+	if err := s.producer.SendMessages(messages); err != nil {
+		return err
+	}
+	s.recordMetrics(len(records), time.Since(start))
+	return nil
 }
 
 func (s *KafkaSink) Close() error {

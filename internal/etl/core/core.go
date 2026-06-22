@@ -110,14 +110,33 @@ type ColumnInfo struct {
 	Nullable bool
 }
 
-// SchemaDescriptor is an optional interface that sources implement to describe
-// their output schema. This enables schema validation and auto-create.
+// SchemaDescriptor is an optional interface that sources may implement to describe
+// their output schema. When a source implements this, the runner will call Describe
+// after Open to obtain column metadata. If the sink also implements SchemaValidator,
+// the schema is validated before the pipeline starts reading records.
+//
+// NOTE: No built-in source currently implements SchemaDescriptor. This interface
+// exists for custom sources built with the Source SDK. See the pipeline runner
+// (pipeline.go:382) for the wiring — it is a no-op when the source doesn't
+// implement the interface.
 type SchemaDescriptor interface {
 	Describe(ctx context.Context) (SchemaInfo, error)
 }
 
-// SchemaValidator is an optional interface that sinks implement to validate
-// source schema compatibility before starting a pipeline.
+// SchemaValidator is an optional interface that sinks may implement to validate
+// source schema compatibility before a pipeline starts. When both the source
+// (SchemaDescriptor) and the sink (SchemaValidator) implement their respective
+// interfaces, the runner calls ValidateSchema after Open to check that the source
+// output columns are compatible with the sink's expectations.
+//
+// A validator should return an error describing the incompatibility if the
+// schema cannot be accepted (e.g., missing required columns, type mismatches
+// that the sink cannot coerce). Returning nil means the sink accepts the schema.
+//
+// NOTE: No built-in sink currently implements SchemaValidator. This interface
+// exists for custom sinks built with the Sink SDK. See the pipeline runner
+// (pipeline.go:383) for the wiring — it is a no-op when the sink doesn't
+// implement the interface.
 type SchemaValidator interface {
 	ValidateSchema(ctx context.Context, schema SchemaInfo) error
 }

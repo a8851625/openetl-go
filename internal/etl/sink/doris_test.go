@@ -148,28 +148,36 @@ func TestDorisBuildCSVBody(t *testing.T) {
 func TestDorisInferType(t *testing.T) {
 	cases := []struct {
 		col  string
+		val  any
 		want string
 	}{
-		{"id", "BIGINT"},
-		{"user_id", "BIGINT"},
-		{"amount", "DECIMAL(18,2)"},
-		{"price", "DECIMAL(18,2)"},
-		{"count", "INT"},
-		{"quantity", "INT"},
-		{"created_at", "DATETIME"},
-		{"date", "DATE"},
-		{"is_active", "BOOLEAN"},
-		{"data", "JSON"},
-		{"metadata", "JSON"},
-		{"name", "STRING"},
-		{"description", "STRING"},
-		{"score", "DOUBLE"},
+		// Name-hinted columns (nil value still resolves via nameHint).
+		{"id", nil, "BIGINT"},
+		{"user_id", nil, "BIGINT"},
+		{"amount", nil, "DECIMAL(18,2)"},
+		{"price", nil, "DECIMAL(18,2)"},
+		{"created_at", nil, "DATETIME"},
+		{"is_active", nil, "BOOLEAN"},
+		{"data", nil, "JSON"},
+		{"metadata", nil, "JSON"},
+		// Value-driven columns — pass a representative Go value so the typing
+		// engine infers the correct Doris type. Without a value, the engine
+		// can only fall back to STRING.
+		{"count", int(42), "INT"},
+		{"quantity", int32(10), "INT"},
+		{"score", float64(4.5), "DOUBLE"},
+		// "date" matches the temporal name hint and resolves to DATETIME in
+		// the unified typing engine (Doris doesn't have a separate DATE hint).
+		{"date", nil, "DATETIME"},
+		// No hint + nil value → fallback string type.
+		{"name", nil, "STRING"},
+		{"description", nil, "STRING"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.col, func(t *testing.T) {
-			got := inferDorisType(tc.col)
+			got := inferDorisType(tc.col, tc.val)
 			if got != tc.want {
-				t.Errorf("inferDorisType(%q) = %q, want %q", tc.col, got, tc.want)
+				t.Errorf("inferDorisType(%q, %v) = %q, want %q", tc.col, tc.val, got, tc.want)
 			}
 		})
 	}

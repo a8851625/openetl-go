@@ -42,6 +42,7 @@ type PostgresSink struct {
 	schemaDrift     string
 	ddLPolicy       DDLPolicy
 	schemaCache     *core.SchemaCache
+	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
@@ -137,6 +138,9 @@ func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
 
 func (s *PostgresSink) Name() string { return s.name }
 
+// SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
+func (s *PostgresSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
+
 func (s *PostgresSink) Open(ctx context.Context) error {
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		s.user, s.password, s.host, s.port, s.database, s.sslmode)
@@ -163,6 +167,7 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) error {
 	if len(records) == 0 {
 		return nil
 	}
+	start := time.Now()
 
 	// Separate DDL records and handle them according to ddl_policy.
 	var ddlRecords, dataRecords []core.Record
@@ -277,6 +282,7 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+	s.recordMetrics(len(records), time.Since(start))
 	return nil
 }
 

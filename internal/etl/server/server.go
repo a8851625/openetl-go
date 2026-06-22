@@ -735,15 +735,21 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 		idempotencyWarnings := pipeline.ValidateIdempotency(&spec)
 		warnings = append(warnings, idempotencyWarnings...)
 
-		// Run preflight checks (best-effort; failures are warnings in dry-run mode).
+		// Run preflight checks (P4-11, SV-2+SV-3). Error-level issues
+		// indicate a hard misconfiguration (e.g., MySQL binlog format) and
+		// should prevent pipeline creation. Reachability warnings don't.
+		preflightValid := true
 		if preflightResult := s.RunPreflight(r.Context(), &spec); preflightResult != nil {
 			for _, issue := range preflightResult.Issues {
 				if issue.Level == "error" {
 					warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
+					preflightValid = false
+				} else {
+					warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
 				}
 			}
 		}
-		json.NewEncoder(w).Encode(map[string]any{"valid": true, "warnings": warnings, "spec": spec})
+		json.NewEncoder(w).Encode(map[string]any{"valid": preflightValid, "warnings": warnings, "spec": spec})
 	}
 
 func (s *Server) handleConnectionTest(w http.ResponseWriter, r *http.Request) {
@@ -2744,10 +2750,15 @@ func (s *Server) replayDLQ(ctx context.Context, name string, filter dlqFilter) (
 		if err := retry.Do(ctx, cfg, core.IsRetryableError, func() error { return sink.Write(ctx, []core.Record{rec}) }); err != nil {
 			return replayed, err
 		}
-		// Delete the replayed item from DB
-		// For the SQL-backed DLQ, items have auto-increment IDs we can use
-		// Since DeadLetter doesn't carry ID, we delete by timestamp match
-		s.dlqWriter.Delete(ctx, name, item.Timestamp)
+		// Delete the replayed item by its DB primary key for precise targeting
+		// (P4-10, SV-1). Timestamp-based deletion is imprecise when multiple
+		// DLQ entries share the same second.
+		if item.ID != 0 {
+			s.dlqWriter.DeleteByID(ctx, item.ID)
+		} else {
+			// Fallback for file-backed DLQ (no auto-increment ID).
+			s.dlqWriter.Delete(ctx, name, item.Timestamp)
+		}
 		replayed++
 	}
 	return replayed, nil
@@ -3272,5 +3283,44 @@ dlq:
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 
-	json.NewEncoder(w).Encode(map[string]any{"yaml": content})
+	// Validate the generated YAML through ValidateSpec + RunPreflight
+		// so callers know immediately whether the LLM output is usable (P4-24, SV-4).
+		var validation map[string]any
+		var spec pipeline.Spec
+		if err := yaml.Unmarshal([]byte(content), &spec); err != nil {
+			validation = map[string]any{
+				"valid":  false,
+				"errors": []string{"parse YAML: " + err.Error()},
+			}
+		} else {
+			pipeline.ApplyDefaults(&spec)
+			if err := pipeline.ValidateSpec(&spec); err != nil {
+				validation = map[string]any{
+					"valid":  false,
+					"errors": []string{err.Error()},
+				}
+			} else {
+				preflightResult := s.RunPreflight(r.Context(), &spec)
+				preflightIssues := []string{}
+				preflightErrCount := 0
+				if preflightResult != nil {
+					for _, issue := range preflightResult.Issues {
+						preflightIssues = append(preflightIssues, fmt.Sprintf("[%s] %s", issue.Check, issue.Message))
+						if issue.Level == "error" {
+							preflightErrCount++
+						}
+					}
+				}
+				validation = map[string]any{
+					"valid":           preflightErrCount == 0,
+					"warnings":        preflightIssues,
+					"preflightPassed": preflightResult == nil || preflightErrCount == 0,
+				}
+			}
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"yaml":       content,
+			"validation": validation,
+		})
 }

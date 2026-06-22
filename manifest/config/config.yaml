@@ -60,12 +60,13 @@ logger:
   file:    "sync-{Y-m-d}.log"
   rotate:  "daily"
   backups: 30
-  # Change to "json" for structured logging (recommended for production).
+  # Format for log output: "" (plain text, default) or "json" (structured logging).
   # GoFrame's JSON format includes level, timestamp, message, and caller.
-  # Usage: set both stdoutFormat and fileFormat to "json".
-  #
-  #   stdoutFormat: "json"
-  #   fileFormat:   "json"
+  # Set LOGGER_FORMAT=json in production for structured logging.
+  # Note: GoFrame glog reads "logger.stdoutFormat" and "logger.fileFormat"
+  # from this config tree. The ETL app also checks LOGGER_FORMAT at startup.
+  stdoutFormat: "${LOGGER_FORMAT:-}"
+  fileFormat:   "${LOGGER_FORMAT:-}"
 
 # 同步源配置
 database:
