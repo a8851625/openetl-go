@@ -20,14 +20,11 @@ import (
 	"github.com/gogf/gf/v2/net/ghttp"
 	"github.com/gogf/gf/v2/os/gres"
 
-	ctlmonitor "openetl-go/internal/controller/monitor"
 	"openetl-go/internal/etl/alert"
 	etlfactory "openetl-go/internal/etl/storage/factory"
 	etlserver "openetl-go/internal/etl/server"
 	"openetl-go/internal/etl/storage"
 	"openetl-go/internal/etl/worker"
-	logicmonitor "openetl-go/internal/logic/monitor"
-	"openetl-go/internal/logic/sync"
 	"openetl-go/internal/service"
 
 	_ "openetl-go/internal/etl/sink"
@@ -37,10 +34,8 @@ import (
 
 // sApp 应用实例
 type sApp struct {
-	collector   service.ICollector
-	canalCancel context.CancelFunc
-	etlServer   *etlserver.Server
-	etlCancel   context.CancelFunc
+	etlServer *etlserver.Server
+	etlCancel context.CancelFunc
 }
 
 func init() {
@@ -104,23 +99,6 @@ func (a *sApp) etlReverseProxy(r *ghttp.Request) {
 	}
 	r.Response.BufferWriter.Flush()
 	proxy.ServeHTTP(r.Response.RawWriter(), r.Request)
-}
-
-// InitMonitor 初始化监控系统
-func (a *sApp) InitMonitor(ctx context.Context) {
-	monitorCfg, chCfg := logicmonitor.LoadConfig(ctx)
-	if !monitorCfg.Enabled {
-		return
-	}
-
-	collector, _, err := ctlmonitor.InitMonitor(monitorCfg, chCfg, "1.0.0")
-	if err != nil {
-		g.Log().Warningf(ctx, "Init monitor failed: %v, monitoring disabled", err)
-		return
-	}
-
-	g.Log().Info(ctx, "Monitor system initialized successfully")
-	a.collector = collector
 }
 
 // StartETLAsync 异步启动 ETL 管道服务
@@ -272,36 +250,9 @@ func (a *sApp) startWorkerRole(ctx context.Context, store storage.Storage) {
 	g.Log().Infof(ctx, "ETL role=worker started: id=%s master=%s slots=%d", workerID, masterURL, slots)
 }
 
-// StartCanalSyncAsync 异步启动 Canal 同步服务
-func (a *sApp) StartCanalSyncAsync() {
-	// 创建独立的 context，用于控制 Canal 生命周期
-	canalCtx, cancel := context.WithCancel(context.Background())
-	a.canalCancel = cancel
-
-	go func() {
-		// 捕获协程 panic
-		defer func() {
-			if r := recover(); r != nil {
-				g.Log().Fatalf(context.Background(), "Canal sync panic: %v", r)
-			}
-		}()
-
-		canalSync := sync.NewCanalSync(a.collector)
-		canalSync.Start(canalCtx)
-	}()
-
-	g.Log().Info(context.Background(), "Canal sync service started in background")
-}
-
 // Stop 优雅停止服务
 func (a *sApp) Stop() {
 	g.Log().Info(context.Background(), "Stopping app...")
-
-	// 停止 Canal 同步
-	if a.canalCancel != nil {
-		a.canalCancel()
-		g.Log().Info(context.Background(), "Canal sync stopped")
-	}
 
 	if a.etlCancel != nil {
 		a.etlCancel()
@@ -313,13 +264,6 @@ func (a *sApp) Stop() {
 			g.Log().Warningf(context.Background(), "Stop ETL server failed: %v", err)
 		}
 		g.Log().Info(context.Background(), "ETL service stopped")
-	}
-
-	// 停止监控采集器
-	if a.collector != nil {
-		if err := a.collector.Stop(); err != nil {
-			g.Log().Warningf(context.Background(), "Stop collector failed: %v", err)
-		}
 	}
 
 	g.Log().Info(context.Background(), "App stopped")

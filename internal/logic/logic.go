@@ -6,6 +6,4 @@ package logic
 
 import (
 	_ "openetl-go/internal/logic/app"
-	_ "openetl-go/internal/logic/monitor"
-	_ "openetl-go/internal/logic/sync"
 )

@@ -1,31 +1,34 @@
-# https://goframe.org/docs/web/server-config-file-template
+# OpenETL-Go — 默认配置(单节点 ETL 模式)。
+#
+# 启动: ./openetl-go
+# 容器: 挂载到 /app/manifest/config/config.yaml
+#
+# 结构化日志: 设置环境变量 LOGGER_FORMAT=json(见 internal/logic/app/logging.go)。
+# 横向扩展: 把 etl.storage.type 切到 mysql/postgresql,etl.role 切到 master/worker。
+
 server:
   address:     ":8000"
   openapiPath: "/api.json"
   swaggerPath: "/swagger"
-  serverRoot: "resource/public"
+  serverRoot:  "resource/public"
 
-# ETL 管道模式。开启后启动 pipes/ 下声明式管道，并跳过旧的单 Canal 同步入口。
+# ETL 管道模式:启动后加载 pipes/ 下声明式管道,并对外暴露 /api/v2/*。
 etl:
   enabled: true
   address: ":8001"
-  # 进程角色 (A11-redo 分布式): standalone (默认, 单进程) | master | worker
-  # master/worker 要求 storage.type 为 mysql/postgresql (跨进程共享元数据)
-  # 环境变量 ETL_ROLE 覆盖此值。DAG 管道不分片, 仅线性 spec 分布式分发。
+  # 进程角色(分布式): standalone(默认,单进程) | master | worker
+  # master/worker 要求 storage.type 为 mysql/postgresql(跨进程共享元数据)。
+  # 环境变量 ETL_ROLE 覆盖此值。DAG 管道不分片,仅线性 spec 走分布式分发。
   role: "standalone"
-  # masterURL: role=worker 时必填, 指向 master 的 HTTP API 基址。环境变量 ETL_MASTER_URL。
-  masterURL: ""
-  # workerID: 可选 worker 标识 (默认 worker-<pid>)。环境变量 ETL_WORKER_ID。
-  workerID: ""
-  # workerSlots: 单个 worker 进程最大并发分片任务数 (默认 4)。
-  workerSlots: 4
+  masterURL: ""        # role=worker 时必填,指向 master 的 HTTP API。环境变量 ETL_MASTER_URL。
+  workerID: ""         # 可选 worker 标识(默认 worker-<pid>)。环境变量 ETL_WORKER_ID。
+  workerSlots: 4       # 单个 worker 进程最大并发分片任务数。
   specsDir: "./pipes"
   checkpointDir: "./data/checkpoint"
   dlqDir: "./data/dlq"
-  # 存储引擎：pipeline 定义、checkpoint、DLQ、audit 等元数据持久化
-  # sqlite (默认) - 零依赖，单文件数据库，适合单机部署
-  # mysql - 需提供 DSN，适合多实例共享元数据
-  # postgresql - 需提供 DSN，适合多实例共享元数据
+  # 存储引擎:pipeline 定义 / checkpoint / DLQ / audit 等元数据持久化。
+  # sqlite(默认)- 零依赖单文件,单机部署。
+  # mysql / postgresql - 多实例共享元数据(配合 master/worker)。
   storage:
     type: "sqlite"
     sqlite:
@@ -37,97 +40,15 @@ etl:
   alert:
     webhook: ""
 
-# 监控配置
-monitor:
-  enabled:       true    # 是否启用监控
-  historyDays:   30      # 历史数据保留天数
-  collectPeriod: 10      # 采集周期(秒)
-  maxEvents:     10000   # 内存最大事件数
-  maxErrors:     1000    # 内存最大错误数
-  # ClickHouse 监控数据存储(可选，留空则仅使用内存)
-  clickhouse:
-    host:     "${CLICKHOUSE_HOST:-127.0.0.1}"
-    port:     ${CLICKHOUSE_PORT:-8124}
-    user:     "${CLICKHOUSE_USER:-default}"
-    password: "${CLICKHOUSE_PASSWORD:-}"
-    database: "${CLICKHOUSE_DATABASE:-sync_monitor}"
-
 # https://goframe.org/docs/core/glog-config
 logger:
   level:   "all"
   stdout:  true
   path:    "./logs"
-  file:    "sync-{Y-m-d}.log"
+  file:    "openetl-{Y-m-d}.log"
   rotate:  "daily"
   backups: 30
-  # Structured logging (P5-16): set env var LOGGER_FORMAT=json to emit JSON
-  # lines on stdout (ts/level/msg + trace_id/caller/stack) for container log
-  # collectors (Loki/ELK/CloudWatch). The handler is installed at startup in
-  # cmd.Main (internal/logic/app/logging.go). When unset, the default text
-  # format is written to stdout + the rotating file above.
-  # (The earlier stdoutFormat/fileFormat keys were inert — GoFrame glog has no
-  # such config fields — so they are removed; format is controlled only by the
-  # registered handler / LOGGER_FORMAT env var.)
-
-# 同步源配置
-database:
-  default:
-    # 使用环境变量注入凭据，避免硬编码到仓库
-    link: "mysql:${DB_USER:-sync_user}:${DB_PASSWORD:-sync_password_123}@tcp(${DB_HOST:-127.0.0.1}:${DB_PORT:-3306})/${DB_NAME:-dzh3136_go}"
-    debug: false
-
-# Canal 配置
-canal:
-  serverId: 1001
-  flavor:   "mysql"
-  # 仅增量同步，禁用 mysqldump
-  dump: false
-
-# 同步目标配置
-sync:
-  # 源数据库
-  database: "dzh3136_go"
-  # 批量大小
-  batchSize: 1000
-  # 同步目标列表
-  targets:
-    - name: "clickhouse-main"
-      type: "clickhouse"
-      tables:
-        - "customers"
-        - "orders"
-        - "products"
-      clickhouse:
-        host:     "${SYNC_CLICKHOUSE_HOST:-127.0.0.1}"
-        port:     ${SYNC_CLICKHOUSE_PORT:-9000}
-        user:     "${SYNC_CLICKHOUSE_USER:-default}"
-        password: "${SYNC_CLICKHOUSE_PASSWORD:-}"
-        database: "${SYNC_CLICKHOUSE_DATABASE:-dzh3136_go}"
-      # 定时 OPTIMIZE 清理
-      schedule:
-        enable:   true
-        interval: 1440  # 分钟，1440 = 24小时
-
-    # Elasticsearch 目标 (示例)
-    # - name: "es-search"
-    #   type: "elasticsearch"
-    #   tables:
-    #     - "addons_customer_pro_clues"
-    #   elasticsearch:
-    #     hosts:
-    #       - "http://127.0.0.1:9200"
-    #     username: "elastic"
-    #     password: "changeme"
-    #     index: ""  # 留空则使用表名
-
-    # MySQL 目标 (示例)
-    # - name: "mysql-replica"
-    #   type: "mysql"
-    #   tables:
-    #     - "addons_customer_pro_clues"
-    #   mysql:
-    #     host:     "127.0.0.1"
-    #     port:     3306
-    #     user:     "writer"
-    #     password: "writer_password"
-    #     database: "dzh_replica"
+  # 结构化日志(P5-16):设置环境变量 LOGGER_FORMAT=json 即在 stdout 输出 JSON 行
+  # (ts/level/msg + trace_id/caller/stack),适配 Loki/ELK/CloudWatch 等日志采集器。
+  # handler 在 cmd.Main 启动时安装(internal/logic/app/logging.go)。
+  # 未设置时,使用默认文本格式同时写 stdout 与上面的滚动日志文件。

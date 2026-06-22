@@ -19,7 +19,7 @@ var (
 	Main = gcmd.Command{
 		Name:  "main",
 		Usage: "main",
-		Brief: "start mysql binlog sync service",
+		Brief: "start openetl-go ETL/CDC service",
 		Func: func(ctx context.Context, parser *gcmd.Parser) (err error) {
 			// Structured (JSON stdout) logging before any g.Log() call (P5-16).
 			app.ConfigureStructuredLogging()
@@ -28,18 +28,11 @@ var (
 
 			a := service.App()
 
-			// 初始化监控系统（先注册 API 路由，确保优先级高于静态文件路由）
-			a.InitMonitor(ctx)
-
-			// 配置静态文件服务（前端 UI，后注册以确保 API 路由优先）
+			// 配置静态文件服务（前端 UI，API 反代路由先于静态路由注册）
 			a.SetupStaticFiles()
 
-			if g.Cfg().MustGet(ctx, "etl.enabled", false).Bool() {
-				a.StartETLAsync(ctx)
-			} else {
-				// 异步启动 Canal 同步服务
-				a.StartCanalSyncAsync()
-			}
+			// 启动 ETL 管道服务（role: standalone 默认 / master / worker）
+			a.StartETLAsync(ctx)
 
 			// 注册优雅关闭
 			go a.WaitForShutdown()
