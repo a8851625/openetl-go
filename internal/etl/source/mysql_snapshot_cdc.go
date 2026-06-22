@@ -221,11 +221,11 @@ func (s *MySQLSnapshotCDCSource) Open(ctx context.Context, cp *core.Checkpoint) 
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&loc=Local&timeout=10s&readTimeout=300s", s.user, s.password, s.host, s.port, s.database)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("connect mysql: %w", err)
+		return nil, fmt.Errorf("connect mysql (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("ping mysql: %w", err)
+		return nil, fmt.Errorf("ping mysql (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	if len(s.tables) == 1 && s.tables[0] == "*" {
 		tables, err := s.listTables(ctx, db)
@@ -311,7 +311,7 @@ func (s *MySQLSnapshotCDCSource) newCanal(reader *snapshotCDCReader) (*canal.Can
 	}
 	c, err := canal.NewCanal(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("create canal: %w", err)
+		return nil, fmt.Errorf("create canal (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	c.SetEventHandler(&snapshotCDCHandler{reader: reader})
 	return c, nil

@@ -169,7 +169,7 @@ func (s *FileSink) Open(ctx context.Context) error {
 			Secure: strings.HasPrefix(s.config.Endpoint, "https://"),
 		})
 		if err != nil {
-			return fmt.Errorf("create s3 client: %w", err)
+			return fmt.Errorf("create s3 client (endpoint %s, bucket %s, region %s): %w", s.config.Endpoint, s.config.Bucket, s.config.Region, err) // P5-15: WHERE context
 		}
 		exists, err := client.BucketExists(ctx, s.config.Bucket)
 		if err != nil {
@@ -177,7 +177,7 @@ func (s *FileSink) Open(ctx context.Context) error {
 		}
 		if !exists {
 			if err := client.MakeBucket(ctx, s.config.Bucket, minio.MakeBucketOptions{Region: s.config.Region}); err != nil {
-				return fmt.Errorf("create bucket: %w", err)
+				return fmt.Errorf("create bucket %s (endpoint %s, region %s): %w", s.config.Bucket, s.config.Endpoint, s.config.Region, err) // P5-15: WHERE context
 			}
 		}
 		s.client = client

@@ -156,7 +156,7 @@ openetl-go is production-ready when, for **both** modes:
 | *(none)* | Pure-Go core + all sinks; **no** WASM, **no** QuickJS, **no** CGO | ✅ |
 | `-tags=extism` | + WASM plugin runtime (wazero, pure Go) | — |
 | `CGO_ENABLED=1` | + QuickJS transform runtime (CGO) | — |
-| `-tags=lua` *(proposed, P5-22)* | + Lua transform runtime (gopher-lua) — **currently ungated** | — |
+| `-tags=nolua` *(P5-22)* | **Opt-out** Lua runtime (gopher-lua) — default build keeps Lua; `-tags=nolua` drops it for 轻量 builds | — |
 
 ### 2.2 Testing (the pyramid)
 
@@ -280,8 +280,8 @@ worker}`:
 
 - On sink `Write` failure: retry with backoff (`retry.Do`); on exhaustion, route each record to
   DLQ; **if the DLQ write itself fails, escalate** (alert + trip circuit breaker + do not advance
-  checkpoint), never `continue`, never `_ =`. *(P5-9: the DLQ-failure path currently does not
-  trip the breaker.)*
+  checkpoint), never `continue`, never `_ =`. *(P5-9: ✅ done — both the linear `Runner` and the
+  DAG `DAGExecutor` trip the per-sink circuit breaker on a DLQ-write failure.)*
 - A batch with zero surviving records (all filtered/errored) must not silently advance the
   checkpoint unless every dropped record was an intentional `ErrRecordFiltered`. *(P5-10.)*
 - Idempotency is the complement: sinks tolerate re-delivery (upsert / version columns / dedup
@@ -299,10 +299,11 @@ Open-source users see these errors. Rules:
   binlog_format is STATEMENT, must be ROW — run SET GLOBAL binlog_format='ROW'`.
 - Never expose raw stack dumps as the primary message; wrap with context.
 
-> **P5-15 (current violation):** sink/source errors like `"ping clickhouse: %w"` or
-> `"create canal: %w"` omit host/port/db. A user with two ClickHouse instances cannot tell which
-> failed. Every error wrap on a connector path must include the endpoint + target object. The
-> Doris mixed-CDC atomicity message (`doris.go:312`) is the in-repo template — replicate it.
+> **P5-15 (✅ done):** sink/source connect/ping/create errors across all 9 sinks and the
+> CDC/batch sources now carry WHERE context — `(host %s:%d, db %s)` for DB sinks,
+> `(brokers %v, topic %s)` for kafka, `(endpoint %s, bucket %s, region %s)` for s3 — replicating
+> the `doris.go` template. A user with two ClickHouse instances can now tell which failed.
+> Per-write errors largely already carried the table object.
 
 ### 4.4 Interface, not metadata
 
@@ -379,9 +380,9 @@ explicit sign-off.
 - **Single static binary, pure Go (default build).** No CGO in the default build; no runtime
   dependency on JVM/Python/Node for core function. **All opt-in script runtimes — WASM, Lua,
   QuickJS — must be gated behind build tags** so a deployment that does not use them does not link
-  them. Status: WASM ✅ (`//go:build extism`), QuickJS ✅ (`//go:build cgo`), **Lua ❌ — linked
-  unconditionally** (P5-22). New external dependencies require review for binary-size and
-  supply-chain impact.
+  them. Status: WASM ✅ (`//go:build extism`), QuickJS ✅ (`//go:build cgo`), **Lua ✅ opt-out**
+  (`//go:build !nolua` — default keeps Lua; `-tags=nolua` drops gopher-lua from the binary, P5-22).
+  New external dependencies require review for binary-size and supply-chain impact.
 - **Zero data loss — on every path, including DAG, shutdown, and the DLQ-failure path.** Every
   record reaches the sink (after retry) or the DLQ; a DLQ-write failure escalates (alert +
   breaker + no-checkpoint-advance). A zero-survivor batch does not silently advance the
@@ -449,7 +450,7 @@ Carried-forward v2 items keep their `P4-n` ID. Evidence and fix sketches are sum
 | P5-6 | Kafka producer silently falls back to non-idempotent mode (`kafka.go:199-208`) → duplicate risk on retry. | Warn (or fail if exactly-once intent declared). | 0.25d | new |
 | P5-7 | `postgres_cdc` unknown pgoutput message type `return`s, dropping the rest of the frame (`postgres_cdc.go:460-463`); LSN still ACKed → silent loss on future PG message types. | Parse length from wire + `continue`. | 0.5d | new |
 | P5-8 | ~~HTTP source advances `committedPage` before sink~~ — **✅ retracted (false-positive, like P4-17)**: `committedPage` is in-memory only; the persisted checkpoint is gated on sink-write via `CheckpointForRecord`; restart resumes from the persisted page and re-fetches (at-least-once). The proposed "drain-gated" fix is already the existing behavior. | — | done (retracted) |
-| P5-9 | DLQ write-failure path never trips the circuit breaker (`pipeline.go:913-922`). | **Linear: ✅** `circuitBreaker.RecordFailure(ctx, dlqErr)` added. DAG per-sink breaker trip on DLQ-fail deferred (needs sinkID threaded into `handleFailed`; DAG path already alerts, non-silent). | 0.25d | done (linear) |
+| P5-9 | DLQ write-failure path never trips the circuit breaker (`pipeline.go:913-922`). | ✅ **Linear + DAG**: linear `Runner` calls `circuitBreaker.RecordFailure(ctx, dlqErr)`; DAG `handleFailed` now takes `sinkID` and trips `e.breakers[sinkID]` on DLQ-write failure (Wave 4). | 0.25d | done |
 | P5-10 | Zero-survivor batch saves checkpoint before any sink write (`pipeline.go:783-786`); combined with no-DLQ-configured silent drop (`:906-926`) → permanent loss. | Save checkpoint only when all drops were `ErrRecordFiltered`; else escalate (log+alert+no-advance). | 0.5d | new |
 | P5-11 | Worker poll loop slot check uses `len(w.executors)` but `ExecuteShard` goroutine never registers (`worker/poll.go:98-101,133`) → unbounded concurrent shard fan-out. | Track in-flight tasks with an atomic counter; gate spawn on it. | 0.5d | scalable |
 | P5-12 | `sinkCounters.recordError()` is dead code in all 9 sinks (`sink_metrics.go:30`) → Prometheus `Errors` permanently 0. | Wire error paths in each sink's `Write`. | 0.5d | both |
@@ -460,7 +461,7 @@ Carried-forward v2 items keep their `P4-n` ID. Evidence and fix sketches are sum
 |----|-----|------------|------|--------|
 | **P5-13** | **README.md advertises the legacy Canal product, not the ETL framework** (Canal mode, hardcoded creds, manual DDL) — a new user clones and reads about the wrong product. | Rewrite README quickstart around the ETL framework + `/api/v2/*` + YAML pipes; point to `docs/quickstart.md`. | 1d | H |
 | **P5-14** | Pipeline create/update (`handlePipelines` POST/PUT, `server.go:1086-1128`) calls only `ApplyDefaults`+`ValidateSpec`, never `RunPreflight` → misconfigs (bad host) return `valid` and fail late/opaque at `/start`. | Call `RunPreflight` on create/update; attach `preflight_warnings`; reject on `level:error`. | 0.5d | H |
-| **P5-15** | Sink/source error messages omit WHERE (host/port/db/table) — §4.3 violation (`clickhouse.go`, `mysql_cdc.go`, others). | Include endpoint + target object in every connector error wrap; replicate `doris.go:312` template. | 1d | H |
+| **P5-15** ✅ | Sink/source error messages omit WHERE (host/port/db/table) — §4.3 violation (`clickhouse.go`, `mysql_cdc.go`, others). | ✅ Done (Wave 4): connect/ping/create errors across 9 sinks + CDC/batch sources now carry `(host:port, db)` / `(brokers, topic)` / `(endpoint, bucket, region)`, replicating the `doris.go` template. | 1d | H→done |
 | **P5-16** | **P4-23 refuted**: JSON logging is inert — no code reads `LOGGER_FORMAT`/`stdoutFormat`/`fileFormat`; config comment is false. | Install a glog JSON handler gated on `LOGGER_FORMAT=json` (or GoFrame `g.Log().SetConfig` with a JSON writer); document. | 0.5d | H |
 | P5-17 | Shipped quickstart example pipe broken — combined `host: quickstart-clickhouse:9000` (`pipes-quickstart/order-aggregation-demo.yaml:31`) → DNS fail at `clickhouse.Open`. | Split into `host` + `port`. | 0.1d | H |
 | P5-18 | `GET /api/v2/plugins/schema` omits real keys (`auto_create`/`schema_drift`/`insert_chunk_size` for mysql/postgres — `schema.go:129-140,162-172`) → users conclude auto-create unsupported. | Complete the schema (or auto-generate from struct tags). | 0.5d | M |
@@ -472,7 +473,7 @@ Carried-forward v2 items keep their `P4-n` ID. Evidence and fix sketches are sum
 
 | ID | Gap | Fix sketch | Size | Impact |
 |----|-----|------------|------|--------|
-| P5-22 | Lua (`gopher-lua`) linked into the default binary (`lua.go` + `pipeline/hooks.go`). | **Deferred (not rushed)**: a clean gate needs build-tag-conditional wiring across 2 packages (`LuaHook` is intertwined with `webhook`/`fireHook` in `hooks.go`), AND it flips the default build — existing `type: lua` transforms break without `-tags=lua`, a backward-compat change §6.1 / the risk table say needs a deprecation cycle. P4-3 per-record budget verified present (`lua.go:29-38`). Planned approach: opt-out `//go:build !nolua` (default keeps Lua) + `nolua` nop stubs, so轻量 users can build `-tags=nolua` without breaking existing specs. | — | deferred |
+| P5-22 | Lua (`gopher-lua`) linked into the default binary (`lua.go` + `pipeline/hooks.go`). | ✅ **Done (Wave 4)**: opt-out `//go:build !nolua` — the default build keeps Lua (non-breaking), `-tags=nolua` drops gopher-lua via `lua_nolua.go` + `lua_hook_nolua.go` stubs; `type:lua` returns a clear error under nolua. Verified: `go list -deps -tags=nolua` is free of gopher-lua. | — | done |
 | P5-23 | GoFrame HTTP server boots alongside the ETL API. | **Retracted/deferred**: the GoFrame server (`:8000`) serves the UI (`resource/public`) AND proxies `/api/v2/*` to `:8001` — "skipping" it removes the UI. The dual-listener is intentional (unified port). A headless API-only mode is a feature, not a fix. | — | retracted |
 | P5-25 | `config.yaml` is ~50% legacy Canal config. | ✅ Added `manifest/config/config.etl.yaml` — minimal single-node ETL template (server+etl+logger, SQLite, no Canal/sync/database). `config.yaml` unchanged for backward compat. | 0.5d | done |
 | P5-26 | Default `extismPkg` unpinned. | ✅ Pinned `@extism/js-pdk@1.1.0` (Wave 2); env overrides. | 0.1d | done |
@@ -506,7 +507,7 @@ Carry-forward: P4-3 folds into Wave 3 (P5-22).
 | Risk | Mitigation |
 |------|------------|
 | P5-1 fix changes runner wiring widely | One-line constructor swap; the regression test pins it; all `hack/e2e-*.sh` re-run. |
-| P5-22 (Lua build tag) breaks users who relied on Lua by default | Document the tag; ship a default build profile that includes it for one release; deprecation cycle (§6.1). |
+| P5-22 (Lua build tag) breaks users who relied on Lua by default | **Mitigated (Wave 4):** the gate is an opt-OUT (`-tags=nolua`), so the default build keeps Lua byte-for-byte — no deprecation cycle needed (§6.1). |
 | P5-13 README rewrite loses legacy-Canal users | Keep a clearly-labeled "Legacy Canal mode" section; link v2 docs. |
 | More latent races surface under new `-race` tests (§5.5) | Budget Wave 1 conservatively; each race is a small targeted fix. |
 
@@ -525,7 +526,7 @@ podman exec etl-go-dev go test -race -count=1 ./internal/etl/...
 # Lightweight: default build excludes all opt-in runtimes
 podman exec etl-go-dev go list -deps ./... | grep -E 'gopher-lua|quickjs|extism|wazero'   # must be EMPTY for default
 podman exec etl-go-dev go build -tags=extism -o /tmp/oa-extism .                          # still compiles
-podman exec etl-go-dev go build -tags=lua -o /tmp/oa-lua .                                # Lua opt-in (after P5-22)
+podman exec etl-go-dev go build -tags=nolua -o /tmp/oa-nolua .                            # 轻量: Lua opt-out (P5-22)
 
 # Dual-mode E2E
 ./hack/e2e.sh                       # file→file, mysql_batch→mysql

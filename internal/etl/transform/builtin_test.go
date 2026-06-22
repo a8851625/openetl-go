@@ -42,17 +42,3 @@ func TestRenameDropAddAndTypeConvert(t *testing.T) {
 		t.Fatalf("convert result = %#v", converted.Data)
 	}
 }
-
-func TestLuaTransform(t *testing.T) {
-	tr, err := NewLuaTransform(`record.full_name = record.first .. " " .. record.last`)
-	if err != nil {
-		t.Fatalf("NewLuaTransform error = %v", err)
-	}
-	rec, err := tr.Apply(context.Background(), core.Record{Data: map[string]any{"first": "Ada", "last": "Lovelace"}})
-	if err != nil {
-		t.Fatalf("Apply error = %v", err)
-	}
-	if rec.Data["full_name"] != "Ada Lovelace" {
-		t.Fatalf("full_name = %#v", rec.Data["full_name"])
-	}
-}

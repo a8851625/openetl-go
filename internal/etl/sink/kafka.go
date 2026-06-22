@@ -208,7 +208,7 @@ func (s *KafkaSink) Open(ctx context.Context) error {
 		cfg.Net.MaxOpenRequests = 5
 		producer, err = sarama.NewSyncProducer(s.brokers, cfg)
 		if err != nil {
-			return fmt.Errorf("create kafka producer: %w", err)
+			return fmt.Errorf("create kafka producer (brokers %v, topic %s): %w", s.brokers, s.topic, err) // P5-15: WHERE context
 		}
 	}
 	s.producer = producer
@@ -216,7 +216,7 @@ func (s *KafkaSink) Open(ctx context.Context) error {
 	// Validate / auto-create the target topic using a cluster admin client.
 	admin, err := sarama.NewClusterAdmin(s.brokers, cfg)
 	if err != nil {
-		return fmt.Errorf("create kafka cluster admin: %w", err)
+		return fmt.Errorf("create kafka cluster admin (brokers %v, topic %s): %w", s.brokers, s.topic, err) // P5-15: WHERE context
 	}
 	defer admin.Close()
 

@@ -1,3 +1,5 @@
+//go:build !nolua
+
 package transform
 
 import (
@@ -165,5 +167,21 @@ record.to_remove = nil
 	}
 	if _, ok := out.Data["to_remove"]; ok {
 		t.Errorf("to_remove should be nil, got %v", out.Data["to_remove"])
+	}
+}
+
+// TestLuaTransform (relocated from builtin_test.go so it is gated with the rest
+// of the Lua tests under //go:build !nolua — P5-22).
+func TestLuaTransform(t *testing.T) {
+	tr, err := NewLuaTransform(`record.full_name = record.first .. " " .. record.last`)
+	if err != nil {
+		t.Fatalf("NewLuaTransform error = %v", err)
+	}
+	rec, err := tr.Apply(context.Background(), core.Record{Data: map[string]any{"first": "Ada", "last": "Lovelace"}})
+	if err != nil {
+		t.Fatalf("Apply error = %v", err)
+	}
+	if rec.Data["full_name"] != "Ada Lovelace" {
+		t.Fatalf("full_name = %#v", rec.Data["full_name"])
 	}
 }

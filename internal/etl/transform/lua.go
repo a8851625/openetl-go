@@ -1,3 +1,5 @@
+//go:build !nolua
+
 package transform
 
 import (

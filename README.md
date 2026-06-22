@@ -20,7 +20,7 @@ podman compose -f docker-compose.quickstart.yml up -d
 - **架构与生产就绪标准**:`SPEC.md`(含 Phase 5 计划)、`ROADMAP.md`
 - **两种运行模式**:单机 SQLite(默认,零依赖)/ 可扩展 MySQL·PG(master-worker 真分布式,经 A11-redo 验证)
 - **可靠性**:at-least-once + 幂等 sink + DLQ + 三态断路器 + 指数退避重试;零静默数据丢失(SPEC §6.1)
-- **轻量**:默认构建不含 WASM/QuickJS(CGO)等可选运行时(均由 build tag 门控)
+- **轻量**:默认构建不含 WASM/QuickJS(CGO)等可选运行时(均由 build tag 门控);Lua(gopher-lua)默认内置,可用 `-tags=nolua` 构建剥离以进一步瘦身,`type:lua` 此时返回清晰错误(P5-22)
 
 > ℹ️ 本 README 下方的“Canal 模式”章节是**早期 go-mysql 同步方案**,仅作向后兼容保留。
 > 新用户请使用上面的 ETL 框架;完整入门见 [`docs/quickstart.md`](./docs/quickstart.md)。

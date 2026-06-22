@@ -177,7 +177,7 @@ func (s *RedisSink) Open(ctx context.Context) error {
 	}
 	s.client = redis.NewClient(opts)
 	if err := s.client.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("redis ping: %w", err)
+		return fmt.Errorf("redis ping (host %s:%d, db %d): %w", s.host, s.port, s.db, err) // P5-15: WHERE context
 	}
 	return nil
 }

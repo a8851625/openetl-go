@@ -151,7 +151,7 @@ func (s *KafkaSource) Open(ctx context.Context, cp *core.Checkpoint) (core.Recor
 
 	group, err := sarama.NewConsumerGroup(s.brokers, s.groupID, config)
 	if err != nil {
-		return nil, fmt.Errorf("create consumer group: %w", err)
+		return nil, fmt.Errorf("create consumer group (brokers %v, group %s): %w", s.brokers, s.groupID, err) // P5-15: WHERE context
 	}
 
 	reader := &kafkaReader{

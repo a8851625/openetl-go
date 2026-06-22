@@ -232,13 +232,13 @@ func (s *DorisSink) Open(ctx context.Context) error {
 		s.user, s.password, s.host, s.port, s.database)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return fmt.Errorf("connect doris: %w", err)
+		return fmt.Errorf("connect doris (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	if err := db.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping doris: %w", err)
+		return fmt.Errorf("ping doris (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	s.db = db
 

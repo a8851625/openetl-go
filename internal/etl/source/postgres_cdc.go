@@ -121,7 +121,7 @@ func (s *PostgresCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core
 
 	replConn, err := pgconn.Connect(ctx, connStr)
 	if err != nil {
-		return nil, fmt.Errorf("connect postgres: %w", err)
+		return nil, fmt.Errorf("connect postgres (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 
 	reader := &pgCDCReader{
@@ -156,12 +156,12 @@ func (s *PostgresCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core
 		snapDB, err := sql.Open("pgx", snapConnStr)
 		if err != nil {
 			replConn.Close(context.Background())
-			return nil, fmt.Errorf("open snapshot db: %w", err)
+			return nil, fmt.Errorf("open snapshot db (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 		}
 		if err := snapDB.PingContext(ctx); err != nil {
 			snapDB.Close()
 			replConn.Close(context.Background())
-			return nil, fmt.Errorf("ping snapshot db: %w", err)
+			return nil, fmt.Errorf("ping snapshot db (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 		}
 		reader.snapshotDB = snapDB
 	}

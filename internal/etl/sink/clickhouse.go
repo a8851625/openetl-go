@@ -278,10 +278,10 @@ func (s *ClickHouseSink) openNative(ctx context.Context) error {
 
 	conn, err := clickhouse.Open(opts)
 	if err != nil {
-		return fmt.Errorf("connect clickhouse: %w", err)
+		return fmt.Errorf("connect clickhouse (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	if err := conn.Ping(ctx); err != nil {
-		return fmt.Errorf("ping clickhouse: %w", err)
+		return fmt.Errorf("ping clickhouse (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	s.conn = conn
 
@@ -320,14 +320,14 @@ func (s *ClickHouseSink) openHTTP(ctx context.Context) error {
 	// clickhouse-go supports HTTP via the database/sql interface
 	db, err := sql.Open("clickhouse", dsn)
 	if err != nil {
-		return fmt.Errorf("connect clickhouse http: %w", err)
+		return fmt.Errorf("connect clickhouse http (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	if err := db.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping clickhouse http: %w", err)
+		return fmt.Errorf("ping clickhouse http (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	s.httpConn = db
 

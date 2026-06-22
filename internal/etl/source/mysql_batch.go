@@ -162,7 +162,7 @@ func (s *MySQLBatchSource) Open(ctx context.Context, cp *core.Checkpoint) (core.
 		s.user, s.password, s.host, s.port, s.database)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("connect mysql: %w", err)
+		return nil, fmt.Errorf("connect mysql (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(2)

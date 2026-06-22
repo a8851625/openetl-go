@@ -154,10 +154,10 @@ func (s *PostgresSink) Open(ctx context.Context) error {
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("connect postgres: %w", err)
+		return fmt.Errorf("connect postgres (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	if err := pool.Ping(ctx); err != nil {
-		return fmt.Errorf("ping postgres: %w", err)
+		return fmt.Errorf("ping postgres (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
 	s.pool = pool
 	return nil

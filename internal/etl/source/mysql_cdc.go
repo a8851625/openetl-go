@@ -306,7 +306,7 @@ func (s *MySQLCDCSource) startCanalOnce(ctx context.Context, reader *mysqlCDCRec
 
 	c, err := canal.NewCanal(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("create canal: %w", err)
+		return nil, fmt.Errorf("create canal (host %s:%d, db %s, serverID %d): %w", s.host, s.port, s.database, s.serverID, err) // P5-15: WHERE context
 	}
 	c.SetEventHandler(&mysqlCDCHandler{reader: reader})
 

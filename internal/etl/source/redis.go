@@ -123,7 +123,7 @@ func (s *RedisSource) Open(ctx context.Context, cp *core.Checkpoint) (core.Recor
 		DB:       s.db,
 	})
 	if err := s.client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis ping: %w", err)
+		return nil, fmt.Errorf("redis ping (host %s:%d, db %d): %w", s.host, s.port, s.db, err) // P5-15: WHERE context
 	}
 
 	rd := &redisReader{
