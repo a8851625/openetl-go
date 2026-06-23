@@ -1,42 +1,45 @@
-# OpenETL-Go — 轻量级 ETL/CDC 引擎(单二进制)
+# OpenETL-Go — Lightweight ETL/CDC Engine (Single Binary)
 
-> **OpenETL-Go** 是一个单二进制、插件化的 ETL/CDC 引擎:`Source → Transform → Sink`。
-> 支持 MySQL binlog / PostgreSQL 逻辑复制 / Kafka / 文件 / HTTP / Redis 作为源,
-> ClickHouse / MySQL / PostgreSQL / Doris / Elasticsearch / Kafka / Redis / S3 / JDBC 作为目标。
-> 单机用 SQLite(零外部依赖);可扩展用 MySQL/PostgreSQL 共享存储 + master-worker 分片。
+> **OpenETL-Go** is a single-binary, plugin-based ETL/CDC engine: `Source → Transform → Sink`.
+> Sources: MySQL binlog / PostgreSQL logical replication / Kafka / File / HTTP / Redis.
+> Sinks: ClickHouse / MySQL / PostgreSQL / Doris / Elasticsearch / Kafka / Redis / S3 / JDBC.
+> Standalone mode uses SQLite (zero external dependencies); scale-out uses MySQL/PostgreSQL shared storage + master-worker sharding.
 
-## 能力一览
+## Capability Matrix
 
-| 阶段 | 支持的连接器 / 算子 |
-|------|---------------------|
-| **Source** | `mysql_cdc`(binlog)、`mysql_snapshot_cdc`(快照+增量衔接)、`postgres_cdc`(逻辑复制)、`mysql_batch`、`kafka`、`redis`(SCAN)、`http`(分页+断点)、`file`(JSON/CSV) |
-| **Transform** | `filter`(表达式)、`deduplicate`、`validate`、`rename`/`drop_field`/`add_field`、`type_convert`、`enricher`、`lookup`、`join`、`window`、`router`(条件路由)、`fanout`、`tap`、`rate_limiter`、`ts`;脚本扩展:`lua`(默认)、`javascript`(QuickJS)、WASM 插件 |
-| **Sink** | `clickhouse`(自动建表+DDL 翻译)、`mysql`/`postgres`(批量+幂等 upsert)、`doris`(Stream Load)、`kafka`(幂等生产者)、`elasticsearch`、`redis`、`s3`/minio、`jdbc`、`file` |
-| **可靠性** | at-least-once + 幂等 sink + DLQ 死信队列 + 三态断路器 + 指数退避重试 + checkpoint;**零静默数据丢失**(SPEC §6.1) |
-| **执行模式** | 线性 pipeline / DAG 多源多汇 / ParallelRunner 分片 / master-worker 真分布式(A11-redo 验证) |
-| **运维** | REST API `/api/v2/*`、preflight 预检、Prometheus `/metrics`、JSON 结构化日志、SQLite/MySQL/PG 元存储、Web 管理界面 |
+| Stage | Connectors / Operators |
+|-------|----------------------|
+| **Source** | `mysql_cdc` (binlog), `mysql_snapshot_cdc` (snapshot+CDC handoff), `postgres_cdc` (logical replication), `mysql_batch`, `kafka`, `redis` (SCAN), `http` (paginated+checkpoint), `file` (JSON/CSV) |
+| **Transform** | `filter` (expression engine), `deduplicate`, `validate` (8 rule types), `rename`/`drop_field`/`add_field`, `type_convert`, `enricher`, `lookup`, `join`, `window`, `router` (conditional routing), `fanout`, `tap`, `rate_limiter`; scripting: `lua` (default, gopher-lua), `javascript`/`typescript` (QuickJS, CGO), WASM plugins (extism) |
+| **Sink** | `clickhouse` (auto-create + DDL translation), `mysql`/`postgres` (batch + idempotent upsert), `doris` (Stream Load), `kafka` (idempotent producer), `elasticsearch` (bulk API, round-robin), `redis` (HASH/STRING/LIST), `s3`/minio (multipart, Parquet), `jdbc` (any JDBC DB), `file` |
+| **Reliability** | at-least-once + idempotent sinks + DLQ dead-letter queue + 3-state circuit breaker + exponential backoff retry + checkpoint; **zero silent data loss** (SPEC §6.1) |
+| **Execution Modes** | Linear pipeline / DAG multi-source multi-sink / ParallelRunner sharding / master-worker distributed (A11-redo verified) |
+| **Operations** | REST API `/api/v2/*`, preflight checks, Prometheus `/metrics`, JSON structured logging, SQLite/MySQL/PostgreSQL metastore, Web management UI |
 
-## 🚀 5 分钟快速开始
+## 🚀 5-Minute Quickstart
 
 ```bash
-# 1. 启动依赖(MySQL 源 + ClickHouse 目标)
+# 1. Start dependencies (MySQL source + ClickHouse target)
 podman compose -f docker-compose.quickstart.yml up -d
-# 2. 示例管道 MySQL CDC -> ClickHouse(自动建表)已在 pipes-quickstart/ 提供
-#    也可以直接用: pipes/mysql-cdc-to-clickhouse.yaml
-# 3. 打开管理界面: http://localhost:8000   (REST API: /api/v2/*)
+
+# 2. Example pipeline MySQL CDC → ClickHouse (auto-create) is in pipes-quickstart/
+#    You can also use: pipes/mysql-cdc-to-clickhouse.yaml
+
+# 3. Open the management UI: http://localhost:8000   (REST API: /api/v2/*)
 ```
 
-- **示例 spec**:`pipes-quickstart/mysql-to-clickhouse.yaml`、`pipes/mysql-cdc-to-clickhouse.yaml`
-- **完整入门**:[`docs/quickstart.md`](./docs/quickstart.md)
+- **Example specs**: `pipes-quickstart/mysql-to-clickhouse.yaml`, `pipes/mysql-cdc-to-clickhouse.yaml`
+- **Full walkthrough**: [`docs/quickstart.md`](./docs/quickstart.md)
 
-## 安装
+## Installation
 
-### 从 Release 下载(推荐)
+### Download Release (Recommended)
 
-到 [Releases](../../releases) 下载对应平台的压缩包(Linux/macOS/Windows × amd64/arm64),解压后:
+Go to [Releases](../../releases) and download the archive for your platform (Linux/macOS/Windows × amd64/arm64), then:
 
 ```bash
-./openetl-go                           # 默认读取 manifest/config/config.yaml
+tar -xzf openetl-go_*.tar.gz
+./openetl-go                           # reads manifest/config/config.yaml by default
 ```
 
 ### Docker
@@ -47,45 +50,120 @@ docker run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
   ghcr.io/a8851625/openetl-go:latest
 ```
 
-### 从源码构建
+### Build from Source
 
 ```bash
-go build -o openetl-go .                # 默认构建(纯 Go,含 Lua)
-# 可选运行时:
-go build -tags=extism -o openetl-go .   # 启用 WASM 插件(wazero,纯 Go)
-go build -tags=nolua -o openetl-go .    # 剥离 Lua 运行时,进一步瘦身
-CGO_ENABLED=1 go build -o openetl-go .  # 启用 JavaScript/TypeScript transform(QuickJS,需 CGO)
+go build -o openetl-go .                # Default build (pure Go, includes Lua)
+# Optional runtimes:
+go build -tags=extism -o openetl-go .   # Enable WASM plugins (wazero, pure Go)
+go build -tags=nolua -o openetl-go .    # Strip Lua runtime for a smaller binary
+CGO_ENABLED=1 go build -o openetl-go .  # Enable JS/TS transforms (QuickJS, requires CGO)
 ```
 
-## 构建标签
+## Build Tags
 
-| 标签 | 效果 | 默认 |
-|------|------|------|
-| *(无)* | 纯 Go 核心 + 全部 sink + Lua;无 WASM、无 QuickJS、无 CGO | ✅ |
-| `-tags=extism` | + WASM 插件运行时(wazero,纯 Go) | — |
-| `-tags=nolua` | 剥离 Lua 运行时(`type:lua` 返回清晰错误),进一步瘦身 | — |
-| `CGO_ENABLED=1` | + JavaScript/TypeScript transform(QuickJS,需 C 工具链) | — |
+| Tag | Effect | Default |
+|-----|--------|---------|
+| *(none)* | Pure Go core + all sinks/sources + Lua (gopher-lua); no WASM, no QuickJS, no CGO | ✅ |
+| `-tags=extism` | + WASM plugin runtime (wazero, pure Go) | — |
+| `-tags=nolua` | Strip Lua runtime (`type:lua` returns a clear error); smaller binary | — |
+| `CGO_ENABLED=1` | + JavaScript/TypeScript transform (QuickJS, requires C toolchain) | — |
 
-## 运行模式
+## Running Modes
 
-- **单机(默认)**:SQLite 存储,零外部依赖,一个进程跑全部管道。
-- **可扩展**:把 `etl.storage.type` 切到 `mysql`/`postgresql`,用 `etl.role=master` + 多个 `etl.role=worker` 跑真分布式分片(线性 spec 跨 worker 不重叠分发,worker 崩溃后分片重分配)。
+- **Standalone (default)**: SQLite storage, zero external dependencies, one process runs all pipelines.
+- **Scalable**: Switch `etl.storage.type` to `mysql` or `postgresql`, then use `etl.role=master` + multiple `etl.role=worker` for true distributed sharding (linear specs distributed across workers with no overlap; worker crash triggers shard reassignment).
 
-最小配置见 [`manifest/config/config.yaml`](./manifest/config/config.yaml);详细字段见 [`docs/etl-config-schema.md`](./docs/etl-config-schema.md)。
+Minimal config at [`manifest/config/config.yaml`](./manifest/config/config.yaml); full field reference at [`docs/etl-config-schema.md`](./docs/etl-config-schema.md).
 
-## 文档
+## Architecture
 
-- [`docs/quickstart.md`](./docs/quickstart.md) — 5 分钟入门
-- [`docs/etl-api.md`](./docs/etl-api.md) — REST API
-- [`docs/etl-config-schema.md`](./docs/etl-config-schema.md) — 配置字段
-- [`docs/etl-idempotency.md`](./docs/etl-idempotency.md) — 幂等与 exactly-once 语义
-- [`docs/parallelism-and-batching.md`](./docs/parallelism-and-batching.md) — 并行与批处理
-- [`SPEC.md`](./SPEC.md) — 架构与生产就绪标准
+### Pipeline Model
 
-## 贡献
+```
+┌──────────┐     ┌──────────────────┐     ┌──────────┐
+│  Source   │ ──► │  Transform Chain  │ ──► │   Sink   │
+│ (read)    │     │ (filter/enrich/…) │     │ (write)  │
+└──────────┘     └──────────────────┘     └──────────┘
+       │                                        │
+       └──────────── checkpoint ◄───────────────┘
+                         │
+                    DLQ (failed records)
+```
 
-见 [`CONTRIBUTING.md`](./CONTRIBUTING.md)。改动前请先阅读 SPEC 的代码风格与测试约定(§3-§5);默认 `-race` 跑测试。
+### Execution Modes
+
+| Mode | Use Case | Config |
+|------|----------|--------|
+| **Linear Pipeline** | Single source → transforms → single sink | `spec.source` + `spec.sink` |
+| **DAG** | Multi-source, multi-sink, conditional edges | `spec.dag.nodes` + `spec.dag.edges` |
+| **ParallelRunner** | Single source, N parallel shards writing independently | `parallelism.count: N` |
+| **Master-Worker** | Distributed across multiple processes/nodes | `etl.role: master\|worker` |
+
+### Storage Backend
+
+| Backend | Use Case | Config |
+|---------|----------|--------|
+| **SQLite** | Standalone, zero-dependency deployments | `etl.storage.type: sqlite` (default) |
+| **MySQL** | Multi-node shared state | `etl.storage.type: mysql` |
+| **PostgreSQL** | Multi-node shared state | `etl.storage.type: postgresql` |
+
+### Reliability Stack
+
+1. **At-least-once delivery**: Checkpoints advance only after sink write succeeds
+2. **Idempotent sinks**: MySQL/PostgreSQL upsert, ClickHouse ReplacingMergeTree, ES document `_id`
+3. **DLQ (Dead Letter Queue)**: Failed records persisted with error classification; list/replay/delete via API
+4. **Circuit Breaker**: Per-sink 3-state breaker (closed→open→half-open) prevents cascading failures
+5. **Exponential Backoff**: `retry.Do` with configurable initial/max intervals on transient errors
+6. **Panic Recovery**: Per-goroutine recovery in readLoop/writeLoop; panics route to DLQ
+
+## Security
+
+### API Authentication
+```bash
+# Enable token auth (required for production)
+export ETL_API_TOKEN=$(openssl rand -hex 32)
+
+# Clients pass token via header
+curl -H "X-API-Token: $ETL_API_TOKEN" http://localhost:8000/api/v2/pipelines
+curl -H "Authorization: Bearer $ETL_API_TOKEN" http://localhost:8000/api/v2/pipelines
+```
+
+### Spec Encryption
+```bash
+# Encrypt pipeline specs at rest in the database
+export ETL_SPEC_ENCRYPTION_KEY=$(openssl rand -base64 32)
+```
+
+### TLS
+```bash
+# Enable TLS on the API server
+export ETL_TLS_CERT=/path/to/cert.pem
+export ETL_TLS_KEY=/path/to/key.pem
+```
+
+### Alerting
+```bash
+# Configure alert channels for DLQ overflow / breaker trips
+export ALERT_DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=...
+export ALERT_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/...
+export ALERT_SLACK_WEBHOOK=https://hooks.slack.com/services/...
+```
+
+## Documentation
+
+- [`docs/quickstart.md`](./docs/quickstart.md) (EN) | [`docs/quickstart.zh.md`](./docs/quickstart.zh.md) (中文) — 5-minute walkthrough
+- [`docs/etl-api.md`](./docs/etl-api.md) (EN) | [`docs/etl-api.zh.md`](./docs/etl-api.zh.md) (中文) — REST API reference
+- [`docs/etl-config-schema.md`](./docs/etl-config-schema.md) (EN) | [`docs/etl-config-schema.zh.md`](./docs/etl-config-schema.zh.md) (中文) — Config field reference
+- [`docs/etl-idempotency.md`](./docs/etl-idempotency.md) (EN) | [`docs/etl-idempotency.zh.md`](./docs/etl-idempotency.zh.md) (中文) — Idempotency & exactly-once semantics
+- [`docs/parallelism-and-batching.md`](./docs/parallelism-and-batching.md) (EN) | [`docs/parallelism-and-batching.zh.md`](./docs/parallelism-and-batching.zh.md) (中文) — Parallelism & batching
+- [`SPEC.md`](./SPEC.md) — Architecture & production-readiness standard
+- [`CHANGELOG.md`](./CHANGELOG.md) (EN) | [`CHANGELOG.zh.md`](./CHANGELOG.zh.md) (中文) — Release notes
+
+## Contributing
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) (EN) | [`CONTRIBUTING.zh.md`](./CONTRIBUTING.zh.md) (中文). Please read SPEC's code style and testing conventions (§3-§5) before making changes; tests run with `-race` by default.
 
 ## License
 
-MIT,见 [`LICENSE`](./LICENSE)。
+MIT, see [`LICENSE`](./LICENSE).

@@ -1,50 +1,50 @@
-# Sync Canal ETL — 快速入门 / Quick Start
+# ETL/CDC Quick Start
 
-> 轻量级声明式 ETL/CDC 数据同步平台。YAML 定义管道，支持 MySQL CDC、Kafka、ClickHouse、PostgreSQL、Doris、Elasticsearch、S3 等 20+ 连接器。
+> Lightweight declarative ETL/CDC data sync platform. Define pipelines in YAML. 20+ connectors including MySQL CDC, Kafka, ClickHouse, PostgreSQL, Doris, Elasticsearch, S3.
 
 ---
 
-## 1. 环境准备 (5 分钟)
+## 1. Environment Setup (5 minutes)
 
-### Docker Compose 一键启动
+### One-Click Docker Compose
 
 ```bash
-# 克隆项目
+# Clone the repo
 git clone <repo-url> openetl-go
 cd openetl-go
 
-# 启动全部依赖 (MySQL, ClickHouse, MinIO, Redpanda) + ETL 服务
+# Start all dependencies (MySQL, ClickHouse, MinIO, Redpanda) + ETL service
 podman-compose -f docker-compose.dev.yml up -d
 
-# 验证服务
+# Verify
 curl http://localhost:8000/api/v2/health
 # → {"status":"ok","storage":"ok",...}
 ```
 
-### 配置 API Token (生产必选)
+### Configure API Token (Required for Production)
 
 ```bash
-# 生成随机 token
+# Generate a random token
 export ETL_API_TOKEN=$(openssl rand -hex 16)
 
-# (可选) 生成 spec 加密密钥
+# (Optional) Generate spec encryption key
 export ETL_SPEC_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
-# 重启服务使配置生效
+# Restart the service
 podman-compose -f docker-compose.dev.yml restart openetl-go
 ```
 
 ---
 
-## 2. 创建第一个管道 (3 分钟)
+## 2. Create Your First Pipeline (3 minutes)
 
-### 方式一：Web UI 设计器
+### Option 1: Web UI Designer
 
-访问 `http://localhost:8000/#/designer`，可视化拖拽构建管道。
+Visit `http://localhost:8000/#/designer` and drag-and-drop to build pipelines visually.
 
-### 方式二：YAML 声明式
+### Option 2: YAML Declaration
 
-创建文件 `pipes/my-first-pipeline.yaml`：
+Create `pipes/my-first-pipeline.yaml`:
 
 ```yaml
 name: mysql-to-clickhouse
@@ -81,9 +81,9 @@ flush_interval_ms: 1000
 checkpoint_interval_sec: 30
 ```
 
-管道文件会被 **热加载**（无需重启），几秒后自动出现在 `http://localhost:8000/#/pipelines`。
+Pipeline files are **hot-reloaded** (no restart needed). They appear at `http://localhost:8000/#/pipelines` within seconds.
 
-### 方式三：API 创建
+### Option 3: API Creation
 
 ```bash
 curl -X POST http://localhost:8000/api/v2/pipelines \
@@ -94,127 +94,177 @@ curl -X POST http://localhost:8000/api/v2/pipelines \
 
 ---
 
-## 3. 管道管理
+## 3. Pipeline Management
 
 ```bash
-# 列出所有管道
+# List all pipelines
 curl -H "X-API-Token: $TOKEN" http://localhost:8000/api/v2/pipelines
 
-# 启动/停止/暂停/恢复
+# Start / Stop / Pause / Resume
 curl -X POST -H "X-API-Token: $TOKEN" http://localhost:8000/api/v2/pipelines/my-pipeline/start
 curl -X POST -H "X-API-Token: $TOKEN" http://localhost:8000/api/v2/pipelines/my-pipeline/stop
 curl -X POST -H "X-API-Token: $TOKEN" http://localhost:8000/api/v2/pipelines/my-pipeline/pause
 curl -X POST -H "X-API-Token: $TOKEN" http://localhost:8000/api/v2/pipelines/my-pipeline/resume
 
-# 查看指标
+# View metrics
 curl -H "X-API-Token: $TOKEN" http://localhost:8000/api/v2/metrics
 
-# Prometheus 格式
+# Prometheus format
 curl http://localhost:8000/metrics
 ```
 
 ---
 
-## 4. 连接器一览
+## 4. Connector Reference
 
-| 类型 | 连接器 | 说明 |
-|------|--------|------|
-| **Source** | `mysql_cdc` | MySQL binlog 增量 (支持 GTID) |
-| | `mysql_snapshot_cdc` | MySQL 全量+增量 |
-| | `mysql_batch` | MySQL 批量读取 |
-| | `postgres_cdc` | PostgreSQL 逻辑复制 |
-| | `kafka` | Kafka 消费者 |
-| | `file` | 文件读取 (JSONL/CSV) |
-| | `http` | HTTP API 轮询 |
-| **Sink** | `clickhouse` | ClickHouse (自动建表/Schema漂移) |
-| | `mysql` | MySQL (INSERT/UPSERT/DELETE) |
-| | `postgres` | PostgreSQL (INSERT/UPSERT) |
-| | `kafka` | Kafka 生产者 (幂等) |
-| | `elasticsearch` | ES 批量索引 |
-| | `doris` | Doris (Stream Load + MySQL协议) |
-| | `s3` | S3/MinIO (Parquet/JSON) |
-| | `file_sink` | 本地文件 |
-| **Transform** | `filter`, `rename`, `add_field`, `drop_field`, `type_convert` | 基础转换 |
-| | `lua` | Lua 脚本 (内联) |
-| | `validate` | 数据校验 (8种规则) |
-| | `join` | 流流 JOIN |
-| | `window` | 窗口聚合 |
-| | `router`, `fanout` | 路由分发 |
-| | `enricher`, `lookup` | 数据增强 |
-
----
-
-## 5. 关键配置说明
-
-| 配置 | 默认值 | 说明 |
-|------|--------|------|
-| `batch_size` | 1000 | 每批最大记录数 |
-| `flush_interval_ms` | 1000 | 多久 flush 一次 |
-| `checkpoint_interval_sec` | 30 | 检查点保存频率 |
-| `backpressure_buffer` | 100 | Source↔Sink 缓冲区 |
-| `parallelism.count` | 1 | 并行实例数 |
-| `parallelism.shard_strategy` | round_robin | 分片策略 |
+| Category | Connector | Description |
+|----------|-----------|-------------|
+| **Source** | `mysql_cdc` | MySQL binlog CDC (supports GTID) |
+| | `mysql_snapshot_cdc` | MySQL full snapshot + incremental CDC handoff |
+| | `mysql_batch` | MySQL batch read (supports custom SQL queries) |
+| | `postgres_cdc` | PostgreSQL logical replication (pgoutput) |
+| | `kafka` | Kafka consumer group |
+| | `redis` | Redis SCAN full read |
+| | `file` | File read (JSONL/CSV) |
+| | `http` | HTTP API paginated polling |
+| **Sink** | `clickhouse` | ClickHouse (auto-create / schema drift / DDL translation) |
+| | `mysql` | MySQL (INSERT / UPSERT / DELETE, auto-create) |
+| | `postgres` | PostgreSQL (INSERT / UPSERT, auto-create) |
+| | `kafka` | Kafka producer (idempotent) |
+| | `elasticsearch` | ES bulk indexing (multi-host round-robin, 429 retry) |
+| | `doris` | Doris (Stream Load + MySQL protocol DELETE) |
+| | `redis` | Redis (HASH/STRING/LIST modes) |
+| | `s3` | S3/MinIO (Parquet/JSON, multipart upload) |
+| | `jdbc` | Any JDBC database |
+| | `file_sink` | Local file output |
+| **Transform** | `filter`, `rename`, `add_field`, `drop_field`, `type_convert` | Basic transforms |
+| | `deduplicate`, `validate` | Data cleansing |
+| | `lua` | Lua scripting (inline, gopher-lua pure Go) |
+| | `join`, `window` | Stream-stream JOIN / windowed aggregation |
+| | `router`, `fanout`, `tap` | Conditional routing / fan-out / tap |
+| | `enricher`, `lookup` | Data enrichment / dimension lookup |
+| | `rate_limiter` | Rate limiting |
 
 ---
 
-## 6. 生产部署检查清单
+## 5. Key Configuration
 
-- [ ] 设置 `ETL_API_TOKEN` 环境变量
-- [ ] 设置 `ETL_SPEC_ENCRYPTION_KEY` 加密 spec
-- [ ] 配置 TLS (`ETL_TLS_CERT`, `ETL_TLS_KEY`)
-- [ ] 配置告警渠道 (`ALERT_DINGTALK_WEBHOOK` / `ALERT_FEISHU_WEBHOOK` / `ALERT_SLACK_WEBHOOK`)
-- [ ] 设置 DLQ 过期 (`ETL_DLQ_TTL=168h`)
-- [ ] 验证所有 CDC 管道使用幂等 sink (UPSERT 模式)
-- [ ] 数据库用户授予复制权限 (`REPLICATION SLAVE`, `REPLICATION CLIENT`)
-- [ ] MySQL binlog 配置 `ROW` 格式 + `FULL` row image
-
----
-
-## 7. API 文档
-
-- **Swagger UI**: `http://localhost:8000/api/v2/docs`
-- **OpenAPI Spec**: `http://localhost:8000/api/v2/openapi.yaml`
-- **完整 API 文档**: `docs/etl-api.md`
-- **配置 Schema**: `docs/etl-config-schema.md`
-- **幂等性说明**: `docs/etl-idempotency.md`
+| Config | Default | Description |
+|--------|---------|-------------|
+| `batch_size` | 1000 | Max records per batch |
+| `flush_interval_ms` | 1000 | Batch flush interval (ms) |
+| `checkpoint_interval_sec` | 30 | Checkpoint save interval (seconds) |
+| `backpressure_buffer` | 100 | Source↔Sink channel buffer size |
+| `parallelism.count` | 1 | Number of parallel shard instances |
+| `parallelism.shard_strategy` | round_robin | Shard strategy |
+| `retry.max_attempts` | 3 | Max retry attempts |
+| `retry.initial_interval_ms` | 1000 | Initial retry interval |
+| `retry.max_interval_ms` | 30000 | Max retry interval |
+| `dlq.enable` | true | Enable dead-letter queue |
 
 ---
 
-## 8. 常见问题
+## 6. Production Deployment Checklist
 
-### Q: 管道创建失败提示 "unsafe pipeline"?
-CDC 源 + 非幂等 sink (file_sink/s3) 会被拦截。请使用 MySQL/ClickHouse/Doris 的 UPSERT 模式。
+- [ ] Set `ETL_API_TOKEN` environment variable
+- [ ] Set `ETL_SPEC_ENCRYPTION_KEY` to encrypt specs at rest
+- [ ] Configure TLS (`ETL_TLS_CERT`, `ETL_TLS_KEY`)
+- [ ] Configure alert channels (`ALERT_DINGTALK_WEBHOOK` / `ALERT_FEISHU_WEBHOOK` / `ALERT_SLACK_WEBHOOK`)
+- [ ] Set DLQ TTL (`ETL_DLQ_TTL=168h`)
+- [ ] Verify all CDC pipelines use idempotent sinks (UPSERT mode)
+- [ ] Grant replication privileges to database users (`REPLICATION SLAVE`, `REPLICATION CLIENT`)
+- [ ] Configure MySQL `binlog_format=ROW` + `binlog_row_image=FULL`
+- [ ] Configure PostgreSQL `wal_level=logical`
+- [ ] Set resource limits (CPU/memory via Docker or systemd)
 
-### Q: 如何从特定时间点回填数据?
+---
+
+## 7. FAQ
+
+### Q: Pipeline creation fails with "unsafe pipeline"?
+CDC source + non-idempotent sink (file_sink/s3) is blocked by default. Use MySQL/ClickHouse/Doris UPSERT mode, or explicitly set `allow_unsafe: true` in the spec.
+
+### Q: How to backfill data from a specific point in time?
 ```yaml
 source:
   type: mysql_cdc
   config:
-    start_from: "2026-06-01T00:00:00Z"  # RFC3339 时间戳
-    # 或: start_from: "binlog:mysql-bin.000003:12345"
-    # 或: start_from: "gtid:3E11FA47-...:1-100"
+    start_from: "2026-06-01T00:00:00Z"  # RFC3339 timestamp
+    # Or specify binlog position:
+    # start_from: "binlog:mysql-bin.000003:12345"
+    # Or specify GTID:
+    # start_from: "gtid:3E11FA47-...:1-100"
 ```
 
-### Q: 如何暂停管道不丢数据?
-使用 `pause` (而非 `stop`)。Pause 暂停源读取但保留 checkpoint，`resume` 从同一位置继续。
+### Q: How to pause a pipeline without losing data?
+Use `pause` (not `stop`). Pause halts source reading but preserves the checkpoint; `resume` continues from the same position.
 
-### Q: DLQ 中的记录如何查看内容?
-DLQ 页面点击每条的 "▼ Data" 展开查看完整 JSON 数据，支持单条 replay。
+### Q: How to view and replay DLQ records?
+The DLQ page shows each record's full JSON data via "▼ Data" expand. Filter and replay:
+```bash
+# Replay by error message
+curl -X POST -H "X-API-Token: $TOKEN" \
+  'http://localhost:8000/api/v2/dlq/my-pipeline/replay?error_contains=Duplicate'
+
+# Replay by time range
+curl -X POST -H "X-API-Token: $TOKEN" \
+  'http://localhost:8000/api/v2/dlq/my-pipeline/replay?from=2026-06-01T00:00:00Z'
+```
+
+### Q: Pipeline starts but produces no data?
+Run a preflight check:
+```bash
+curl -X POST -H "X-API-Token: $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @pipes/my-pipeline.yaml \
+  http://localhost:8000/api/v2/specs/validate
+```
+Common causes: wrong binlog format, missing replication grants, source table doesn't exist, network issues.
+
+### Q: How to monitor pipeline status?
+- **Web UI**: Dashboard page shows real-time metrics
+- **Prometheus**: `curl http://localhost:8000/metrics`
+- **API**: `curl -H "X-API-Token: $TOKEN" http://localhost:8000/api/v2/metrics`
+- **Logs**: Set `LOGGER_FORMAT=json` for structured JSON logging
+
+### Q: ClickHouse auto-create produces wrong column types?
+Auto-create infers types by sampling data values. For precise type mapping, create the table manually in ClickHouse first, then set `auto_create: false`.
+
+### Q: How to configure distributed deployment?
+```yaml
+# Master node
+etl:
+  role: master
+  storage:
+    type: mysql
+    # ... MySQL connection config
+
+# Worker node
+etl:
+  role: worker
+  storage:
+    type: mysql
+    # ... same MySQL connection config
+```
+Master schedules tasks; workers execute shards. Crashed worker shards are automatically reassigned.
 
 ---
 
-## 9. 示例管道
+## 8. Example Pipelines
 
-`pipes/` 目录包含 9 个完整示例：
-- `file-to-file.yaml` — 最简 file→file
-- `mysql-batch-to-mysql.yaml` — MySQL 批量同步
-- `kafka-to-clickhouse.yaml` — Kafka 消费到 ClickHouse
-- `order-analytics.yaml` — 窗口聚合 + JOIN 示例
+The `pipes/` directory contains complete examples:
+- `file-to-file.yaml` — Minimal file→file
+- `mysql-batch-to-mysql.yaml` — MySQL batch sync
+- `mysql-cdc-to-clickhouse.yaml` — MySQL CDC→ClickHouse (auto-create)
+- `order-realtime-analytics.yaml` — Window aggregation + JOIN real-time analytics
+- `ultimate-complex-demo.yaml` — DAG multi-source multi-sink complex scenario
 
 ---
 
-## 10. 获取帮助
+## 9. Getting Help
 
-- **GitHub Issues**: 报告 Bug / 功能需求
+- **GitHub Issues**: Bug reports / feature requests
 - **API Docs**: `/api/v2/docs` (Swagger UI)
-- **示例管道**: `pipes/` 目录
+- **Example Pipelines**: `pipes/` directory
+- **Config Reference**: [`docs/etl-config-schema.md`](./etl-config-schema.md)
+- **API Reference**: [`docs/etl-api.md`](./etl-api.md)
