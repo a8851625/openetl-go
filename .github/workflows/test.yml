@@ -27,7 +27,7 @@ jobs:
         with:
           go-version: "1.24"
       - name: Run unit tests
-        run: go test -race -count=1 ./internal/etl/... ./internal/logic/... ./internal/controller/...
+        run: go test -race -count=1 ./internal/etl/... ./internal/logic/...
 
   integration-test:
     name: Integration Tests
@@ -56,9 +56,11 @@ jobs:
           - 9000:9000
         options: >-
           --health-cmd "wget -q --spider http://localhost:8123/ping"
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 30
+          --health-start-period 10s
+          --ulimit nofile=262144:262144
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

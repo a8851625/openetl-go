@@ -113,7 +113,6 @@ func (a *DLQWriterAdapter) Read(ctx context.Context, jobName string, limit int) 
 
 // ReadFiltered returns dead-letter records matching the filter criteria.
 func (a *DLQWriterAdapter) ReadFiltered(ctx context.Context, filter DLQFilter) ([]DLQRecord, error) {
-	filter.JobName = filter.JobName
 	recs, err := a.store.ListDeadLetters(ctx, filter)
 	if err != nil {
 		return nil, err
