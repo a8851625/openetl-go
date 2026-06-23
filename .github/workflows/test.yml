@@ -55,17 +55,29 @@ jobs:
           - 8123:8123
           - 9000:9000
         options: >-
-          --health-cmd "wget -q --spider http://localhost:8123/ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 30
-          --health-start-period 10s
           --ulimit nofile=262144:262144
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+      - name: Wait for ClickHouse
+        run: |
+          for i in $(seq 1 180); do
+            if curl -fsS http://127.0.0.1:8123/ping >/dev/null 2>&1 || \
+               curl -fsS http://default:dzh123456@127.0.0.1:8123/ping >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          docker ps -a
+          cid="$(docker ps -aq --filter ancestor=clickhouse/clickhouse-server:24.3-alpine | head -n 1)"
+          if [ -n "$cid" ]; then
+            docker logs "$cid" || true
+            docker exec "$cid" sh -c 'tail -200 /var/log/clickhouse-server/clickhouse-server.err.log 2>/dev/null || true'
+          fi
+          exit 1
       - name: Run integration tests
         env:
           MYSQL_HOST: 127.0.0.1
