@@ -14,13 +14,16 @@ source:
     tables: [customers, orders, products]
 
 # Sink: ClickHouse — auto-creates tables with ReplacingMergeTree dedup.
+# protocol: http uses port 8123 (works out-of-the-box with the quickstart
+# ClickHouse image); native (9000) works when the default user has no password.
 sink:
   type: clickhouse
   config:
     host: quickstart-clickhouse
-    port: 9000
+    port: 8123
+    protocol: http
     user: default
-    password: ""
+    password: "clickhouse"
     database: dzh3136_go
     auto_create: true
     batch_size: 500

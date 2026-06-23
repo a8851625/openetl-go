@@ -50,7 +50,7 @@ services:
     restart: unless-stopped
     environment:
       CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_PASSWORD: "clickhouse"
       TZ: UTC
     ports:
       - "8124:8123"
