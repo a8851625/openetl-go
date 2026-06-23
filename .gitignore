@@ -37,6 +37,18 @@ addons/*
 dzhcore
 /data
 
+# E2E test runtime output directories
+/data-*
+
+# Playwright CLI recordings
+/.playwright-cli/
+
+# Screenshots (legacy, keep out of repo)
+/screenshots/
+
+# Utility (legacy, keep out of repo)
+/utility/
+
 # 但不忽略这三个子目录及其内容
 !addons/dict/
 !addons/space/

@@ -1,9 +1,0 @@
-{
-  "id": "file-to-kafka-1781279964307622790",
-  "job_name": "file-to-kafka",
-  "source": "file",
-  "position": {
-    "offset": 248
-  },
-  "timestamp": "2026-06-12T15:59:24.307623915Z"
-}
