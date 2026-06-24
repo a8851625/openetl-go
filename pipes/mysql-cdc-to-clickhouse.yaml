@@ -22,7 +22,7 @@ sink:
     host: clickhouse
     port: 9000
     user: default
-    password: ""
+    password: "dzh123456"
     database: dzh3136_go
     auto_create: true
     schema_drift: add_columns

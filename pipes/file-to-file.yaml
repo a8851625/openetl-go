@@ -2,7 +2,7 @@ name: "file-to-file"
 source:
   type: file
   config:
-    path: "/app/testdata/files/customers.jsonl"
+    path: "/app/data/input/customers.jsonl"
     format: "json"
 
 transforms:

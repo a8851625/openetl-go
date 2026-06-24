@@ -61,6 +61,51 @@ func buildInsertMsg(relID uint32, vals []any) []byte {
 	return buf
 }
 
+func buildOriginMsg(name string) []byte {
+	var buf []byte
+	buf = append(buf, 'O')
+	buf = append(buf, make([]byte, 8)...)
+	buf = append(buf, []byte(name)...)
+	buf = append(buf, 0)
+	return buf
+}
+
+func buildTypeMsg(ns, name string) []byte {
+	var buf []byte
+	buf = append(buf, 'Y')
+	oid := make([]byte, 4)
+	binary.BigEndian.PutUint32(oid, 1234)
+	buf = append(buf, oid...)
+	buf = append(buf, []byte(ns)...)
+	buf = append(buf, 0)
+	buf = append(buf, []byte(name)...)
+	buf = append(buf, 0)
+	return buf
+}
+
+func buildLogicalMessageMsg(prefix string, content []byte) []byte {
+	var buf []byte
+	buf = append(buf, 'M')
+	buf = append(buf, 0)
+	buf = append(buf, make([]byte, 8)...)
+	buf = append(buf, []byte(prefix)...)
+	buf = append(buf, 0)
+	cl := make([]byte, 4)
+	binary.BigEndian.PutUint32(cl, uint32(len(content)))
+	buf = append(buf, cl...)
+	buf = append(buf, content...)
+	return buf
+}
+
+func buildWALDataFrame(payload ...[]byte) []byte {
+	frame := make([]byte, 20)
+	binary.BigEndian.PutUint64(frame[0:8], 0x100000002)
+	for _, p := range payload {
+		frame = append(frame, p...)
+	}
+	return frame
+}
+
 func formatValueStr(v any) string {
 	switch x := v.(type) {
 	case string:
@@ -209,6 +254,35 @@ func TestParseInsertMsgUsesCatalog(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected record on channel")
+	}
+}
+
+func TestHandleWALDataSkipsNonRowPgoutputMessages(t *testing.T) {
+	r := newTestReader()
+	r.catalog.setRelation(1, "users", []pgColumnInfo{
+		{Name: "id", TypeOID: 23},
+		{Name: "name", TypeOID: 25},
+	})
+
+	r.handleWALData(context.Background(), buildWALDataFrame(
+		buildOriginMsg("upstream"),
+		buildInsertMsg(1, []any{1, "alice"}),
+		buildTypeMsg("public", "custom_type"),
+		buildLogicalMessageMsg("audit", []byte("ignored")),
+		buildInsertMsg(1, []any{2, "bob"}),
+	))
+
+	var got []core.Record
+	for i := 0; i < 2; i++ {
+		select {
+		case rec := <-r.records:
+			got = append(got, rec)
+		default:
+			t.Fatalf("got %d records, want 2", len(got))
+		}
+	}
+	if got[0].Data["id"] != int32(1) || got[1].Data["id"] != int32(2) {
+		t.Fatalf("ids = %v, %v; want 1, 2", got[0].Data["id"], got[1].Data["id"])
 	}
 }
 

@@ -25,7 +25,7 @@
 #   ✓ DLQ enabled
 #   ✓ Retry with exponential backoff
 #
-# Run:  Place test orders in testdata/files/orders.jsonl
+# Run:  Place test orders in data/input/orders.jsonl
 # Out:  data/output/ultimate-demo/
 # ════════════════════════════════════════════════════════════════════
 
@@ -34,7 +34,7 @@ name: ultimate-complex-demo
 source:
   type: file
   config:
-    path: ./testdata/files/orders.jsonl
+    path: ./data/input/orders.jsonl
     format: json
 
 transforms:
@@ -47,7 +47,7 @@ transforms:
   # ── 2. Rate Limiter: throttle to 500 records/sec, burst 200 ──
   - type: rate_limiter
     config:
-      rate: 500
+      rps: 500
       burst: 200
 
   # ── 3a. TS Transform: classify tier + mask credit_card (JavaScript/QuickJS) ──

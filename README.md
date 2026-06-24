@@ -157,6 +157,8 @@ export ALERT_SLACK_WEBHOOK=https://hooks.slack.com/services/...
 - [`docs/etl-config-schema.md`](./docs/etl-config-schema.md) (EN) | [`docs/etl-config-schema.zh.md`](./docs/etl-config-schema.zh.md) (中文) — Config field reference
 - [`docs/etl-idempotency.md`](./docs/etl-idempotency.md) (EN) | [`docs/etl-idempotency.zh.md`](./docs/etl-idempotency.zh.md) (中文) — Idempotency & exactly-once semantics
 - [`docs/parallelism-and-batching.md`](./docs/parallelism-and-batching.md) (EN) | [`docs/parallelism-and-batching.zh.md`](./docs/parallelism-and-batching.zh.md) (中文) — Parallelism & batching
+- [`docs/GITHUB_ACTIONS_DEPLOY.md`](./docs/GITHUB_ACTIONS_DEPLOY.md) (EN) | [`docs/GITHUB_ACTIONS_DEPLOY.zh.md`](./docs/GITHUB_ACTIONS_DEPLOY.zh.md) (中文) — GitHub Actions release and deployment
+- [`docs/SPEC-v2-reaudit-2026-06.md`](./docs/SPEC-v2-reaudit-2026-06.md) (EN) | [`docs/SPEC-v2-reaudit-2026-06.zh.md`](./docs/SPEC-v2-reaudit-2026-06.zh.md) (中文) — v2 production-readiness re-audit
 - [`SPEC.md`](./SPEC.md) — Architecture & production-readiness standard
 - [`CHANGELOG.md`](./CHANGELOG.md) (EN) | [`CHANGELOG.zh.md`](./CHANGELOG.zh.md) (中文) — Release notes
 

@@ -40,6 +40,10 @@ dzhcore
 # E2E test runtime output directories
 /data-*
 
+# ETL runtime state created by package-level tests and ad-hoc local runs.
+/internal/etl/**/data/
+/internal/etl/**/logs/
+
 # Playwright CLI recordings
 /.playwright-cli/
 

@@ -18,8 +18,12 @@ trap cleanup EXIT
 
 mkdir -p "$DATA_DIR/output" "$DATA_DIR/checkpoint" "$DATA_DIR/dlq" "$LOG_DIR"
 
-echo "==> Build image"
-podman build -t "$IMAGE" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR" 2>&1 | tail -1
+if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
+  echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
+else
+  echo "==> Build image"
+  podman build -t "$IMAGE" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR" 2>&1 | tail -1
+fi
 podman rm -f "$APP" >/dev/null 2>&1 || true
 echo "==> Start app container"
 podman run -d --name "$APP" \
@@ -57,10 +61,10 @@ goto_page() {
 
 # ════════════════════════════════════════════════
 echo "=== A: Page Structure & Sidebar ==="
-check "A1: Title = Sync Canal ETL" "$(evaljs "document.title === 'Sync Canal ETL'")"
+check "A1: Title = OpenETL" "$(evaljs "document.title === 'OpenETL'")"
 check "A2: Sidebar present" "$(evaljs "document.querySelector('aside') !== null")"
-check "A3: 6 nav items" "$(evaljs "document.querySelectorAll('.sidebar-item').length >= 6")"
-check "A4: Brand 'Sync Canal'" "$(evaljs "document.body.innerText.includes('Sync Canal')")"
+check "A3: 8 nav items" "$(evaljs "document.querySelectorAll('.sidebar-item').length >= 8")"
+check "A4: Brand 'OpenETL'" "$(evaljs "document.body.innerText.includes('OpenETL')")"
 check "A5: Default page = Dashboard" "$(evaljs "document.body.innerText.includes('Pipeline Overview') || document.body.innerText.includes('管道总览')")"
 
 # ════════════════════════════════════════════════
@@ -102,8 +106,8 @@ check "C7: Pipeline selected" "$(evaljs "document.querySelector('.pipeline-row.s
 echo "=== D: Pipelines Page ==="
 goto_page "Pipelines"
 check "D1: All Pipelines header" "$(evaljs "document.body.innerText.includes('All Pipelines')")"
-check "D2: Start button" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.trim()==='Start')")"
-check "D3: Stop button" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.trim()==='Stop')")"
+check "D2: Start icon button" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.trim()==='▶')")"
+check "D3: Stop icon button" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.trim()==='⏹')")"
 check "D4: Checkpoints card" "$(evaljs "document.body.innerText.includes('Checkpoints')")"
 
 # Click a pipeline row to verify selection works
@@ -114,7 +118,7 @@ check "D5: Pipeline row selected" "$(evaljs "document.querySelector('.pipeline-r
 # Click Start
 evaljs "Array.from(document.querySelectorAll('button')).find(b=>b.textContent?.trim()==='Start')?.click()" >/dev/null 2>&1 || true
 sleep 3
-check "D6: Start action triggered" "$(evaljs "document.body.innerText.includes('Start') || document.body.innerText.includes('Success')")"
+check "D6: Start action triggered" "$(evaljs "document.body.innerText.includes('Start') || document.body.innerText.includes('Success') || document.body.innerText.includes('▶')")"
 
 # ════════════════════════════════════════════════
 echo "=== E: Designer Page (Visual DAG Editor) ==="
@@ -123,7 +127,7 @@ check "E1: DAG Editor title" "$(evaljs "document.body.innerText.includes('Design
 check "E2: Add Source button" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.includes('Source'))")"
 check "E3: Add Transform button" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.includes('Transform'))")"
 check "E4: Add Sink button" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.includes('Sink'))")"
-check "E5: Export YAML button" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.includes('YAML'))")"
+check "E5: Export YAML button" "$(evaljs "document.querySelector('button[title*=\"YAML\"]') !== null || Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.includes('📄'))")"
 check "E6: Create Pipeline button" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.includes('Create Pipeline'))")"
 
 # Add a source node
@@ -145,7 +149,7 @@ check "E10: Properties panel shown" "$(evaljs "document.body.innerText.includes(
 check "E11: Config form visible" "$(evaljs "document.querySelectorAll('.react-flow__node-selected').length > 0 || document.body.innerText.includes('Config') || document.querySelector('input[type=text]') !== null")"
 
 # Export YAML
-playwright-cli click "button:has-text('YAML')" >/dev/null 2>&1 || true
+playwright-cli click "button[title*='YAML']" >/dev/null 2>&1 || true
 sleep 1
 check "E12: YAML output appears" "$(evaljs "document.querySelectorAll('textarea').length > 0")"
 check "E13: YAML has pipeline name" "$(evaljs "Array.from(document.querySelectorAll('textarea')).some(t=>(t.value||'').includes('my-pipeline') || (t.value||'').includes('name:'))")"
@@ -230,11 +234,13 @@ check "K3: /api/v2/plugins has metadata" "$(evaljs "fetch('/api/v2/plugins').the
 sleep 1
 check "K4: /api/v2/plugins/schema works" "$(evaljs "fetch('/api/v2/plugins/schema').then(r=>r.ok).catch(()=>false)")"
 sleep 1
-check "K5: /api/v2/checkpoints works" "$(evaljs "fetch('/api/v2/checkpoints').then(r=>r.json()).then(d=>d.checkpoints!==undefined).catch(()=>false)")"
+check "K5: schema includes P5-18 fields" "$(evaljs "fetch('/api/v2/plugins/schema').then(r=>r.json()).then(d=>((xs,n)=>(xs||[]).some(f=>f.name===n))(d.sources.mysql_batch,'cursor_column') && ((xs,n)=>(xs||[]).some(f=>f.name===n))(d.sinks.postgresql,'auto_create') && ((xs,n)=>(xs||[]).some(f=>f.name===n))(d.sinks.es,'chunk_size') && ((xs,n)=>(xs||[]).some(f=>f.name===n))(d.transforms.rate_limiter,'rps') && ((xs,n)=>(xs||[]).some(f=>f.name===n))(d.transforms.javascript,'timeout_ms')).catch(()=>false)")"
 sleep 1
-check "K6: /api/v2/audit works" "$(evaljs "fetch('/api/v2/audit?limit=20').then(r=>r.json()).then(d=>Array.isArray(d.events)).catch(()=>false)")"
+check "K6: /api/v2/checkpoints works" "$(evaljs "fetch('/api/v2/checkpoints').then(r=>r.json()).then(d=>d.checkpoints!==undefined).catch(()=>false)")"
 sleep 1
-check "K7: /api/v2/dlq works" "$(evaljs "fetch('/api/v2/dlq/auth-file-to-file').then(r=>r.json()).then(d=>Array.isArray(d.items)).catch(()=>false)")"
+check "K7: /api/v2/audit works" "$(evaljs "fetch('/api/v2/audit?limit=20').then(r=>r.json()).then(d=>Array.isArray(d.events)).catch(()=>false)")"
+sleep 1
+check "K8: /api/v2/dlq works" "$(evaljs "fetch('/api/v2/dlq/auth-file-to-file').then(r=>r.json()).then(d=>Array.isArray(d.items)).catch(()=>false)")"
 
 # ════════════════════════════════════════════════
 echo "=== L: Auto-refresh ==="

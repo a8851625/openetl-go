@@ -376,7 +376,7 @@ Mapping the SPEC's bars to the remaining work. Status reflects the **2026-06-21 
 ## 8. Change Control
 
 - This SPEC is versioned (`Status: Stable v2`). Material changes to §1 (objective/modes), §3 (plugin ABI), or §6 (boundaries) require a version bump and user sign-off.
-- Implementation progress is tracked in `TODO.md` and `ROADMAP.md`; this file defines the bar, those track reaching it.
+- Implementation progress is tracked in this SPEC and the paired user-facing docs; this file defines the bar and must stay aligned with the current repository state.
 - **Honesty rule (new in v2):** a claim of "done" is retractable. When a re-audit refutes a prior claim, the SPEC must record it (as ❌ in §7) within the same release — never leave a refuted "✅" standing.
 
 ### 8.1 Historical errata (v1, Phase 2+3) — retained for provenance

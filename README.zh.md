@@ -157,6 +157,8 @@ export ALERT_SLACK_WEBHOOK=https://hooks.slack.com/services/...
 - [`docs/etl-config-schema.zh.md`](./docs/etl-config-schema.zh.md)（中文）| [`docs/etl-config-schema.md`](./docs/etl-config-schema.md) (EN) — 配置字段参考
 - [`docs/etl-idempotency.zh.md`](./docs/etl-idempotency.zh.md)（中文）| [`docs/etl-idempotency.md`](./docs/etl-idempotency.md) (EN) — 幂等与 exactly-once 语义
 - [`docs/parallelism-and-batching.zh.md`](./docs/parallelism-and-batching.zh.md)（中文）| [`docs/parallelism-and-batching.md`](./docs/parallelism-and-batching.md) (EN) — 并行与批处理
+- [`docs/GITHUB_ACTIONS_DEPLOY.zh.md`](./docs/GITHUB_ACTIONS_DEPLOY.zh.md)（中文）| [`docs/GITHUB_ACTIONS_DEPLOY.md`](./docs/GITHUB_ACTIONS_DEPLOY.md) (EN) — GitHub Actions 发布与部署
+- [`docs/SPEC-v2-reaudit-2026-06.zh.md`](./docs/SPEC-v2-reaudit-2026-06.zh.md)（中文）| [`docs/SPEC-v2-reaudit-2026-06.md`](./docs/SPEC-v2-reaudit-2026-06.md) (EN) — v2 生产就绪复审
 - [`SPEC.md`](./SPEC.md) — 架构与生产就绪标准
 - [`CHANGELOG.zh.md`](./CHANGELOG.zh.md)（中文）| [`CHANGELOG.md`](./CHANGELOG.md) (EN) — 发布说明
 

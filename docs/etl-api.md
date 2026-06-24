@@ -121,7 +121,7 @@ Build and optionally open one source, sink, or transform config without creating
 ```sh
 curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"kind":"source","type":"file","config":{"path":"/app/testdata/files/customers.jsonl","format":"json"},"open":true}' \
+  -d '{"kind":"source","type":"file","config":{"path":"/app/data/input/customers.jsonl","format":"json"},"open":true}' \
   'http://127.0.0.1:8001/api/v2/connections/test'
 ```
 

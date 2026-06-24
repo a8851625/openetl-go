@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gogf/gf/v2/frame/g"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/gogf/gf/v2/frame/g"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
@@ -447,6 +447,12 @@ func (r *pgCDCReader) handleWALData(ctx context.Context, data []byte) {
 			data = r.handleCommitMsg(data[1:], frameLSNStr)
 		case 'R':
 			data = r.parseRelationMsg(data[1:])
+		case 'O':
+			data = r.skipOriginMsg(data[1:])
+		case 'Y':
+			data = r.skipTypeMsg(data[1:])
+		case 'M':
+			data = r.skipLogicalMessageMsg(data[1:])
 		case 'I':
 			data = r.parseInsertMsg(data[1:], frameLSNStr)
 		case 'U':
@@ -458,13 +464,11 @@ func (r *pgCDCReader) handleWALData(ctx context.Context, data []byte) {
 			// so unrecognised messages don't halt the stream.
 			data = r.skipTruncateMsg(data[1:])
 		default:
-			// Unknown pgoutput message type. pgoutput messages do not carry a
-			// uniform length prefix, so we cannot safely skip this byte and
-			// continue (advancing data would mis-parse the rest of the frame;
-			// not advancing would loop forever on the same byte). Stop parsing
-			// this frame and surface it at ERROR level — a future PG message
-			// type we don't handle must not be silently dropped (P5-7).
-			g.Log().Errorf(r.ctx, "postgres_cdc: unknown pgoutput message type '%c' (0x%x) — aborting frame parse; remaining messages in this frame are skipped. Update the parser to handle this message type.", data[0], data[0])
+			// Unknown pgoutput message type. pgoutput messages do not have a
+			// uniform message-level length prefix, so blindly skipping one byte
+			// would corrupt the rest of the frame. Known non-row messages (O/Y/M)
+			// are parsed above and skipped by their wire format (P5-7).
+			g.Log().Errorf(r.ctx, "postgres_cdc: unknown pgoutput message type '%c' (0x%x) — aborting frame parse. Add a typed skipper before enabling this PostgreSQL message class.", data[0], data[0])
 			return
 		}
 	}
@@ -491,6 +495,55 @@ func (r *pgCDCReader) skipTxBlock(data []byte) []byte {
 		return data[:0]
 	}
 	return data[25:]
+}
+
+// skipOriginMsg skips an Origin pgoutput message.
+// Format: origin_lsn(8) + origin_name(null-terminated string).
+func (r *pgCDCReader) skipOriginMsg(data []byte) []byte {
+	if len(data) < 8 {
+		return data[:0]
+	}
+	_, pos := readNullString(data, 8)
+	if pos > len(data) {
+		return data[:0]
+	}
+	return data[pos:]
+}
+
+// skipTypeMsg skips a Type pgoutput message for protocol version 1.
+// Format: type_oid(4) + namespace(null-terminated string) + name(null-terminated string).
+func (r *pgCDCReader) skipTypeMsg(data []byte) []byte {
+	if len(data) < 4 {
+		return data[:0]
+	}
+	_, pos := readNullString(data, 4)
+	if pos > len(data) {
+		return data[:0]
+	}
+	_, pos = readNullString(data, pos)
+	if pos > len(data) {
+		return data[:0]
+	}
+	return data[pos:]
+}
+
+// skipLogicalMessageMsg skips a logical decoding Message pgoutput message for
+// protocol version 1. Format: flags(1) + lsn(8) + prefix(string) +
+// content_length(4) + content.
+func (r *pgCDCReader) skipLogicalMessageMsg(data []byte) []byte {
+	if len(data) < 9 {
+		return data[:0]
+	}
+	_, pos := readNullString(data, 9)
+	if pos > len(data) || pos+4 > len(data) {
+		return data[:0]
+	}
+	contentLen := int(binary.BigEndian.Uint32(data[pos:]))
+	pos += 4
+	if contentLen < 0 || pos+contentLen > len(data) {
+		return data[:0]
+	}
+	return data[pos+contentLen:]
 }
 
 // skipTruncateMsg skips a TRUNCATE pgoutput message.

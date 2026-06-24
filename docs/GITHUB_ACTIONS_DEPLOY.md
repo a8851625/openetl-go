@@ -1,491 +1,274 @@
-# GitHub Actions 部署教程
+# GitHub Actions Release and Deployment Guide
 
-本文档介绍如何使用 GitHub Actions 自动化构建、部署 openetl-go 项目。
+This guide documents the GitHub Actions setup that is currently present in this repository. It covers CI, release artifacts, GHCR images, and a practical server deployment path for OpenETL-Go.
 
-## 目录
+Chinese version: [`GITHUB_ACTIONS_DEPLOY.zh.md`](./GITHUB_ACTIONS_DEPLOY.zh.md).
 
-- [概述](#概述)
-- [前置要求](#前置要求)
-- [配置 GitHub Secrets](#配置-github-secrets)
-- [服务器准备](#服务器准备)
-- [部署流程](#部署流程)
-- [手动操作](#手动操作)
-- [常见问题](#常见问题)
+## Workflow Overview
 
----
+| Workflow | File | Trigger | What it does |
+| --- | --- | --- | --- |
+| Test | `.github/workflows/test.yml` | Push or pull request to `main` | Runs `go vet`, unit tests with `-race`, and integration tests with MySQL + ClickHouse services. |
+| Release | `.github/workflows/release.yml` | Push tag matching `v*` | Runs GoReleaser, publishes multi-platform archives to GitHub Releases, and pushes the default Docker image to GHCR. |
 
-## 概述
+There is no repository workflow that SSHs into a server. Server rollout is intentionally a separate operator step: pull a released image from GHCR, mount production config and data directories, then restart the container or service manager.
 
-### 工作流说明
+## What Release Publishes
 
-| 工作流文件 | 触发条件 | 功能 |
-|-----------|---------|------|
-| `ci.yml` | push/PR 到 main/develop | 代码检查、构建、测试 |
-| `docker.yml` | push 到 main 或创建 tag | 构建 Docker 镜像并推送到阿里云 |
-| `deploy.yml` | 手动触发 或 docker.yml 完成 | SSH 到服务器部署容器 |
-| `release.yml` | 创建 tag `v*` | 多平台二进制打包发布到 GitHub Release |
+GoReleaser is configured by [`.goreleaser.yml`](../.goreleaser.yml).
 
-### 部署流程图
+| Artifact | Contents | Notes |
+| --- | --- | --- |
+| `openetl-go_<version>_<os>_<arch>` | Default pure-Go binary, `manifest/`, `README.md`, `LICENSE` | Linux, macOS, Windows for amd64/arm64, excluding Windows arm64. |
+| `openetl-go-extism_<version>_<os>_<arch>` | WASM-enabled binary plus the same release files | Built with `-tags=extism`. |
+| `ghcr.io/a8851625/openetl-go:<version>` | Runtime Docker image | Contains binary, `manifest/`, `resource/`, and `pipes/`. Test fixtures are not shipped. |
+| `ghcr.io/a8851625/openetl-go:latest` | Latest release image | Updated by tagged releases. |
 
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  push 代码   │ →  │ CI 构建测试  │ →  │ Docker 构建  │ →  │ SSH 部署     │
-└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
-       ↓
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  创建 tag    │ →  │ 多平台打包   │ →  │ GitHub Release│
-└─────────────┘    └─────────────┘    └─────────────┘
-```
+Release images do **not** include `testdata/`. Test fixtures remain in the repository for automated e2e scripts, but production containers should receive input files, pipeline specs, and writable state through explicit mounts.
 
-### 镜像仓库
+## Required Repository Settings
 
-- **阿里云镜像仓库**: `registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go`
-- **镜像标签**: `latest` (主分支) 或 `v1.0.0` (版本标签)
+The current workflows use GitHub-provided credentials only:
 
----
+| Permission | Why it is needed |
+| --- | --- |
+| `contents: write` | GoReleaser creates the GitHub Release and uploads archives/checksums. |
+| `packages: write` | GoReleaser pushes the Docker image to GitHub Container Registry. |
 
-## 前置要求
+No Alibaba Cloud registry secrets, SSH private key, or server host secret is required by the checked-in workflows.
 
-### 1. 服务器要求
+If a future repository policy restricts `GITHUB_TOKEN`, enable package write permission under **Settings -> Actions -> General -> Workflow permissions**, or replace it with a scoped token that can publish GHCR packages.
 
-- Docker 已安装
-- 开放端口: 8000 (服务端口)、SSH 端口
-- 可访问阿里云镜像仓库
+## Release Procedure
 
-### 2. 本地要求
+1. Ensure `main` is clean and CI is green.
 
-- Git 已配置
-- 有 GitHub 仓库的 push 权限
-- 有阿里云镜像仓库的访问权限
+   ```sh
+   git status --short
+   git fetch origin
+   ```
 
-### 3. 检查服务器 Docker
+2. Create and push a version tag.
 
-```bash
-# SSH 到服务器
-ssh root@你的服务器IP
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
 
-# 检查 Docker
-docker --version
+3. Watch the release workflow.
 
-# 登录阿里云镜像仓库
-docker login registry.cn-heyuan.aliyuncs.com
-```
+   ```sh
+   gh run list --workflow Release --limit 5
+   ```
 
----
+4. Verify the published artifacts.
 
-## 配置 GitHub Secrets
+   ```sh
+   gh release view v0.1.0
+   docker pull ghcr.io/a8851625/openetl-go:v0.1.0
+   ```
 
-在 GitHub 仓库页面：**Settings → Secrets and variables → Actions → New repository secret**
+Use semantic tags (`vMAJOR.MINOR.PATCH`) for stable releases. GoReleaser marks prereleases automatically when the tag matches its prerelease rules.
 
-### 必填变量 (5个)
+## Local Release Dry Run
 
-| Secret 名称 | 说明 | 获取方式 |
-|------------|------|---------|
-| `ALIYUN_REGISTRY_USERNAME` | 阿里云镜像仓库用户名 | 阿里云控制台 → 容器镜像服务 |
-| `ALIYUN_REGISTRY_PASSWORD` | 阿里云镜像仓库密码 | 阿里云控制台 → 容器镜像服务 → 访问凭证 |
-| `SERVER_HOST` | 服务器 IP 地址 | 如 `192.168.1.100` 或域名 |
-| `SERVER_USER` | SSH 用户名 | 如 `root` |
-| `SERVER_SSH_KEY` | SSH 私钥 | 见下方获取方式 |
+Use a snapshot build before pushing a tag:
 
-### 可选变量 (2个)
-
-| Secret 名称 | 说明 | 默认值 |
-|------------|------|--------|
-| `SERVER_PORT` | SSH 端口 | `22` |
-| `DEPLOY_PATH` | 服务器部署目录 | `/www/wwwroot/docker/openetl-go` |
-
-### 获取 SSH 私钥
-
-```bash
-# 查看本地私钥
-cat ~/.ssh/id_rsa
-
-# 如果没有私钥，生成一对
-ssh-keygen -t rsa -b 4096 -C "github-actions"
-
-# 将公钥添加到服务器
-ssh-copy-id -i ~/.ssh/id_rsa.pub root@你的服务器IP
+```sh
+goreleaser build --snapshot --clean
 ```
 
-### 配置截图示例
+This verifies cross-platform binary builds without creating GitHub releases or pushing images. For a full local release simulation that does not publish:
 
-```
-Settings
-  └── Secrets and variables
-        └── Actions
-              ├── New repository secret
-              │     ├── Name: ALIYUN_REGISTRY_USERNAME
-              │     └── Value: your-username
-              │
-              ├── New repository secret
-              │     ├── Name: ALIYUN_REGISTRY_PASSWORD
-              │     └── Value: your-password
-              │
-              ├── New repository secret
-              │     ├── Name: SERVER_HOST
-              │     └── Value: 192.168.1.100
-              │
-              ├── New repository secret
-              │     ├── Name: SERVER_USER
-              │     └── Value: root
-              │
-              └── New repository secret
-                    ├── Name: SERVER_SSH_KEY
-                    └── Value: -----BEGIN RSA PRIVATE KEY-----
-                               MIIEpAIBAAKCAQEA...
-                               -----END RSA PRIVATE KEY-----
+```sh
+goreleaser release --snapshot --clean --skip=publish
 ```
 
----
+The default build is pure Go (`CGO_ENABLED=0`). JavaScript/TypeScript transforms that require QuickJS are intentionally not part of the cross-compiled release matrix; build them locally with CGO when needed.
 
-## 服务器准备
+## Server Deployment
 
-### 1. 创建部署目录
+### Directory Layout
 
-```bash
-# SSH 到服务器
-ssh root@你的服务器IP
+Create one deployment directory per environment:
 
-# 创建目录 (使用默认路径)
-mkdir -p /www/wwwroot/docker/openetl-go/logs
-mkdir -p /www/wwwroot/docker/openetl-go/config
-
-# 或使用自定义路径 (需要配置 DEPLOY_PATH Secret)
-mkdir -p /your/custom/path/logs
-mkdir -p /your/custom/path/config
+```sh
+sudo mkdir -p /opt/openetl-go/{config,pipes,data,input,logs}
+sudo chown -R "$USER":"$USER" /opt/openetl-go
 ```
 
-### 2. 准备配置文件
+Recommended responsibilities:
 
-```bash
-cd /www/wwwroot/docker/openetl-go
+| Path | Mounted to container | Purpose |
+| --- | --- | --- |
+| `/opt/openetl-go/config/config.yaml` | `/app/manifest/config/config.yaml:ro` | Runtime config. |
+| `/opt/openetl-go/pipes` | `/app/pipes:ro` | Environment-specific pipeline specs. |
+| `/opt/openetl-go/data` | `/app/data` | SQLite metastore, checkpoints, DLQ, output files. |
+| `/opt/openetl-go/input` | `/app/data/input:ro` | Optional file-source input data. |
+| `/opt/openetl-go/logs` | `/app/logs` | Rolling log files when file logging is enabled. |
 
-# 创建配置文件 (从项目复制并修改)
-vim config/config.yaml
-```
+### Minimal Standalone Config
 
-**config.yaml 示例** (从项目复制并修改数据库连接等敏感信息):
+Use SQLite for a single-node deployment:
 
 ```yaml
-# https://goframe.org/docs/web/server-config-file-template
 server:
-  address:     ":8000"
-  openapiPath: "/api.json"
-  swaggerPath: "/swagger"
-  serverRoot:  "resource/public"
+  address: ":8000"
+  serverRoot: "resource/public"
 
-# 监控配置
-monitor:
-  enabled:       true    # 是否启用监控
-  historyDays:   30      # 历史数据保留天数
-  collectPeriod: 10      # 采集周期(秒)
-  maxEvents:     10000   # 内存最大事件数
-  maxErrors:     1000    # 内存最大错误数
-  # ClickHouse 监控数据存储(可选，留空则仅使用内存)
-  clickhouse:
-    host:     "127.0.0.1"
-    port:     8124
-    user:     "default"
-    password: "your_password"
-    database: "sync_monitor"
+etl:
+  enabled: true
+  address: ":8001"
+  role: "standalone"
+  specsDir: "./pipes"
+  checkpointDir: "./data/checkpoint"
+  dlqDir: "./data/dlq"
+  storage:
+    type: "sqlite"
+    sqlite:
+      path: "./data/etl.db"
 
-# https://goframe.org/docs/core/glog-config
 logger:
-  level:   "all"
-  stdout:  true
-  path:    "/app/logs"
-  file:    "sync-{Y-m-d}.log"
-  rotate:  "daily"
+  level: "info"
+  stdout: true
+  path: "./logs"
+  file: "openetl-{Y-m-d}.log"
+  rotate: "daily"
   backups: 30
-
-# 同步源配置
-database:
-  default:
-    link: "mysql:sync_user:your_password@tcp(127.0.0.1:3306)/your_database"
-    debug: true
-
-# Canal 配置
-canal:
-  serverId: 1001
-  flavor:   "mysql"
-  # 仅增量同步，禁用 mysqldump
-  dump: false
-
-# 同步目标配置
-sync:
-  # 源数据库
-  database: "your_database"
-  # 批量大小
-  batchSize: 1000
-  # 同步目标列表
-  targets:
-    - name: "clickhouse-main"
-      type: "clickhouse"
-      tables:
-        - "your_table_name"
-      clickhouse:
-        host:     "127.0.0.1"
-        port:     8124
-        user:     "default"
-        password: "your_password"
-        database: "your_database"
-      # 定时 OPTIMIZE 清理
-      schedule:
-        enable:   true
-        interval: 1440  # 分钟，1440 = 24小时
 ```
 
-> **注意**: 请根据实际环境修改数据库连接信息、表名等配置。完整配置参考 `manifest/config/config.yaml`。
+Set production secrets through environment variables rather than writing them into Git:
 
-### 3. 登录镜像仓库
-
-```bash
-docker login registry.cn-heyuan.aliyuncs.com
-# 输入用户名和密码
+```sh
+export ETL_API_TOKEN="$(openssl rand -hex 32)"
+export ETL_SPEC_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
 
----
+### Run the Released Image
 
-## 部署流程
-
-### 自动部署
-
-推送代码到 main 分支，自动触发完整部署流程：
-
-```bash
-# 提交代码
-git add .
-git commit -m "feat: 新功能"
-git push origin main
-```
-
-**流程**:
-1. CI 工作流运行 (代码检查、构建、测试)
-2. Docker 工作流构建镜像并推送
-3. Deploy 工作流 SSH 到服务器部署
-
-### 发布版本
-
-创建 tag 触发版本发布：
-
-```bash
-# 创建 tag
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-**流程**:
-1. Docker 工作流构建 `v1.0.0` 镜像
-2. Release 工作流打包多平台二进制
-3. 创建 GitHub Release 页面
-
-### 手动部署
-
-在 GitHub 页面手动触发：
-
-1. 进入 **Actions** 页面
-2. 选择 **Deploy** 工作流
-3. 点击 **Run workflow**
-4. 输入镜像标签 (如 `v1.0.0` 或 `latest`)
-5. 点击 **Run workflow**
-
----
-
-## 手动操作
-
-### 查看部署状态
-
-```bash
-# GitHub Actions 页面
-https://github.com/你的用户名/你的仓库/actions
-```
-
-### 查看服务器容器
-
-```bash
-# SSH 到服务器
-ssh root@你的服务器IP
-
-# 查看容器状态
-docker ps | grep openetl-go
-
-# 查看日志
-docker logs -f openetl-go
-
-# 查看最近 100 行日志
-docker logs --tail 100 openetl-go
-```
-
-### 手动重启容器
-
-```bash
-docker restart openetl-go
-```
-
-### 手动更新镜像
-
-```bash
-# 拉取最新镜像
-docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:latest
-
-# 停止旧容器
-docker stop openetl-go
-docker rm openetl-go
-
-# 启动新容器
-docker run -d \
-  --name openetl-go \
-  --restart always \
-  -p 8000:8000 \
-  -v /www/wwwroot/docker/openetl-go/config/config.yaml:/app/manifest/config/config.yaml:ro \
-  -v /www/wwwroot/docker/openetl-go/logs:/app/logs \
-  registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:latest
-```
-
-### 回滚到指定版本
-
-```bash
-# 使用指定版本镜像
-docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:v1.0.0
-
-docker stop openetl-go
-docker rm openetl-go
+```sh
+docker pull ghcr.io/a8851625/openetl-go:v0.1.0
 
 docker run -d \
   --name openetl-go \
-  --restart always \
+  --restart unless-stopped \
   -p 8000:8000 \
-  -v /www/wwwroot/docker/openetl-go/config/config.yaml:/app/manifest/config/config.yaml:ro \
-  -v /www/wwwroot/docker/openetl-go/logs:/app/logs \
-  registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:v1.0.0
+  -p 8001:8001 \
+  -e ETL_API_TOKEN="$ETL_API_TOKEN" \
+  -e ETL_SPEC_ENCRYPTION_KEY="$ETL_SPEC_ENCRYPTION_KEY" \
+  -v /opt/openetl-go/config/config.yaml:/app/manifest/config/config.yaml:ro \
+  -v /opt/openetl-go/pipes:/app/pipes:ro \
+  -v /opt/openetl-go/data:/app/data \
+  -v /opt/openetl-go/input:/app/data/input:ro \
+  -v /opt/openetl-go/logs:/app/logs \
+  ghcr.io/a8851625/openetl-go:v0.1.0
 ```
 
----
+Verify the service:
 
-## 常见问题
-
-### Q1: Docker 登录失败
-
-**错误**: `unauthorized: authentication required`
-
-**解决**:
-```bash
-# 确认 Secrets 配置正确
-# ALIYUN_REGISTRY_USERNAME 和 ALIYUN_REGISTRY_PASSWORD
-
-# 本地测试登录
-docker login registry.cn-heyuan.aliyuncs.com
+```sh
+curl -fsS http://127.0.0.1:8000/api/v2/health
+curl -fsS -H "X-API-Token: $ETL_API_TOKEN" http://127.0.0.1:8000/api/v2/pipelines
 ```
 
-### Q2: SSH 连接失败
+Open the UI at `http://<server>:8000`.
 
-**错误**: `Permission denied (publickey)`
+### Upgrade
 
-**解决**:
-```bash
-# 1. 检查 SERVER_SSH_KEY Secret 是否正确配置
-# 2. 确保私钥格式正确 (包含完整的 BEGIN 和 END 行)
-# 3. 确保公钥已添加到服务器的 ~/.ssh/authorized_keys
-
-# 在服务器上检查
-cat ~/.ssh/authorized_keys
+```sh
+docker pull ghcr.io/a8851625/openetl-go:v0.1.1
+docker stop openetl-go
+docker rm openetl-go
+# run the same docker run command with the new tag
 ```
 
-### Q3: 容器启动失败
+For scripted deployments, keep the `docker run` command in a checked deployment script or use Compose/systemd. Do not store runtime state inside the container filesystem; only mounted `/app/data` should persist.
 
-**错误**: 容器反复重启
+### Rollback
 
-**解决**:
-```bash
-# 查看容器日志
-docker logs openetl-go
-
-# 常见原因:
-# 1. 配置文件路径不正确
-# 2. 数据库连接失败
-# 3. 端口被占用
-
-# 检查配置文件
-ls -la /www/wwwroot/docker/openetl-go/config/config.yaml
-
-# 检查端口
-netstat -tlnp | grep 8000
+```sh
+docker pull ghcr.io/a8851625/openetl-go:v0.1.0
+docker stop openetl-go
+docker rm openetl-go
+# run the previous tag with the same mounted config/data directories
 ```
 
-### Q4: 镜像拉取失败
+If a release changes the storage schema, inspect release notes before rolling back. The SQLite file or SQL metastore may contain migrations that older binaries do not understand.
 
-**错误**: `Error: image gzdzh/openetl-go:latest not found`
+## Distributed Deployment Notes
 
-**解决**:
-```bash
-# 确认镜像已推送
-# 检查 GitHub Actions 是否成功完成
+Use `etl.storage.type: mysql` or `postgresql` before running more than one process. SQLite is a local single-file store and is not suitable for multi-node master-worker operation.
 
-# 手动拉取测试
-docker pull registry.cn-heyuan.aliyuncs.com/gzdzh/openetl-go:latest
+Typical layout:
+
+| Process | Required config |
+| --- | --- |
+| Master | `etl.role: master`, SQL storage DSN, public API address. |
+| Worker | `etl.role: worker`, same SQL storage DSN, `etl.masterURL` pointing to the master API. |
+
+Workers can also be configured with environment variables:
+
+```sh
+ETL_ROLE=worker
+ETL_MASTER_URL=http://openetl-master:8001
+ETL_WORKER_ID=worker-a
 ```
 
-### Q5: 配置文件修改后不生效
+Mount the same pipeline specs to the master. Workers execute assigned shards and report heartbeats through the master API.
 
-**解决**:
-```bash
-# 修改配置文件后重启容器
-vim /www/wwwroot/docker/openetl-go/config/config.yaml
-docker restart openetl-go
+## Troubleshooting
+
+### Release workflow cannot push GHCR
+
+Check workflow permissions and package visibility. The release workflow needs `packages: write`; the package may also need to be linked to the repository under GitHub Packages settings.
+
+### `goreleaser` fails after `go mod tidy`
+
+GoReleaser runs `go mod tidy` as a pre-hook. Run it locally and review the diff:
+
+```sh
+go mod tidy
+git diff -- go.mod go.sum
 ```
 
-### Q6: 如何查看部署历史
+Commit intentional dependency changes before tagging.
 
-```bash
-# GitHub Actions 页面
-https://github.com/你的用户名/你的仓库/actions
+### Container starts but API is unavailable
 
-# 点击具体的工作流运行记录查看详细日志
+Check logs and the mounted config:
+
+```sh
+docker logs --tail 200 openetl-go
+docker exec openetl-go ls -la /app/manifest/config /app/pipes /app/data
 ```
 
----
+Common causes are an invalid config path, missing SQL credentials, a port already in use, or a pipeline spec that references an unreachable source/sink.
 
-## 附录
+### File source cannot find input data
 
-### 目录结构
+Release images do not include test fixtures. Mount input files explicitly and reference the mounted container path:
 
-```
-openetl-go/
-├── .github/
-│   └── workflows/
-│       ├── ci.yml          # CI 工作流
-│       ├── docker.yml      # Docker 构建推送
-│       ├── deploy.yml      # SSH 部署
-│       └── release.yml     # 版本发布
-├── Dockerfile              # 多阶段构建
-├── docker-compose.yml      # 本地/服务器部署示例
-└── docs/
-    └── GITHUB_ACTIONS_DEPLOY.md  # 本文档
+```yaml
+source:
+  type: file
+  config:
+    path: /app/data/input/customers.jsonl
+    format: json
 ```
 
-### 服务器目录结构
+### Health check returns non-200
 
-```
-/www/wwwroot/docker/openetl-go/
-├── config/
-│   └── config.yaml    # 配置文件（挂载到容器 /app/manifest/config/config.yaml）
-└── logs/              # 日志目录（挂载到容器 /app/logs）
-    └── sync-{Y-m-d}.log
+Use the proxied health endpoint first:
+
+```sh
+curl -i http://127.0.0.1:8000/api/v2/health
 ```
 
-### 配置文件挂载说明
+Then inspect `/metrics` and pipeline status with an API token. A `503` means the process is reachable but the ETL server reports an unhealthy state.
 
-容器内配置文件路径: `/app/manifest/config/config.yaml`
+## Related Documents
 
-部署时通过 Docker volume 挂载:
-```bash
--v /www/wwwroot/docker/openetl-go/config/config.yaml:/app/manifest/config/config.yaml:ro
-```
-
-这样服务器上的 `/www/wwwroot/docker/openetl-go/config/config.yaml` 会覆盖容器内的默认配置。
-
-### 相关链接
-
-- [GitHub Actions 文档](https://docs.github.com/en/actions)
-- [Docker 文档](https://docs.docker.com/)
-- [阿里云容器镜像服务](https://cr.console.aliyun.com/)
+- [`quickstart.md`](./quickstart.md) — local MySQL to ClickHouse walkthrough.
+- [`etl-config-schema.md`](./etl-config-schema.md) — pipeline YAML fields.
+- [`etl-api.md`](./etl-api.md) — runtime API reference.
+- [`parallelism-and-batching.md`](./parallelism-and-batching.md) — sharding and batching behavior.

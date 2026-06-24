@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [v0.1.0-beta2] — Phase 5 可靠性与易用性发布
+
+### 亮点
+- 关闭 beta2 的 P0/P1 可靠性门槛：standalone runner 创建、文件源恢复、零幸存批次 checkpoint 安全、Postgres CDC pgoutput 解析、worker slot 限流、sink error metrics，以及 pipeline 硬性 preflight 错误拦截。
+- 重整公开 quickstart 体验：规范 MySQL CDC -> ClickHouse 示例、对齐 Podman compose 配置、补全 `/api/v2/plugins/schema` 元数据，并更新 README / quickstart / 部署文档。
+- 改善轻量发布形态：运行时镜像不再携带测试夹具，新增 `-tags=nolua` Lua-free 构建选项，同时保持默认 Lua 兼容。
+
+### 验证
+- 新增/更新 server preflight、插件 schema 覆盖、runner checkpoint 安全、Postgres CDC 非行消息、worker slot 限流等测试。
+- 已验证受影响包：`go test -race -count=1 -timeout=120s ./internal/etl/server ./internal/etl/pipeline ./internal/etl/source ./internal/etl/worker`。
+
 ## [v0.1.0-beta] — 首个公开测试版
 
 ### 亮点

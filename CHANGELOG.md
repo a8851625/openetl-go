@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [v0.1.0-beta2] — Phase 5 reliability and usability release
+
+### Highlights
+- Closed the beta2 P0/P1 reliability bar: standalone runner creation, file-source resume, zero-survivor checkpoint safety, Postgres CDC pgoutput parsing, worker slot accounting, sink error metrics, and preflight rejection for hard pipeline misconfigurations.
+- Reworked the public quickstart surface around OpenETL-Go: canonical MySQL CDC -> ClickHouse examples, aligned Podman compose settings, richer `/api/v2/plugins/schema` metadata, and updated README/quickstart/deployment docs.
+- Improved the lightweight release shape by excluding test fixtures from runtime images and publishing `-tags=nolua` as the Lua-free build option while keeping default Lua compatibility.
+
+### Verification
+- Added/updated focused tests for server preflight behavior, plugin schema coverage, runner checkpoint safety, Postgres CDC non-row messages, and worker slot limits.
+- Verified affected packages with `go test -race -count=1 -timeout=120s ./internal/etl/server ./internal/etl/pipeline ./internal/etl/source ./internal/etl/worker`.
+
 ## [v0.1.0-beta] — 首个公开测试版
 
 ### 亮点

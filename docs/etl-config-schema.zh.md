@@ -50,7 +50,7 @@ dlq:
 source:
   type: file
   config:
-    path: /app/testdata/files/customers.jsonl
+    path: /app/data/input/customers.jsonl
     format: json
     delimiter: ","
     has_header: true
@@ -58,7 +58,7 @@ source:
 
 | 字段 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `path` | 是 | | 文件路径（容器内）。 |
+| `path` | 是 | | 容器内文件路径。Docker 部署建议把输入文件挂载到 `/app/data/input`。 |
 | `format` | 否 | `csv` | `json`（JSON Lines）或 `csv`。 |
 | `delimiter` | 否 | `,` | CSV 分隔符。 |
 | `has_header` | 否 | `true` | CSV 首行是否为列名。 |

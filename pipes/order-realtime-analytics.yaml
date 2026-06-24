@@ -18,7 +18,7 @@ name: order-realtime-analytics
 source:
   type: file
   config:
-    path: ./testdata/files/orders.jsonl
+    path: ./data/input/orders.jsonl
     format: json
 
 transforms:
@@ -31,7 +31,7 @@ transforms:
   # 2. Rate Limiter — token-bucket throttle (100 rps, burst 50)
   - type: rate_limiter
     config:
-      rate: 100
+      rps: 100
       burst: 50
 
   # 3. Lua — add computed fields: processing timestamp + order tier

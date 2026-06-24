@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -36,6 +38,47 @@ func (s *recordingSink) Write(_ context.Context, _ []core.Record) error {
 }
 func (s *recordingSink) Close() error { return nil }
 
+type checkpointTestReader struct{}
+
+func (r checkpointTestReader) Read(_ context.Context) (core.Record, error) {
+	return core.Record{}, io.EOF
+}
+func (r checkpointTestReader) ReadBatch(_ context.Context, _ int) ([]core.Record, error) {
+	return nil, io.EOF
+}
+func (r checkpointTestReader) Snapshot(_ context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (r checkpointTestReader) Close() error { return nil }
+func (r checkpointTestReader) CheckpointForRecord(_ context.Context, rec core.Record) (core.Checkpoint, error) {
+	pos, _ := json.Marshal(map[string]any{"offset": rec.Metadata.Offset})
+	return core.Checkpoint{Source: "checkpoint-test", Position: pos}, nil
+}
+
+type filterAllTransform struct{}
+
+func (t filterAllTransform) Name() string { return "filter-all" }
+func (t filterAllTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
+	return rec, core.ErrRecordFiltered
+}
+
+type failAllTransform struct{}
+
+func (t failAllTransform) Name() string { return "fail-all" }
+func (t failAllTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
+	return rec, errors.New("injected transform error")
+}
+
+type zeroBatchTransform struct{}
+
+func (t zeroBatchTransform) Name() string { return "zero-batch" }
+func (t zeroBatchTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
+	return rec, nil
+}
+func (t zeroBatchTransform) ApplyBatch(_ context.Context, _ []core.Record) ([]core.Record, error) {
+	return nil, nil
+}
+
 // captureDLQ records every DLQ write.
 type captureDLQ struct {
 	mu      sync.Mutex
@@ -61,6 +104,77 @@ func makeRunnerSpec(t *testing.T, batchSize int) (*Spec, string) {
 		BatchSize:             batchSize,
 		CheckpointIntervalSec: 1,
 	}, outPath
+}
+
+func newCheckpointWriteBatchRunner(t *testing.T, transforms core.TransformChain, store core.CheckpointStore, dlq DLQWriter) *Runner {
+	t.Helper()
+	am := alert.NewManager()
+	t.Cleanup(am.Close)
+	return &Runner{
+		spec:            &Spec{Name: "checkpoint-zero-survivor"},
+		transforms:      transforms,
+		sink:            &recordingSink{},
+		checkpointStore: store,
+		dlqWriter:       dlq,
+		alertManager:    am,
+		reader:          checkpointTestReader{},
+		logBuf:          NewLogBuffer(20),
+	}
+}
+
+func checkpointSaved(t *testing.T, store *memoryCPStore, jobName string) bool {
+	t.Helper()
+	cp, err := store.Load(context.Background(), jobName)
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	return cp != nil
+}
+
+func checkpointTestBatch() []core.Record {
+	return []core.Record{
+		{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 1}},
+		{Data: map[string]any{"id": 2}, Metadata: core.Metadata{Offset: 2}},
+	}
+}
+
+func TestRunnerCheckpointAdvancesWhenAllRecordsFiltered(t *testing.T) {
+	store := newMemoryCPStore()
+	r := newCheckpointWriteBatchRunner(t, core.TransformChain{filterAllTransform{}}, store, noopDLQ{})
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	if !checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("expected checkpoint to advance when every record was intentionally filtered")
+	}
+}
+
+func TestRunnerDoesNotCheckpointZeroSurvivorTransformFailures(t *testing.T) {
+	store := newMemoryCPStore()
+	dlq := &captureDLQ{}
+	r := newCheckpointWriteBatchRunner(t, core.TransformChain{failAllTransform{}}, store, dlq)
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	if checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint advanced for zero-survivor transform failures")
+	}
+	dlq.mu.Lock()
+	defer dlq.mu.Unlock()
+	if len(dlq.entries) != len(checkpointTestBatch()) {
+		t.Fatalf("DLQ entries = %d, want %d", len(dlq.entries), len(checkpointTestBatch()))
+	}
+}
+
+func TestRunnerDoesNotCheckpointZeroSurvivorBatchTransform(t *testing.T) {
+	store := newMemoryCPStore()
+	r := newCheckpointWriteBatchRunner(t, core.TransformChain{zeroBatchTransform{}}, store, noopDLQ{})
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	if checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint advanced after batch transform produced no sink records")
+	}
 }
 
 // TestRunnerCheckpointAfterCommit verifies saveCommittedCheckpoint is invoked

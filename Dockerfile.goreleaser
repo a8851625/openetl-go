@@ -10,7 +10,6 @@ COPY openetl-go ./openetl-go
 COPY manifest ./manifest
 COPY resource ./resource
 COPY pipes ./pipes
-COPY testdata ./testdata
 
 RUN chmod +x ./openetl-go \
     && mkdir -p data/checkpoint data/dlq data/output \

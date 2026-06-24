@@ -1,6 +1,6 @@
 # openetl-go · Production-Ready SPEC (v3)
 
-> **Status**: Draft v3 · 2026-06-22 — Phase 5 gap analysis, requirements & development plan.
+> **Status**: Release candidate v3 · 2026-06-24 — Phase 5 beta2 closure.
 > **Supersedes**: SPEC v2 (2026-06-21 re-audit), preserved verbatim at
 > [`docs/SPEC-v2-reaudit-2026-06.md`](./docs/SPEC-v2-reaudit-2026-06.md). The v2 §9 findings
 > register remains the evidence base for everything carried forward; this file points into it
@@ -12,7 +12,9 @@
 > **v3 changelog (v2 → v3)**: An independent three-pillar audit (reliability / usability /
 > lightweight, 2026-06-22) verified the Phase 4 P0–P2 closure **did land in code** — but found
 > (a) **two new committed P0 regressions**, (b) one **v2 "done" claim that is inert** (P4-23 JSON
-> logging), and (c) substantial 易用 / 轻量 gaps. §7 (Phase 5) is the corrected, current workstream.
+> logging), and (c) substantial 易用 / 轻量 gaps. Phase 5 is closed for `v0.1.0-beta2`
+> (2026-06-24): the P0/P1 reliability fixes, README/quickstart/schema ergonomics, JSON logging,
+> worker slot accounting, and lightweight Lua opt-out are implemented and covered by tests/E2E.
 > What is genuinely solid: linear Runner at-least-once + DLQ escalation, three-state circuit
 > breaker, retry/backoff, DAG per-record panic recovery, real distributed dispatch (A11-redo,
 > verified real not simulated), unified typing engine (now including ClickHouse + Doris), storage
@@ -23,33 +25,27 @@
 
 ## 0. Headline (read this first)
 
-1. **🔴 P0 regression — default mode is broken.** Since commit `f5faef0` (A11 Inc 2-7),
-   `Server.newRunner` infinite-recurses on every non-distributed path
-   (`internal/etl/server/server.go:78` — `return s.newRunner(spec)` instead of
-   `return pipeline.NewPipeline(...)`). **Every standalone-role and single-shard pipeline
-   stack-overflows at start.** The A11 integration tests only exercised the distributed branch
-   (line 76), so the regression slipped through. This must be fixed before *any* production
-   claim. See **P5-1**.
+1. **P0 regressions are closed.** `Server.newRunner` now takes the inline
+   `pipeline.NewPipeline(...)` path for standalone/single-shard execution, and
+   `TestNewRunnerNotRecursive` guards against the prior stack-overflow regression (P5-1).
+   JSON-lines file checkpoints no longer compound byte offsets across restarts, with
+   `TestFileJSONCheckpointNoCompoundOnRestart` covering repeated resume (P5-2).
 
-2. **🔴 P0 data loss — JSON file source skips records on every restart.**
-   `internal/etl/source/file.go:181` seeds the `byteOffset` delta with the absolute resume
-   offset (should be `0`); `Snapshot()` then emits `base + offset`, doubling the offset each
-   restart → records skipped. See **P5-2**.
+2. **P1 reliability is closed for beta2.** DAG reader-map access and `ParallelRunner.cancel`
+   are race-safe; ES bulk 2xx/unparseable responses return an error; Kafka idempotent fallback
+   warns loudly; Postgres CDC skips known non-row pgoutput messages by wire format; zero-survivor
+   batches checkpoint only when every drop is intentional `ErrRecordFiltered`; worker slot
+   accounting uses an atomic in-flight counter; sink error counters are wired (P5-3..P5-12).
 
-3. **🟠 v2 "done" claim refuted.** P4-23 (JSON logging) is **inert** — the yaml keys
-   (`stdoutFormat`/`fileFormat`) are read by nothing and `LOGGER_FORMAT` is checked nowhere; the
-   config comment claiming otherwise is false. B3/SV-6 is still open. See **P5-16**.
+3. **易用 beta2 bar is closed.** README and quickstart now describe OpenETL-Go, create/update
+   APIs run preflight and reject hard errors, connector schemas expose real fields and aliases,
+   canonical MySQL CDC → ClickHouse examples ship in `pipes/`, and compose quickstarts use
+   consistent MySQL/ClickHouse settings (P5-13..P5-21).
 
-4. **易用 is not met.** The README advertises the *legacy Canal product*, not the ETL framework;
-   pipeline creation skips preflight (misconfigs fail late and opaque); sink/source error
-   messages omit WHERE (host/port/db/table) — a §4.3 violation; the shipped quickstart example
-   pipe is broken (combined `host:port`). See **Tier C**.
-
-5. **轻量 is partially violated.** Lua (`gopher-lua`) is linked into the **default** binary
-   (`lua.go` + `pipeline/hooks.go` have no build tag) — the only opt-in runtime not gated, contra
-   §6.1. The legacy GoFrame HTTP server always boots alongside the ETL API. See **Tier D**.
-
-The Phase 4 closure is real and good. The work above is what remains.
+4. **轻量 beta2 bar is closed with a compatibility compromise.** WASM remains opt-in
+   (`-tags=extism`), QuickJS remains CGO-gated, and Lua is an opt-out runtime via `-tags=nolua`
+   so existing default Lua users are not broken (P5-22). API-only/headless mode and per-sink
+   build tags remain deferred product work (P5-23/P5-24).
 
 ---
 
@@ -88,8 +84,8 @@ dual-mode architecture is the central decision of the project (v2 §1.2; unchang
 > `pipeline.NewDistributedPipeline` + `ShardDispatcher`, and `etl.role` selection are all wired
 > and exercised by integration tests (4 shards split 2/2 across real HTTP workers; crash
 > reassignment). This is genuine distributed execution, not a single-process simulation — the v2
-> ST-2 finding is closed. **Caveat (P5-11):** the worker poll loop's slot accounting is currently
-> broken, so a worker will over-subscribe beyond its slot count — see §7.
+> ST-2 finding is closed. **P5-11 is now closed:** the worker poll loop gates new task goroutines
+> with an atomic in-flight counter and `TestPollLoopRespectsSlotsLimit` pins slot behavior.
 
 ### 1.3 Target users
 
@@ -121,20 +117,22 @@ When goals conflict, resolve in this order — but all three must reach the mini
 openetl-go is production-ready when, for **both** modes:
 
 - **No data is silently lost** on any write path (retry → DLQ → escalate; never bare `continue`,
-  never a silent success on an unparseable response). *(P5-2, P5-5, P5-9, P5-10 address current
+  never a silent success on an unparseable response). *(P5-2, P5-5, P5-9, P5-10 closed current
   violations.)*
 - **A crash or SIGTERM** never loses committed data and never re-delivers beyond idempotency
   tolerance; checkpoint advances only after sink commit.
 - **Schema changes** are either auto-applied or clearly rejected — never silently dropped.
 - **Health and metrics** are observable (`/api/v2/health` returns 503 when unhealthy; Prometheus
-  `/metrics` with correct types; per-sink error metrics are non-zero when sinks fail). *(P5-12.)*
+  `/metrics` with correct types; per-sink error metrics are non-zero when sinks fail). *(P5-12
+  closed.)*
 - **Scalable mode** genuinely distributes shards across nodes with heartbeat-based reassignment
-  and respects per-worker slot limits. *(A11-redo done; P5-11.)*
+  and respects per-worker slot limits. *(A11-redo done; P5-11 closed.)*
 - **A new user** goes from `git clone` to a working MySQL→ClickHouse sync in < 5 minutes using
   SQLite mode and the README quickstart, with a quickstart example that runs unmodified.
-  *(P5-13, P5-17, P5-19.)*
+  *(P5-13, P5-17, P5-19 closed.)*
 - **The binary is lightweight by default**: the default build excludes every opt-in runtime
-  (WASM, Lua, QuickJS) and every unused sink is a candidate for exclusion. *(P5-22, P5-24.)*
+  (WASM/QuickJS) and supports `-tags=nolua` for Lua-free builds; every unused sink remains a
+  candidate for later exclusion. *(P5-22 closed; P5-24 deferred.)*
 
 ---
 
@@ -283,7 +281,8 @@ worker}`:
   checkpoint), never `continue`, never `_ =`. *(P5-9: ✅ done — both the linear `Runner` and the
   DAG `DAGExecutor` trip the per-sink circuit breaker on a DLQ-write failure.)*
 - A batch with zero surviving records (all filtered/errored) must not silently advance the
-  checkpoint unless every dropped record was an intentional `ErrRecordFiltered`. *(P5-10.)*
+  checkpoint unless every dropped record was an intentional `ErrRecordFiltered`. *(P5-10: ✅
+  done in the linear Runner, with zero-survivor tests.)*
 - Idempotency is the complement: sinks tolerate re-delivery (upsert / version columns / dedup
   keys) so at-least-once is observationally exactly-once.
 - **Graceful `Stop()` flush uses a fresh `context.WithTimeout(context.Background(), ~10s)`**, not
@@ -437,37 +436,37 @@ Carried-forward v2 items keep their `P4-n` ID. Evidence and fix sketches are sum
 
 | ID | Gap | Fix | Acceptance | Size | Mode |
 |----|-----|-----|------------|------|------|
-| **P5-1** | `Server.newRunner` infinite-recurses on every non-distributed path → standalone (default) & single-shard pipelines stack-overflow at start. `server.go:78`. | Line 78 → `return pipeline.NewPipeline(spec, s.cpAdapter, s.dlqWriter, s.alertManager)`. | New server-level test boots a standalone pipeline and reaches `running`; all existing `hack/e2e-*.sh` green. | 0.25d | both |
-| **P5-2** | JSON-lines file source `byteOffset` seeded with absolute resume offset (`file.go:181`), then `Snapshot` emits `base+offset` → offset doubles each restart → records skipped. | `file.go:181` → `byteOffset: 0` (base already holds the resume anchor). | Write-5 / checkpoint / restart / expect-next test passes; offset is stable across ≥3 restarts. | 0.25d | both |
+| **P5-1** | `Server.newRunner` infinite-recurses on every non-distributed path → standalone (default) & single-shard pipelines stack-overflow at start. `server.go:78`. | ✅ Closed: non-distributed path now returns `pipeline.NewPipeline(...)`; guarded by `internal/etl/server/newrunner_test.go`. | `TestNewRunnerNotRecursive`; `./hack/e2e.sh`; `./hack/e2e-ui.sh`. | 0.25d | both |
+| **P5-2** | JSON-lines file source `byteOffset` seeded with absolute resume offset (`file.go:181`), then `Snapshot` emits `base+offset` → offset doubles each restart → records skipped. | ✅ Closed: resume offset no longer compounds. | `TestFileJSONCheckpointNoCompoundOnRestart`; `go test ./internal/etl/source`. | 0.25d | both |
 
 ### Tier B — P1 reliability (correctness / safety nets)
 
 | ID | Gap | Fix sketch | Size | Ref |
 |----|-----|------------|------|-----|
-| P5-3 | `DAGExecutor.readers` map read unlocked (`executor.go:578`) vs locked writes (`:357,:361`) → `-race` latent. | `RLock`/`RUnlock` around the read. | 0.25d | new |
-| P5-4 | `ParallelRunner.cancel` assigned after `Unlock` (`parallel.go:165`) → Start/Stop race. | Move assignment before `Unlock`. | 0.25d | new |
-| P5-5 | ES sink returns `nil` on unparseable bulk response (`elasticsearch.go:308-322`) → unknown commit state, checkpoint advances. | `else { return error("unparseable bulk response: …") }`. | 0.25d | new |
-| P5-6 | Kafka producer silently falls back to non-idempotent mode (`kafka.go:199-208`) → duplicate risk on retry. | Warn (or fail if exactly-once intent declared). | 0.25d | new |
-| P5-7 | `postgres_cdc` unknown pgoutput message type `return`s, dropping the rest of the frame (`postgres_cdc.go:460-463`); LSN still ACKed → silent loss on future PG message types. | Parse length from wire + `continue`. | 0.5d | new |
+| P5-3 | `DAGExecutor.readers` map read unlocked (`executor.go:578`) vs locked writes (`:357,:361`) → `-race` latent. | ✅ Closed: `checkpointForRecord` now reads `e.readers` under `RLock`. | 0.25d | done |
+| P5-4 | `ParallelRunner.cancel` assigned after `Unlock` (`parallel.go:165`) → Start/Stop race. | ✅ Closed: `context.WithCancel` assignment happens under `pr.mu`. | 0.25d | done |
+| P5-5 | ES sink returns `nil` on unparseable bulk response (`elasticsearch.go:308-322`) → unknown commit state, checkpoint advances. | ✅ Closed: 2xx/unparseable bulk responses now return an error. | 0.25d | done |
+| P5-6 | Kafka producer silently falls back to non-idempotent mode (`kafka.go:199-208`) → duplicate risk on retry. | ✅ Closed: fallback is explicit and emits a warning with broker/topic context. | 0.25d | done |
+| P5-7 | `postgres_cdc` unknown pgoutput message type `return`s, dropping the rest of the frame (`postgres_cdc.go:460-463`); LSN still ACKed → silent loss on future PG message types. | ✅ Closed for protocol v1 known non-row messages: `O`/`Y`/`M` are skipped by wire format; unknown types still hard-error the frame. | 0.5d | done |
 | P5-8 | ~~HTTP source advances `committedPage` before sink~~ — **✅ retracted (false-positive, like P4-17)**: `committedPage` is in-memory only; the persisted checkpoint is gated on sink-write via `CheckpointForRecord`; restart resumes from the persisted page and re-fetches (at-least-once). The proposed "drain-gated" fix is already the existing behavior. | — | done (retracted) |
 | P5-9 | DLQ write-failure path never trips the circuit breaker (`pipeline.go:913-922`). | ✅ **Linear + DAG**: linear `Runner` calls `circuitBreaker.RecordFailure(ctx, dlqErr)`; DAG `handleFailed` now takes `sinkID` and trips `e.breakers[sinkID]` on DLQ-write failure (Wave 4). | 0.25d | done |
-| P5-10 | Zero-survivor batch saves checkpoint before any sink write (`pipeline.go:783-786`); combined with no-DLQ-configured silent drop (`:906-926`) → permanent loss. | Save checkpoint only when all drops were `ErrRecordFiltered`; else escalate (log+alert+no-advance). | 0.5d | new |
-| P5-11 | Worker poll loop slot check uses `len(w.executors)` but `ExecuteShard` goroutine never registers (`worker/poll.go:98-101,133`) → unbounded concurrent shard fan-out. | Track in-flight tasks with an atomic counter; gate spawn on it. | 0.5d | scalable |
-| P5-12 | `sinkCounters.recordError()` is dead code in all 9 sinks (`sink_metrics.go:30`) → Prometheus `Errors` permanently 0. | Wire error paths in each sink's `Write`. | 0.5d | both |
+| P5-10 | Zero-survivor batch saves checkpoint before any sink write (`pipeline.go:783-786`); combined with no-DLQ-configured silent drop (`:906-926`) → permanent loss. | ✅ Closed: checkpoint only advances when every dropped record is `ErrRecordFiltered`; batch-empty/error paths log+alert and replay. | 0.5d | done |
+| P5-11 | Worker poll loop slot check uses `len(w.executors)` but `ExecuteShard` goroutine never registers (`worker/poll.go:98-101,133`) → unbounded concurrent shard fan-out. | ✅ Closed: atomic `inFlight` counter gates task claims; `TestPollLoopRespectsSlotsLimit` covers it. | 0.5d | done |
+| P5-12 | `sinkCounters.recordError()` is dead code in all 9 sinks (`sink_metrics.go:30`) → Prometheus `Errors` permanently 0. | ✅ Closed: each sink `Write` defers `recordError()` on failure and exposes `SinkMetrics()`. | 0.5d | done |
 
 ### Tier C — 易用 (usability; production-blocking per §1.4)
 
 | ID | Gap | Fix sketch | Size | Impact |
 |----|-----|------------|------|--------|
-| **P5-13** | **README.md advertises the legacy Canal product, not the ETL framework** (Canal mode, hardcoded creds, manual DDL) — a new user clones and reads about the wrong product. | Rewrite README quickstart around the ETL framework + `/api/v2/*` + YAML pipes; point to `docs/quickstart.md`. | 1d | H |
-| **P5-14** | Pipeline create/update (`handlePipelines` POST/PUT, `server.go:1086-1128`) calls only `ApplyDefaults`+`ValidateSpec`, never `RunPreflight` → misconfigs (bad host) return `valid` and fail late/opaque at `/start`. | Call `RunPreflight` on create/update; attach `preflight_warnings`; reject on `level:error`. | 0.5d | H |
+| **P5-13** | **README.md advertises the legacy Canal product, not the ETL framework** (Canal mode, hardcoded creds, manual DDL) — a new user clones and reads about the wrong product. | ✅ Closed: README now leads with OpenETL-Go’s ETL/CDC model, `/api/v2/*`, quickstart, docs, and capability matrix. | 1d | H→done |
+| **P5-14** | Pipeline create/update (`handlePipelines` POST/PUT, `server.go:1086-1128`) calls only `ApplyDefaults`+`ValidateSpec`, never `RunPreflight` → misconfigs (bad host) return `valid` and fail late/opaque at `/start`. | ✅ Closed: create/update call `RunPreflight`, reject `level:error`, and return warnings in the response. | 0.5d | H→done |
 | **P5-15** ✅ | Sink/source error messages omit WHERE (host/port/db/table) — §4.3 violation (`clickhouse.go`, `mysql_cdc.go`, others). | ✅ Done (Wave 4): connect/ping/create errors across 9 sinks + CDC/batch sources now carry `(host:port, db)` / `(brokers, topic)` / `(endpoint, bucket, region)`, replicating the `doris.go` template. | 1d | H→done |
-| **P5-16** | **P4-23 refuted**: JSON logging is inert — no code reads `LOGGER_FORMAT`/`stdoutFormat`/`fileFormat`; config comment is false. | Install a glog JSON handler gated on `LOGGER_FORMAT=json` (or GoFrame `g.Log().SetConfig` with a JSON writer); document. | 0.5d | H |
-| P5-17 | Shipped quickstart example pipe broken — combined `host: quickstart-clickhouse:9000` (`pipes-quickstart/order-aggregation-demo.yaml:31`) → DNS fail at `clickhouse.Open`. | Split into `host` + `port`. | 0.1d | H |
-| P5-18 | `GET /api/v2/plugins/schema` omits real keys (`auto_create`/`schema_drift`/`insert_chunk_size` for mysql/postgres — `schema.go:129-140,162-172`) → users conclude auto-create unsupported. | Complete the schema (or auto-generate from struct tags). | 0.5d | M |
-| P5-19 | Default `pipes/` has no `mysql_cdc → clickhouse` canonical example (SPEC §1.3); it lives only in `pipes-quickstart/`. | Add a canonical example to `pipes/` that loads under the default Dockerfile. | 0.25d | M |
-| P5-20 | `docker-compose.dev.yml` doesn't pass `CLICKHOUSE_HOST/PORT/PASSWORD` to the ETL container → monitor writes silently fail inside the container. | Add the env vars. | 0.1d | M |
-| P5-21 | Quickstart drift: `docker-compose.quickstart.yml` `MYSQL_DATABASE: demo` vs init SQL `dzh3136_go`; `docs/quickstart.md` stale hostnames + `file_sink` example uses `path` (should be `output_dir`). | Unify the two quickstarts; fix the file_sink example. | 0.5d | M |
+| **P5-16** | **P4-23 refuted**: JSON logging is inert — no code reads `LOGGER_FORMAT`/`stdoutFormat`/`fileFormat`; config comment is false. | ✅ Closed: `internal/logic/app/logging.go` installs a real glog JSON stdout handler when `LOGGER_FORMAT=json`. | 0.5d | H→done |
+| P5-17 | Shipped quickstart example pipe broken — combined `host: quickstart-clickhouse:9000` (`pipes-quickstart/order-aggregation-demo.yaml:31`) → DNS fail at `clickhouse.Open`. | ✅ Closed: quickstart pipe uses distinct `host` / `port` and matching HTTP settings. | 0.1d | H→done |
+| P5-18 | `GET /api/v2/plugins/schema` omits real keys (`auto_create`/`schema_drift`/`insert_chunk_size` for mysql/postgres — `schema.go:129-140,162-172`) → users conclude auto-create unsupported. | ✅ Closed: schema includes implemented fields/aliases across sources, sinks, and transforms; covered by `schema_test.go`. | 0.5d | M→done |
+| P5-19 | Default `pipes/` has no `mysql_cdc → clickhouse` canonical example (SPEC §1.3); it lives only in `pipes-quickstart/`. | ✅ Closed: `pipes/mysql-cdc-to-clickhouse.yaml` ships as the canonical example. | 0.25d | M→done |
+| P5-20 | `docker-compose.dev.yml` doesn't pass `CLICKHOUSE_HOST/PORT/PASSWORD` to the ETL container → monitor writes silently fail inside the container. | ✅ Closed: dev compose now injects ClickHouse monitor env vars into `openetl-go`. | 0.1d | M→done |
+| P5-21 | Quickstart drift: `docker-compose.quickstart.yml` `MYSQL_DATABASE: demo` vs init SQL `dzh3136_go`; `docs/quickstart.md` stale hostnames + `file_sink` example uses `path` (should be `output_dir`). | ✅ Closed: quickstart compose/docs/specs are aligned on `dzh3136_go`, ClickHouse HTTP, and `output_dir`. | 0.5d | M→done |
 
 ### Tier D — 轻量 (lightweight; §6.1)
 
@@ -475,7 +474,7 @@ Carried-forward v2 items keep their `P4-n` ID. Evidence and fix sketches are sum
 |----|-----|------------|------|--------|
 | P5-22 | Lua (`gopher-lua`) linked into the default binary (`lua.go` + `pipeline/hooks.go`). | ✅ **Done (Wave 4)**: opt-out `//go:build !nolua` — the default build keeps Lua (non-breaking), `-tags=nolua` drops gopher-lua via `lua_nolua.go` + `lua_hook_nolua.go` stubs; `type:lua` returns a clear error under nolua. Verified: `go list -deps -tags=nolua` is free of gopher-lua. | — | done |
 | P5-23 | GoFrame HTTP server boots alongside the ETL API. | **Retracted/deferred**: the GoFrame server (`:8000`) serves the UI (`resource/public`) AND proxies `/api/v2/*` to `:8001` — "skipping" it removes the UI. The dual-listener is intentional (unified port). A headless API-only mode is a feature, not a fix. | — | retracted |
-| P5-25 | `config.yaml` is ~50% legacy Canal config. | ✅ Added `manifest/config/config.etl.yaml` — minimal single-node ETL template (server+etl+logger, SQLite, no Canal/sync/database). `config.yaml` unchanged for backward compat. | 0.5d | done |
+| P5-25 | `config.yaml` was legacy-Canal-heavy. | ✅ Default `manifest/config/config.yaml` is now a minimal single-node ETL template (server+etl+logger, SQLite, no Canal/sync/database). | 0.5d | done |
 | P5-26 | Default `extismPkg` unpinned. | ✅ Pinned `@extism/js-pdk@1.1.0` (Wave 2); env overrides. | 0.1d | done |
 | P5-24 *(optional/defer)* | All 9 sink connectors linked unconditionally (~77MB binary is sink-dominated). | Per-sink build tags with no-op stubs, or a `sinks_all` default. | 2–3d | M |
 
@@ -540,8 +539,8 @@ podman exec etl-go-dev go build -tags=nolua -o /tmp/oa-nolua .                  
 ```
 
 **Definition of Done (per item)**: every acceptance checkbox met · `-race` green for changed
-packages · relevant `hack/e2e-*.sh` green · `go vet` clean · SPEC updated if the bar moved ·
-one-line entry appended to `TODO.md` Done Log.
+packages · relevant `hack/e2e-*.sh` green · `go vet` clean · SPEC and paired docs updated
+if the bar moved.
 
 ---
 

@@ -17,9 +17,12 @@ data-cdc-crash/
 data-duplicate-spec/
 data-snapshot-cdc/
 data-snapshot-cdc-crash/
+internal/etl/**/data/
+internal/etl/**/logs/
+testdata/
 log/
 logs/
-screenshots/
+.playwright-cli/
 web/node_modules
 .vscode
 .idea

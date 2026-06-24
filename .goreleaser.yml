@@ -110,7 +110,6 @@ dockers:
       - manifest
       - resource
       - pipes
-      - testdata
     skip_push: auto
 
 release:

@@ -14,7 +14,7 @@ git clone <repo-url> openetl-go
 cd openetl-go
 
 # 启动全部依赖（MySQL、ClickHouse、MinIO、Redpanda）+ ETL 服务
-podman-compose -f docker-compose.dev.yml up -d
+podman compose -f docker-compose.quickstart.yml up -d
 
 # 验证服务
 curl http://localhost:8000/api/v2/health
@@ -31,7 +31,7 @@ export ETL_API_TOKEN=$(openssl rand -hex 16)
 export ETL_SPEC_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
 # 重启服务使配置生效
-podman-compose -f docker-compose.dev.yml restart openetl-go
+podman compose -f docker-compose.quickstart.yml restart etl
 ```
 
 ---
@@ -52,10 +52,10 @@ name: mysql-to-clickhouse
 source:
   type: mysql_cdc
   config:
-    host: etl-mysql-source
+    host: quickstart-mysql
     port: 3306
-    user: sync_user
-    password: sync_password_123
+    user: root
+    password: root123
     database: dzh3136_go
     tables: ["orders"]
 
@@ -68,10 +68,11 @@ transforms:
 sink:
   type: clickhouse
   config:
-    host: etl-clickhouse
-    port: 9000
+    host: quickstart-clickhouse
+    port: 8123
+    protocol: http
     user: default
-    password: dzh123456
+    password: clickhouse
     database: dzh3136_go
     auto_create: true
     schema_drift: add_columns

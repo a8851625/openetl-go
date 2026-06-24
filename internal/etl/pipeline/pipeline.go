@@ -744,6 +744,9 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	var transformed []core.Record
 	processed := make([]core.Record, len(batch))
 	copy(processed, batch)
+	filteredCount := 0
+	transformFailureCount := 0
+	batchTransformZeroOutput := false
 
 	// Check if any transform in the chain is a BatchTransform.
 	hasBatch := false
@@ -764,6 +767,7 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			return
 		}
 		transformed = out
+		batchTransformZeroOutput = len(transformed) == 0
 	} else {
 		// Per-record path (original behavior).
 		transformed = make([]core.Record, 0, len(batch))
@@ -771,8 +775,10 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			tRec, err := r.transforms.Apply(ctx, rec)
 			if err != nil {
 				if errors.Is(err, core.ErrRecordFiltered) {
+					filteredCount++
 					continue
 				}
+				transformFailureCount++
 				r.handleFailedRecord(ctx, rec, err)
 				continue
 			}
@@ -781,7 +787,23 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	}
 
 	if len(transformed) == 0 {
-		r.saveCommittedCheckpoint(ctx, processed)
+		if !hasBatch && filteredCount == len(processed) && transformFailureCount == 0 {
+			r.saveCommittedCheckpoint(ctx, processed)
+			return
+		}
+		reason := fmt.Sprintf("filtered=%d failed=%d", filteredCount, transformFailureCount)
+		if batchTransformZeroOutput {
+			reason = "batch transform produced no records"
+		}
+		r.logWarn(fmt.Sprintf("zero-survivor batch not checkpointed (%s); records may replay on restart", reason))
+		if r.alertManager != nil {
+			r.alertManager.Send(ctx, alert.Event{
+				Level:   alert.LevelWarning,
+				Title:   "Zero-survivor batch not checkpointed",
+				Message: fmt.Sprintf("Pipeline %s produced no sink records for a batch (%s); checkpoint was not advanced to avoid data loss.", r.spec.Name, reason),
+				JobName: r.spec.Name,
+			})
+		}
 		return
 	}
 

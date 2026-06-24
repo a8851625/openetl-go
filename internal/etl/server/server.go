@@ -56,10 +56,10 @@ type Server struct {
 	// distributed enables master-role shard dispatch (A11-redo): parallel
 	// pipelines delegate shard execution to worker processes instead of running
 	// inline. Set via SetDistributed when etl.role=master.
-	distributed bool
-	dlqTTL           time.Duration
-	dlqMaxCount      int
-	schemaRegistry   *SchemaRegistry
+	distributed    bool
+	dlqTTL         time.Duration
+	dlqMaxCount    int
+	schemaRegistry *SchemaRegistry
 }
 
 // SetDistributed enables master-role distributed dispatch (A11-redo): parallel
@@ -736,25 +736,25 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 	if exists {
 		warnings = append(warnings, "pipeline already exists; create would return 409")
 	}
-		idempotencyWarnings := pipeline.ValidateIdempotency(&spec)
-		warnings = append(warnings, idempotencyWarnings...)
+	idempotencyWarnings := pipeline.ValidateIdempotency(&spec)
+	warnings = append(warnings, idempotencyWarnings...)
 
-		// Run preflight checks (P4-11, SV-2+SV-3). Error-level issues
-		// indicate a hard misconfiguration (e.g., MySQL binlog format) and
-		// should prevent pipeline creation. Reachability warnings don't.
-		preflightValid := true
-		if preflightResult := s.RunPreflight(r.Context(), &spec); preflightResult != nil {
-			for _, issue := range preflightResult.Issues {
-				if issue.Level == "error" {
-					warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
-					preflightValid = false
-				} else {
-					warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
-				}
+	// Run preflight checks (P4-11, SV-2+SV-3). Error-level issues
+	// indicate a hard misconfiguration (e.g., MySQL binlog format) and
+	// should prevent pipeline creation. Reachability warnings don't.
+	preflightValid := true
+	if preflightResult := s.RunPreflight(r.Context(), &spec); preflightResult != nil {
+		for _, issue := range preflightResult.Issues {
+			if issue.Level == "error" {
+				warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
+				preflightValid = false
+			} else {
+				warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
 			}
 		}
-		json.NewEncoder(w).Encode(map[string]any{"valid": preflightValid, "warnings": warnings, "spec": spec})
 	}
+	json.NewEncoder(w).Encode(map[string]any{"valid": preflightValid, "warnings": warnings, "spec": spec})
+}
 
 func (s *Server) handleConnectionTest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -945,6 +945,19 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"events": result})
 }
 
+func formatPreflightIssues(pr *PreflightResult) (warnings []string, hasError bool) {
+	if pr == nil {
+		return nil, false
+	}
+	for _, issue := range pr.Issues {
+		warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
+		if issue.Level == "error" {
+			hasError = true
+		}
+	}
+	return warnings, hasError
+}
+
 func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -1101,19 +1114,19 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Run preflight at create time so misconfigurations (wrong binlog format,
-		// missing grants/tables, unreachable sink) surface immediately instead
-		// of failing late and opaque at /start (P5-14). Non-blocking: the
-		// pipeline is still created; warnings + preflight_valid are returned.
-		createWarnings := []string{}
-		preflightValid := true
-		if pr := s.RunPreflight(r.Context(), &spec); pr != nil {
-			for _, issue := range pr.Issues {
-				createWarnings = append(createWarnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
-				if issue.Level == "error" {
-					preflightValid = false
-				}
-			}
+		// Run preflight at create time so hard misconfigurations (wrong binlog
+		// format, missing grants, bad source credentials) fail before the
+		// pipeline is persisted. Warning-level issues are returned but do not
+		// block creation.
+		createWarnings, hasPreflightError := formatPreflightIssues(s.RunPreflight(r.Context(), &spec))
+		if hasPreflightError {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":              "preflight failed",
+				"preflight_valid":    false,
+				"preflight_warnings": createWarnings,
+			})
+			return
 		}
 
 		runner, err := s.newRunner(&spec)
@@ -1144,7 +1157,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"name":               spec.Name,
 			"status":             runner.Status(),
-			"preflight_valid":    preflightValid,
+			"preflight_valid":    true,
 			"preflight_warnings": createWarnings,
 		})
 
@@ -1271,6 +1284,20 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		updateWarnings, hasPreflightError := formatPreflightIssues(s.RunPreflight(r.Context(), &spec))
+		if hasPreflightError {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":              "preflight failed",
+				"preflight_valid":    false,
+				"preflight_warnings": updateWarnings,
+				"spec_changed":       specChanged,
+				"checkpoint_warning": checkpointWarning,
+				"checkpoint_reset":   req.ResetCheckpoint,
+			})
+			return
+		}
+
 		// Stop old runner if exists
 		s.mu.Lock()
 		if oldRunner, ok := s.pipelines[spec.Name]; ok {
@@ -1306,6 +1333,8 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"name":               spec.Name,
 			"status":             runner.Status(),
+			"preflight_valid":    true,
+			"preflight_warnings": updateWarnings,
 			"spec_changed":       specChanged,
 			"checkpoint_warning": checkpointWarning,
 			"checkpoint_reset":   req.ResetCheckpoint,
@@ -2829,7 +2858,7 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 			BackpressureDepth:    pipelineMetrics.BackpressureDepth,
 			BackpressureCapacity: pipelineMetrics.BackpressureCapacity,
 			CircuitBreakerState:  runner.CircuitBreakerState(),
-				SinkMetrics:          convertSinkMetrics(runner.SinkMetrics()),
+			SinkMetrics:          convertSinkMetrics(runner.SinkMetrics()),
 			StartedAt:            stats.StartedAt,
 			Uptime:               stats.Uptime,
 		})
@@ -3305,43 +3334,43 @@ dlq:
 	content = strings.TrimSpace(content)
 
 	// Validate the generated YAML through ValidateSpec + RunPreflight
-		// so callers know immediately whether the LLM output is usable (P4-24, SV-4).
-		var validation map[string]any
-		var spec pipeline.Spec
-		if err := yaml.Unmarshal([]byte(content), &spec); err != nil {
+	// so callers know immediately whether the LLM output is usable (P4-24, SV-4).
+	var validation map[string]any
+	var spec pipeline.Spec
+	if err := yaml.Unmarshal([]byte(content), &spec); err != nil {
+		validation = map[string]any{
+			"valid":  false,
+			"errors": []string{"parse YAML: " + err.Error()},
+		}
+	} else {
+		pipeline.ApplyDefaults(&spec)
+		if err := pipeline.ValidateSpec(&spec); err != nil {
 			validation = map[string]any{
 				"valid":  false,
-				"errors": []string{"parse YAML: " + err.Error()},
+				"errors": []string{err.Error()},
 			}
 		} else {
-			pipeline.ApplyDefaults(&spec)
-			if err := pipeline.ValidateSpec(&spec); err != nil {
-				validation = map[string]any{
-					"valid":  false,
-					"errors": []string{err.Error()},
-				}
-			} else {
-				preflightResult := s.RunPreflight(r.Context(), &spec)
-				preflightIssues := []string{}
-				preflightErrCount := 0
-				if preflightResult != nil {
-					for _, issue := range preflightResult.Issues {
-						preflightIssues = append(preflightIssues, fmt.Sprintf("[%s] %s", issue.Check, issue.Message))
-						if issue.Level == "error" {
-							preflightErrCount++
-						}
+			preflightResult := s.RunPreflight(r.Context(), &spec)
+			preflightIssues := []string{}
+			preflightErrCount := 0
+			if preflightResult != nil {
+				for _, issue := range preflightResult.Issues {
+					preflightIssues = append(preflightIssues, fmt.Sprintf("[%s] %s", issue.Check, issue.Message))
+					if issue.Level == "error" {
+						preflightErrCount++
 					}
 				}
-				validation = map[string]any{
-					"valid":           preflightErrCount == 0,
-					"warnings":        preflightIssues,
-					"preflightPassed": preflightResult == nil || preflightErrCount == 0,
-				}
+			}
+			validation = map[string]any{
+				"valid":           preflightErrCount == 0,
+				"warnings":        preflightIssues,
+				"preflightPassed": preflightResult == nil || preflightErrCount == 0,
 			}
 		}
+	}
 
-		json.NewEncoder(w).Encode(map[string]any{
-			"yaml":       content,
-			"validation": validation,
-		})
+	json.NewEncoder(w).Encode(map[string]any{
+		"yaml":       content,
+		"validation": validation,
+	})
 }

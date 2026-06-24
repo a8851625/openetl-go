@@ -32,7 +32,6 @@ COPY --from=builder /app/main .
 COPY --from=builder /app/resource ./resource
 COPY --from=builder /app/manifest ./manifest
 COPY --from=builder /app/pipes ./pipes
-COPY --from=builder /app/testdata ./testdata
 
 # Create data directories with correct permissions
 RUN mkdir -p data/checkpoint data/dlq data/output && chown -R etl:etl /app

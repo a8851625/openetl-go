@@ -29,9 +29,10 @@ sink:
   type: clickhouse
   config:
     host: quickstart-clickhouse
-    port: 9000
+    port: 8123
+    protocol: http
     user: default
-    password: ""
+    password: "clickhouse"
     database: dzh3136_go
     table: order_window_agg
     auto_create: true

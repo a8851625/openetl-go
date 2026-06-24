@@ -48,7 +48,7 @@ dlq:
 source:
   type: file
   config:
-    path: /app/testdata/files/customers.jsonl
+    path: /app/data/input/customers.jsonl
     format: json
     delimiter: ","
     has_header: true
@@ -56,7 +56,7 @@ source:
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `path` | yes | | File path inside the container. |
+| `path` | yes | | File path inside the container. Mount input files under `/app/data/input` for Docker deployments. |
 | `format` | no | `csv` | `json` (JSON Lines) or `csv`. |
 | `delimiter` | no | `,` | CSV delimiter. |
 | `has_header` | no | `true` | Whether CSV first row contains column names. |

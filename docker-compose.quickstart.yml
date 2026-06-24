@@ -1,7 +1,7 @@
 version: '3.8'
 
 # ════════════════════════════════════════════════════════════════════
-# Sync Canal ETL — Quick Start
+# OpenETL-Go — Quick Start
 #
 # One-command demo: MySQL CDC → ClickHouse
 #
@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root123
-      MYSQL_DATABASE: demo
+      MYSQL_DATABASE: dzh3136_go
       MYSQL_USER: etl
       MYSQL_PASSWORD: etl123
       TZ: UTC
@@ -64,7 +64,7 @@ services:
       timeout: 5s
       retries: 20
 
-  # ── Sync Canal ETL App ───────────────────────────────────────────
+  # ── OpenETL-Go App ───────────────────────────────────────────────
   etl:
     build:
       context: .
