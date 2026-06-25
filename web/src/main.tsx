@@ -30,6 +30,43 @@ type DLQItem = { job_name: string; record: { operation: string; data: Record<str
 type AuditEvent = { timestamp?: string; action?: string; target?: string; method?: string; path?: string };
 type PipelineLogEntry = { timestamp: string; message: string; level: string; seq: number };
 
+function zeroPipelineStats(raw: any = {}): PipelineStats {
+  return {
+    records_read: Number(raw.records_read) || 0,
+    records_written: Number(raw.records_written) || 0,
+    records_failed: Number(raw.records_failed) || 0,
+    records_dlq: Number(raw.records_dlq) || 0,
+    last_error: typeof raw.last_error === 'string' ? raw.last_error : undefined,
+    last_checkpoint: typeof raw.last_checkpoint === 'string' ? raw.last_checkpoint : undefined,
+    started_at: typeof raw.started_at === 'string' ? raw.started_at : undefined,
+    uptime: typeof raw.uptime === 'string' ? raw.uptime : undefined,
+    bytes_read: Number(raw.bytes_read) || 0,
+    bytes_written: Number(raw.bytes_written) || 0,
+    dlq_replay_count: Number(raw.dlq_replay_count) || 0,
+    dlq_delete_count: Number(raw.dlq_delete_count) || 0,
+  };
+}
+
+function normalizePipeline(raw: unknown): Pipeline | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const p = raw as any;
+  const name = typeof p.name === 'string' ? p.name.trim() : '';
+  if (!name) return null;
+  return {
+    ...p,
+    name,
+    status: typeof p.status === 'string' && p.status ? p.status : 'unknown',
+    stats: zeroPipelineStats(p.stats),
+    tags: Array.isArray(p.tags) ? p.tags.filter((tag: unknown): tag is string => typeof tag === 'string' && tag.trim() !== '') : [],
+    shards: Array.isArray(p.shards) ? p.shards.map((s: any) => ({ ...s, stats: zeroPipelineStats(s?.stats) })) : undefined,
+  };
+}
+
+function normalizePipelines(data?: { pipelines?: Pipeline[] | null }): Pipeline[] {
+  if (!Array.isArray(data?.pipelines)) return [];
+  return data.pipelines.map(normalizePipeline).filter((p): p is Pipeline => p !== null);
+}
+
 // New types for version management, DAG preview, and runtime preview
 type PipelineVersion = { id: number; pipeline: string; version: number; spec_yaml: string; created_at: string };
 type DAGNode = { id: string; kind: string; plugin: string; config?: Record<string, unknown>; x?: number; y?: number };
@@ -203,13 +240,13 @@ function App() {
   // Defend against API returning {pipelines: null} (Go nil slice → JSON null).
   // Optional chaining only short-circuits on undefined, not on a present-but-null
   // field, so `(d?.pipelines)` evaluates to null and `.find` would throw.
-  const pipelinesList = pipelines.data?.pipelines || [];
+  const pipelinesList = normalizePipelines(pipelines.data);
   const metricsList = metrics.data?.pipelines || [];
   const selected = pipelinesList.find((p) => p.name === selectedPipeline) || pipelinesList[0];
   const selectedMetric = metricsList.find((p) => p.name === selected?.name);
 
   const totals = useMemo(() => {
-    const list = pipelines.data?.pipelines || [];
+    const list = normalizePipelines(pipelines.data);
     return list.reduce((a, p) => ({
       read: a.read + p.stats.records_read, written: a.written + p.stats.records_written,
       failed: a.failed + p.stats.records_failed, dlq: a.dlq + p.stats.records_dlq,
@@ -302,7 +339,7 @@ function App() {
           </h1>
           <div className="flex items-center gap-3">
             <span className="text-xs text-slate-400">{t('top.autorefresh')}</span>
-            <div className={`status-dot ${pipelines.data?.pipelines.some(p => p.status === 'running') ? 'status-running' : 'status-stopped'}`} />
+            <div className={`status-dot ${pipelinesList.some(p => p.status === 'running') ? 'status-running' : 'status-stopped'}`} />
             {/* Quick lang toggle */}
             <button className="btn btn-ghost btn-sm flex items-center gap-1" onClick={() => switchLang(lang === 'en' ? 'zh' : 'en')} title={t('settings.language')}>
               <Icon.Globe className="h-4 w-4" />
@@ -462,7 +499,7 @@ function SettingsModal({ t, lang, token, setToken, switchLang, llmConfig, setLLM
 // Dashboard
 // ════════════════════════════════════════════════
 function DashboardPage({ t, totals, pipelines, selected, selectedMetric, onSelect }: { t: TFunc; lang: Lang; totals: any; pipelines: any; metrics: any; selected: any; selectedMetric: any; onSelect: (n: string) => void }) {
-  const pList = pipelines.data?.pipelines || [];
+  const pList = normalizePipelines(pipelines.data);
   const runningCount = pList.filter((p: Pipeline) => p.status === 'running').length;
   const failedCount = pList.filter((p: Pipeline) => p.status === 'failed').length;
   const health = pList.length > 0 ? Math.round((runningCount / pList.length) * 100) : 100;
@@ -984,12 +1021,12 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
 
   const allTags = useMemo(() => {
     const s = new Set<string>();
-    (pipelines.data?.pipelines || []).forEach((p: Pipeline) => (p.tags || []).forEach((tag) => s.add(tag)));
+    normalizePipelines(pipelines.data).forEach((p: Pipeline) => (p.tags || []).forEach((tag) => s.add(tag)));
     return Array.from(s).sort();
   }, [pipelines.data]);
 
   const filteredPipelines = useMemo(() => {
-    let list = pipelines.data?.pipelines || [];
+    let list = normalizePipelines(pipelines.data);
     if (tagFilter) list = list.filter((p: Pipeline) => (p.tags || []).includes(tagFilter));
     if (search) {
       const q = search.toLowerCase();
@@ -1349,7 +1386,7 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
       <div className="card">
         <div className="card-header"><h2 className="text-sm font-semibold">{t('dlq.selectPipeline')}</h2></div>
         <div className="card-body space-y-1">
-          {(pipelines.data?.pipelines || []).map((p: Pipeline) => (
+          {normalizePipelines(pipelines.data).map((p: Pipeline) => (
             <div key={p.name} className={`pipeline-row ${selected?.name === p.name ? 'selected' : ''} !p-3`} onClick={() => { onSelect(p.name); setRefreshKey(n => n + 1); }}>
               <span className={`status-dot status-${p.status}`} />
               <span className="truncate text-sm">{p.name}</span>

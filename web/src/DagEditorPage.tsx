@@ -490,11 +490,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     }
 
     // ── Linear format (backward compatible) ────────────
+    // Note: do NOT silently fall back to 'file'/'file_sink' when sourceNode/
+    // sinkNode are missing — that would let an empty canvas create a phantom
+    // pipeline. Leave source/sink undefined so validateAndCreate() rejects it.
     return {
       name: pipelineName,
-      source: { type: sourceNode?.data.plugin || 'file', config: sourceNode?.data.config || {} },
+      source: sourceNode ? { type: sourceNode.data.plugin || 'file', config: sourceNode.data.config || {} } : undefined,
       transforms: transforms.map((n) => ({ type: n.data.plugin, config: n.data.config })),
-      sink: { type: sinkNode?.data.plugin || 'file_sink', config: sinkNode?.data.config || {} },
+      sink: sinkNode ? { type: sinkNode.data.plugin || 'file_sink', config: sinkNode.data.config || {} } : undefined,
       schedule: schedule.type !== 'streaming' ? schedule : undefined,
       tags: tagList.length > 0 ? tagList : undefined,
       worker_selector: Object.keys(matchLabels).length > 0 ? { match_labels: matchLabels } : undefined,
@@ -508,7 +511,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   };
 
   const exportYaml = () => {
-    const spec = buildSpec();
+    const spec = { ...buildSpec(), name: trimmedName };
     const yamlStr = YAML.stringify(spec);
     setYamlOutput(yamlStr);
     return spec;
@@ -581,11 +584,21 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   };
 
   const validateAndCreate = () => {
+    // Guard: pipeline name must be non-empty (otherwise the backend creates
+    // a pipeline with name="" which corrupts subsequent pipeline listing and
+    // renders the Pipelines page blank).
+    const trimmedName = pipelineName.trim();
+    if (!trimmedName) {
+      onAction(t('dag.validate'), () => Promise.reject(new Error(t('dag.errNameRequired'))));
+      return;
+    }
+    setPipelineName(trimmedName);
+
     const spec = buildSpec();
     const hasSource = spec.source?.type || spec.dag?.nodes?.some((n: any) => n.kind === 'source');
     const hasSink = spec.sink?.type || spec.dag?.nodes?.some((n: any) => n.kind === 'sink');
     if (!hasSource || !hasSink) {
-      onAction(t('dag.validate'), () => Promise.reject(new Error('DAG needs at least one source and one sink')));
+      onAction(t('dag.validate'), () => Promise.reject(new Error(t('dag.errEmptyDag'))));
       return;
     }
     if (editTarget) {

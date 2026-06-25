@@ -260,6 +260,64 @@ const dict: Dict = {
   'category.flowControl': { en: 'Flow Control', zh: '流程控制' },
   'category.observe': { en: 'Observe', zh: '监控' },
   'category.enrich': { en: 'Enrich', zh: '数据丰富' },
+
+  // ── Common (extras used in Designer) ──
+  'common.enabled': { en: 'Enabled', zh: '已启用' },
+  'common.disabled': { en: 'Disabled', zh: '已禁用' },
+  'common.cron': { en: 'Cron expression', zh: 'Cron 表达式' },
+  'common.interval': { en: 'Interval', zh: '间隔' },
+
+  // ── Schedule (trigger type in Designer) ──
+  'sched.triggerType': { en: 'Trigger type', zh: '触发类型' },
+  'sched.streaming': { en: 'Streaming', zh: '流式' },
+  'sched.periodic': { en: 'Periodic', zh: '周期' },
+  'sched.cron': { en: 'Cron', zh: 'Cron 定时' },
+  'sched.once': { en: 'Once', zh: '一次性' },
+
+  // ── Status ──
+  'status.running': { en: 'Running', zh: '运行中' },
+  'status.failed': { en: 'Failed', zh: '失败' },
+
+  // ── Designer (DAG editor) ──
+  'design.name': { en: 'Pipeline name', zh: '管道名称' },
+  'design.copy': { en: 'Copy', zh: '复制' },
+  'design.yamlSpec': { en: 'YAML spec', zh: 'YAML 配置' },
+
+  'drawer.advanced': { en: 'Advanced', zh: '高级' },
+  'drawer.ai': { en: 'AI', zh: 'AI 助手' },
+  'drawer.hooks': { en: 'Hooks', zh: '钩子' },
+
+  'dag.plugin': { en: 'Plugin', zh: '插件' },
+  'dag.config': { en: 'Configuration', zh: '配置' },
+  'dag.nodeId': { en: 'Node ID', zh: '节点 ID' },
+  'dag.editing': { en: 'Editing: {name}', zh: '正在编辑：{name}' },
+  'dag.emptyHint': { en: 'Drag nodes from the left palette to start', zh: '从左侧拖拽节点开始设计' },
+  'dag.emptyHint2': { en: 'Tip: every pipeline needs at least one source and one sink', zh: '提示：每个管道至少需要一个源节点和一个汇节点' },
+  'dag.createPipeline': { en: 'Create Pipeline', zh: '创建管道' },
+  'dag.updatePipeline': { en: 'Update Pipeline', zh: '更新管道' },
+  'dag.updateResetCheckpoint': { en: 'Update & Reset Checkpoint', zh: '更新并重置检查点' },
+  'dag.validate': { en: 'Validate', zh: '校验' },
+  'dag.errNameRequired': { en: 'Pipeline name is required', zh: '请填写管道名称' },
+  'dag.errEmptyDag': { en: 'DAG needs at least one source and one sink', zh: '画布至少需要一个数据源和一个数据汇节点' },
+  'dag.exportYaml': { en: 'Export YAML', zh: '导出 YAML' },
+  'dag.deleteNode': { en: 'Delete node', zh: '删除节点' },
+  'dag.testConnection': { en: 'Test connection', zh: '测试连接' },
+  'dag.testing': { en: 'Testing...', zh: '测试中...' },
+  'dag.testSelectNode': { en: 'Select a node first', zh: '请先选中一个节点' },
+  'dag.parallelInstances': { en: 'Parallel instances', zh: '并行实例数' },
+  'dag.streamingDesc': { en: 'Streaming mode runs continuously', zh: '流式模式会持续运行' },
+  'dag.onceDesc': { en: 'Run once and exit', zh: '运行一次后退出' },
+  'dag.hooksDesc': { en: 'Lifecycle hooks (Lua/JS)', zh: '生命周期钩子（Lua/JS）' },
+  'dag.hookOnInit': { en: 'onInit', zh: '初始化时' },
+  'dag.hookOnPreBatch': { en: 'onPreBatch', zh: '批处理前' },
+  'dag.hookOnPostBatch': { en: 'onPostBatch', zh: '批处理后' },
+  'dag.hookOnError': { en: 'onError', zh: '错误时' },
+  'dag.hookOnCheckpoint': { en: 'onCheckpoint', zh: '检查点时' },
+  'dag.hookOnShutdown': { en: 'onShutdown', zh: '关闭时' },
+  'dag.generatePipeline': { en: 'Generate with AI', zh: '用 AI 生成' },
+  'dag.generating': { en: 'Generating...', zh: '生成中...' },
+  'dag.aiDesc': { en: 'Describe the pipeline you want and AI will draft the YAML', zh: '描述你想要的管道，AI 会帮你生成 YAML 草稿' },
+  'dag.aiPlaceholder': { en: 'e.g. CDC from mysql users table to clickhouse, deduplicate by id', zh: '例如：从 MySQL users 表 CDC 同步到 ClickHouse，按 id 去重' },
 };
 
 export function getLang(): Lang {
