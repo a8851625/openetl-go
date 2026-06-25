@@ -146,7 +146,16 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 		}
 	}
 	if v, ok := config["schema_drift"]; ok {
-		s.schemaDrift = v.(string)
+		switch val := v.(type) {
+		case string:
+			s.schemaDrift = val
+		case bool:
+			if val {
+				s.schemaDrift = "add_columns"
+			} else {
+				s.schemaDrift = "ignore"
+			}
+		}
 	}
 	if v, ok := config["ddl_policy"]; ok {
 		if vs, ok := v.(string); ok {
@@ -377,7 +386,11 @@ func (s *ClickHouseSink) optimizeLoop(ctx context.Context) {
 }
 
 func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err error) {
-	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
+	defer func() {
+		if err != nil {
+			s.recordError()
+		}
+	}() // P5-12: count write failures
 	// Separate DDL records — they are applied directly, not batched.
 	var ddlRecords []core.Record
 	var dataRecords []core.Record

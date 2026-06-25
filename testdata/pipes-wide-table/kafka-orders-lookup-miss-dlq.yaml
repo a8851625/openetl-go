@@ -1,0 +1,42 @@
+name: kafka-orders-lookup-miss-dlq
+
+source:
+  type: kafka
+  config:
+    brokers:
+      - host.containers.internal:19092
+    topic: orders.lookup_miss
+    group_id: openetl-wide-table-lookup-miss-dlq
+    initial_offset: oldest
+
+transforms:
+  - type: normalize_envelope
+    config:
+      keep_metadata: true
+  - type: lookup
+    config:
+      dsn: root:root123456@tcp(host.containers.internal:13306)/dzh3136_go?timeout=5s&readTimeout=5s&writeTimeout=5s
+      query: SELECT id, tier, region FROM dim_users
+      join_key: user_id
+      dim_key: id
+      fields:
+        - tier
+        - region
+      refresh_interval_sec: 0
+      on_miss: dlq
+      on_refresh_error: error
+
+sink:
+  type: clickhouse
+  config:
+    host: host.containers.internal
+    port: 9000
+    user: default
+    password: dzh123456
+    database: wide
+    table: lookup_miss_dlq_sink
+    auto_create: true
+    schema_drift: add_columns
+    pk_columns:
+      - id
+    version_column: _version

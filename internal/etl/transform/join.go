@@ -2,14 +2,17 @@ package transform
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/state"
 )
 
 func init() {
@@ -34,6 +37,8 @@ func init() {
 //	                "drop" (default, silent — indistinguishable from a filter)
 //	                | "dlq" (route the unmatched record to the DLQ so misses
 //	                are visible — useful for catching schema/data drift)
+//	state_backend: "sqlite" optional durable state backend for buffered records
+//	state_path:    SQLite state database path when state_backend=sqlite
 type JoinTransform struct {
 	name       string
 	joinType   string
@@ -43,14 +48,38 @@ type JoinTransform struct {
 	prefix     string
 	whereExpr  string
 	onMiss     string
+	maxKeys    int
+	maxRecords int
 
 	mu    sync.RWMutex
 	state map[string][]joinEntry // key → buffered records
+	// bufferedRecords mirrors the number of entries in state. It lets the
+	// transform enforce a global cap without scanning every key on each record.
+	bufferedRecords int
+
+	store         state.Store
+	stateOwner    bool
+	pipeline      string
+	node          string
+	stateTTL      time.Duration
+	stateRestored bool
+
+	hits        int64
+	misses      int64
+	missDropped int64
+	missDLQ     int64
+	missError   int64
+	limitErrors int64
 }
 
 type joinEntry struct {
 	record    core.Record
 	timestamp time.Time
+}
+
+type persistedJoinEntry struct {
+	Record    core.Record `json:"record"`
+	Timestamp time.Time   `json:"timestamp"`
 }
 
 func NewJoinTransform(config map[string]any) (*JoinTransform, error) {
@@ -59,6 +88,8 @@ func NewJoinTransform(config map[string]any) (*JoinTransform, error) {
 		joinType:  "inner",
 		windowDur: 60 * time.Second,
 		prefix:    "joined_",
+		pipeline:  "default",
+		node:      "join",
 	}
 	if v, ok := config["join_type"]; ok {
 		if s, ok := v.(string); ok {
@@ -97,6 +128,16 @@ func NewJoinTransform(config map[string]any) (*JoinTransform, error) {
 			t.whereExpr = s
 		}
 	}
+	if v, ok := config["max_buffered_keys"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.maxKeys = n
+		}
+	}
+	if v, ok := config["max_buffered_records"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.maxRecords = n
+		}
+	}
 	t.onMiss = "drop"
 	if v, ok := config["on_miss"]; ok {
 		if s, ok := v.(string); ok {
@@ -122,19 +163,71 @@ func NewJoinTransform(config map[string]any) (*JoinTransform, error) {
 		return nil, fmt.Errorf("join: right join is not supported in stream model")
 	}
 	t.state = make(map[string][]joinEntry)
+	if v, ok := config["state_pipeline"].(string); ok && v != "" {
+		t.pipeline = v
+	}
+	if v, ok := config["state_node"].(string); ok && v != "" {
+		t.node = v
+	}
+	if v, ok := config["state_ttl_seconds"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.stateTTL = time.Duration(n) * time.Second
+		}
+	}
+	if backend, ok := config["state_backend"].(string); ok && backend != "" {
+		switch strings.ToLower(backend) {
+		case "sqlite":
+			path, _ := config["state_path"].(string)
+			if path == "" {
+				path = "./data/etl-state.db"
+			}
+			store, err := state.NewSQLiteStore(path)
+			if err != nil {
+				return nil, fmt.Errorf("join: open state store: %w", err)
+			}
+			t.store = store
+			t.stateOwner = true
+		default:
+			return nil, fmt.Errorf("join: unsupported state_backend %q", backend)
+		}
+	}
 	return t, nil
 }
 
 func (t *JoinTransform) Name() string { return "join" }
+
+// WithStateStore wires a shared state backend into join. It is primarily used
+// by tests today and provides the same future runner-injection seam as
+// lookup/deduplicate.
+func (t *JoinTransform) WithStateStore(store state.Store, pipeline, node string, ttl time.Duration) *JoinTransform {
+	t.store = store
+	t.stateOwner = false
+	if pipeline != "" {
+		t.pipeline = pipeline
+	}
+	if node != "" {
+		t.node = node
+	}
+	t.stateTTL = ttl
+	t.stateRestored = false
+	return t
+}
 
 // handleMiss routes an inner-join miss per on_miss: "drop" (default) returns
 // ErrRecordFiltered so the runner drops it silently; "dlq"/"error" return a
 // real error so the pipeline routes the record to the DLQ — making misses
 // visible instead of indistinguishable from a filter (TF-7).
 func (t *JoinTransform) handleMiss(rec core.Record) (core.Record, error) {
-	if t.onMiss == "dlq" || t.onMiss == "error" {
+	atomic.AddInt64(&t.misses, 1)
+	switch t.onMiss {
+	case "dlq":
+		atomic.AddInt64(&t.missDLQ, 1)
+		return rec, fmt.Errorf("join: no match for key=%v (on_miss=%s)", rec.Data[t.joinKey], t.onMiss)
+	case "error":
+		atomic.AddInt64(&t.missError, 1)
 		return rec, fmt.Errorf("join: no match for key=%v (on_miss=%s)", rec.Data[t.joinKey], t.onMiss)
 	}
+	atomic.AddInt64(&t.missDropped, 1)
 	return rec, core.ErrRecordFiltered
 }
 
@@ -159,6 +252,10 @@ func (t *JoinTransform) Apply(ctx context.Context, rec core.Record) (core.Record
 	now := time.Now()
 
 	t.mu.Lock()
+	if err := t.restoreStateLocked(ctx, now); err != nil {
+		t.mu.Unlock()
+		return rec, err
+	}
 	// Evict expired entries from the window.
 	t.evictLocked(now)
 
@@ -177,10 +274,23 @@ func (t *JoinTransform) Apply(ctx context.Context, rec core.Record) (core.Record
 	}
 
 	// Store current record for future joins.
+	if err := t.checkStateLimitLocked(key); err != nil {
+		atomic.AddInt64(&t.limitErrors, 1)
+		t.mu.Unlock()
+		return rec, err
+	}
 	t.state[key] = append(entries, joinEntry{record: rec, timestamp: now})
+	t.bufferedRecords++
+	if err := t.persistJoinKeyLocked(ctx, key); err != nil {
+		t.mu.Unlock()
+		return rec, err
+	}
 	t.mu.Unlock()
 
 	if matched == nil {
+		if t.joinType != "inner" {
+			atomic.AddInt64(&t.misses, 1)
+		}
 		if t.joinType == "inner" {
 			return t.handleMiss(rec)
 		}
@@ -200,6 +310,8 @@ func (t *JoinTransform) Apply(ctx context.Context, rec core.Record) (core.Record
 		return rec, nil
 	}
 
+	atomic.AddInt64(&t.hits, 1)
+
 	// Copy joined fields with prefix.
 	for _, f := range t.joinFields {
 		if v, ok := matched.Data[f]; ok {
@@ -208,6 +320,132 @@ func (t *JoinTransform) Apply(ctx context.Context, rec core.Record) (core.Record
 	}
 
 	return rec, nil
+}
+
+func (t *JoinTransform) restoreStateLocked(ctx context.Context, now time.Time) error {
+	if t.stateRestored {
+		return nil
+	}
+	t.stateRestored = true
+	if t.store == nil {
+		return nil
+	}
+	snap, err := t.store.Snapshot(ctx, t.pipeline, t.node)
+	if err != nil {
+		return fmt.Errorf("join: snapshot state: %w", err)
+	}
+	if snap == nil || len(snap.Entries) == 0 {
+		return nil
+	}
+	cutoff := now.Add(-t.windowDur)
+	for _, entry := range snap.Entries {
+		var persisted []persistedJoinEntry
+		if err := json.Unmarshal(entry.Value, &persisted); err != nil {
+			return fmt.Errorf("join: unmarshal state key %q: %w", entry.Key, err)
+		}
+		restored := make([]joinEntry, 0, len(persisted))
+		for _, e := range persisted {
+			if e.Timestamp.After(cutoff) {
+				restored = append(restored, joinEntry{record: e.Record, timestamp: e.Timestamp})
+			}
+		}
+		if len(restored) == 0 {
+			if err := t.store.Delete(ctx, t.pipeline, t.node, entry.Key); err != nil {
+				return fmt.Errorf("join: delete expired state key %q: %w", entry.Key, err)
+			}
+			continue
+		}
+		sort.SliceStable(restored, func(i, j int) bool {
+			return restored[i].timestamp.Before(restored[j].timestamp)
+		})
+		t.state[entry.Key] = restored
+		t.bufferedRecords += len(restored)
+	}
+	return nil
+}
+
+func (t *JoinTransform) checkStateLimitLocked(key string) error {
+	if t.maxKeys > 0 {
+		if _, exists := t.state[key]; !exists && len(t.state) >= t.maxKeys {
+			return fmt.Errorf("join: state key limit exceeded (%d)", t.maxKeys)
+		}
+	}
+	if t.maxRecords > 0 && t.bufferedRecords >= t.maxRecords {
+		return fmt.Errorf("join: state record limit exceeded (%d)", t.maxRecords)
+	}
+	return nil
+}
+
+func (t *JoinTransform) persistJoinKeyLocked(ctx context.Context, key string) error {
+	if t.store == nil {
+		return nil
+	}
+	entries := t.state[key]
+	if len(entries) == 0 {
+		if err := t.store.Delete(ctx, t.pipeline, t.node, key); err != nil {
+			return fmt.Errorf("join: delete state key %q: %w", key, err)
+		}
+		return nil
+	}
+	persisted := make([]persistedJoinEntry, 0, len(entries))
+	for _, entry := range entries {
+		persisted = append(persisted, persistedJoinEntry{
+			Record:    entry.record,
+			Timestamp: entry.timestamp,
+		})
+	}
+	value, err := json.Marshal(persisted)
+	if err != nil {
+		return fmt.Errorf("join: marshal state key %q: %w", key, err)
+	}
+	ttl := t.stateTTL
+	if ttl <= 0 {
+		ttl = t.windowDur
+	}
+	if err := t.store.Set(ctx, t.pipeline, t.node, key, value, ttl); err != nil {
+		return fmt.Errorf("join: set state key %q: %w", key, err)
+	}
+	return nil
+}
+
+func (t *JoinTransform) Close() error {
+	if t.stateOwner && t.store != nil {
+		return t.store.Close()
+	}
+	return nil
+}
+
+func (t *JoinTransform) SnapshotState(ctx context.Context) (string, string, bool, error) {
+	if t.store == nil {
+		return "", "", false, nil
+	}
+	snap, err := t.store.Snapshot(ctx, t.pipeline, t.node)
+	if err != nil {
+		return t.node, "", false, fmt.Errorf("join: snapshot state: %w", err)
+	}
+	if snap == nil || len(snap.Entries) == 0 {
+		return t.node, "", false, nil
+	}
+	return t.node, snap.Version, true, nil
+}
+
+func (t *JoinTransform) StateMetrics(ctx context.Context) (core.StateMetrics, bool, error) {
+	return stateMetrics(ctx, t.store, t.pipeline, t.node, "join")
+}
+
+func (t *JoinTransform) TransformMetrics() core.TransformMetrics {
+	return core.TransformMetrics{
+		Node:      t.node,
+		Transform: t.Name(),
+		Counters: map[string]int64{
+			"hit":                  atomic.LoadInt64(&t.hits),
+			"miss":                 atomic.LoadInt64(&t.misses),
+			"miss_dropped":         atomic.LoadInt64(&t.missDropped),
+			"miss_dlq":             atomic.LoadInt64(&t.missDLQ),
+			"miss_error":           atomic.LoadInt64(&t.missError),
+			"state_limit_exceeded": atomic.LoadInt64(&t.limitErrors),
+		},
+	}
 }
 
 // evictLocked removes records older than the join window. Caller must hold t.mu.
@@ -220,6 +458,7 @@ func (t *JoinTransform) evictLocked(now time.Time) {
 				kept = append(kept, e)
 			}
 		}
+		t.bufferedRecords -= len(entries) - len(kept)
 		if len(kept) == 0 {
 			delete(t.state, key)
 		} else {

@@ -6,6 +6,9 @@ import { getLang, setLang, translate, type Lang } from './i18n';
 import { DagEditorPage } from './DagEditorPage';
 import { WorkersPage } from './WorkersPage';
 import { MyPluginsPage } from './MyPluginsPage';
+import { SchedulesPage } from './SchedulesPage';
+import { ConnectionsPage } from './ConnectionsPage';
+import { WideTablePage } from './WideTablePage';
 
 // ════════════════════════════════════════════════
 // Types
@@ -26,7 +29,7 @@ type ShardInfo = { index: number; status: string; stats: PipelineStats; logs?: P
 type PluginResponse = { sources: string[]; sinks: string[]; transforms: string[]; metadata?: Record<string, Record<string, PluginInfo>> };
 type PluginInfo = { required?: string[]; capabilities?: string[]; maturity?: string };
 type Checkpoint = { id: string; job_name: string; source: string; position: unknown; timestamp: string };
-type DLQItem = { job_name: string; record: { operation: string; data: Record<string, unknown> }; error: string; timestamp: string; error_class?: string };
+type DLQItem = { id?: number; job_name: string; record: { operation: string; data: Record<string, unknown> }; error: string; timestamp: string; error_class?: string; record_hash?: string; pipeline_version?: number; dag_node?: string };
 type AuditEvent = { timestamp?: string; action?: string; target?: string; method?: string; path?: string };
 type PipelineLogEntry = { timestamp: string; message: string; level: string; seq: number };
 
@@ -206,13 +209,14 @@ const Icon = {
 const PAGE_ICONS: Record<string, (p: any) => JSX.Element> = {
   dashboard: Icon.Dashboard, pipelines: Icon.Pipeline, designer: Icon.Flow,
   dlq: Icon.DLQ, plugins: Icon.Plugin, audit: Icon.Audit,
-  workers: Icon.Server, myPlugins: Icon.Plugin,
+  workers: Icon.Server, myPlugins: Icon.Plugin, schedules: Icon.Clock,
+  connections: Icon.Server, wideTable: Icon.Flow,
 };
 
 // ════════════════════════════════════════════════
 // App
 // ════════════════════════════════════════════════
-type Page = 'dashboard' | 'pipelines' | 'designer' | 'dlq' | 'plugins' | 'audit' | 'workers' | 'myPlugins';
+type Page = 'dashboard' | 'pipelines' | 'designer' | 'dlq' | 'plugins' | 'audit' | 'workers' | 'myPlugins' | 'schedules' | 'connections' | 'wideTable';
 type Toast = { id: number; type: 'success' | 'error' | 'info'; msg: string };
 
 function App() {
@@ -287,11 +291,14 @@ function App() {
   const navItems: { id: Page; key: string }[] = [
     { id: 'dashboard', key: 'nav.dashboard' },
     { id: 'pipelines', key: 'nav.pipelines' },
+    { id: 'connections', key: 'nav.connections' },
+    { id: 'wideTable', key: 'nav.wideTable' },
     { id: 'designer', key: 'nav.designer' },
     { id: 'dlq', key: 'nav.dlq' },
     { id: 'plugins', key: 'nav.plugins' },
     { id: 'myPlugins', key: 'nav.myPlugins' },
     { id: 'workers', key: 'nav.workers' },
+    { id: 'schedules', key: 'nav.schedules' },
     { id: 'audit', key: 'nav.audit' },
   ];
 
@@ -368,11 +375,14 @@ function App() {
         <div className="p-8">
           {page === 'dashboard' && <DashboardPage t={t} lang={lang} totals={totals} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} />}
           {page === 'pipelines' && <PipelinesPage t={t} lang={lang} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} onAction={runAction} checkpoints={checkpoints} onResetCheckpoint={(name: string) => runAction(`${t('toast.resetCheckpoint')}: ${name}`, () => api(`/api/v2/pipelines/${name}/checkpoint/reset`, { method: 'POST' }))} onEdit={editPipeline} refreshKey={refreshKey} onShowToast={toast} />}
+          {page === 'connections' && <ConnectionsPage t={t} lang={lang} />}
+          {page === 'wideTable' && <WideTablePage t={t} lang={lang} />}
           {page === 'designer' && <DagEditorPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} onAction={runAction} editTarget={editTarget} />}
           {page === 'dlq' && <DLQPage t={t} lang={lang} pipelines={pipelines} selected={selected} onSelect={setSelectedPipeline} onAction={runAction} />}
           {page === 'plugins' && <PluginsPage t={t} lang={lang} plugins={plugins} />}
           {page === 'myPlugins' && <MyPluginsPage t={t} lang={lang} />}
           {page === 'workers' && <WorkersPage t={t} lang={lang} />}
+          {page === 'schedules' && <SchedulesPage t={t} lang={lang} pipelines={pipelines} />}
           {page === 'audit' && <AuditPage t={t} lang={lang} audit={audit} />}
         </div>
       </main>
@@ -1349,7 +1359,9 @@ function DLQRow({ item, onDelete, onReplay, t }: { item: DLQItem; onDelete: () =
     <div className="rounded-lg border border-slate-200 p-3 hover:border-slate-300 transition">
       <div className="flex items-center gap-3">
         <span className="badge badge-slate">{item.record.operation}</span>
+        {item.id && <span className="badge badge-slate">#{item.id}</span>}
         {item.error_class && <span className="badge badge-amber">{item.error_class}</span>}
+        {item.dag_node && <span className="badge badge-slate">{item.dag_node}</span>}
         <span className="text-xs text-slate-400">{fmtTime(item.timestamp)}</span>
         <div className="flex-1 min-w-0">
           <div className="truncate text-xs font-mono text-rose-600">{item.error}</div>
@@ -1360,6 +1372,11 @@ function DLQRow({ item, onDelete, onReplay, t }: { item: DLQItem; onDelete: () =
       </div>
       {expanded && (
         <div className="mt-2 rounded-lg bg-slate-50 p-3">
+          <div className="mb-2 grid gap-1 text-[11px] text-slate-500 md:grid-cols-3">
+            {item.record_hash && <div className="truncate font-mono">hash {item.record_hash}</div>}
+            {!!item.pipeline_version && <div>version {item.pipeline_version}</div>}
+            {item.dag_node && <div>node {item.dag_node}</div>}
+          </div>
           <pre className="text-xs overflow-x-auto whitespace-pre-wrap break-all">{JSON.stringify(item.record.data, null, 2)}</pre>
         </div>
       )}
@@ -1378,7 +1395,11 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
 
   const deleteOne = async (item: DLQItem) => {
     try {
-      await api(`/api/v2/dlq/${selected.name}?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`, { method: 'DELETE' });
+      if (item.id) {
+        await api(`/api/v2/dlq/${selected.name}/${item.id}`, { method: 'DELETE' });
+      } else {
+        await api(`/api/v2/dlq/${selected.name}?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`, { method: 'DELETE' });
+      }
       setRefreshKey((n) => n + 1);
     } catch (e) { /* ignore */ }
   };
@@ -1412,7 +1433,10 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
             dlq.data?.items?.length ? (
               <div className="space-y-2">
                 {dlq.data.items.map((item, i) => (
-                  <DLQRow key={i} t={t} item={item} onDelete={() => deleteOne(item)} onReplay={() => onAction(`Replay: ${selected.name}`, () => api(`/api/v2/dlq/${selected.name}/replay?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`, { method: 'POST' }).then(() => setRefreshKey(n => n + 1)))} />
+                  <DLQRow key={item.id || i} t={t} item={item} onDelete={() => deleteOne(item)} onReplay={() => onAction(`Replay: ${selected.name}`, () => {
+                    const url = item.id ? `/api/v2/dlq/${selected.name}/${item.id}/replay` : `/api/v2/dlq/${selected.name}/replay?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`;
+                    return api(url, { method: 'POST' }).then(() => setRefreshKey(n => n + 1));
+                  })} />
                 ))}
               </div>
             ) : <Empty text={t('dlq.noRecords')} />
@@ -1453,7 +1477,7 @@ function PluginsPage({ t, plugins }: any) {
               <tr key={`${r.kind}-${r.name}`}>
                 <td><span className={`badge ${kindTone[r.kind]}`}>{r.kind}</span></td>
                 <td className="font-medium">{r.name}</td>
-                <td><span className={`badge ${r.info.maturity === 'stable' ? 'badge-emerald' : r.info.maturity === 'beta' ? 'badge-blue' : 'badge-amber'}`}>{r.info.maturity || 'unknown'}</span></td>
+                <td><span className={`badge ${r.info.maturity === 'production' ? 'badge-emerald' : r.info.maturity === 'beta' ? 'badge-blue' : r.info.maturity === 'experimental' ? 'badge-amber' : 'badge-slate'}`}>{r.info.maturity || 'unknown'}</span></td>
                 <td><div className="flex flex-wrap gap-1">{(r.info.required || []).map((f: string) => <span key={f} className="badge badge-rose">{f}</span>)}</div></td>
                 <td><div className="flex flex-wrap gap-1">{(r.info.capabilities || []).map((c: string) => <span key={c} className="badge badge-slate">{c}</span>)}</div></td>
               </tr>

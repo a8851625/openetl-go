@@ -27,6 +27,8 @@ type RunnerInterface interface {
 	IncrementDLQDelete(n int64)
 	CircuitBreakerState() int
 	SinkMetrics() []core.SinkMetrics
+	StateMetrics() []core.StateMetrics
+	TransformMetrics() []core.TransformMetrics
 }
 
 // Ensure *Runner and *ParallelRunner satisfy the interface.
@@ -142,6 +144,56 @@ func (pr *ParallelRunner) SinkMetrics() []core.SinkMetrics {
 	var result []core.SinkMetrics
 	for _, sm := range seen {
 		result = append(result, sm)
+	}
+	return result
+}
+
+func (pr *ParallelRunner) StateMetrics() []core.StateMetrics {
+	seen := map[string]core.StateMetrics{}
+	for _, inst := range pr.instances {
+		for _, sm := range inst.StateMetrics() {
+			key := sm.Pipeline + "/" + sm.Node
+			if existing, ok := seen[key]; ok {
+				existing.Keys += sm.Keys
+				existing.Bytes += sm.Bytes
+				if sm.UpdatedAt.After(existing.UpdatedAt) {
+					existing.UpdatedAt = sm.UpdatedAt
+				}
+				seen[key] = existing
+			} else {
+				seen[key] = sm
+			}
+		}
+	}
+	var result []core.StateMetrics
+	for _, sm := range seen {
+		result = append(result, sm)
+	}
+	return result
+}
+
+func (pr *ParallelRunner) TransformMetrics() []core.TransformMetrics {
+	seen := map[string]core.TransformMetrics{}
+	for _, inst := range pr.instances {
+		for _, tm := range inst.TransformMetrics() {
+			key := tm.Node + "/" + tm.Transform
+			existing, ok := seen[key]
+			if !ok {
+				existing = core.TransformMetrics{
+					Node:      tm.Node,
+					Transform: tm.Transform,
+					Counters:  map[string]int64{},
+				}
+			}
+			for name, value := range tm.Counters {
+				existing.Counters[name] += value
+			}
+			seen[key] = existing
+		}
+	}
+	var result []core.TransformMetrics
+	for _, tm := range seen {
+		result = append(result, tm)
 	}
 	return result
 }

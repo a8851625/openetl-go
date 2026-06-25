@@ -31,6 +31,7 @@ func runConformanceSuite(t *testing.T, newStore func(t *testing.T) (storage.Stor
 	t.Run("WorkerRegistry", func(t *testing.T) { testWorkerRegistry(t, newStore) })
 	t.Run("Tasks", func(t *testing.T) { testTasks(t, newStore) })
 	t.Run("Plugins", func(t *testing.T) { testPlugins(t, newStore) })
+	t.Run("Connections", func(t *testing.T) { testConnections(t, newStore) })
 	t.Run("Settings", func(t *testing.T) { testSettings(t, newStore) })
 }
 
@@ -275,11 +276,13 @@ func testDLQ(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())
 
 	for i := 0; i < 5; i++ {
 		rec := &storage.DLQRecord{
-			JobName:    "test-pipe",
-			Record:     core.Record{Operation: core.OpInsert, Data: map[string]any{"id": i}},
-			Error:      "schema mismatch: unknown column",
-			ErrorClass: "schema",
-			Attempt:    1,
+			JobName:         "test-pipe",
+			Record:          core.Record{Operation: core.OpInsert, Data: map[string]any{"id": i}},
+			Error:           "schema mismatch: unknown column",
+			ErrorClass:      "schema",
+			Attempt:         1,
+			PipelineVersion: i + 1,
+			DAGNode:         "sink-clickhouse",
 		}
 		if err := s.WriteDeadLetter(ctx, rec); err != nil {
 			t.Fatalf("write %d: %v", i, err)
@@ -292,6 +295,19 @@ func testDLQ(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())
 	}
 	if len(items) != 5 {
 		t.Errorf("count = %d, want 5", len(items))
+	}
+	if items[0].RecordHash == "" {
+		t.Fatal("record_hash is empty")
+	}
+	byID, err := s.GetDeadLetterByID(ctx, "test-pipe", items[0].ID)
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if byID == nil || byID.ID != items[0].ID {
+		t.Fatalf("get by id returned %+v, want id %d", byID, items[0].ID)
+	}
+	if byID.RecordHash != items[0].RecordHash || byID.PipelineVersion == 0 || byID.DAGNode != "sink-clickhouse" {
+		t.Fatalf("dlq metadata not preserved: %+v", byID)
 	}
 
 	// Count.
@@ -585,6 +601,76 @@ func testPlugins(t *testing.T, newStore func(t *testing.T) (storage.Storage, fun
 	}
 	if got3, _ := s.GetPlugin(ctx, "echo"); got3 != nil {
 		t.Error("expected nil after delete")
+	}
+}
+
+// ── Connection catalog ───────────────────────────────────────────────
+
+func testConnections(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())) {
+	s, cleanup := newStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	c := &storage.ConnectionEntry{
+		Name: "orders-kafka",
+		Kind: "source",
+		Type: "kafka",
+		Config: map[string]any{
+			"brokers":  []any{"redpanda:9092"},
+			"topic":    "orders",
+			"password": "secret",
+		},
+	}
+	if err := s.SaveConnection(ctx, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := s.GetConnection(ctx, "orders-kafka")
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%+v", err, got)
+	}
+	if got.Kind != "source" || got.Type != "kafka" || got.Config["topic"] != "orders" {
+		t.Fatalf("unexpected connection: %+v", got)
+	}
+	list, err := s.ListConnections(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("list len = %d, want 1", len(list))
+	}
+
+	// Upsert replaces connector config but preserves catalog identity.
+	c2 := &storage.ConnectionEntry{
+		Name: "orders-kafka",
+		Kind: "source",
+		Type: "kafka",
+		Config: map[string]any{
+			"brokers": []any{"redpanda:9092"},
+			"topic":   "orders.v2",
+		},
+	}
+	if err := s.SaveConnection(ctx, c2); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got2, _ := s.GetConnection(ctx, "orders-kafka")
+	if got2.Config["topic"] != "orders.v2" {
+		t.Fatalf("upsert not applied: %+v", got2)
+	}
+
+	testedAt := time.Now().UTC().Truncate(time.Millisecond)
+	if err := s.UpdateConnectionHealth(ctx, "orders-kafka", "ok", "", testedAt); err != nil {
+		t.Fatalf("update health: %v", err)
+	}
+	healthy, _ := s.GetConnection(ctx, "orders-kafka")
+	if healthy.LastStatus != "ok" || healthy.LastTestedAt == nil {
+		t.Fatalf("health not applied: %+v", healthy)
+	}
+
+	if err := s.DeleteConnection(ctx, "orders-kafka"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if missing, err := s.GetConnection(ctx, "orders-kafka"); err != nil || missing != nil {
+		t.Fatalf("expected nil after delete, err=%v got=%+v", err, missing)
 	}
 }
 

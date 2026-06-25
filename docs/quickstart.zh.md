@@ -141,7 +141,8 @@ curl http://localhost:8000/metrics
 | **Transform** | `filter`、`rename`、`add_field`、`drop_field`、`type_convert` | 基础转换 |
 | | `deduplicate`、`validate` | 数据清洗 |
 | | `lua` | Lua 脚本（内联，gopher-lua 纯 Go） |
-| | `join`、`window` | 流流 JOIN / 窗口聚合 |
+| | `normalize_envelope`、`lookup`、`window` | Kafka envelope 标准化 / 维表 JOIN / tumbling 窗口聚合 |
+| | `join` | 流流 interval JOIN，可选 SQLite 状态恢复；生产级 crash/rebalance 认证仍在 roadmap 中 |
 | | `router`、`fanout`、`tap` | 条件路由 / 扇出 / 旁路 |
 | | `enricher`、`lookup` | 数据增强 / 维表查找 |
 | | `rate_limiter` | 流量控制 |
@@ -210,6 +211,12 @@ curl -X POST -H "X-API-Token: $TOKEN" \
 # 按时间范围重放
 curl -X POST -H "X-API-Token: $TOKEN" \
   'http://localhost:8000/api/v2/dlq/my-pipeline/replay?from=2026-06-01T00:00:00Z'
+
+# 按稳定 DLQ ID 单条重放或删除
+curl -X POST -H "X-API-Token: $TOKEN" \
+  'http://localhost:8000/api/v2/dlq/my-pipeline/123/replay'
+curl -X DELETE -H "X-API-Token: $TOKEN" \
+  'http://localhost:8000/api/v2/dlq/my-pipeline/123'
 ```
 
 ### Q: 管道启动后无数据？

@@ -1,0 +1,83 @@
+name: kafka-orders-aggregate-clickhouse
+
+source:
+  type: kafka
+  config:
+    brokers:
+      - host.containers.internal:19092
+    topic: orders.cdc
+    group_id: openetl-wide-table-aggregate
+    initial_offset: oldest
+
+transforms:
+  - type: normalize_envelope
+    config:
+      keep_metadata: true
+  - type: deduplicate
+    config:
+      keys:
+        - id
+        - _version
+      window_size: 100000
+      state_backend: sqlite
+      state_path: /app/data/wide-table-state.db
+      state_ttl_seconds: 86400
+  - type: lookup
+    config:
+      dsn: root:root123456@tcp(host.containers.internal:13306)/dzh3136_go?timeout=5s&readTimeout=5s&writeTimeout=5s
+      query: SELECT id, tier, region FROM dim_users
+      join_key: user_id
+      dim_key: id
+      fields:
+        - tier
+        - region
+      refresh_interval_sec: 60
+      max_cache_entries: 100000
+      on_miss: "null"
+      on_refresh_error: error
+  - type: window
+    config:
+      window_type: tumbling
+      window_size_seconds: 60
+      allowed_lateness_seconds: 10
+      group_by:
+        - region
+        - tier
+      aggregates:
+        order_count:
+          func: count
+        total_amount:
+          func: sum
+          field: amount
+        avg_amount:
+          func: avg
+          field: amount
+
+sink:
+  type: clickhouse
+  config:
+    host: host.containers.internal
+    port: 9000
+    user: default
+    password: dzh123456
+    database: wide
+    table: order_minute_aggregate
+    auto_create: true
+    schema_drift: add_columns
+    pk_columns:
+      - window_start
+      - region
+      - tier
+    version_column: _version
+
+batch_size: 100
+checkpoint_interval_sec: 5
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 30000
+
+dlq:
+  enable: true

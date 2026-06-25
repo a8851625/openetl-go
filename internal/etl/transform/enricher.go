@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/state"
 )
 
 func init() {
@@ -408,6 +410,9 @@ func (t *EnricherTransform) Close() error {
 //	dim_key: "id"                // column in the dimension table
 //	fields: [name, region]       // which dimension columns to copy
 //	refresh_interval_sec: 300    // full refresh interval (0 = no auto-refresh)
+//	max_cache_entries: 100000    // optional cache entry cap (0 = unlimited)
+//	on_miss: "pass"              // "pass" | "null" | "dlq" | "error"
+//	on_refresh_error: "pass"     // "pass" | "error"
 type LookupTransform struct {
 	dsn         string
 	query       string
@@ -416,10 +421,33 @@ type LookupTransform struct {
 	fields      []string
 	refreshIv   time.Duration
 	lastRefresh time.Time
+	maxCache    int
+	onMiss      string
+	onRefresh   string
 
 	mu    sync.RWMutex
-	cache map[any]map[string]any // dimKeyValue → {field: value}
+	cache map[string]map[string]any // normalized dimKeyValue → {field: value}
 	db    *sql.DB
+
+	store      state.Store
+	stateOwner bool
+	pipeline   string
+	node       string
+	stateTTL   time.Duration
+
+	processed          int64
+	hits               int64
+	misses             int64
+	missingKeys        int64
+	missNull           int64
+	missDLQ            int64
+	missError          int64
+	refreshSuccesses   int64
+	refreshErrors      int64
+	refreshErrorDLQ    int64
+	restoreSuccesses   int64
+	scanErrors         int64
+	cacheLimitExceeded int64
 }
 
 func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
@@ -427,7 +455,11 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 		joinKey:   "id",
 		dimKey:    "id",
 		refreshIv: 5 * time.Minute,
-		cache:     make(map[any]map[string]any),
+		cache:     make(map[string]map[string]any),
+		pipeline:  "default",
+		node:      "lookup",
+		onMiss:    "pass",
+		onRefresh: "pass",
 	}
 
 	if v, ok := config["dsn"].(string); ok {
@@ -456,11 +488,66 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 			t.refreshIv = time.Duration(v) * time.Second
 		}
 	}
+	if v, ok := config["max_cache_entries"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.maxCache = n
+		}
+	}
+	if v, ok := config["on_miss"].(string); ok && v != "" {
+		switch v {
+		case "pass", "null", "dlq", "error":
+			t.onMiss = v
+		default:
+			return nil, fmt.Errorf("lookup: on_miss must be pass|null|dlq|error, got %q", v)
+		}
+	}
+	if v, ok := config["on_refresh_error"].(string); ok && v != "" {
+		switch v {
+		case "pass", "error":
+			t.onRefresh = v
+		default:
+			return nil, fmt.Errorf("lookup: on_refresh_error must be pass|error, got %q", v)
+		}
+	}
+	if v, ok := config["state_pipeline"].(string); ok && v != "" {
+		t.pipeline = v
+	}
+	if v, ok := config["state_node"].(string); ok && v != "" {
+		t.node = v
+	}
+	if v, ok := config["state_ttl_seconds"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.stateTTL = time.Duration(n) * time.Second
+		}
+	}
+	if backend, ok := config["state_backend"].(string); ok && backend != "" {
+		switch strings.ToLower(backend) {
+		case "sqlite":
+			path, _ := config["state_path"].(string)
+			if path == "" {
+				path = "./data/etl-state.db"
+			}
+			store, err := state.NewSQLiteStore(path)
+			if err != nil {
+				return nil, fmt.Errorf("lookup: open state store: %w", err)
+			}
+			t.store = store
+			t.stateOwner = true
+		default:
+			return nil, fmt.Errorf("lookup: unsupported state_backend %q", backend)
+		}
+	}
 
 	if t.dsn == "" || t.query == "" {
+		if t.stateOwner && t.store != nil {
+			_ = t.store.Close()
+		}
 		return nil, fmt.Errorf("lookup: dsn and query are required")
 	}
 	if len(t.fields) == 0 {
+		if t.stateOwner && t.store != nil {
+			_ = t.store.Close()
+		}
 		return nil, fmt.Errorf("lookup: at least one field is required")
 	}
 
@@ -471,12 +558,20 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 	}
 	db, err := sql.Open(driver, t.dsn)
 	if err != nil {
+		if t.stateOwner && t.store != nil {
+			_ = t.store.Close()
+		}
 		return nil, fmt.Errorf("lookup: open db: %w", err)
 	}
 	db.SetMaxOpenConns(3)
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("lookup: ping db: %w", err)
+	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(pingCtx); err != nil {
+		if t.store == nil {
+			db.Close()
+			return nil, fmt.Errorf("lookup: ping db: %w", err)
+		}
+		fmt.Printf("[WARN] lookup: ping db failed, will use persisted state if available: %v\n", err)
 	}
 	t.db = db
 
@@ -485,7 +580,24 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 
 func (t *LookupTransform) Name() string { return "lookup" }
 
+// WithStateStore wires a shared state backend into lookup. It is primarily used
+// by tests today and provides the same future runner-injection seam as
+// deduplicate.
+func (t *LookupTransform) WithStateStore(store state.Store, pipeline, node string, ttl time.Duration) *LookupTransform {
+	t.store = store
+	t.stateOwner = false
+	if pipeline != "" {
+		t.pipeline = pipeline
+	}
+	if node != "" {
+		t.node = node
+	}
+	t.stateTTL = ttl
+	return t
+}
+
 func (t *LookupTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
+	atomic.AddInt64(&t.processed, 1)
 	// Lazy-load cache on first use, or refresh if interval has elapsed.
 	t.mu.RLock()
 	cacheSize := len(t.cache)
@@ -494,6 +606,10 @@ func (t *LookupTransform) Apply(ctx context.Context, rec core.Record) (core.Reco
 	if needsRefresh {
 		if err := t.loadCache(ctx); err != nil {
 			fmt.Printf("[WARN] lookup: loadCache failed: %v\n", err)
+			if t.onRefresh == "error" {
+				atomic.AddInt64(&t.refreshErrorDLQ, 1)
+				return rec, fmt.Errorf("lookup: refresh failed: %w", err)
+			}
 			return rec, nil
 		}
 	}
@@ -505,14 +621,17 @@ func (t *LookupTransform) Apply(ctx context.Context, rec core.Record) (core.Reco
 	// Look up the join key value from the record.
 	keyVal, ok := rec.Data[t.joinKey]
 	if !ok {
-		return rec, nil
+		atomic.AddInt64(&t.missingKeys, 1)
+		return t.handleLookupMiss(rec, nil, true)
 	}
 
+	lookupKey := normalizeLookupKey(keyVal)
 	t.mu.RLock()
-	dimRow, found := t.cache[keyVal]
+	dimRow, found := t.cache[lookupKey]
 	t.mu.RUnlock()
 
 	if found {
+		atomic.AddInt64(&t.hits, 1)
 		if rec.Data == nil {
 			rec.Data = make(map[string]any)
 		}
@@ -521,21 +640,74 @@ func (t *LookupTransform) Apply(ctx context.Context, rec core.Record) (core.Reco
 				rec.Data[f] = v
 			}
 		}
+	} else {
+		return t.handleLookupMiss(rec, keyVal, false)
 	}
 
 	return rec, nil
 }
 
-func (t *LookupTransform) loadCache(ctx context.Context) error {
+func (t *LookupTransform) handleLookupMiss(rec core.Record, key any, missingKey bool) (core.Record, error) {
+	atomic.AddInt64(&t.misses, 1)
+	switch t.onMiss {
+	case "null":
+		atomic.AddInt64(&t.missNull, 1)
+		if rec.Data == nil {
+			rec.Data = make(map[string]any)
+		}
+		for _, f := range t.fields {
+			rec.Data[f] = nil
+		}
+		return rec, nil
+	case "dlq":
+		atomic.AddInt64(&t.missDLQ, 1)
+		if missingKey {
+			return rec, fmt.Errorf("lookup: missing join key %q (on_miss=%s)", t.joinKey, t.onMiss)
+		}
+		return rec, fmt.Errorf("lookup: no dimension match for key=%v (on_miss=%s)", key, t.onMiss)
+	case "error":
+		atomic.AddInt64(&t.missError, 1)
+		if missingKey {
+			return rec, fmt.Errorf("lookup: missing join key %q (on_miss=%s)", t.joinKey, t.onMiss)
+		}
+		return rec, fmt.Errorf("lookup: no dimension match for key=%v (on_miss=%s)", key, t.onMiss)
+	default:
+		return rec, nil
+	}
+}
+
+func (t *LookupTransform) loadCache(ctx context.Context) (err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	defer func() {
+		if err != nil {
+			atomic.AddInt64(&t.refreshErrors, 1)
+		}
+	}()
 
 	if len(t.cache) > 0 && t.refreshIv == 0 {
 		return nil // already loaded, no refresh
 	}
+	if t.db == nil {
+		restored, err := t.restoreCacheFromStateLocked(ctx)
+		if err != nil {
+			return err
+		}
+		if restored {
+			atomic.AddInt64(&t.restoreSuccesses, 1)
+			return nil
+		}
+		return fmt.Errorf("lookup: database is not open and no persisted cache is available")
+	}
 
 	rows, err := t.db.QueryContext(ctx, t.query)
 	if err != nil {
+		if restored, restoreErr := t.restoreCacheFromStateLocked(ctx); restoreErr == nil && restored {
+			atomic.AddInt64(&t.refreshErrors, 1)
+			atomic.AddInt64(&t.restoreSuccesses, 1)
+			fmt.Printf("[WARN] lookup: dimension query failed, restored persisted cache: %v\n", err)
+			return nil
+		}
 		return fmt.Errorf("lookup: query dimension table: %w", err)
 	}
 	defer rows.Close()
@@ -545,7 +717,7 @@ func (t *LookupTransform) loadCache(ctx context.Context) error {
 		return err
 	}
 
-	newCache := make(map[any]map[string]any)
+	newCache := make(map[string]map[string]any)
 	for rows.Next() {
 		values := make([]any, len(cols))
 		ptrs := make([]any, len(cols))
@@ -553,30 +725,144 @@ func (t *LookupTransform) loadCache(ctx context.Context) error {
 			ptrs[i] = &values[i]
 		}
 		if err := rows.Scan(ptrs...); err != nil {
+			atomic.AddInt64(&t.scanErrors, 1)
 			fmt.Printf("[WARN] lookup: dimension row scan error: %v (row skipped)\n", err)
 			continue
 		}
 		row := make(map[string]any)
 		var dimKeyVal any
 		for i, col := range cols {
-			row[col] = values[i]
+			row[col] = normalizeSQLValue(values[i])
 			if col == t.dimKey {
-				dimKeyVal = values[i]
+				dimKeyVal = row[col]
 			}
 		}
 		if dimKeyVal != nil {
-			newCache[dimKeyVal] = row
+			key := normalizeLookupKey(dimKeyVal)
+			if _, exists := newCache[key]; !exists && t.maxCache > 0 && len(newCache) >= t.maxCache {
+				atomic.AddInt64(&t.cacheLimitExceeded, 1)
+				return fmt.Errorf("lookup: cache entry limit exceeded: max_cache_entries=%d", t.maxCache)
+			}
+			newCache[key] = row
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("lookup: iterate dimension rows: %w", err)
 	}
 
 	t.cache = newCache
 	t.lastRefresh = time.Now()
+	atomic.AddInt64(&t.refreshSuccesses, 1)
+	if err := t.persistCacheToStateLocked(ctx); err != nil {
+		fmt.Printf("[WARN] lookup: persist state cache failed: %v\n", err)
+	}
 	return nil
 }
 
-func (t *LookupTransform) Close() error {
-	if t.db != nil {
-		return t.db.Close()
+func (t *LookupTransform) persistCacheToStateLocked(ctx context.Context) error {
+	if t.store == nil {
+		return nil
+	}
+	for key, row := range t.cache {
+		value, err := json.Marshal(row)
+		if err != nil {
+			return fmt.Errorf("marshal lookup cache row %q: %w", key, err)
+		}
+		if err := t.store.Set(ctx, t.pipeline, t.node, key, value, t.stateTTL); err != nil {
+			return fmt.Errorf("set lookup state row %q: %w", key, err)
+		}
 	}
 	return nil
+}
+
+func (t *LookupTransform) restoreCacheFromStateLocked(ctx context.Context) (bool, error) {
+	if t.store == nil {
+		return false, nil
+	}
+	snap, err := t.store.Snapshot(ctx, t.pipeline, t.node)
+	if err != nil {
+		return false, fmt.Errorf("lookup: snapshot state: %w", err)
+	}
+	if snap == nil || len(snap.Entries) == 0 {
+		return false, nil
+	}
+	if t.maxCache > 0 && len(snap.Entries) > t.maxCache {
+		atomic.AddInt64(&t.cacheLimitExceeded, 1)
+		return false, fmt.Errorf("lookup: persisted cache entry limit exceeded: entries=%d max_cache_entries=%d", len(snap.Entries), t.maxCache)
+	}
+	restored := make(map[string]map[string]any, len(snap.Entries))
+	for _, entry := range snap.Entries {
+		row := make(map[string]any)
+		if err := json.Unmarshal(entry.Value, &row); err != nil {
+			return false, fmt.Errorf("lookup: unmarshal state row %q: %w", entry.Key, err)
+		}
+		restored[entry.Key] = row
+	}
+	t.cache = restored
+	t.lastRefresh = time.Now()
+	return true, nil
+}
+
+func normalizeLookupKey(v any) string {
+	return fmt.Sprint(normalizeSQLValue(v))
+}
+
+func normalizeSQLValue(v any) any {
+	if b, ok := v.([]byte); ok {
+		return string(b)
+	}
+	return v
+}
+
+func (t *LookupTransform) Close() error {
+	var err error
+	if t.db != nil {
+		err = t.db.Close()
+	}
+	if t.stateOwner && t.store != nil {
+		if stateErr := t.store.Close(); err == nil {
+			err = stateErr
+		}
+	}
+	return err
+}
+
+func (t *LookupTransform) SnapshotState(ctx context.Context) (string, string, bool, error) {
+	if t.store == nil {
+		return "", "", false, nil
+	}
+	snap, err := t.store.Snapshot(ctx, t.pipeline, t.node)
+	if err != nil {
+		return t.node, "", false, fmt.Errorf("lookup: snapshot state: %w", err)
+	}
+	if snap == nil || len(snap.Entries) == 0 {
+		return t.node, "", false, nil
+	}
+	return t.node, snap.Version, true, nil
+}
+
+func (t *LookupTransform) StateMetrics(ctx context.Context) (core.StateMetrics, bool, error) {
+	return stateMetrics(ctx, t.store, t.pipeline, t.node, "lookup")
+}
+
+func (t *LookupTransform) TransformMetrics() core.TransformMetrics {
+	return core.TransformMetrics{
+		Node:      t.node,
+		Transform: t.Name(),
+		Counters: map[string]int64{
+			"processed":            atomic.LoadInt64(&t.processed),
+			"hit":                  atomic.LoadInt64(&t.hits),
+			"miss":                 atomic.LoadInt64(&t.misses),
+			"missing_key":          atomic.LoadInt64(&t.missingKeys),
+			"miss_null":            atomic.LoadInt64(&t.missNull),
+			"miss_dlq":             atomic.LoadInt64(&t.missDLQ),
+			"miss_error":           atomic.LoadInt64(&t.missError),
+			"refresh_success":      atomic.LoadInt64(&t.refreshSuccesses),
+			"refresh_error":        atomic.LoadInt64(&t.refreshErrors),
+			"refresh_error_dlq":    atomic.LoadInt64(&t.refreshErrorDLQ),
+			"restore_success":      atomic.LoadInt64(&t.restoreSuccesses),
+			"scan_error":           atomic.LoadInt64(&t.scanErrors),
+			"cache_limit_exceeded": atomic.LoadInt64(&t.cacheLimitExceeded),
+		},
+	}
 }

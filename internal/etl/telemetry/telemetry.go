@@ -84,6 +84,10 @@ type PipelineMetrics struct {
 	CircuitBreakerState int `json:"circuit_breaker_state"`
 	// Per-sink metrics: sink name → metrics snapshot
 	SinkMetrics []SinkMetric `json:"sink_metrics,omitempty"`
+	// Per-stateful-node metrics: node id → durable state size/freshness.
+	StateMetrics []StateMetric `json:"state_metrics,omitempty"`
+	// Per-transform domain counters, e.g. join hit/miss.
+	TransformMetrics []TransformMetric `json:"transform_metrics,omitempty"`
 }
 
 // SinkMetric provides per-sink write metrics for Prometheus exposure.
@@ -93,6 +97,19 @@ type SinkMetric struct {
 	BatchesSent  int64   `json:"batches_sent"`
 	WriteLatency float64 `json:"write_latency_ms"`
 	Errors       int64   `json:"errors"`
+}
+
+type StateMetric struct {
+	Node      string    `json:"node"`
+	Keys      int       `json:"keys"`
+	Bytes     int64     `json:"bytes"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+type TransformMetric struct {
+	Node      string           `json:"node"`
+	Transform string           `json:"transform"`
+	Counters  map[string]int64 `json:"counters"`
 }
 
 func MetricsHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
@@ -179,6 +196,14 @@ func PrometheusHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 # TYPE etl_sink_batches_sent_total counter
 # HELP etl_sink_write_latency_ms_per_sink Sink write latency per sink in milliseconds (average).
 # TYPE etl_sink_write_latency_ms_per_sink gauge
+# HELP etl_state_keys Number of persisted state keys per pipeline node.
+# TYPE etl_state_keys gauge
+# HELP etl_state_bytes Bytes of persisted state per pipeline node.
+# TYPE etl_state_bytes gauge
+# HELP etl_state_updated_timestamp_seconds Unix timestamp of the latest persisted state update per pipeline node.
+# TYPE etl_state_updated_timestamp_seconds gauge
+# HELP etl_transform_metric_total Transform-specific counters by pipeline node.
+# TYPE etl_transform_metric_total counter
 `))
 		for _, m := range getMetrics() {
 			fmt.Fprintf(w, "etl_records_read_total{pipeline=\"%s\"} %d\n", m.Name, m.RecordsRead)
@@ -205,6 +230,18 @@ func PrometheusHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 				fmt.Fprintf(w, "etl_sink_rows_written_total{pipeline=\"%s\",sink=\"%s\"} %d\n", m.Name, sm.SinkName, sm.RowsWritten)
 				fmt.Fprintf(w, "etl_sink_batches_sent_total{pipeline=\"%s\",sink=\"%s\"} %d\n", m.Name, sm.SinkName, sm.BatchesSent)
 				fmt.Fprintf(w, "etl_sink_write_latency_ms_per_sink{pipeline=\"%s\",sink=\"%s\"} %.2f\n", m.Name, sm.SinkName, sm.WriteLatency)
+			}
+			for _, sm := range m.StateMetrics {
+				fmt.Fprintf(w, "etl_state_keys{pipeline=\"%s\",node=\"%s\"} %d\n", m.Name, sm.Node, sm.Keys)
+				fmt.Fprintf(w, "etl_state_bytes{pipeline=\"%s\",node=\"%s\"} %d\n", m.Name, sm.Node, sm.Bytes)
+				if !sm.UpdatedAt.IsZero() {
+					fmt.Fprintf(w, "etl_state_updated_timestamp_seconds{pipeline=\"%s\",node=\"%s\"} %d\n", m.Name, sm.Node, sm.UpdatedAt.Unix())
+				}
+			}
+			for _, tm := range m.TransformMetrics {
+				for metric, value := range tm.Counters {
+					fmt.Fprintf(w, "etl_transform_metric_total{pipeline=\"%s\",node=\"%s\",transform=\"%s\",metric=\"%s\"} %d\n", m.Name, tm.Node, tm.Transform, metric, value)
+				}
 			}
 		}
 	}

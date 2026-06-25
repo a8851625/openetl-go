@@ -41,7 +41,7 @@ type ElasticsearchSink struct {
 	tlsSkipVerify bool
 	client        *http.Client
 	hostCounter   uint32
-	sinkCounters // P4-20: per-sink write metrics (SK-4)
+	sinkCounters  // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
@@ -159,7 +159,11 @@ func (s *ElasticsearchSink) Open(ctx context.Context) error {
 }
 
 func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (err error) {
-	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
+	defer func() {
+		if err != nil {
+			s.recordError()
+		}
+	}() // P5-12: count write failures
 	if len(records) == 0 {
 		return nil
 	}
@@ -205,8 +209,7 @@ func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (e
 				action["delete"].(map[string]any)["_id"] = docID
 				actionLine, err := json.Marshal(action)
 				if err != nil {
-					fmt.Printf("[WARN] elasticsearch sink: skip record (delete action marshal failed): doc_id=%s err=%v\n", docID, err)
-					continue
+					return fmt.Errorf("elasticsearch marshal delete action (doc_id=%s): %w", docID, err)
 				}
 				buf.Write(actionLine)
 				buf.WriteByte('\n')
@@ -220,18 +223,14 @@ func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (e
 
 				actionLine, err := json.Marshal(action)
 				if err != nil {
-					fmt.Printf("[WARN] elasticsearch sink: skip record (index action marshal failed): doc_id=%s err=%v\n", docID, err)
-					continue
+					return fmt.Errorf("elasticsearch marshal index action (doc_id=%s): %w", docID, err)
 				}
 				buf.Write(actionLine)
 				buf.WriteByte('\n')
 
 				docLine, err := json.Marshal(rec.Data)
 				if err != nil {
-					fmt.Printf("[WARN] elasticsearch sink: skip record (doc marshal failed): doc_id=%s err=%v\n", docID, err)
-					// Remove the action line we just wrote so ES bulk NDJSON stays paired.
-					buf.Truncate(buf.Len() - len(actionLine) - 1)
-					continue
+					return fmt.Errorf("elasticsearch marshal document (doc_id=%s): %w", docID, err)
 				}
 				buf.Write(docLine)
 				buf.WriteByte('\n')

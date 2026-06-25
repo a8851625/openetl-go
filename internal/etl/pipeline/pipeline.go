@@ -11,6 +11,7 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 
 	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/checkpoint"
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
 	"github.com/a8851625/openetl-go/internal/etl/retry"
@@ -24,11 +25,13 @@ type DLQWriter interface {
 
 // DLQEntry is the pipeline-level representation of a dead-letter record.
 type DLQEntry struct {
-	JobName    string
-	Record     core.Record
-	Error      string
-	ErrorClass string
-	Attempt    int
+	JobName         string
+	Record          core.Record
+	Error           string
+	ErrorClass      string
+	Attempt         int
+	PipelineVersion int
+	DAGNode         string
 }
 
 type Status string
@@ -115,8 +118,9 @@ func NewRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *ale
 	}
 
 	var transforms core.TransformChain
-	for _, tc := range spec.Transforms {
-		t, err := registry.BuildTransform(tc.Type, tc.Config)
+	for i, tc := range spec.Transforms {
+		config := InjectStateDefaults(spec.Name, TransformStateNodeID(i, tc.Type), tc.Config)
+		t, err := registry.BuildTransform(tc.Type, config)
 		if err != nil {
 			return nil, fmt.Errorf("build transform %s: %w", tc.Type, err)
 		}
@@ -292,6 +296,19 @@ func (r *Runner) SinkMetrics() []core.SinkMetrics {
 	return nil
 }
 
+func (r *Runner) StateMetrics() []core.StateMetrics {
+	metrics, err := r.transforms.StateMetrics(context.Background())
+	if err != nil {
+		r.logWarn(fmt.Sprintf("state metrics collection failed: %v", err))
+		return nil
+	}
+	return metrics
+}
+
+func (r *Runner) TransformMetrics() []core.TransformMetrics {
+	return r.transforms.TransformMetrics()
+}
+
 // addRecordsRead atomically increments RecordsRead under mutex and returns new value.
 func (r *Runner) addRecordsRead(delta int64) int64 {
 	r.mu.Lock()
@@ -399,7 +416,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	if r.checkpointStore != nil {
 		loaded, err := r.checkpointStore.Load(ctx, r.spec.Name)
 		if err == nil && loaded != nil {
-			cp = loaded
+			cp = unwrapCheckpointForSource(loaded)
 			r.logInfo("Resuming from checkpoint")
 		}
 	}
@@ -979,6 +996,17 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed []core.R
 	}
 	cp.JobName = r.spec.Name
 	cp.ID = fmt.Sprintf("%s-%d", r.spec.Name, time.Now().UnixNano())
+	if stateVersions, err := r.transforms.StateSnapshotVersions(ctx); err != nil {
+		r.handleCheckpointBoundaryError(ctx, fmt.Sprintf("state snapshot version collection failed: %v", err))
+		return
+	} else if len(stateVersions) > 0 {
+		if wrapped, wrapErr := checkpoint.BuildEnvelope(cp.Position, stateVersions, nil); wrapErr != nil {
+			r.handleCheckpointBoundaryError(ctx, fmt.Sprintf("checkpoint envelope build failed: %v", wrapErr))
+			return
+		} else {
+			cp.Position = wrapped
+		}
+	}
 
 	if saveErr := r.checkpointStore.Save(ctx, cp); saveErr != nil {
 		errMsg := fmt.Sprintf("checkpoint save failed: %v", saveErr)
@@ -1015,4 +1043,35 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed []core.R
 		CheckpointPos: cp.Position,
 		Config:        r.spec.Hooks.getConfig(core.HookOnCheckpoint),
 	})
+}
+
+func (r *Runner) handleCheckpointBoundaryError(ctx context.Context, errMsg string) {
+	r.mu.Lock()
+	r.stats.LastError = errMsg
+	r.mu.Unlock()
+	if r.circuitBreaker != nil {
+		r.circuitBreaker.RecordFailure(ctx, errors.New(errMsg))
+	}
+	if r.alertManager != nil {
+		r.alertManager.Send(ctx, alert.Event{
+			Level:   alert.LevelError,
+			Title:   "Checkpoint boundary failure — pipeline at risk",
+			Message: fmt.Sprintf("[%s] %s. Source checkpoint was not advanced because state could not be bound to it.", r.spec.Name, errMsg),
+			JobName: r.spec.Name,
+		})
+	}
+	r.logError(errMsg + " — checkpoint not saved")
+}
+
+func unwrapCheckpointForSource(cp *core.Checkpoint) *core.Checkpoint {
+	if cp == nil {
+		return nil
+	}
+	env, ok, err := checkpoint.ParseEnvelope(cp.Position)
+	if err != nil || !ok {
+		return cp
+	}
+	unwrapped := *cp
+	unwrapped.Position = append([]byte(nil), env.Source...)
+	return &unwrapped
 }

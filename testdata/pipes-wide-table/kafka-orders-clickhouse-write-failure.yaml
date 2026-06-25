@@ -1,0 +1,30 @@
+name: kafka-orders-clickhouse-write-failure
+
+source:
+  type: kafka
+  config:
+    brokers:
+      - host.containers.internal:19092
+    topic: orders.clickhouse_failure
+    group_id: openetl-wide-table-clickhouse-write-failure
+    initial_offset: oldest
+
+transforms:
+  - type: normalize_envelope
+    config:
+      keep_metadata: true
+
+sink:
+  type: clickhouse
+  config:
+    host: host.containers.internal
+    port: 9000
+    user: default
+    password: dzh123456
+    database: wide
+    table: clickhouse_write_failure_sink
+    auto_create: false
+    schema_drift: fail
+    pk_columns:
+      - id
+    version_column: _version

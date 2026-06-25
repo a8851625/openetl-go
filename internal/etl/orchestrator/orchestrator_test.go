@@ -1,9 +1,20 @@
 package orchestrator
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"path/filepath"
 	"testing"
 
+	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/checkpoint"
+	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/retry"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/storage/sqlite"
 )
 
 func TestDAGValidation(t *testing.T) {
@@ -176,4 +187,228 @@ func TestMultiSinkDAG(t *testing.T) {
 	if len(downstream) != 2 {
 		t.Errorf("downstream of tfm = %d, want 2", len(downstream))
 	}
+}
+
+func TestDAGExecutorInjectsStateDefaultsBeforeBuildingTransforms(t *testing.T) {
+	var captured map[string]any
+	registry.RegisterSource("state-defaults-source", func(config map[string]any) (core.Source, error) {
+		return dagNoopSource{}, nil
+	})
+	registry.RegisterSink("state-defaults-sink", func(config map[string]any) (core.Sink, error) {
+		return dagNoopSink{}, nil
+	})
+	registry.RegisterTransform("state-defaults-dag-probe", func(config map[string]any) (core.Transform, error) {
+		captured = config
+		return dagNoopTransform{}, nil
+	})
+
+	spec := &PipelineSpec{
+		Name: "dag-state-defaults",
+		DAG: DAG{
+			Nodes: []*Node{
+				{ID: "src", Kind: KindSource, Plugin: "state-defaults-source"},
+				{ID: "window-node", Kind: KindTransform, Plugin: "state-defaults-dag-probe", Config: map[string]any{"state_backend": "sqlite"}},
+				{ID: "sink", Kind: KindSink, Plugin: "state-defaults-sink"},
+			},
+			Edges: []*Edge{
+				{From: "src", To: "window-node"},
+				{From: "window-node", To: "sink"},
+			},
+		},
+	}
+
+	if _, err := NewDAGExecutor(spec, nil, nil, nil); err != nil {
+		t.Fatalf("NewDAGExecutor: %v", err)
+	}
+	if captured["state_pipeline"] != "dag-state-defaults" || captured["state_node"] != "window-node" {
+		t.Fatalf("state defaults captured = %#v", captured)
+	}
+	if _, ok := spec.DAG.Nodes[1].Config["state_pipeline"]; ok {
+		t.Fatalf("NewDAGExecutor mutated original transform config: %#v", spec.DAG.Nodes[1].Config)
+	}
+}
+
+func TestDAGExecutorCheckpointIncludesStateSnapshotVersions(t *testing.T) {
+	adapter, cleanup := newDAGCheckpointAdapter(t)
+	defer cleanup()
+	am := alert.NewManager()
+	defer am.Close()
+
+	exec := &DAGExecutor{
+		spec: &PipelineSpec{Name: "dag-checkpoint"},
+		transforms: map[string]core.Transform{
+			"window-node": dagStateSnapshotTransform{node: "window-node", version: "state-v1"},
+		},
+		sinks: map[string]core.Sink{
+			"sink": dagNoopSink{},
+		},
+		readers: map[string]core.RecordReader{
+			"src": dagCheckpointReader{},
+		},
+		cpAdapter:   adapter,
+		alertMgr:    am,
+		retryConfig: retry.DefaultConfig(),
+		breakers:    map[string]*pipeline.CircuitBreaker{},
+	}
+
+	exec.writeToSink(context.Background(), "sink", []core.Record{
+		{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
+	}, map[string]core.Record{
+		"src": {Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
+	})
+
+	cp, err := adapter.Load(context.Background(), "dag-checkpoint-src")
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	if cp == nil {
+		t.Fatal("checkpoint not saved")
+	}
+	env, ok, err := checkpoint.ParseEnvelope(cp.Position)
+	if err != nil {
+		t.Fatalf("ParseEnvelope: %v", err)
+	}
+	if !ok {
+		t.Fatalf("checkpoint position not wrapped in envelope: %s", cp.Position)
+	}
+	if env.State["window-node"] != "state-v1" {
+		t.Fatalf("state versions = %#v", env.State)
+	}
+	if string(env.Source) != `{"offset":42}` {
+		t.Fatalf("source position = %s, want offset 42", env.Source)
+	}
+}
+
+func TestDAGExecutorDoesNotCheckpointWhenStateSnapshotFails(t *testing.T) {
+	adapter, cleanup := newDAGCheckpointAdapter(t)
+	defer cleanup()
+	am := alert.NewManager()
+	defer am.Close()
+
+	exec := &DAGExecutor{
+		spec: &PipelineSpec{Name: "dag-checkpoint-fail"},
+		transforms: map[string]core.Transform{
+			"window-node": dagFailingStateSnapshotTransform{},
+		},
+		sinks: map[string]core.Sink{
+			"sink": dagNoopSink{},
+		},
+		readers: map[string]core.RecordReader{
+			"src": dagCheckpointReader{},
+		},
+		cpAdapter:   adapter,
+		alertMgr:    am,
+		retryConfig: retry.DefaultConfig(),
+		breakers:    map[string]*pipeline.CircuitBreaker{},
+	}
+
+	exec.writeToSink(context.Background(), "sink", []core.Record{
+		{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
+	}, map[string]core.Record{
+		"src": {Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
+	})
+
+	cp, err := adapter.Load(context.Background(), "dag-checkpoint-fail-src")
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	if cp != nil {
+		t.Fatalf("checkpoint advanced after state snapshot failed: %s", cp.Position)
+	}
+}
+
+func TestDAGExecutorLoadSourceCheckpointUnwrapsEnvelope(t *testing.T) {
+	adapter, cleanup := newDAGCheckpointAdapter(t)
+	defer cleanup()
+	raw, err := checkpoint.BuildEnvelope(json.RawMessage(`{"offset":99}`), map[string]string{"window-node": "state-v1"}, nil)
+	if err != nil {
+		t.Fatalf("BuildEnvelope: %v", err)
+	}
+	if err := adapter.Save(context.Background(), core.Checkpoint{
+		JobName:  "dag-load-src",
+		Source:   "src",
+		Position: raw,
+	}); err != nil {
+		t.Fatalf("Save checkpoint: %v", err)
+	}
+
+	exec := &DAGExecutor{spec: &PipelineSpec{Name: "dag-load"}, cpAdapter: adapter}
+	got := exec.loadSourceCheckpoint(context.Background(), "src")
+
+	if got == nil {
+		t.Fatal("checkpoint not loaded")
+	}
+	if string(got.Position) != `{"offset":99}` {
+		t.Fatalf("unwrapped position = %s, want offset 99", got.Position)
+	}
+}
+
+func newDAGCheckpointAdapter(t *testing.T) (*storage.CheckpointStoreAdapter, func()) {
+	t.Helper()
+	store, err := sqlite.New(filepath.Join(t.TempDir(), "etl.db"))
+	if err != nil {
+		t.Fatalf("sqlite.New: %v", err)
+	}
+	return storage.NewCheckpointStoreAdapter(store), func() { _ = store.Close() }
+}
+
+type dagNoopSource struct{}
+
+func (dagNoopSource) Name() string { return "dag-noop-source" }
+func (dagNoopSource) Open(context.Context, *core.Checkpoint) (core.RecordReader, error) {
+	return nil, nil
+}
+
+type dagNoopSink struct{}
+
+func (dagNoopSink) Name() string                               { return "dag-noop-sink" }
+func (dagNoopSink) Open(context.Context) error                 { return nil }
+func (dagNoopSink) Write(context.Context, []core.Record) error { return nil }
+func (dagNoopSink) Close() error                               { return nil }
+
+type dagNoopTransform struct{}
+
+func (dagNoopTransform) Name() string { return "dag-noop-transform" }
+func (dagNoopTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
+	return rec, nil
+}
+
+type dagCheckpointReader struct{}
+
+func (dagCheckpointReader) Read(context.Context) (core.Record, error) {
+	return core.Record{}, errors.New("unused")
+}
+func (dagCheckpointReader) ReadBatch(context.Context, int) ([]core.Record, error) {
+	return nil, errors.New("unused")
+}
+func (dagCheckpointReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (dagCheckpointReader) Close() error { return nil }
+func (dagCheckpointReader) CheckpointForRecord(_ context.Context, rec core.Record) (core.Checkpoint, error) {
+	pos, _ := json.Marshal(map[string]any{"offset": rec.Metadata.Offset})
+	return core.Checkpoint{Source: "dag-checkpoint-reader", Position: pos}, nil
+}
+
+type dagStateSnapshotTransform struct {
+	node    string
+	version string
+}
+
+func (t dagStateSnapshotTransform) Name() string { return "dag-state-snapshot" }
+func (t dagStateSnapshotTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
+	return rec, nil
+}
+func (t dagStateSnapshotTransform) SnapshotState(context.Context) (string, string, bool, error) {
+	return t.node, t.version, true, nil
+}
+
+type dagFailingStateSnapshotTransform struct{}
+
+func (t dagFailingStateSnapshotTransform) Name() string { return "dag-failing-state-snapshot" }
+func (t dagFailingStateSnapshotTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
+	return rec, nil
+}
+func (t dagFailingStateSnapshotTransform) SnapshotState(context.Context) (string, string, bool, error) {
+	return "window-node", "", false, errors.New("state snapshot failed")
 }

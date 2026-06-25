@@ -328,6 +328,9 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "expression", Type: FieldString, Required: true, Description: "Filter expression"},
 			{Name: "strict_types", Type: FieldBool, Required: false, Default: false, Description: "Use strict type comparisons"},
 		},
+		"normalize_envelope": {
+			{Name: "keep_metadata", Type: FieldBool, Required: false, Default: true, Description: "Add _op, _source_table, and _event_time fields after normalizing Debezium-like payloads"},
+		},
 		"lua": {
 			{Name: "script", Type: FieldString, Required: true, Description: "Lua script code"},
 			{Name: "code", Type: FieldString, Required: false, Description: "Alias for script"},
@@ -377,17 +380,35 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "dim_key", Type: FieldString, Required: false, Default: "id", Description: "Column in dimension table to match"},
 			{Name: "fields", Type: FieldStringArray, Required: true, Description: "Dimension columns to copy into the record", Example: []string{"name", "tier"}},
 			{Name: "refresh_interval_sec", Type: FieldInt, Required: false, Default: 300, Description: "Refresh dimension table every N seconds (0=load once)"},
+			{Name: "max_cache_entries", Type: FieldInt, Required: false, Default: 0, Description: "Maximum distinct dimension cache entries (0=unlimited)"},
+			{Name: "on_miss", Type: FieldString, Required: false, Default: "pass", Description: "Action when the dimension row is missing", Enum: []string{"pass", "null", "dlq", "error"}},
+			{Name: "on_refresh_error", Type: FieldString, Required: false, Default: "pass", Description: "Action when dimension cache refresh fails and no usable cache can be loaded", Enum: []string{"pass", "error"}},
+			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional durable lookup cache backend", Enum: []string{"sqlite"}},
+			{Name: "state_path", Type: FieldString, Required: false, Default: "./data/etl-state.db", Description: "SQLite state database path when state_backend=sqlite"},
+			{Name: "state_pipeline", Type: FieldString, Required: false, Default: "pipeline name", Description: "Pipeline namespace for persisted lookup cache; runtime injects the pipeline name when omitted"},
+			{Name: "state_node", Type: FieldString, Required: false, Default: "transform node id", Description: "Node namespace for persisted lookup cache; runtime injects the transform node id when omitted"},
+			{Name: "state_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "TTL for persisted lookup cache rows in seconds (0 = no expiry)"},
 		},
 		"window": {
-			{Name: "window_type", Type: FieldString, Required: false, Default: "tumbling", Description: "Window type", Enum: []string{"tumbling", "sliding", "session"}},
+			{Name: "window_type", Type: FieldString, Required: false, Default: "tumbling", Description: "Window type. Only tumbling is implemented in the production path.", Enum: []string{"tumbling"}},
 			{Name: "window_size_seconds", Type: FieldInt, Required: false, Default: 60, Description: "Tumbling window size in seconds"},
 			{Name: "allowed_lateness_seconds", Type: FieldInt, Required: false, Default: 0, Description: "Allowed event-time lateness before records are dropped"},
 			{Name: "group_by", Type: FieldStringArray, Required: false, Description: "Group-by fields"},
 			{Name: "aggregates", Type: FieldMap, Required: true, Description: "Aggregations as map: output_field -> {func, field}. funcs: count, sum, avg, min, max, first, last"},
+			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional durable tumbling-window state backend", Enum: []string{"sqlite"}},
+			{Name: "state_path", Type: FieldString, Required: false, Default: "./data/etl-state.db", Description: "SQLite state database path when state_backend=sqlite"},
+			{Name: "state_pipeline", Type: FieldString, Required: false, Default: "pipeline name", Description: "Pipeline namespace for persisted window state; runtime injects the pipeline name when omitted"},
+			{Name: "state_node", Type: FieldString, Required: false, Default: "transform node id", Description: "Node namespace for persisted window state; runtime injects the transform node id when omitted"},
+			{Name: "state_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "TTL for persisted window state in seconds (0 = no expiry)"},
 		},
 		"deduplicate": {
 			{Name: "keys", Type: FieldStringArray, Required: true, Description: "Fields forming the dedup key", Example: []string{"order_id"}},
 			{Name: "window_size", Type: FieldInt, Required: false, Default: 10000, Description: "Dedup window size (max records to remember)"},
+			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional durable state backend", Enum: []string{"sqlite"}},
+			{Name: "state_path", Type: FieldString, Required: false, Default: "./data/etl-state.db", Description: "SQLite state database path when state_backend=sqlite"},
+			{Name: "state_pipeline", Type: FieldString, Required: false, Default: "pipeline name", Description: "Pipeline namespace for persisted dedup keys; runtime injects the pipeline name when omitted"},
+			{Name: "state_node", Type: FieldString, Required: false, Default: "transform node id", Description: "Node namespace for persisted dedup keys; runtime injects the transform node id when omitted"},
+			{Name: "state_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "TTL for persisted dedup keys in seconds (0 = no expiry)"},
 		},
 		"validate": {
 			{Name: "required_fields", Type: FieldStringArray, Required: false, Description: "Fields that must be present and non-null"},
@@ -403,9 +424,17 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "join_prefix", Type: FieldString, Required: false, Default: "joined_", Description: "Prefix for joined fields"},
 			{Name: "where", Type: FieldString, Required: false, Description: "Optional filter expression for join side"},
 			{Name: "on_miss", Type: FieldString, Required: false, Default: "drop", Description: "Action when a join match is missing", Enum: []string{"drop", "dlq", "error"}},
+			{Name: "max_buffered_keys", Type: FieldInt, Required: false, Default: 0, Description: "Maximum distinct join keys buffered in memory (0 = unlimited)"},
+			{Name: "max_buffered_records", Type: FieldInt, Required: false, Default: 0, Description: "Maximum total join records buffered in memory (0 = unlimited)"},
+			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional durable join buffer backend", Enum: []string{"sqlite"}},
+			{Name: "state_path", Type: FieldString, Required: false, Default: "./data/etl-state.db", Description: "SQLite state database path when state_backend=sqlite"},
+			{Name: "state_pipeline", Type: FieldString, Required: false, Default: "pipeline name", Description: "Pipeline namespace for persisted join buffers; runtime injects the pipeline name when omitted"},
+			{Name: "state_node", Type: FieldString, Required: false, Default: "transform node id", Description: "Node namespace for persisted join buffers; runtime injects the transform node id when omitted"},
+			{Name: "state_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "TTL for persisted join buffers in seconds (0 = join window)"},
 		},
 	}
 	schemas["javascript"] = schemas["ts"]
 	schemas["js"] = schemas["ts"]
+	schemas["debezium_envelope"] = schemas["normalize_envelope"]
 	return schemas
 }

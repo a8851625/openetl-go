@@ -141,7 +141,8 @@ curl http://localhost:8000/metrics
 | **Transform** | `filter`, `rename`, `add_field`, `drop_field`, `type_convert` | Basic transforms |
 | | `deduplicate`, `validate` | Data cleansing |
 | | `lua` | Lua scripting (inline, gopher-lua pure Go) |
-| | `join`, `window` | Stream-stream JOIN / windowed aggregation |
+| | `normalize_envelope`, `lookup`, `window` | Kafka envelope normalization / dimension JOIN / tumbling window aggregation |
+| | `join` | Stream-stream interval JOIN with optional SQLite state recovery; production crash/rebalance certification remains on the roadmap |
 | | `router`, `fanout`, `tap` | Conditional routing / fan-out / tap |
 | | `enricher`, `lookup` | Data enrichment / dimension lookup |
 | | `rate_limiter` | Rate limiting |
@@ -210,6 +211,12 @@ curl -X POST -H "X-API-Token: $TOKEN" \
 # Replay by time range
 curl -X POST -H "X-API-Token: $TOKEN" \
   'http://localhost:8000/api/v2/dlq/my-pipeline/replay?from=2026-06-01T00:00:00Z'
+
+# Replay or delete one record by stable DLQ ID
+curl -X POST -H "X-API-Token: $TOKEN" \
+  'http://localhost:8000/api/v2/dlq/my-pipeline/123/replay'
+curl -X DELETE -H "X-API-Token: $TOKEN" \
+  'http://localhost:8000/api/v2/dlq/my-pipeline/123'
 ```
 
 ### Q: Pipeline starts but produces no data?

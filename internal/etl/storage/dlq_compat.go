@@ -11,13 +11,16 @@ import (
 // DeadLetter mirrors dlq.DeadLetter for the adapter interface.
 // Keeping this as a structural alias avoids a circular import.
 type DeadLetter struct {
-	ID         int64       `json:"id"`
-	JobName    string      `json:"job_name"`
-	Record     core.Record `json:"record"`
-	Error      string      `json:"error"`
-	ErrorClass string      `json:"error_class,omitempty"`
-	Timestamp  time.Time   `json:"timestamp"`
-	Attempt    int         `json:"attempt"`
+	ID              int64       `json:"id"`
+	JobName         string      `json:"job_name"`
+	Record          core.Record `json:"record"`
+	Error           string      `json:"error"`
+	ErrorClass      string      `json:"error_class,omitempty"`
+	Timestamp       time.Time   `json:"timestamp"`
+	Attempt         int         `json:"attempt"`
+	RecordHash      string      `json:"record_hash,omitempty"`
+	PipelineVersion int         `json:"pipeline_version,omitempty"`
+	DAGNode         string      `json:"dag_node,omitempty"`
 }
 
 // DLQCompatWriter implements pipeline.DLQWriter (WriteDLQ) and also provides
@@ -33,7 +36,7 @@ func NewDLQCompatWriter(s Storage) *DLQCompatWriter {
 
 // WriteDLQ implements pipeline.DLQWriter.
 func (w *DLQCompatWriter) WriteDLQ(ctx context.Context, entry pipeline.DLQEntry) error {
-	return w.adapter.Write(ctx, entry.JobName, entry.Record, entry.Error, entry.ErrorClass, entry.Attempt)
+	return w.adapter.WriteEntry(ctx, entry)
 }
 
 // Read returns the most recent dead-letter records for a job.
@@ -44,17 +47,19 @@ func (w *DLQCompatWriter) Read(ctx context.Context, jobName string, limit int) (
 	}
 	result := make([]DeadLetter, len(recs))
 	for i, rec := range recs {
-		result[i] = DeadLetter{
-			ID:         rec.ID,
-			JobName:    rec.JobName,
-			Record:     rec.Record,
-			Error:      rec.Error,
-			ErrorClass: rec.ErrorClass,
-			Timestamp:  rec.CreatedAt,
-			Attempt:    rec.Attempt,
-		}
+		result[i] = deadLetterFromRecord(rec)
 	}
 	return result, nil
+}
+
+// ReadByID returns one dead-letter record by primary key.
+func (w *DLQCompatWriter) ReadByID(ctx context.Context, jobName string, id int64) (*DeadLetter, error) {
+	rec, err := w.adapter.ReadByID(ctx, jobName, id)
+	if err != nil || rec == nil {
+		return nil, err
+	}
+	item := deadLetterFromRecord(*rec)
+	return &item, nil
 }
 
 // Delete removes records. If timestamp is zero, deletes all for the job.
@@ -78,15 +83,7 @@ func (w *DLQCompatWriter) ReadFiltered(ctx context.Context, filter DLQFilter) ([
 	}
 	result := make([]DeadLetter, len(recs))
 	for i, rec := range recs {
-		result[i] = DeadLetter{
-			ID:         rec.ID,
-			JobName:    rec.JobName,
-			Record:     rec.Record,
-			Error:      rec.Error,
-			ErrorClass: rec.ErrorClass,
-			Timestamp:  rec.CreatedAt,
-			Attempt:    rec.Attempt,
-		}
+		result[i] = deadLetterFromRecord(rec)
 	}
 	return result, nil
 }
@@ -112,4 +109,19 @@ func (w *DLQCompatWriter) DeleteAll(ctx context.Context, jobName string) error {
 // multiple DLQ entries share the same second (P4-10, SV-1).
 func (w *DLQCompatWriter) DeleteByID(ctx context.Context, id int64) error {
 	return w.adapter.DeleteByID(ctx, id)
+}
+
+func deadLetterFromRecord(rec DLQRecord) DeadLetter {
+	return DeadLetter{
+		ID:              rec.ID,
+		JobName:         rec.JobName,
+		Record:          rec.Record,
+		Error:           rec.Error,
+		ErrorClass:      rec.ErrorClass,
+		Timestamp:       rec.CreatedAt,
+		Attempt:         rec.Attempt,
+		RecordHash:      rec.RecordHash,
+		PipelineVersion: rec.PipelineVersion,
+		DAGNode:         rec.DAGNode,
+	}
 }

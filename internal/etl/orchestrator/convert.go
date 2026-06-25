@@ -91,8 +91,9 @@ func ConvertLinearSpec(spec *pipeline.Spec) (*PipelineSpec, error) {
 
 	if spec.Schedule != nil {
 		dagSpec.Schedule = &ScheduleConfig{
-			Type: ScheduleType(spec.Schedule.Type),
-			Cron: spec.Schedule.Cron,
+			Type:      ScheduleType(spec.Schedule.Type),
+			Cron:      spec.Schedule.Cron,
+			IntervalS: spec.Schedule.IntervalSec,
 		}
 	}
 

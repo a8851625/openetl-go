@@ -14,8 +14,9 @@ import (
 )
 
 type ScheduleConfig struct {
-	Type string `yaml:"type" json:"type"`
-	Cron string `yaml:"cron,omitempty" json:"cron,omitempty"`
+	Type        string `yaml:"type" json:"type"`
+	Cron        string `yaml:"cron,omitempty" json:"cron,omitempty"`
+	IntervalSec int    `yaml:"interval_sec,omitempty" json:"interval_sec,omitempty"`
 }
 
 type SourceSpec struct {

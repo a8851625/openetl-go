@@ -130,6 +130,17 @@ func (s *Store) migrate() error {
 			enabled      INTEGER DEFAULT 1,
 			installed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS connections (
+			name           TEXT PRIMARY KEY,
+			kind           TEXT NOT NULL,
+			type           TEXT NOT NULL,
+			config_json    TEXT NOT NULL,
+			last_status    TEXT,
+			last_error     TEXT,
+			last_tested_at DATETIME,
+			created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key    TEXT PRIMARY KEY,
 			value  TEXT NOT NULL,
@@ -181,6 +192,9 @@ func (s *Store) runVersionedMigrations() error {
 		// each column is its own versioned migration.
 		{2, "add shard_index to task_assignments", "ALTER TABLE task_assignments ADD COLUMN shard_index INTEGER DEFAULT 0"},
 		{3, "add shard_total to task_assignments", "ALTER TABLE task_assignments ADD COLUMN shard_total INTEGER DEFAULT 0"},
+		{4, "add record_hash to dead_letters", "ALTER TABLE dead_letters ADD COLUMN record_hash TEXT"},
+		{5, "add pipeline_version to dead_letters", "ALTER TABLE dead_letters ADD COLUMN pipeline_version INTEGER DEFAULT 0"},
+		{6, "add dag_node to dead_letters", "ALTER TABLE dead_letters ADD COLUMN dag_node TEXT"},
 	}
 
 	for _, m := range migrations {
@@ -361,12 +375,36 @@ func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) err
 	if err != nil {
 		return fmt.Errorf("marshal dlq record: %w", err)
 	}
+	if rec.RecordHash == "" {
+		rec.RecordHash = storage.RecordHashJSON(recJSON)
+	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO dead_letters (job_name, record_json, error, error_class, attempt, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		rec.JobName, string(recJSON), rec.Error, rec.ErrorClass, rec.Attempt, time.Now(),
+		`INSERT INTO dead_letters (job_name, record_json, error, error_class, attempt, record_hash, pipeline_version, dag_node, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.JobName, string(recJSON), rec.Error, rec.ErrorClass, rec.Attempt, rec.RecordHash, rec.PipelineVersion, rec.DAGNode, time.Now(),
 	)
 	return err
+}
+
+func (s *Store) GetDeadLetterByID(ctx context.Context, jobName string, id int64) (*storage.DLQRecord, error) {
+	rec := &storage.DLQRecord{}
+	var recJSON string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, job_name, record_json, error, error_class, attempt,
+		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
+		 FROM dead_letters WHERE job_name=? AND id=?`,
+		jobName, id,
+	).Scan(&rec.ID, &rec.JobName, &recJSON, &rec.Error, &rec.ErrorClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(recJSON), &rec.Record); err != nil {
+		return nil, err
+	}
+	return rec, nil
 }
 
 func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) ([]*storage.DLQRecord, error) {
@@ -380,7 +418,7 @@ func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) (
 	for rows.Next() {
 		rec := &storage.DLQRecord{}
 		var recJSON string
-		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &rec.Error, &rec.ErrorClass, &rec.Attempt, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &rec.Error, &rec.ErrorClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(recJSON), &rec.Record); err != nil {
@@ -456,7 +494,8 @@ func newDLQQueryBuilder(f storage.DLQFilter) *dlqQueryBuilder {
 		limit = 100
 	}
 	q := fmt.Sprintf(
-		`SELECT id, job_name, record_json, error, error_class, attempt, created_at
+		`SELECT id, job_name, record_json, error, error_class, attempt,
+		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
 		 FROM dead_letters WHERE %s ORDER BY created_at DESC LIMIT %d OFFSET %d`,
 		strings.Join(where, " AND "), limit, f.Offset,
 	)
@@ -736,6 +775,93 @@ func (s *Store) ListPlugins(ctx context.Context) ([]*storage.PluginEntry, error)
 
 func (s *Store) DeletePlugin(ctx context.Context, name string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM plugins WHERE name=?`, name)
+	return err
+}
+
+// ── Connection catalog ───────────────────────────────────────────────
+
+func (s *Store) SaveConnection(ctx context.Context, c *storage.ConnectionEntry) error {
+	cfg, err := json.Marshal(c.Config)
+	if err != nil {
+		return fmt.Errorf("marshal connection config: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO connections (name, kind, type, config_json, last_status, last_error, last_tested_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, type=excluded.type, config_json=excluded.config_json, updated_at=CURRENT_TIMESTAMP`,
+		c.Name, c.Kind, c.Type, string(cfg), c.LastStatus, c.LastError, c.LastTestedAt)
+	return err
+}
+
+func (s *Store) GetConnection(ctx context.Context, name string) (*storage.ConnectionEntry, error) {
+	c := &storage.ConnectionEntry{}
+	var cfg string
+	var lastTestedAt sql.NullTime
+	err := s.db.QueryRowContext(ctx,
+		`SELECT name, kind, type, config_json, COALESCE(last_status, ''), COALESCE(last_error, ''), last_tested_at, created_at, updated_at
+		 FROM connections WHERE name=?`, name,
+	).Scan(&c.Name, &c.Kind, &c.Type, &cfg, &c.LastStatus, &c.LastError, &lastTestedAt, &c.CreatedAt, &c.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if cfg != "" {
+		if err := json.Unmarshal([]byte(cfg), &c.Config); err != nil {
+			return nil, fmt.Errorf("unmarshal connection config: %w", err)
+		}
+	}
+	if c.Config == nil {
+		c.Config = map[string]any{}
+	}
+	if lastTestedAt.Valid {
+		c.LastTestedAt = &lastTestedAt.Time
+	}
+	return c, nil
+}
+
+func (s *Store) ListConnections(ctx context.Context) ([]*storage.ConnectionEntry, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT name, kind, type, config_json, COALESCE(last_status, ''), COALESCE(last_error, ''), last_tested_at, created_at, updated_at
+		 FROM connections ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*storage.ConnectionEntry
+	for rows.Next() {
+		c := &storage.ConnectionEntry{}
+		var cfg string
+		var lastTestedAt sql.NullTime
+		if err := rows.Scan(&c.Name, &c.Kind, &c.Type, &cfg, &c.LastStatus, &c.LastError, &lastTestedAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if cfg != "" {
+			if err := json.Unmarshal([]byte(cfg), &c.Config); err != nil {
+				return nil, fmt.Errorf("unmarshal connection config: %w", err)
+			}
+		}
+		if c.Config == nil {
+			c.Config = map[string]any{}
+		}
+		if lastTestedAt.Valid {
+			c.LastTestedAt = &lastTestedAt.Time
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) DeleteConnection(ctx context.Context, name string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM connections WHERE name=?`, name)
+	return err
+}
+
+func (s *Store) UpdateConnectionHealth(ctx context.Context, name, status, lastError string, testedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE connections SET last_status=?, last_error=?, last_tested_at=?, updated_at=CURRENT_TIMESTAMP WHERE name=?`,
+		status, lastError, testedAt, name)
 	return err
 }
 

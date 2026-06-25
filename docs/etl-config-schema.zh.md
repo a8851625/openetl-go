@@ -563,6 +563,173 @@ transforms:
 
 被过滤的记录不算 DLQ 错误，可以推进 checkpoint。
 
+### `normalize_envelope` / `debezium_envelope`
+
+将 Kafka 中的普通 JSON 或 Debezium-like envelope 标准化为后续 `lookup` / `window` 可处理的记录。普通 JSON 会原样通过；Debezium payload 会展开 `after` / `before`，并设置 `operation`、`metadata.table`、`metadata.timestamp`。
+
+```yaml
+transforms:
+  - type: normalize_envelope
+    config:
+      keep_metadata: true
+```
+
+| 字段 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `keep_metadata` | 否 | `true` | 在记录中保留 `_op`、`_source_table`、`_event_time`。 |
+
+### `lookup`
+
+用于 stream-table join：启动后从 MySQL/PostgreSQL 维表加载缓存，并按 `join_key` 补充维表字段。
+
+```yaml
+transforms:
+  - type: lookup
+    config:
+      dsn: root:root123456@tcp(mysql:3306)/app
+      query: SELECT id, name, tier FROM dim_users
+      join_key: user_id
+      dim_key: id
+      fields: [name, tier]
+      refresh_interval_sec: 300
+      max_cache_entries: 100000
+      on_miss: "null"
+      on_refresh_error: error
+      state_backend: sqlite
+      state_path: ./data/etl-state.db
+      state_pipeline: orders-wide-table
+      state_node: lookup-users
+      state_ttl_seconds: 86400
+```
+
+| 字段 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `dsn` | 是 | | 维表数据库 DSN。 |
+| `query` | 是 | | 加载维表的 SQL。 |
+| `join_key` | 否 | `id` | 输入记录中的关联字段。 |
+| `dim_key` | 否 | `id` | 维表查询结果中的关联字段。 |
+| `fields` | 是 | | 要复制到记录中的维表字段。 |
+| `refresh_interval_sec` | 否 | `300` | 维表全量刷新间隔，`0` 表示只加载一次。 |
+| `max_cache_entries` | 否 | `0` | 维表缓存最多保留的不同 key 数，`0` 表示不限。超过上限会让刷新/恢复失败，并递增 `cache_limit_exceeded` 指标。 |
+| `on_miss` | 否 | `pass` | 维表未命中时的动作：`pass` 保持记录不变，`null` 将配置的维表字段显式写成 null，`dlq`/`error` 返回错误并进入 runner 的 DLQ 路径。 |
+| `on_refresh_error` | 否 | `pass` | 维表刷新失败且没有可用缓存时的动作：`pass` 保持记录不变，`error` 返回错误并进入 runner 的 DLQ 路径。 |
+| `state_backend` | 否 | | 持久化 lookup 缓存后端，当前支持 `sqlite`。 |
+| `state_path` | 否 | `./data/etl-state.db` | `state_backend=sqlite` 时的 SQLite 状态库路径。 |
+| `state_pipeline` | 否 | pipeline name | 持久化 lookup 缓存的 pipeline 命名空间；省略时由运行时注入 pipeline 名称。 |
+| `state_node` | 否 | transform node id | 持久化 lookup 缓存的 node 命名空间；省略时由运行时注入 transform/node ID。 |
+| `state_ttl_seconds` | 否 | `0` | 持久化 lookup 行的 TTL，`0` 表示不过期。 |
+
+启用 `state_backend` 后，每次维表刷新成功都会写入 `StateStore`。如果后续维表查询失败，lookup 会尝试恢复最近一份未过期缓存，用已知维表值继续补充记录。
+
+生产宽表链路中，如果 left join 未命中是可接受场景，建议使用 `on_miss: "null"`，让下游明确看到维表字段为空；如果维表未命中或缓存刷新失败必须人工处理，则使用 `on_miss: dlq` 或 `on_refresh_error: error`，让当前记录进入标准 DLQ 路径。
+
+### `join`
+
+执行 stream-stream interval join：在 `join_window_sec` 时间窗口内缓存记录，并用后续记录的 `join_key` 匹配已缓存记录。如果需要 crash/restart 后恢复 join 缓冲区，可以启用 SQLite `StateStore` 后端。
+
+```yaml
+transforms:
+  - type: join
+    config:
+      join_type: left
+      join_key: user_id
+      join_window_sec: 60
+      join_fields: [amount, status]
+      join_prefix: prev_
+      on_miss: dlq
+      state_backend: sqlite
+      state_path: ./data/etl-state.db
+      state_pipeline: orders-wide-table
+      state_node: join-orders
+```
+
+| 字段 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `join_type` | 否 | `inner` | Join 类型，支持 `inner`、`left`。 |
+| `join_key` | 是 | | 用于关联的字段名。 |
+| `join_window_sec` | 否 | `60` | 记录在 join 状态中保留的时间窗口。 |
+| `join_fields` | 是 | | 从匹配到的缓存记录中复制的字段。 |
+| `join_prefix` | 否 | `joined_` | 复制字段的前缀。 |
+| `where` | 否 | | 针对缓存记录的可选过滤表达式。 |
+| `on_miss` | 否 | `drop` | inner join 未命中时的动作：`drop`、`dlq` 或 `error`。 |
+| `max_buffered_keys` | 否 | `0` | 内存中最多保留的 join key 数，`0` 表示不限制。 |
+| `max_buffered_records` | 否 | `0` | 内存中最多保留的 join 记录数，`0` 表示不限制。 |
+| `state_backend` | 否 | | 持久化 join 缓冲后端，当前支持 `sqlite`。 |
+| `state_path` | 否 | `./data/etl-state.db` | `state_backend=sqlite` 时的 SQLite 状态库路径。 |
+| `state_pipeline` | 否 | pipeline name | 持久化 join 缓冲的 pipeline 命名空间；省略时由运行时注入 pipeline 名称。 |
+| `state_node` | 否 | transform node id | 持久化 join 缓冲的 node 命名空间；省略时由运行时注入 transform/node ID。 |
+| `state_ttl_seconds` | 否 | `0` | 持久化 join 缓冲的 TTL，`0` 表示使用 `join_window_sec`。 |
+
+启用 `state_backend` 后，`join` 会在每次更新后按 join key 持久化缓冲记录，并在启动时恢复未过期记录。这能改善 stream-stream join 的 crash/restart 恢复，但不等价于 Kafka offset、状态快照和 sink commit 之间的 exactly-once 事务。
+
+当 `max_buffered_keys` 或 `max_buffered_records` 超出上限时，`join` 会拒绝当前记录并返回错误，而不是继续扩大无界状态；该错误会进入现有 pipeline retry/DLQ 路径，并通过 transform metrics 暴露 `state_limit_exceeded` 计数。
+
+### `window`
+
+窗口聚合。当前生产配置路径只暴露 `tumbling` window；`sliding` / `session` 仍属于 roadmap 项，不应在生产 spec 中使用。
+
+```yaml
+transforms:
+  - type: window
+    config:
+      window_type: tumbling
+      window_size_seconds: 60
+      allowed_lateness_seconds: 10
+      group_by: [region, tier]
+      aggregates:
+        order_count:
+          func: count
+        total_amount:
+          func: sum
+          field: amount
+      state_backend: sqlite
+      state_path: ./data/etl-state.db
+      state_pipeline: orders-wide-table
+      state_node: window-orders
+```
+
+| 字段 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `window_type` | 否 | `tumbling` | 仅支持 `tumbling`。 |
+| `window_size_seconds` | 否 | `60` | 固定窗口大小。 |
+| `allowed_lateness_seconds` | 否 | `0` | 允许的 event-time 迟到时间。 |
+| `group_by` | 否 | | 分组字段。 |
+| `aggregates` | 是 | | 聚合定义，支持 `count`、`sum`、`avg`、`min`、`max`、`first`、`last`。 |
+| `state_backend` | 否 | | 持久化 tumbling window 状态后端，当前支持 `sqlite`。 |
+| `state_path` | 否 | `./data/etl-state.db` | `state_backend=sqlite` 时的 SQLite 状态库路径。 |
+| `state_pipeline` | 否 | pipeline name | 持久化 window 状态的 pipeline 命名空间；省略时由运行时注入 pipeline 名称。 |
+| `state_node` | 否 | transform node id | 持久化 window 状态的 node 命名空间；省略时由运行时注入 transform/node ID。 |
+| `state_ttl_seconds` | 否 | `0` | 持久化 window 状态的 TTL，`0` 表示不过期。 |
+
+启用 `state_backend` 后，`window` 会持久化 tumbling window 的聚合缓冲状态，并在启动时恢复；重启前已经累计但尚未输出的记录仍可参与最终聚合。这是 at-least-once pipeline 的恢复辅助能力，不等价于 Kafka offset、window 输出和下游 sink commit 之间的事务。
+
+### `deduplicate`
+
+按复合 key 过滤重复记录。默认只在进程内保存最近 key；如果需要 crash/restart 后仍能去重，可以启用 SQLite `StateStore` 后端。
+
+```yaml
+transforms:
+  - type: deduplicate
+    config:
+      keys: [order_id]
+      window_size: 10000
+      state_backend: sqlite
+      state_path: ./data/etl-state.db
+      state_pipeline: orders-wide-table
+      state_node: dedup-orders
+      state_ttl_seconds: 86400
+```
+
+| 字段 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `keys` | 是 | | 组成去重 key 的字段。 |
+| `window_size` | 否 | `10000` | 进程内最近 key ring 大小。 |
+| `state_backend` | 否 | | 持久化状态后端，当前支持 `sqlite`。 |
+| `state_path` | 否 | `./data/etl-state.db` | `state_backend=sqlite` 时的 SQLite 状态库路径。 |
+| `state_pipeline` | 否 | pipeline name | 持久化去重 key 的 pipeline 命名空间；省略时由运行时注入 pipeline 名称。 |
+| `state_node` | 否 | transform node id | 持久化去重 key 的 node 命名空间；省略时由运行时注入 transform/node ID。 |
+| `state_ttl_seconds` | 否 | `0` | 持久化去重 key 的 TTL，`0` 表示不过期。 |
+
 ### `lua`
 
 ```yaml
@@ -581,10 +748,58 @@ transforms:
 ## 运行时配置 API
 
 - 校验 spec：`POST /api/v2/specs/validate` — 返回危险 Source/Sink 组合的幂等性警告
-- 测试连接：`POST /api/v2/connections/test`
+- 连接目录：`GET/POST /api/v2/connections`、`GET/PUT/DELETE /api/v2/connections/{name}`、`POST /api/v2/connections/{name}/test` — 保存可复用 source/sink/transform 配置，响应中脱敏密钥字段，并记录最近健康状态
+- 临时测试连接：`POST /api/v2/connections/test`
+- Connector Descriptor：`GET /api/v2/connectors/descriptors` — 返回 Connector Descriptor v1，聚合 registry、配置 schema、secret 标记、capabilities 和 maturity metadata
 - Transform 试运行：`POST /api/v2/transforms/dry-run`
+- 聚合宽表预览：`POST /api/v2/wide-table/preview` — 返回 envelope/lookup/window/sink 预览、样例字段类型、ClickHouse DDL 建议和 preflight 结果
 - 重载 spec：`POST /api/v2/specs/reload`
 - 插件 schema：`GET /api/v2/plugins/schema` — 返回带 secret 标记的类型化字段 schema
+
+## 状态化处理基础
+
+状态化 transform 使用 `internal/etl/state` 中的 `StateStore` v1 契约。当前已经具备：
+
+- `MemoryStore`：用于测试和开发。
+- `SQLiteStore`：用于本地/standalone 持久化状态，支持 TTL、snapshot/restore、状态大小统计和过期 key 清理。
+- `checkpoint.Envelope`：用于状态化 checkpoint payload，把 source position、每个 node 的 state snapshot version、sink commit metadata 和已文档化的 `at_least_once` 交付模式放在同一个 JSON payload 中，同时可与旧 source position 区分。
+
+`lookup`、`join`、`window` 和 `deduplicate` 现在都可以通过 `state_backend: sqlite` 使用 `StateStore`。`lookup` 会持久化刷新成功的维表缓存，并在维表查询失败时恢复最近一份未过期快照；`join` 会按 join key 持久化 interval join 缓冲记录；`window` 会持久化 tumbling window 聚合缓冲；`deduplicate` 会在进程重启后继续识别已见 key。sliding/session、side output 和事务化输出等复杂 window 语义仍属于 roadmap 项。
+
+当 pipeline 由 linear runner 或 DAG executor 构建时，只要 transform 启用了 `state_backend`，运行时会自动把 `state_pipeline` 设置为 pipeline 名称，并把 `state_node` 设置为 transform/node ID。只有需要显式共享状态命名空间或迁移旧状态时，才需要手动配置这两个字段。
+
+linear runner 与 DAG executor 现在都会为实现 `StateSnapshotter` 的状态化 transform 保存 checkpoint envelope：sink 写入成功后，把 source position 与最新 state snapshot version 一起保存；source 重新打开前会自动把 envelope 解回原始 source position。如果状态快照采集失败，source checkpoint 不会前进。sink commit metadata 仍是 roadmap 项。
+
+`deduplicate`、`lookup`、`join` 和 `window` 在启用 `state_backend` 后也会暴露基础状态指标。`/api/v2/metrics` 会按 node 返回 `state_metrics`，Prometheus `/metrics` 会导出：
+
+- `etl_state_keys{pipeline,node}`
+- `etl_state_bytes{pipeline,node}`
+- `etl_state_updated_timestamp_seconds{pipeline,node}`
+
+`deduplicate` 会在 `/api/v2/metrics` 的 `transform_metrics` 中暴露 `processed`、`passed`、`duplicate_dropped`、`memory_duplicate_dropped`、`state_duplicate_dropped` 和 `evicted_keys`，并在 Prometheus 中输出 `etl_transform_metric_total{pipeline,node,transform,metric}`。
+
+`lookup` 会通过同一组 `transform_metrics` 和 Prometheus counter 暴露 `processed`、`hit`、`miss`、`missing_key`、`miss_null`、`miss_dlq`、`miss_error`、`refresh_success`、`refresh_error`、`refresh_error_dlq`、`restore_success`、`scan_error` 和 `cache_limit_exceeded`。这些指标用于观察维表缓存命中率、miss 处理方式、旧状态恢复、外部依赖失败、行扫描失败和缓存上限压力。
+
+`join` 还会在 `/api/v2/metrics` 的 `transform_metrics` 中暴露业务计数，并在 Prometheus 中输出 `etl_transform_metric_total{pipeline,node,transform,metric}`。当前 join 指标包括 `hit`、`miss`、`miss_dropped`、`miss_dlq`、`miss_error` 和 `state_limit_exceeded`。
+
+`window` 也会通过同一组 `transform_metrics` 和 Prometheus counter 暴露 `accumulated`、`late_dropped`、`emitted_records`、`emitted_windows` 和 `flushed_records`。
+
+## Connector Descriptor 与 Plugin ABI
+
+`GET /api/v2/connectors/descriptors` 返回 Connector Descriptor v1。每个 descriptor 包含：
+
+- `kind`、`type`、`version`、`registered`
+- 类型化配置 `fields`
+- `required` 和 `secret_fields`
+- `capabilities`
+- 基于测试证据的 `maturity`
+
+WASM 插件使用 `internal/etl/plugin/pluginsystem` 中的 Plugin ABI v1 元数据：
+
+- ABI 字符串：`openetl.plugin.abi/v1`
+- 最低运行时契约：`openetl-runtime/v1`
+- 必要 entrypoint：source 插件导出 `read`，sink 插件导出 `write`，transform 插件导出 `transform`
+- 配置字段类型：`string`、`int`、`bool`、`float`、`string_array`、`map`
 
 ## 幂等性警告
 

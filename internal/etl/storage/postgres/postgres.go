@@ -147,6 +147,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			enabled      BOOLEAN DEFAULT TRUE,
 			installed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS connections (
+			name           TEXT PRIMARY KEY,
+			kind           TEXT NOT NULL,
+			type           TEXT NOT NULL,
+			config_json    JSONB NOT NULL,
+			last_status    TEXT,
+			last_error     TEXT,
+			last_tested_at TIMESTAMPTZ,
+			created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key        TEXT PRIMARY KEY,
 			value      TEXT NOT NULL,
@@ -198,6 +209,9 @@ func (s *Store) runVersionedMigrations(ctx context.Context) error {
 		// shard to execute.
 		{2, "add shard_index to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS shard_index INTEGER DEFAULT 0"},
 		{3, "add shard_total to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS shard_total INTEGER DEFAULT 0"},
+		{4, "add record_hash to dead_letters", "ALTER TABLE dead_letters ADD COLUMN IF NOT EXISTS record_hash TEXT"},
+		{5, "add pipeline_version to dead_letters", "ALTER TABLE dead_letters ADD COLUMN IF NOT EXISTS pipeline_version INTEGER DEFAULT 0"},
+		{6, "add dag_node to dead_letters", "ALTER TABLE dead_letters ADD COLUMN IF NOT EXISTS dag_node TEXT"},
 	}
 
 	for _, m := range migrations {
@@ -414,15 +428,39 @@ func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) err
 	if err != nil {
 		return fmt.Errorf("marshal dlq record: %w", err)
 	}
+	if rec.RecordHash == "" {
+		rec.RecordHash = storage.RecordHashJSON(recJSON)
+	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO dead_letters (job_name, record_json, error, error_class, attempt, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		rec.JobName, string(recJSON), rec.Error, rec.ErrorClass, rec.Attempt, time.Now(),
+		`INSERT INTO dead_letters (job_name, record_json, error, error_class, attempt, record_hash, pipeline_version, dag_node, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		rec.JobName, string(recJSON), rec.Error, rec.ErrorClass, rec.Attempt, rec.RecordHash, rec.PipelineVersion, rec.DAGNode, time.Now(),
 	)
 	if err != nil {
 		return fmt.Errorf("write dlq: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) GetDeadLetterByID(ctx context.Context, jobName string, id int64) (*storage.DLQRecord, error) {
+	rec := &storage.DLQRecord{}
+	var recJSON string
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, job_name, record_json, error, error_class, attempt,
+		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
+		 FROM dead_letters WHERE job_name=$1 AND id=$2`,
+		jobName, id,
+	).Scan(&rec.ID, &rec.JobName, &recJSON, &rec.Error, &rec.ErrorClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get dlq by id: %w", err)
+	}
+	if err := json.Unmarshal([]byte(recJSON), &rec.Record); err != nil {
+		return nil, fmt.Errorf("unmarshal dlq record: %w", err)
+	}
+	return rec, nil
 }
 
 func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) ([]*storage.DLQRecord, error) {
@@ -436,7 +474,7 @@ func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) (
 	for rows.Next() {
 		rec := &storage.DLQRecord{}
 		var recJSON string
-		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &rec.Error, &rec.ErrorClass, &rec.Attempt, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &rec.Error, &rec.ErrorClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan dlq: %w", err)
 		}
 		if err := json.Unmarshal([]byte(recJSON), &rec.Record); err != nil {
@@ -531,7 +569,8 @@ func newDLQQueryBuilder(f storage.DLQFilter) *dlqQueryBuilder {
 	limitIdx := n + 1
 	offsetIdx := n + 2
 	q := fmt.Sprintf(
-		`SELECT id, job_name, record_json, error, error_class, attempt, created_at
+		`SELECT id, job_name, record_json, error, error_class, attempt,
+		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
 		 FROM dead_letters WHERE %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`,
 		c.where, limitIdx, offsetIdx,
 	)
@@ -839,6 +878,102 @@ func (s *Store) DeletePlugin(ctx context.Context, name string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM plugins WHERE name=$1`, name)
 	if err != nil {
 		return fmt.Errorf("delete plugin: %w", err)
+	}
+	return nil
+}
+
+// ── Connection catalog ───────────────────────────────────────────────
+
+func (s *Store) SaveConnection(ctx context.Context, c *storage.ConnectionEntry) error {
+	cfg, err := json.Marshal(c.Config)
+	if err != nil {
+		return fmt.Errorf("marshal connection config: %w", err)
+	}
+	_, err = s.pool.Exec(ctx,
+		`INSERT INTO connections (name, kind, type, config_json, last_status, last_error, last_tested_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+		 ON CONFLICT (name) DO UPDATE SET
+		   kind        = EXCLUDED.kind,
+		   type        = EXCLUDED.type,
+		   config_json = EXCLUDED.config_json,
+		   updated_at  = CURRENT_TIMESTAMP`,
+		c.Name, c.Kind, c.Type, cfg, c.LastStatus, c.LastError, c.LastTestedAt)
+	if err != nil {
+		return fmt.Errorf("save connection: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetConnection(ctx context.Context, name string) (*storage.ConnectionEntry, error) {
+	c := &storage.ConnectionEntry{}
+	var cfg []byte
+	var lastTestedAt *time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT name, kind, type, config_json, COALESCE(last_status, ''), COALESCE(last_error, ''), last_tested_at, created_at, updated_at
+		 FROM connections WHERE name=$1`, name,
+	).Scan(&c.Name, &c.Kind, &c.Type, &cfg, &c.LastStatus, &c.LastError, &lastTestedAt, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, errNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get connection: %w", err)
+	}
+	if len(cfg) > 0 {
+		if err := json.Unmarshal(cfg, &c.Config); err != nil {
+			return nil, fmt.Errorf("unmarshal connection config: %w", err)
+		}
+	}
+	if c.Config == nil {
+		c.Config = map[string]any{}
+	}
+	c.LastTestedAt = lastTestedAt
+	return c, nil
+}
+
+func (s *Store) ListConnections(ctx context.Context) ([]*storage.ConnectionEntry, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT name, kind, type, config_json, COALESCE(last_status, ''), COALESCE(last_error, ''), last_tested_at, created_at, updated_at
+		 FROM connections ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("list connections: %w", err)
+	}
+	defer rows.Close()
+	var result []*storage.ConnectionEntry
+	for rows.Next() {
+		c := &storage.ConnectionEntry{}
+		var cfg []byte
+		var lastTestedAt *time.Time
+		if err := rows.Scan(&c.Name, &c.Kind, &c.Type, &cfg, &c.LastStatus, &c.LastError, &lastTestedAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan connection: %w", err)
+		}
+		if len(cfg) > 0 {
+			if err := json.Unmarshal(cfg, &c.Config); err != nil {
+				return nil, fmt.Errorf("unmarshal connection config: %w", err)
+			}
+		}
+		if c.Config == nil {
+			c.Config = map[string]any{}
+		}
+		c.LastTestedAt = lastTestedAt
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) DeleteConnection(ctx context.Context, name string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM connections WHERE name=$1`, name)
+	if err != nil {
+		return fmt.Errorf("delete connection: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateConnectionHealth(ctx context.Context, name, status, lastError string, testedAt time.Time) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE connections SET last_status=$1, last_error=$2, last_tested_at=$3, updated_at=CURRENT_TIMESTAMP WHERE name=$4`,
+		status, lastError, testedAt, name)
+	if err != nil {
+		return fmt.Errorf("update connection health: %w", err)
 	}
 	return nil
 }

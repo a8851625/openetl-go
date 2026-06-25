@@ -24,9 +24,9 @@ type PreflightIssue struct {
 
 // PreflightResult is the outcome of running all preflight checks.
 type PreflightResult struct {
-	Passed  bool              `json:"passed"`
-	Issues  []PreflightIssue  `json:"issues,omitempty"`
-	Summary string            `json:"summary"`
+	Passed  bool             `json:"passed"`
+	Issues  []PreflightIssue `json:"issues,omitempty"`
+	Summary string           `json:"summary"`
 }
 
 // RunPreflight validates a pipeline spec's source and sink connectivity
@@ -276,7 +276,10 @@ func intField(cfg map[string]any, key string, def int) int {
 
 func stringSliceField(cfg map[string]any, key string) []string {
 	var result []string
-	if arr, ok := cfg[key].([]interface{}); ok {
+	switch arr := cfg[key].(type) {
+	case []string:
+		result = append(result, arr...)
+	case []interface{}:
 		for _, v := range arr {
 			if s, ok := v.(string); ok {
 				result = append(result, s)

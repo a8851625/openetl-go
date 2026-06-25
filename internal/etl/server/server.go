@@ -608,8 +608,11 @@ func (s *Server) RegisterHTTPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/specs/validate", s.handleSpecValidate)
 	mux.HandleFunc("/api/v2/specs/reload", s.handleSpecReload)
 	mux.HandleFunc("/api/v2/specs/import", s.handleSpecImport)
+	mux.HandleFunc("/api/v2/connections", s.handleConnections)
+	mux.HandleFunc("/api/v2/connections/", s.handleConnectionAction)
 	mux.HandleFunc("/api/v2/connections/test", s.handleConnectionTest)
 	mux.HandleFunc("/api/v2/transforms/dry-run", s.handleTransformDryRun)
+	mux.HandleFunc("/api/v2/wide-table/preview", s.handleWideTablePreview)
 	mux.HandleFunc("/api/v2/audit", s.handleAudit)
 	mux.HandleFunc("/api/v2/checkpoints", s.handleCheckpoints)
 	mux.HandleFunc("/api/v2/checkpoints/", s.handleCheckpointAction)
@@ -618,6 +621,7 @@ func (s *Server) RegisterHTTPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/metrics", telemetry.PrometheusHandler(s.getPipelineMetrics))
 	mux.HandleFunc("/api/v2/plugins", s.handlePlugins)
 	mux.HandleFunc("/api/v2/plugins/schema", s.handlePluginSchema)
+	mux.HandleFunc("/api/v2/connectors/descriptors", s.handleConnectorDescriptors)
 	mux.HandleFunc("/api/v2/plugins/install", s.handlePluginInstall)
 	mux.HandleFunc("/api/v2/plugins/compile", s.handlePluginCompile)
 	mux.HandleFunc("/api/v2/plugins/dry-run", s.handlePluginDryRun)
@@ -763,12 +767,7 @@ func (s *Server) handleConnectionTest(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"error": "method not allowed"})
 		return
 	}
-	var req struct {
-		Kind   string         `json:"kind"`
-		Type   string         `json:"type"`
-		Config map[string]any `json:"config"`
-		Open   *bool          `json:"open,omitempty"`
-	}
+	var req connectionTestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "invalid body"})
@@ -777,80 +776,13 @@ func (s *Server) handleConnectionTest(w http.ResponseWriter, r *http.Request) {
 	if req.Config == nil {
 		req.Config = map[string]any{}
 	}
-	openPlugin := true
-	if req.Open != nil {
-		openPlugin = *req.Open
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-
-	switch req.Kind {
-	case "source":
-		source, err := registry.BuildSource(req.Type, req.Config)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"ok": false, "stage": "build", "error": err.Error()})
-			return
-		}
-		if openPlugin {
-			reader, err := source.Open(ctx, nil)
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"ok": false, "stage": "open", "error": err.Error()})
-				return
-			}
-			// Read up to 5 sample records for preview
-			var samples []map[string]any
-			for i := 0; i < 5; i++ {
-				rec, readErr := reader.Read(ctx)
-				if readErr != nil {
-					break
-				}
-				samples = append(samples, map[string]any{
-					"operation": string(rec.Operation),
-					"table":     rec.Metadata.Table,
-					"key":       rec.Metadata.Key,
-					"data":      rec.Data,
-				})
-			}
-			_ = reader.Close()
-			json.NewEncoder(w).Encode(map[string]any{
-				"ok":     true,
-				"kind":   req.Kind,
-				"type":   req.Type,
-				"opened": openPlugin,
-				"sample": samples,
-				"count":  len(samples),
-			})
-			return
-		}
-	case "sink":
-		sink, err := registry.BuildSink(req.Type, req.Config)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"ok": false, "stage": "build", "error": err.Error()})
-			return
-		}
-		if openPlugin {
-			if err := sink.Open(ctx); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"ok": false, "stage": "open", "error": err.Error()})
-				return
-			}
-			_ = sink.Close()
-		}
-	case "transform":
-		if _, err := registry.BuildTransform(req.Type, req.Config); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"ok": false, "stage": "build", "error": err.Error()})
-			return
-		}
-	default:
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "kind must be source, sink, or transform"})
-		return
+	result, status := s.runConnectionTest(ctx, req)
+	if status != http.StatusOK {
+		w.WriteHeader(status)
 	}
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "kind": req.Kind, "type": req.Type, "opened": openPlugin})
+	json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) handleTransformDryRun(w http.ResponseWriter, r *http.Request) {
@@ -1365,6 +1297,144 @@ func (s *Server) handlePipelineSpecGET(w http.ResponseWriter, r *http.Request, n
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{"spec": maskSpecSecrets(spec)})
+}
+
+type pipelineScheduleRequest struct {
+	Type        string `json:"type"`
+	Cron        string `json:"cron,omitempty"`
+	IntervalSec int    `json:"interval_sec,omitempty"`
+}
+
+func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, name string) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		spec := s.specs[name]
+		dagSpec := s.dagSpecs[name]
+		s.mu.RUnlock()
+		if spec == nil && dagSpec == nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"error": "pipeline not found"})
+			return
+		}
+		if dagSpec != nil {
+			json.NewEncoder(w).Encode(map[string]any{"enabled": dagSpec.Schedule != nil, "schedule": dagSpec.Schedule})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"enabled": spec.Schedule != nil, "schedule": spec.Schedule})
+
+	case http.MethodPut:
+		var req pipelineScheduleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
+			return
+		}
+		if err := validatePipelineSchedule(req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		s.mu.Lock()
+		spec := s.specs[name]
+		dagSpec := s.dagSpecs[name]
+		if spec == nil && dagSpec == nil {
+			s.mu.Unlock()
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"error": "pipeline not found"})
+			return
+		}
+		if dagSpec != nil {
+			dagSpec.Schedule = &orchestrator.ScheduleConfig{
+				Type:      orchestrator.ScheduleType(req.Type),
+				Cron:      req.Cron,
+				IntervalS: req.IntervalSec,
+			}
+		} else {
+			spec.Schedule = &pipeline.ScheduleConfig{Type: req.Type, Cron: req.Cron, IntervalSec: req.IntervalSec}
+		}
+		s.mu.Unlock()
+
+		if err := s.persistPipelineSchedule(r.Context(), name, "schedule_updated"); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		s.audit(r, "pipeline.schedule.update", name)
+		json.NewEncoder(w).Encode(map[string]any{"name": name, "enabled": true, "schedule": req})
+
+	case http.MethodDelete:
+		s.mu.Lock()
+		spec := s.specs[name]
+		dagSpec := s.dagSpecs[name]
+		if spec == nil && dagSpec == nil {
+			s.mu.Unlock()
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"error": "pipeline not found"})
+			return
+		}
+		if dagSpec != nil {
+			dagSpec.Schedule = nil
+		} else {
+			spec.Schedule = nil
+		}
+		s.mu.Unlock()
+
+		if err := s.persistPipelineSchedule(r.Context(), name, "schedule_disabled"); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		s.audit(r, "pipeline.schedule.disable", name)
+		json.NewEncoder(w).Encode(map[string]any{"name": name, "enabled": false})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func validatePipelineSchedule(req pipelineScheduleRequest) error {
+	switch req.Type {
+	case "streaming", "once":
+		return nil
+	case "cron":
+		if strings.TrimSpace(req.Cron) == "" {
+			return fmt.Errorf("cron schedule requires cron")
+		}
+		return nil
+	case "periodic":
+		if req.IntervalSec <= 0 {
+			return fmt.Errorf("periodic schedule requires interval_sec > 0")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported schedule type %q", req.Type)
+	}
+}
+
+func (s *Server) persistPipelineSchedule(ctx context.Context, name, status string) error {
+	s.mu.RLock()
+	spec := s.specs[name]
+	dagSpec := s.dagSpecs[name]
+	s.mu.RUnlock()
+	if dagSpec != nil {
+		yamlBytes, err := yaml.Marshal(dagSpec)
+		if err != nil {
+			return fmt.Errorf("marshal dag spec: %w", err)
+		}
+		return s.specStore.Save(ctx, name, string(yamlBytes), status)
+	}
+	if spec != nil {
+		yamlBytes, err := pipeline.MarshalSpecYAML(spec)
+		if err != nil {
+			return fmt.Errorf("marshal spec: %w", err)
+		}
+		return s.specStore.Save(ctx, name, string(yamlBytes), status)
+	}
+	return fmt.Errorf("pipeline %s not found", name)
 }
 
 // secretKeyPatterns are config key substrings that indicate a secret field.
@@ -1946,7 +2016,7 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	// Actions that don't require a running pipeline
 	standaloneActions := map[string]bool{
 		"": true, "spec": true, "checkpoint": true, "checkpoint/reset": true, "checkpoint/set": true,
-		"history": true, "export": true, "dag": true, "delete": true,
+		"history": true, "export": true, "dag": true, "delete": true, "schedule": true,
 	}
 	if !ok && !standaloneActions[action] {
 		w.WriteHeader(404)
@@ -2063,6 +2133,9 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 			}
 			json.NewEncoder(w).Encode(map[string]any{"history": runs})
 		}
+
+	case "schedule":
+		s.handlePipelineSchedule(w, r, name)
 
 	case "spec":
 		s.handlePipelineSpecGET(w, r, name)
@@ -2434,16 +2507,6 @@ func compileWithExtismJS(tmpDir, srcFile, name string) ([]byte, error) {
 	// output path cannot escape tmpDir (TF-3).
 	outFile := filepath.Join(tmpDir, filepath.Base(name)+".wasm")
 
-	// extismJSPackage is the npm package providing the `extism-js` compiler,
-	// used only in the npx fallback when a pre-installed binary is absent.
-	// Pin a version in production via OPENETL_EXTISM_JS_PKG (e.g.
-	// "@extism/js-pdk@1.1.0") so `npx --yes` does not auto-fetch the latest
-	// at request time (TF-3 supply-chain/availability risk).
-	extismPkg := os.Getenv("OPENETL_EXTISM_JS_PKG")
-	if extismPkg == "" {
-		extismPkg = "@extism/js-pdk@1.1.0" // pinned default (P5-26); override via OPENETL_EXTISM_JS_PKG
-	}
-
 	// First check if extism-js is available as a pre-installed binary
 	// (preferred — no network fetch, no supply-chain exposure).
 	if extismPath, err := exec.LookPath("extism-js"); err == nil {
@@ -2455,10 +2518,17 @@ func compileWithExtismJS(tmpDir, srcFile, name string) ([]byte, error) {
 			return nil, fmt.Errorf("extism-js compile failed: %v\nstderr: %s", err, stderr.String())
 		}
 	} else if _, err2 := exec.LookPath("npx"); err2 == nil {
-		// Fallback: npx. This fetches from npm at request time — log it so the
-		// supply-chain exposure is observable, and use an explicit pinned
-		// package rather than resolving an ambiguous bin name.
-		g.Log().Warningf(context.Background(), "extism-js not pre-installed; falling back to npx --yes -p %s (network fetch at request time — pin OPENETL_EXTISM_JS_PKG and/or pre-install extism-js in production)", extismPkg)
+		if os.Getenv("OPENETL_ALLOW_NPX_PLUGIN_COMPILE") != "true" {
+			return nil, fmt.Errorf("extism-js not found and npx fallback is disabled; pre-install extism-js or set OPENETL_ALLOW_NPX_PLUGIN_COMPILE=true only in trusted development environments")
+		}
+		extismPkg := os.Getenv("OPENETL_EXTISM_JS_PKG")
+		if extismPkg == "" {
+			extismPkg = "@extism/js-pdk@1.1.0"
+		}
+		// Development-only fallback. Production images should pre-install
+		// extism-js or compile plugins in CI/CLI so request handling never
+		// fetches executable tooling from the network.
+		g.Log().Warningf(context.Background(), "extism-js not pre-installed; development npx fallback enabled with package %s", extismPkg)
 		cmd := exec.Command("npx", "--yes", "-p", extismPkg, "extism-js", "compile", srcFile, "-o", outFile)
 		cmd.Dir = tmpDir
 		var stderr bytes.Buffer
@@ -2467,7 +2537,7 @@ func compileWithExtismJS(tmpDir, srcFile, name string) ([]byte, error) {
 			return nil, fmt.Errorf("npx extism-js compile failed: %v\nstderr: %s", err, stderr.String())
 		}
 	} else {
-		return nil, fmt.Errorf("extism-js not found: install with 'npm install -g @extism/js-pdk' or set OPENETL_EXTISM_JS_PKG")
+		return nil, fmt.Errorf("extism-js not found: install with 'npm install -g @extism/js-pdk' or compile plugins offline")
 	}
 
 	wasmBytes, err := os.ReadFile(outFile)
@@ -2574,49 +2644,51 @@ func (s *Server) handlePluginAction(w http.ResponseWriter, r *http.Request) {
 func pluginMetadata() map[string]any {
 	return map[string]any{
 		"sources": map[string]any{
-			"file":               pluginInfo([]string{"path", "format"}, []string{"batch", "checkpoint"}, "stable"),
-			"http":               pluginInfo([]string{"url"}, []string{"pagination", "auth_headers", "checkpoint"}, "stable"),
-			"mysql_batch":        pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "checkpoint"}, "stable"),
-			"mysql_cdc":          pluginInfo([]string{"host", "user", "database", "tables"}, []string{"cdc", "checkpoint"}, "stable"),
-			"mysql_snapshot_cdc": pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "cdc", "checkpoint"}, "stable"),
-			"kafka":              pluginInfo([]string{"brokers", "topic"}, []string{"stream", "checkpoint"}, "stable"),
-			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot", "checkpoint"}, "stable"),
-			"redis":              pluginInfo([]string{"addr"}, []string{"stream", "checkpoint"}, "stable"),
+			"file":               pluginInfo([]string{"path", "format"}, []string{"batch", "checkpoint"}, "beta"),
+			"http":               pluginInfo([]string{"url"}, []string{"pagination", "auth_headers", "checkpoint"}, "beta"),
+			"mysql_batch":        pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "checkpoint"}, "beta"),
+			"mysql_cdc":          pluginInfo([]string{"host", "user", "database", "tables"}, []string{"cdc", "checkpoint"}, "beta"),
+			"mysql_snapshot_cdc": pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "cdc", "checkpoint"}, "beta"),
+			"kafka":              pluginInfo([]string{"brokers", "topic"}, []string{"stream", "checkpoint"}, "beta"),
+			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot", "checkpoint"}, "beta"),
+			"redis":              pluginInfo([]string{"addr"}, []string{"stream", "checkpoint"}, "experimental"),
 		},
 		"sinks": map[string]any{
-			"file_sink":     pluginInfo([]string{"output_dir", "format"}, []string{"batch", "local_file"}, "stable"),
-			"s3":            pluginInfo([]string{"bucket", "format"}, []string{"batch", "minio_compatible"}, "stable"),
-			"mysql":         pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift"}, "stable"),
-			"clickhouse":    pluginInfo([]string{"host", "database", "table"}, []string{"batch", "auto_create", "schema_drift", "sync", "distributed", "update", "delete", "optimize"}, "stable"),
-			"postgres":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift"}, "stable"),
-			"postgresql":    pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert"}, "stable"),
-			"kafka":         pluginInfo([]string{"brokers", "topic"}, []string{"stream"}, "stable"),
-			"elasticsearch": pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "stable"),
-			"es":            pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "stable"),
-			"redis":         pluginInfo([]string{"addr"}, []string{"stream"}, "stable"),
+			"file_sink":     pluginInfo([]string{"output_dir", "format"}, []string{"batch", "local_file"}, "beta"),
+			"s3":            pluginInfo([]string{"bucket", "format"}, []string{"batch", "minio_compatible"}, "beta"),
+			"mysql":         pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift"}, "beta"),
+			"clickhouse":    pluginInfo([]string{"host", "database", "table"}, []string{"batch", "auto_create", "schema_drift", "sync", "distributed", "update", "delete", "optimize"}, "beta"),
+			"postgres":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift"}, "beta"),
+			"postgresql":    pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert"}, "beta"),
+			"kafka":         pluginInfo([]string{"brokers", "topic"}, []string{"stream"}, "beta"),
+			"elasticsearch": pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "beta"),
+			"es":            pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "beta"),
+			"redis":         pluginInfo([]string{"addr"}, []string{"stream"}, "experimental"),
 
-			"doris": pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "stream_load", "upsert", "auto_create", "schema_drift"}, "stable"),
-			"jdbc":  pluginInfo([]string{"dsn", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "generic"}, "stable"),
+			"doris": pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "stream_load", "upsert", "auto_create", "schema_drift"}, "experimental"),
+			"jdbc":  pluginInfo([]string{"dsn", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "generic"}, "experimental"),
 		},
 		"transforms": map[string]any{
-			"identity":     pluginInfo(nil, []string{"pass_through"}, "stable"),
-			"rename":       pluginInfo([]string{"mappings"}, []string{"schema_mapping"}, "stable"),
-			"drop_field":   pluginInfo([]string{"fields"}, []string{"projection"}, "stable"),
-			"add_field":    pluginInfo([]string{"field", "value"}, []string{"enrichment"}, "stable"),
-			"type_convert": pluginInfo([]string{"conversions"}, []string{"type_mapping"}, "stable"),
-			"filter":       pluginInfo([]string{"expression"}, []string{"record_filter"}, "stable"),
-			"lua":          pluginInfo([]string{"script"}, []string{"script", "inline"}, "stable"),
-			"ts":           pluginInfo([]string{"script"}, []string{"script", "inline", "typescript"}, "beta"),
-			"router":       pluginInfo(nil, []string{"conditional_routing", "flow_control"}, "beta"),
-			"fanout":       pluginInfo(nil, []string{"broadcast", "flow_control"}, "beta"),
-			"tap":          pluginInfo([]string{"log_every"}, []string{"observe", "metrics", "alerts"}, "beta"),
-			"rate_limiter": pluginInfo([]string{"rate"}, []string{"throttle", "flow_control"}, "beta"),
-			"enricher":     pluginInfo([]string{"mode", "url"}, []string{"http_enrichment", "sql_enrichment", "cache"}, "beta"),
-			"lookup":       pluginInfo([]string{"dsn", "query", "fields"}, []string{"dimension_join", "stream_table_join"}, "beta"),
-			"window":       pluginInfo([]string{"window_sec", "aggregates"}, []string{"tumbling_window", "aggregation"}, "beta"),
-			"deduplicate":  pluginInfo([]string{"keys"}, []string{"dedup", "lru"}, "beta"),
-			"validate":     pluginInfo([]string{"rules"}, []string{"data_quality", "schema_validation"}, "beta"),
-			"join":         pluginInfo([]string{"join_key", "join_fields"}, []string{"stream_join", "interval_join"}, "beta"),
+			"identity":           pluginInfo(nil, []string{"pass_through"}, "production"),
+			"rename":             pluginInfo([]string{"mappings"}, []string{"schema_mapping"}, "production"),
+			"drop_field":         pluginInfo([]string{"fields"}, []string{"projection"}, "production"),
+			"add_field":          pluginInfo([]string{"field", "value"}, []string{"enrichment"}, "production"),
+			"type_convert":       pluginInfo([]string{"conversions"}, []string{"type_mapping"}, "production"),
+			"filter":             pluginInfo([]string{"expression"}, []string{"record_filter"}, "production"),
+			"normalize_envelope": pluginInfo(nil, []string{"debezium_envelope", "event_time", "cdc_metadata"}, "beta"),
+			"debezium_envelope":  pluginInfo(nil, []string{"debezium_envelope", "event_time", "cdc_metadata"}, "beta"),
+			"lua":                pluginInfo([]string{"script"}, []string{"script", "inline"}, "beta"),
+			"ts":                 pluginInfo([]string{"script"}, []string{"script", "inline", "typescript"}, "experimental"),
+			"router":             pluginInfo(nil, []string{"conditional_routing", "flow_control"}, "beta"),
+			"fanout":             pluginInfo(nil, []string{"broadcast", "flow_control"}, "beta"),
+			"tap":                pluginInfo([]string{"log_every"}, []string{"observe", "metrics", "alerts"}, "beta"),
+			"rate_limiter":       pluginInfo([]string{"rate"}, []string{"throttle", "flow_control"}, "beta"),
+			"enricher":           pluginInfo([]string{"mode", "url"}, []string{"http_enrichment", "sql_enrichment", "cache"}, "beta"),
+			"lookup":             pluginInfo([]string{"dsn", "query", "fields"}, []string{"dimension_join", "stream_table_join"}, "beta"),
+			"window":             pluginInfo([]string{"window_sec", "aggregates"}, []string{"tumbling_window", "aggregation"}, "experimental"),
+			"deduplicate":        pluginInfo([]string{"keys"}, []string{"dedup", "lru"}, "beta"),
+			"validate":           pluginInfo([]string{"rules"}, []string{"data_quality", "schema_validation"}, "beta"),
+			"join":               pluginInfo([]string{"join_key", "join_fields"}, []string{"stream_join", "interval_join"}, "beta"),
 		},
 	}
 }
@@ -2669,6 +2741,34 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 			runner.IncrementDLQDelete(int64(count))
 		}
 		json.NewEncoder(w).Encode(map[string]any{"deleted": count})
+	case r.Method == http.MethodDelete && action != "":
+		id, ok := parseDLQIDAction(action)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid dlq id"})
+			return
+		}
+		item, err := s.dlqWriter.ReadByID(r.Context(), name, id)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		if item == nil {
+			json.NewEncoder(w).Encode(map[string]any{"deleted": 0})
+			return
+		}
+		if err := s.dlqWriter.DeleteByID(r.Context(), id); err != nil {
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		s.audit(r, "dlq.delete", fmt.Sprintf("%s:%d", name, id))
+		s.mu.RLock()
+		runner, ok := s.pipelines[name]
+		s.mu.RUnlock()
+		if ok {
+			runner.IncrementDLQDelete(1)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"deleted": 1})
 	case r.Method == http.MethodPost && action == "replay":
 		count, err := s.replayDLQ(r.Context(), name, filter)
 		if err != nil {
@@ -2684,10 +2784,47 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 			runner.IncrementDLQReplay(int64(count))
 		}
 		json.NewEncoder(w).Encode(map[string]any{"replayed": count})
+	case r.Method == http.MethodPost && strings.HasSuffix(action, "/replay"):
+		id, ok := parseDLQReplayIDAction(action)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid dlq replay id"})
+			return
+		}
+		count, err := s.replayDLQByID(r.Context(), name, id)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "replayed": count})
+			return
+		}
+		s.audit(r, "dlq.replay", fmt.Sprintf("%s:%d", name, id))
+		s.mu.RLock()
+		runner, ok := s.pipelines[name]
+		s.mu.RUnlock()
+		if ok {
+			runner.IncrementDLQReplay(int64(count))
+		}
+		json.NewEncoder(w).Encode(map[string]any{"replayed": count})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]any{"error": "dlq action not found"})
 	}
+}
+
+func parseDLQIDAction(action string) (int64, bool) {
+	if action == "" || strings.Contains(action, "/") {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(action, 10, 64)
+	return id, err == nil && id > 0
+}
+
+func parseDLQReplayIDAction(action string) (int64, bool) {
+	idPart, ok := strings.CutSuffix(action, "/replay")
+	if !ok {
+		return 0, false
+	}
+	return parseDLQIDAction(idPart)
 }
 
 type dlqFilter struct {
@@ -2751,6 +2888,25 @@ func hasSelectiveDLQFilter(filter dlqFilter) bool {
 }
 
 func (s *Server) replayDLQ(ctx context.Context, name string, filter dlqFilter) (int, error) {
+	items, err := s.readFilteredDLQ(ctx, name, filter)
+	if err != nil {
+		return 0, err
+	}
+	return s.replayDLQItems(ctx, name, items)
+}
+
+func (s *Server) replayDLQByID(ctx context.Context, name string, id int64) (int, error) {
+	item, err := s.dlqWriter.ReadByID(ctx, name, id)
+	if err != nil {
+		return 0, err
+	}
+	if item == nil {
+		return 0, nil
+	}
+	return s.replayDLQItems(ctx, name, []storage.DeadLetter{*item})
+}
+
+func (s *Server) replayDLQItems(ctx context.Context, name string, items []storage.DeadLetter) (int, error) {
 	s.mu.RLock()
 	spec := s.specs[name]
 	dagSpec := s.dagSpecs[name]
@@ -2763,10 +2919,6 @@ func (s *Server) replayDLQ(ctx context.Context, name string, filter dlqFilter) (
 
 	if spec == nil {
 		return 0, fmt.Errorf("pipeline %s not found", name)
-	}
-	items, err := s.readFilteredDLQ(ctx, name, filter)
-	if err != nil {
-		return 0, err
 	}
 	if len(items) == 0 {
 		return 0, nil
@@ -2809,10 +2961,14 @@ func (s *Server) replayDLQ(ctx context.Context, name string, filter dlqFilter) (
 		// (P4-10, SV-1). Timestamp-based deletion is imprecise when multiple
 		// DLQ entries share the same second.
 		if item.ID != 0 {
-			s.dlqWriter.DeleteByID(ctx, item.ID)
+			if err := s.dlqWriter.DeleteByID(ctx, item.ID); err != nil {
+				return replayed, fmt.Errorf("delete replayed dlq id %d: %w", item.ID, err)
+			}
 		} else {
 			// Fallback for file-backed DLQ (no auto-increment ID).
-			s.dlqWriter.Delete(ctx, name, item.Timestamp)
+			if err := s.dlqWriter.Delete(ctx, name, item.Timestamp); err != nil {
+				return replayed, fmt.Errorf("delete replayed dlq timestamp %s: %w", item.Timestamp.Format(time.RFC3339Nano), err)
+			}
 		}
 		replayed++
 	}
@@ -2864,6 +3020,8 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 			BackpressureCapacity: pipelineMetrics.BackpressureCapacity,
 			CircuitBreakerState:  runner.CircuitBreakerState(),
 			SinkMetrics:          convertSinkMetrics(runner.SinkMetrics()),
+			StateMetrics:         convertStateMetrics(runner.StateMetrics()),
+			TransformMetrics:     convertTransformMetrics(runner.TransformMetrics()),
 			StartedAt:            stats.StartedAt,
 			Uptime:               stats.Uptime,
 		})
@@ -2881,6 +3039,35 @@ func convertSinkMetrics(coreMetrics []core.SinkMetrics) []telemetry.SinkMetric {
 			BatchesSent:  sm.BatchesSent,
 			WriteLatency: sm.WriteLatency,
 			Errors:       sm.Errors,
+		})
+	}
+	return result
+}
+
+func convertStateMetrics(coreMetrics []core.StateMetrics) []telemetry.StateMetric {
+	var result []telemetry.StateMetric
+	for _, sm := range coreMetrics {
+		result = append(result, telemetry.StateMetric{
+			Node:      sm.Node,
+			Keys:      sm.Keys,
+			Bytes:     sm.Bytes,
+			UpdatedAt: sm.UpdatedAt,
+		})
+	}
+	return result
+}
+
+func convertTransformMetrics(coreMetrics []core.TransformMetrics) []telemetry.TransformMetric {
+	var result []telemetry.TransformMetric
+	for _, tm := range coreMetrics {
+		counters := make(map[string]int64, len(tm.Counters))
+		for name, value := range tm.Counters {
+			counters[name] = value
+		}
+		result = append(result, telemetry.TransformMetric{
+			Node:      tm.Node,
+			Transform: tm.Transform,
+			Counters:  counters,
 		})
 	}
 	return result

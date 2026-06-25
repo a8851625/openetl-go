@@ -198,3 +198,11 @@ func (w *DAGRunnerWrapper) SinkMetrics() []core.SinkMetrics {
 	}
 	return result
 }
+
+func (w *DAGRunnerWrapper) StateMetrics() []core.StateMetrics {
+	return w.exec.StateMetrics(context.Background())
+}
+
+func (w *DAGRunnerWrapper) TransformMetrics() []core.TransformMetrics {
+	return w.exec.TransformMetrics()
+}

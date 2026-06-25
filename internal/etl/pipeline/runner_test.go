@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/checkpoint"
 	"github.com/a8851625/openetl-go/internal/etl/core"
 
 	_ "github.com/a8851625/openetl-go/internal/etl/sink"
@@ -77,6 +78,29 @@ func (t zeroBatchTransform) Apply(_ context.Context, rec core.Record) (core.Reco
 }
 func (t zeroBatchTransform) ApplyBatch(_ context.Context, _ []core.Record) ([]core.Record, error) {
 	return nil, nil
+}
+
+type stateSnapshotTransform struct {
+	node    string
+	version string
+}
+
+func (t stateSnapshotTransform) Name() string { return "state-snapshot" }
+func (t stateSnapshotTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
+	return rec, nil
+}
+func (t stateSnapshotTransform) SnapshotState(context.Context) (string, string, bool, error) {
+	return t.node, t.version, true, nil
+}
+
+type failingStateSnapshotTransform struct{}
+
+func (t failingStateSnapshotTransform) Name() string { return "failing-state-snapshot" }
+func (t failingStateSnapshotTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
+	return rec, nil
+}
+func (t failingStateSnapshotTransform) SnapshotState(context.Context) (string, string, bool, error) {
+	return "window-0", "", false, errors.New("state store unavailable")
 }
 
 // captureDLQ records every DLQ write.
@@ -202,6 +226,66 @@ func TestRunnerCheckpointAfterCommit(t *testing.T) {
 	}
 	if cp.JobName != spec.Name {
 		t.Errorf("checkpoint JobName = %q, want %q", cp.JobName, spec.Name)
+	}
+}
+
+func TestRunnerCheckpointIncludesStateSnapshotVersions(t *testing.T) {
+	store := newMemoryCPStore()
+	r := newCheckpointWriteBatchRunner(t, core.TransformChain{
+		stateSnapshotTransform{node: "window-0", version: "state-v1"},
+	}, store, noopDLQ{})
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	cp, err := store.Load(context.Background(), r.spec.Name)
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	if cp == nil {
+		t.Fatal("checkpoint not saved")
+	}
+	env, ok, err := checkpoint.ParseEnvelope(cp.Position)
+	if err != nil {
+		t.Fatalf("ParseEnvelope: %v", err)
+	}
+	if !ok {
+		t.Fatalf("checkpoint position not wrapped in envelope: %s", cp.Position)
+	}
+	if env.State["window-0"] != "state-v1" {
+		t.Fatalf("state versions = %#v", env.State)
+	}
+	if string(env.Source) != `{"offset":2}` {
+		t.Fatalf("source position = %s, want offset 2", env.Source)
+	}
+}
+
+func TestRunnerDoesNotCheckpointWhenStateSnapshotFails(t *testing.T) {
+	store := newMemoryCPStore()
+	r := newCheckpointWriteBatchRunner(t, core.TransformChain{
+		failingStateSnapshotTransform{},
+	}, store, noopDLQ{})
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	if checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint advanced after state snapshot failed")
+	}
+}
+
+func TestUnwrapCheckpointForSourceExtractsEnvelopeSource(t *testing.T) {
+	raw, err := checkpoint.BuildEnvelope(json.RawMessage(`{"offset":42}`), map[string]string{"window-0": "v1"}, nil)
+	if err != nil {
+		t.Fatalf("BuildEnvelope: %v", err)
+	}
+	cp := &core.Checkpoint{JobName: "p", Position: raw}
+
+	got := unwrapCheckpointForSource(cp)
+
+	if string(got.Position) != `{"offset":42}` {
+		t.Fatalf("unwrapped position = %s", got.Position)
+	}
+	if string(cp.Position) != string(raw) {
+		t.Fatalf("unwrap mutated original checkpoint: %s", cp.Position)
 	}
 }
 

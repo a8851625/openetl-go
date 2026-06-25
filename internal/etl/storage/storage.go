@@ -19,13 +19,16 @@ type CheckpointRecord struct {
 
 // DLQRecord is the storage-layer representation of a dead-letter entry.
 type DLQRecord struct {
-	ID         int64       `json:"id"`
-	JobName    string      `json:"job_name"`
-	Record     core.Record `json:"record"`
-	Error      string      `json:"error"`
-	ErrorClass string      `json:"error_class,omitempty"`
-	Attempt    int         `json:"attempt"`
-	CreatedAt  time.Time   `json:"created_at"`
+	ID              int64       `json:"id"`
+	JobName         string      `json:"job_name"`
+	Record          core.Record `json:"record"`
+	Error           string      `json:"error"`
+	ErrorClass      string      `json:"error_class,omitempty"`
+	Attempt         int         `json:"attempt"`
+	RecordHash      string      `json:"record_hash,omitempty"`
+	PipelineVersion int         `json:"pipeline_version,omitempty"`
+	DAGNode         string      `json:"dag_node,omitempty"`
+	CreatedAt       time.Time   `json:"created_at"`
 }
 
 // DLQFilter provides SQL-style filtering for dead-letter queries.
@@ -97,9 +100,9 @@ type WorkerInfo struct {
 
 // TaskAssignment tracks the dispatch of a task to a worker.
 type TaskAssignment struct {
-	ID         int64      `json:"id"`
-	TaskID     string     `json:"task_id"`
-	Pipeline   string     `json:"pipeline"`
+	ID       int64  `json:"id"`
+	TaskID   string `json:"task_id"`
+	Pipeline string `json:"pipeline"`
 	// ShardIndex/ShardTotal identify which shard of a parallel pipeline this
 	// task represents, so a worker can build the correct single-shard Runner.
 	// Set once at dispatch time (A11-redo); immutable afterward.
@@ -120,6 +123,20 @@ type PluginEntry struct {
 	Version     string    `json:"version"`
 	Enabled     bool      `json:"enabled"`
 	InstalledAt time.Time `json:"installed_at"`
+}
+
+// ConnectionEntry records a reusable connector configuration for UI wizards,
+// preflight, and runtime API operations.
+type ConnectionEntry struct {
+	Name         string         `json:"name"`
+	Kind         string         `json:"kind"`
+	Type         string         `json:"type"`
+	Config       map[string]any `json:"config,omitempty"`
+	LastStatus   string         `json:"last_status,omitempty"`
+	LastError    string         `json:"last_error,omitempty"`
+	LastTestedAt *time.Time     `json:"last_tested_at,omitempty"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // Storage is the abstraction over persistent ETL metadata.
@@ -155,6 +172,7 @@ type Storage interface {
 	// ── Dead letters ──────────────────────────────────────────────────
 
 	WriteDeadLetter(ctx context.Context, rec *DLQRecord) error
+	GetDeadLetterByID(ctx context.Context, jobName string, id int64) (*DLQRecord, error)
 	ListDeadLetters(ctx context.Context, filter DLQFilter) ([]*DLQRecord, error)
 	CountDeadLetters(ctx context.Context, jobName string) (int64, error)
 	DeleteDeadLettersByFilter(ctx context.Context, filter DLQFilter) (int64, error)
@@ -191,6 +209,14 @@ type Storage interface {
 	GetPlugin(ctx context.Context, name string) (*PluginEntry, error)
 	ListPlugins(ctx context.Context) ([]*PluginEntry, error)
 	DeletePlugin(ctx context.Context, name string) error
+
+	// ── Connection catalog ────────────────────────────────────────────
+
+	SaveConnection(ctx context.Context, c *ConnectionEntry) error
+	GetConnection(ctx context.Context, name string) (*ConnectionEntry, error)
+	ListConnections(ctx context.Context) ([]*ConnectionEntry, error)
+	DeleteConnection(ctx context.Context, name string) error
+	UpdateConnectionHealth(ctx context.Context, name, status, lastError string, testedAt time.Time) error
 
 	// ── Settings (key-value store for LLM config etc.) ────────────────
 	GetSetting(ctx context.Context, key string) (string, error)

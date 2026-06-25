@@ -1,0 +1,68 @@
+name: kafka-orders-detail-clickhouse
+
+source:
+  type: kafka
+  config:
+    brokers:
+      - host.containers.internal:19092
+    topic: orders.cdc
+    group_id: openetl-wide-table-detail
+    initial_offset: oldest
+
+transforms:
+  - type: normalize_envelope
+    config:
+      keep_metadata: true
+  - type: lookup
+    config:
+      dsn: root:root123456@tcp(host.containers.internal:13306)/dzh3136_go?timeout=5s&readTimeout=5s&writeTimeout=5s
+      query: SELECT id, name, tier, region FROM dim_users
+      join_key: user_id
+      dim_key: id
+      fields:
+        - name
+        - tier
+        - region
+      refresh_interval_sec: 60
+      max_cache_entries: 100000
+      on_miss: "null"
+      on_refresh_error: error
+  - type: rename
+    config:
+      mappings:
+        name: user_name
+        tier: user_tier
+        region: user_region
+  - type: type_convert
+    config:
+      conversions:
+        id: int
+        user_id: string
+        amount: float
+
+sink:
+  type: clickhouse
+  config:
+    host: host.containers.internal
+    port: 9000
+    user: default
+    password: dzh123456
+    database: wide
+    table: order_detail_wide
+    auto_create: true
+    schema_drift: add_columns
+    pk_columns:
+      - id
+    version_column: _version
+
+batch_size: 100
+checkpoint_interval_sec: 5
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 30000
+
+dlq:
+  enable: true

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 )
 
 // ── CheckpointStore adapter ──────────────────────────────────────────
@@ -84,13 +85,31 @@ func NewDLQWriterAdapter(s Storage) *DLQWriterAdapter {
 
 // Write persists a dead-letter record into the database.
 func (a *DLQWriterAdapter) Write(ctx context.Context, jobName string, record core.Record, errMsg, errClass string, attempt int) error {
-	rec := &DLQRecord{
+	return a.WriteEntry(ctx, pipeline.DLQEntry{
 		JobName:    jobName,
 		Record:     record,
 		Error:      errMsg,
 		ErrorClass: errClass,
 		Attempt:    attempt,
-		CreatedAt:  time.Now(),
+	})
+}
+
+// WriteEntry persists a pipeline-level dead-letter entry into the database.
+func (a *DLQWriterAdapter) WriteEntry(ctx context.Context, entry pipeline.DLQEntry) error {
+	hash, err := RecordHash(entry.Record)
+	if err != nil {
+		return fmt.Errorf("hash dlq record: %w", err)
+	}
+	rec := &DLQRecord{
+		JobName:         entry.JobName,
+		Record:          entry.Record,
+		Error:           entry.Error,
+		ErrorClass:      entry.ErrorClass,
+		Attempt:         entry.Attempt,
+		RecordHash:      hash,
+		PipelineVersion: entry.PipelineVersion,
+		DAGNode:         entry.DAGNode,
+		CreatedAt:       time.Now(),
 	}
 	return a.store.WriteDeadLetter(ctx, rec)
 }
@@ -109,6 +128,11 @@ func (a *DLQWriterAdapter) Read(ctx context.Context, jobName string, limit int) 
 		result[i] = *rec
 	}
 	return result, nil
+}
+
+// ReadByID returns one dead-letter record by primary key, scoped to a pipeline.
+func (a *DLQWriterAdapter) ReadByID(ctx context.Context, jobName string, id int64) (*DLQRecord, error) {
+	return a.store.GetDeadLetterByID(ctx, jobName, id)
 }
 
 // ReadFiltered returns dead-letter records matching the filter criteria.

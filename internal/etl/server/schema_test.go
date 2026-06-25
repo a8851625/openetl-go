@@ -1,6 +1,11 @@
 package server
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	schema := configSchema()
@@ -41,10 +46,129 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, transforms, "router", "field", "routes", "default")
 	assertFields(t, transforms, "rate_limiter", "rps", "burst")
 	assertFields(t, transforms, "enricher", "timeout_seconds", "cache_ttl_seconds", "on_error")
-	assertFields(t, transforms, "window", "window_size_seconds", "allowed_lateness_seconds", "aggregates")
-	assertFields(t, transforms, "join", "on_miss")
+	assertFields(t, transforms, "lookup", "dsn", "query", "fields", "on_miss", "on_refresh_error", "state_backend", "state_ttl_seconds")
+	assertFields(t, transforms, "normalize_envelope", "keep_metadata")
+	assertFields(t, transforms, "debezium_envelope", "keep_metadata")
+	assertFields(t, transforms, "window", "window_size_seconds", "allowed_lateness_seconds", "aggregates", "state_backend", "state_ttl_seconds")
+	assertFields(t, transforms, "deduplicate", "keys", "window_size", "state_backend", "state_ttl_seconds")
+	assertFields(t, transforms, "join", "on_miss", "state_backend", "state_ttl_seconds")
 	assertFields(t, transforms, "javascript", "script", "code", "timeout_ms")
 	assertFields(t, transforms, "js", "script", "code", "timeout_ms")
+}
+
+func TestWindowSchemaOnlyExposesImplementedWindowTypes(t *testing.T) {
+	schema := configSchema()
+	transforms := schema["transforms"].(map[string][]ConfigField)
+
+	fields := transforms["window"]
+	for _, field := range fields {
+		if field.Name != "window_type" {
+			continue
+		}
+		if len(field.Enum) != 1 || field.Enum[0] != "tumbling" {
+			t.Fatalf("window_type enum = %#v, want only tumbling", field.Enum)
+		}
+		return
+	}
+	t.Fatal("window schema missing window_type")
+}
+
+func TestPluginMetadataUsesEvidenceDrivenMaturity(t *testing.T) {
+	metadata := pluginMetadata()
+	for kind, rawGroup := range metadata {
+		group, ok := rawGroup.(map[string]any)
+		if !ok {
+			t.Fatalf("metadata[%s] has type %T", kind, rawGroup)
+		}
+		for name, rawInfo := range group {
+			info, ok := rawInfo.(map[string]any)
+			if !ok {
+				t.Fatalf("metadata[%s][%s] has type %T", kind, name, rawInfo)
+			}
+			maturity, _ := info["maturity"].(string)
+			switch maturity {
+			case "production", "beta", "experimental", "dev-only":
+			default:
+				t.Fatalf("metadata[%s][%s] maturity = %q, want production|beta|experimental|dev-only", kind, name, maturity)
+			}
+			if maturity == "stable" {
+				t.Fatalf("metadata[%s][%s] still uses stable maturity", kind, name)
+			}
+		}
+	}
+}
+
+func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
+	descriptors := connectorDescriptors()
+	if len(descriptors) == 0 {
+		t.Fatal("connectorDescriptors returned no descriptors")
+	}
+
+	kafka := findDescriptor(descriptors, "source", "kafka")
+	if kafka == nil {
+		t.Fatal("missing kafka source descriptor")
+	}
+	if kafka.Version != "v1" || kafka.Maturity != "beta" || !kafka.Registered {
+		t.Fatalf("unexpected kafka descriptor metadata: %#v", kafka)
+	}
+	if !contains(kafka.Required, "brokers") || !contains(kafka.Required, "topic") {
+		t.Fatalf("kafka required fields = %#v", kafka.Required)
+	}
+	if !contains(kafka.SecretFields, "sasl_password") {
+		t.Fatalf("kafka secret fields = %#v", kafka.SecretFields)
+	}
+
+	clickhouse := findDescriptor(descriptors, "sink", "clickhouse")
+	if clickhouse == nil {
+		t.Fatal("missing clickhouse sink descriptor")
+	}
+	if !contains(clickhouse.Capabilities, "schema_drift") || clickhouse.Maturity != "beta" {
+		t.Fatalf("unexpected clickhouse descriptor: %#v", clickhouse)
+	}
+
+	normalize := findDescriptor(descriptors, "transform", "normalize_envelope")
+	if normalize == nil {
+		t.Fatal("missing normalize_envelope transform descriptor")
+	}
+	if normalize.Maturity != "beta" || len(normalize.Fields) == 0 {
+		t.Fatalf("unexpected normalize descriptor: %#v", normalize)
+	}
+}
+
+func TestCompileWithExtismJSDisablesNpxFallbackByDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "plugin.ts")
+	if err := os.WriteFile(srcFile, []byte("export function transform() {}"), 0644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	t.Setenv("PATH", "")
+	t.Setenv("OPENETL_ALLOW_NPX_PLUGIN_COMPILE", "")
+
+	_, err := compileWithExtismJS(tmpDir, srcFile, "safe-plugin")
+	if err == nil {
+		t.Fatal("compileWithExtismJS() = nil error, want missing extism-js error")
+	}
+	if strings.Contains(err.Error(), "npx --yes") {
+		t.Fatalf("compileWithExtismJS() error mentions npx fallback execution: %v", err)
+	}
+}
+
+func findDescriptor(items []ConnectorDescriptor, kind, typ string) *ConnectorDescriptor {
+	for i := range items {
+		if items[i].Kind == kind && items[i].Type == typ {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+func contains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func assertFields(t *testing.T, schemas map[string][]ConfigField, plugin string, names ...string) {

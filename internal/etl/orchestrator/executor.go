@@ -12,6 +12,7 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 
 	"github.com/a8851625/openetl-go/internal/etl/alert"
+	"github.com/a8851625/openetl-go/internal/etl/checkpoint"
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
@@ -136,7 +137,8 @@ func NewDAGExecutor(spec *PipelineSpec, cpStore *storage.CheckpointStoreAdapter,
 				return nil, fmt.Errorf("build source %s (%s): %w", node.ID, node.Plugin, err)
 			}
 		case KindTransform:
-			exec.transforms[node.ID], err = registry.BuildTransform(node.Plugin, node.Config)
+			config := pipeline.InjectStateDefaults(spec.Name, node.ID, node.Config)
+			exec.transforms[node.ID], err = registry.BuildTransform(node.Plugin, config)
 			if err != nil {
 				return nil, fmt.Errorf("build transform %s (%s): %w", node.ID, node.Plugin, err)
 			}
@@ -327,7 +329,7 @@ func (e *DAGExecutor) runDAG(ctx context.Context) {
 
 // readSource continuously reads from a source and sends records to the channel.
 func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID string, records chan<- recordMsg) {
-	cp, _ := e.cpAdapter.Load(ctx, e.spec.Name+"-"+sourceID)
+	cp := e.loadSourceCheckpoint(ctx, sourceID)
 	reader, err := src.Open(ctx, cp)
 	if err != nil {
 		g.Log().Errorf(ctx, "open source %s: %v", sourceID, err)
@@ -544,6 +546,11 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 
 	// Save checkpoints for sources that contributed to this batch.
 	if e.cpAdapter != nil {
+		stateVersions, err := e.stateSnapshotVersions(ctx)
+		if err != nil {
+			e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("state snapshot version collection failed: %v", err))
+			return
+		}
 		for sourceID, lastRec := range lastRecBySource {
 			cp, err := e.checkpointForRecord(ctx, sourceID, lastRec)
 			if err != nil {
@@ -553,6 +560,14 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 			saveKey := e.spec.Name + "-" + sourceID
 			cp.JobName = saveKey
 			cp.ID = fmt.Sprintf("%s-%d", saveKey, time.Now().UnixNano())
+			if len(stateVersions) > 0 {
+				wrapped, wrapErr := checkpoint.BuildEnvelope(cp.Position, stateVersions, nil)
+				if wrapErr != nil {
+					e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("checkpoint envelope build failed for source %s: %v", sourceID, wrapErr))
+					return
+				}
+				cp.Position = wrapped
+			}
 			if saveErr := e.cpAdapter.Save(ctx, cp); saveErr != nil {
 				// Checkpoint save failed — records already written to the sink
 				// will be re-delivered on restart (at-least-once). Trip the
@@ -573,6 +588,18 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 	}
 }
 
+func (e *DAGExecutor) loadSourceCheckpoint(ctx context.Context, sourceID string) *core.Checkpoint {
+	if e.cpAdapter == nil {
+		return nil
+	}
+	cp, err := e.cpAdapter.Load(ctx, e.spec.Name+"-"+sourceID)
+	if err != nil {
+		g.Log().Warningf(ctx, "load checkpoint source %s: %v", sourceID, err)
+		return nil
+	}
+	return unwrapCheckpointForSource(cp)
+}
+
 // checkpointForRecord generates a checkpoint from the source's reader based on the last committed record.
 func (e *DAGExecutor) checkpointForRecord(ctx context.Context, sourceID string, rec core.Record) (core.Checkpoint, error) {
 	e.mu.RLock()
@@ -585,6 +612,97 @@ func (e *DAGExecutor) checkpointForRecord(ctx context.Context, sourceID string, 
 		return checkpointer.CheckpointForRecord(ctx, rec)
 	}
 	return reader.Snapshot(ctx)
+}
+
+func (e *DAGExecutor) stateSnapshotVersions(ctx context.Context) (map[string]string, error) {
+	versions := make(map[string]string)
+	for _, t := range e.transforms {
+		snapper, ok := t.(core.StateSnapshotter)
+		if !ok {
+			continue
+		}
+		node, version, hasState, err := snapper.SnapshotState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if hasState && node != "" && version != "" {
+			versions[node] = version
+		}
+	}
+	if len(versions) == 0 {
+		return nil, nil
+	}
+	return versions, nil
+}
+
+func (e *DAGExecutor) StateMetrics(ctx context.Context) []core.StateMetrics {
+	var metrics []core.StateMetrics
+	for _, t := range e.transforms {
+		provider, ok := t.(core.StateMetricsProvider)
+		if !ok {
+			continue
+		}
+		m, hasState, err := provider.StateMetrics(ctx)
+		if err != nil {
+			g.Log().Warningf(ctx, "DAG pipeline %s: state metrics collection failed: %v", e.spec.Name, err)
+			continue
+		}
+		if hasState {
+			metrics = append(metrics, m)
+		}
+	}
+	return metrics
+}
+
+func (e *DAGExecutor) TransformMetrics() []core.TransformMetrics {
+	var metrics []core.TransformMetrics
+	for nodeID, t := range e.transforms {
+		provider, ok := t.(core.TransformMetricsProvider)
+		if !ok {
+			continue
+		}
+		m := provider.TransformMetrics()
+		if m.Node == "" {
+			m.Node = nodeID
+		}
+		if m.Transform == "" {
+			m.Transform = t.Name()
+		}
+		if len(m.Counters) > 0 {
+			metrics = append(metrics, m)
+		}
+	}
+	return metrics
+}
+
+func (e *DAGExecutor) handleCheckpointBoundaryError(ctx context.Context, sinkID string, errMsg string) {
+	g.Log().Errorf(ctx, "DAG pipeline %s: %s — checkpoint not saved", e.spec.Name, errMsg)
+	if sinkID != "" {
+		if breaker := e.breakers[sinkID]; breaker != nil {
+			breaker.RecordFailure(ctx, fmt.Errorf("%s", errMsg))
+		}
+	}
+	if e.alertMgr != nil {
+		e.alertMgr.Send(ctx, alert.Event{
+			Level:   alert.LevelError,
+			Title:   "DAG checkpoint boundary failure",
+			Message: fmt.Sprintf("pipeline %s: %s. Source checkpoint was not advanced because state could not be bound to it.", e.spec.Name, errMsg),
+			JobName: e.spec.Name,
+		})
+	}
+}
+
+func unwrapCheckpointForSource(cp *core.Checkpoint) *core.Checkpoint {
+	if cp == nil {
+		return nil
+	}
+	env, ok, err := checkpoint.ParseEnvelope(cp.Position)
+	if err != nil || !ok {
+		return cp
+	}
+	unwrapped := *cp
+	unwrapped.Position = append([]byte(nil), env.Source...)
+	return &unwrapped
 }
 
 // handleFailed routes a failed record to the DLQ. sinkID is the sink the record
@@ -611,6 +729,7 @@ func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err err
 		Record:     rec,
 		Error:      err.Error(),
 		ErrorClass: string(core.ClassifyError(err)),
+		DAGNode:    sinkID,
 	}
 	if dlqErr := e.dlqWriter.WriteDLQ(ctx, entry); dlqErr != nil {
 		// DLQ write itself failed — this is a potential data-loss event.

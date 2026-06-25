@@ -159,6 +159,7 @@ export ALERT_SLACK_WEBHOOK=https://hooks.slack.com/services/...
 - [`docs/parallelism-and-batching.zh.md`](./docs/parallelism-and-batching.zh.md)（中文）| [`docs/parallelism-and-batching.md`](./docs/parallelism-and-batching.md) (EN) — 并行与批处理
 - [`docs/GITHUB_ACTIONS_DEPLOY.zh.md`](./docs/GITHUB_ACTIONS_DEPLOY.zh.md)（中文）| [`docs/GITHUB_ACTIONS_DEPLOY.md`](./docs/GITHUB_ACTIONS_DEPLOY.md) (EN) — GitHub Actions 发布与部署
 - [`docs/SPEC-v2-reaudit-2026-06.zh.md`](./docs/SPEC-v2-reaudit-2026-06.zh.md)（中文）| [`docs/SPEC-v2-reaudit-2026-06.md`](./docs/SPEC-v2-reaudit-2026-06.md) (EN) — v2 生产就绪复审
+- [`docs/ROADMAP.zh.md`](./docs/ROADMAP.zh.md)（中文）— 产品能力缺口与后续改进路线图
 - [`SPEC.md`](./SPEC.md) — 架构与生产就绪标准
 - [`CHANGELOG.zh.md`](./CHANGELOG.zh.md)（中文）| [`CHANGELOG.md`](./CHANGELOG.md) (EN) — 发布说明
 

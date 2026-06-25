@@ -146,6 +146,20 @@ type Transform interface {
 	Name() string
 }
 
+// TransformMetrics exposes transform-specific counters for node-level
+// observability, for example join hit/miss or window emit/late counters.
+type TransformMetrics struct {
+	Node      string           `json:"node"`
+	Transform string           `json:"transform"`
+	Counters  map[string]int64 `json:"counters"`
+}
+
+// TransformMetricsProvider is an optional interface for transforms with
+// domain-specific runtime counters.
+type TransformMetricsProvider interface {
+	TransformMetrics() TransformMetrics
+}
+
 // BatchTransform is an optional interface for transforms that operate on
 // entire batches rather than single records. If any transform in the chain
 // implements this, TransformChain.ApplyBatch will route through it.
@@ -163,6 +177,28 @@ type BatchTransform interface {
 type Flusher interface {
 	// Flush returns any records accumulated in internal buffers.
 	Flush(ctx context.Context) ([]Record, error)
+}
+
+// StateSnapshotter is an optional interface for stateful transforms that can
+// expose the current durable state snapshot version for checkpoint envelopes.
+type StateSnapshotter interface {
+	SnapshotState(ctx context.Context) (node string, version string, ok bool, err error)
+}
+
+// StateMetrics describes the current durable state footprint for one
+// stateful transform node.
+type StateMetrics struct {
+	Pipeline  string    `json:"pipeline"`
+	Node      string    `json:"node"`
+	Keys      int       `json:"keys"`
+	Bytes     int64     `json:"bytes"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+// StateMetricsProvider is an optional interface for stateful transforms that
+// expose StateStore size/freshness metrics.
+type StateMetricsProvider interface {
+	StateMetrics(ctx context.Context) (StateMetrics, bool, error)
 }
 
 type TransformChain []Transform
@@ -240,6 +276,69 @@ func (tc TransformChain) FlushChain(ctx context.Context) ([]Record, error) {
 		}
 	}
 	return all, nil
+}
+
+// StateSnapshotVersions collects durable state snapshot versions from
+// transforms that implement StateSnapshotter.
+func (tc TransformChain) StateSnapshotVersions(ctx context.Context) (map[string]string, error) {
+	versions := make(map[string]string)
+	for _, t := range tc {
+		snapper, ok := t.(StateSnapshotter)
+		if !ok {
+			continue
+		}
+		node, version, hasState, err := snapper.SnapshotState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if hasState && node != "" && version != "" {
+			versions[node] = version
+		}
+	}
+	if len(versions) == 0 {
+		return nil, nil
+	}
+	return versions, nil
+}
+
+// StateMetrics collects durable state size/freshness metrics from transforms
+// that implement StateMetricsProvider.
+func (tc TransformChain) StateMetrics(ctx context.Context) ([]StateMetrics, error) {
+	var metrics []StateMetrics
+	for _, t := range tc {
+		provider, ok := t.(StateMetricsProvider)
+		if !ok {
+			continue
+		}
+		m, hasState, err := provider.StateMetrics(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if hasState {
+			metrics = append(metrics, m)
+		}
+	}
+	return metrics, nil
+}
+
+// TransformMetrics collects domain-specific metrics from transforms that
+// implement TransformMetricsProvider.
+func (tc TransformChain) TransformMetrics() []TransformMetrics {
+	var metrics []TransformMetrics
+	for _, t := range tc {
+		provider, ok := t.(TransformMetricsProvider)
+		if !ok {
+			continue
+		}
+		m := provider.TransformMetrics()
+		if m.Transform == "" {
+			m.Transform = t.Name()
+		}
+		if len(m.Counters) > 0 {
+			metrics = append(metrics, m)
+		}
+	}
+	return metrics
 }
 
 // TransformCloser is an optional interface for transforms that spawn

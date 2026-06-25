@@ -47,3 +47,21 @@ func TestNextVersionConcurrent(t *testing.T) {
 		t.Fatalf("expected 10000 unique versions, got %d", len(seen))
 	}
 }
+
+func TestClickHouseSchemaDriftBoolCompatibility(t *testing.T) {
+	enabled, err := NewClickHouseSink(map[string]any{"schema_drift": true})
+	if err != nil {
+		t.Fatalf("NewClickHouseSink(true): %v", err)
+	}
+	if enabled.schemaDrift != "add_columns" {
+		t.Fatalf("schemaDrift = %q, want add_columns", enabled.schemaDrift)
+	}
+
+	disabled, err := NewClickHouseSink(map[string]any{"schema_drift": false})
+	if err != nil {
+		t.Fatalf("NewClickHouseSink(false): %v", err)
+	}
+	if disabled.schemaDrift != "ignore" {
+		t.Fatalf("schemaDrift = %q, want ignore", disabled.schemaDrift)
+	}
+}

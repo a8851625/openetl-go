@@ -20,6 +20,7 @@ TESTS=(
   "e2e-s3-minio.sh|S3/MinIO sink (JSONL/CSV/Parquet)"
   "e2e-http-source.sh|HTTP source pagination/auth"
   "e2e-kafka.sh|Kafka source/sink (Redpanda)"
+  "e2e-wide-table.sh|Kafka + dimension lookup + ClickHouse wide table"
   "e2e-elasticsearch.sh|Elasticsearch/OpenSearch bulk indexing"
   "e2e-crash-recovery.sh|Checkpoint crash recovery"
   "e2e-cdc-crash-recovery.sh|CDC checkpoint restart"

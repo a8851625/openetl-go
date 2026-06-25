@@ -68,6 +68,53 @@ components:
             started_at: { type: string, format: date-time }
             uptime: { type: string }
             last_error: { type: string }
+    MetricsResponse:
+      type: object
+      properties:
+        timestamp: { type: string, format: date-time }
+        pipelines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PipelineMetrics'
+    PipelineMetrics:
+      type: object
+      properties:
+        name: { type: string }
+        status: { type: string }
+        records_read: { type: integer, format: int64 }
+        records_written: { type: integer, format: int64 }
+        records_failed: { type: integer, format: int64 }
+        records_dlq: { type: integer, format: int64 }
+        state_metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/StateMetric'
+        transform_metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransformMetric'
+    StateMetric:
+      type: object
+      properties:
+        node: { type: string, example: "window-orders" }
+        keys: { type: integer, example: 7 }
+        bytes: { type: integer, format: int64, example: 512 }
+        updated_at: { type: string, format: date-time }
+    TransformMetric:
+      type: object
+      properties:
+        node: { type: string, example: "join-orders" }
+        transform: { type: string, example: "join" }
+        counters:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+          example:
+            hit: 10
+            miss: 2
+            miss_dropped: 1
+            miss_dlq: 1
 
 tags:
   - name: Pipelines
@@ -179,6 +226,48 @@ paths:
       responses:
         '200': { description: Spec with masked secrets }
 
+  /pipelines/{name}/schedule:
+    get:
+      tags: [Pipelines]
+      summary: Get pipeline schedule config
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Schedule config and enabled flag }
+    put:
+      tags: [Pipelines]
+      summary: Create or update pipeline schedule config
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [streaming, once, cron, periodic] }
+                cron: { type: string }
+                interval_sec: { type: integer }
+      responses:
+        '200': { description: Schedule saved }
+    delete:
+      tags: [Pipelines]
+      summary: Disable pipeline schedule config
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Schedule disabled }
+
+  /pipelines/{name}/history:
+    get:
+      tags: [Pipelines]
+      summary: Get pipeline run history
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Run history }
+
   /pipelines/{name}/log:
     get:
       tags: [Pipelines]
@@ -221,7 +310,12 @@ paths:
       tags: [Monitoring]
       summary: Get JSON metrics for all pipelines
       responses:
-        '200': { description: Metrics JSON }
+        '200':
+          description: Metrics JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
 
   /health:
     get:
@@ -259,6 +353,86 @@ paths:
       responses:
         '200': { description: Replayed }
 
+  /dlq/{name}/{id}:
+    delete:
+      tags: [DLQ]
+      summary: Delete one DLQ record by stable ID
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '200': { description: Deleted }
+
+  /dlq/{name}/{id}/replay:
+    post:
+      tags: [DLQ]
+      summary: Replay one DLQ record by stable ID
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '200': { description: Replayed }
+
+  /connections:
+    get:
+      tags: [Connections]
+      summary: List saved reusable connections with secret fields masked
+      responses:
+        '200': { description: Connection catalog entries }
+    post:
+      tags: [Connections]
+      summary: Create or update a saved reusable connection
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, kind, type, config]
+              properties:
+                name: { type: string }
+                kind: { type: string, enum: [source, sink, transform] }
+                type: { type: string }
+                config: { type: object }
+                test: { type: boolean, default: false }
+                open: { type: boolean, default: true }
+      responses:
+        '200': { description: Saved connection with masked config and optional test result }
+
+  /connections/{name}:
+    get:
+      tags: [Connections]
+      summary: Get a saved connection with secret fields masked
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Connection entry }
+        '404': { description: Connection not found }
+    put:
+      tags: [Connections]
+      summary: Update a saved connection
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Saved connection }
+    delete:
+      tags: [Connections]
+      summary: Delete a saved connection
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+
+  /connections/{name}/test:
+    post:
+      tags: [Connections]
+      summary: Test a saved connection and update its health status
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Test result and updated health status }
+        '400': { description: Build/open failed }
+        '404': { description: Connection not found }
+
   /connections/test:
     post:
       tags: [Connections]
@@ -276,12 +450,38 @@ paths:
       responses:
         '200': { description: Test result with optional sample records }
 
+  /connectors/descriptors:
+    get:
+      tags: [Connectors]
+      summary: List Connector Descriptor v1 records merged from registry, config schema, and maturity metadata
+      responses:
+        '200': { description: Connector descriptors for UI forms, preflight, and connector test kits }
+
   /transforms/dry-run:
     post:
       tags: [Transforms]
       summary: Dry-run transforms against a sample record
       responses:
         '200': { description: Transformed record }
+
+  /wide-table/preview:
+    post:
+      tags: [WideTable]
+      summary: Preview Kafka wide-table pipeline fields, joins, window aggregate, and ClickHouse DDL
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                spec: { type: object }
+                samples:
+                  type: array
+                  items: { type: object }
+                run_preflight: { type: boolean, default: false }
+      responses:
+        '200': { description: Wide-table preview result }
+        '400': { description: Invalid spec or preflight errors }
 
   /specs/validate:
     post:

@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/state"
 )
 
 func init() {
@@ -135,6 +138,18 @@ type DeduplicatorTransform struct {
 	cache      []string // ring buffer of seen keys
 	cacheMap   map[string]bool
 	pos        int
+	store      state.Store
+	stateOwner bool
+	pipeline   string
+	node       string
+	ttl        time.Duration
+
+	processed              int64
+	passed                 int64
+	duplicateDropped       int64
+	memoryDuplicateDropped int64
+	stateDuplicateDropped  int64
+	evictedKeys            int64
 
 	// mu guards cache/cacheMap/pos. Apply is invoked concurrently by the DAG
 	// executor and ParallelRunner (parallel.go); an unlocked map is a fatal
@@ -180,6 +195,8 @@ func NewDeduplicatorTransform(config map[string]any) (*DeduplicatorTransform, er
 		windowSize: 10000,
 		cacheMap:   make(map[string]bool),
 		cache:      make([]string, 0, 10000),
+		pipeline:   "default",
+		node:       "deduplicate",
 	}
 	if rawKeys, ok := config["keys"].([]any); ok {
 		for _, k := range rawKeys {
@@ -196,7 +213,38 @@ func NewDeduplicatorTransform(config map[string]any) (*DeduplicatorTransform, er
 			t.cache = make([]string, 0, n)
 		}
 	}
+	if v, ok := config["state_pipeline"].(string); ok && v != "" {
+		t.pipeline = v
+	}
+	if v, ok := config["state_node"].(string); ok && v != "" {
+		t.node = v
+	}
+	if v, ok := config["state_ttl_seconds"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.ttl = time.Duration(n) * time.Second
+		}
+	}
+	if backend, ok := config["state_backend"].(string); ok && backend != "" {
+		switch strings.ToLower(backend) {
+		case "sqlite":
+			path, _ := config["state_path"].(string)
+			if path == "" {
+				path = "./data/etl-state.db"
+			}
+			store, err := state.NewSQLiteStore(path)
+			if err != nil {
+				return nil, fmt.Errorf("deduplicate: open state store: %w", err)
+			}
+			t.store = store
+			t.stateOwner = true
+		default:
+			return nil, fmt.Errorf("deduplicate: unsupported state_backend %q", backend)
+		}
+	}
 	if len(t.keys) == 0 {
+		if t.stateOwner && t.store != nil {
+			_ = t.store.Close()
+		}
 		return nil, fmt.Errorf("deduplicate: keys is required")
 	}
 	return t, nil
@@ -204,8 +252,26 @@ func NewDeduplicatorTransform(config map[string]any) (*DeduplicatorTransform, er
 
 func (t *DeduplicatorTransform) Name() string { return "deduplicate" }
 
+// WithStateStore wires a shared state backend into the deduplicator. It is used
+// by tests today and is the narrow injection point for future runner-managed
+// stateful transform wiring.
+func (t *DeduplicatorTransform) WithStateStore(store state.Store, pipeline, node string, ttl time.Duration) *DeduplicatorTransform {
+	t.store = store
+	t.stateOwner = false
+	if pipeline != "" {
+		t.pipeline = pipeline
+	}
+	if node != "" {
+		t.node = node
+	}
+	t.ttl = ttl
+	return t
+}
+
 func (t *DeduplicatorTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
+	atomic.AddInt64(&t.processed, 1)
 	if rec.Data == nil {
+		atomic.AddInt64(&t.passed, 1)
 		return rec, nil
 	}
 
@@ -224,20 +290,84 @@ func (t *DeduplicatorTransform) Apply(ctx context.Context, rec core.Record) (cor
 
 	// Check if seen.
 	if t.cacheMap[compositeKey] {
+		atomic.AddInt64(&t.duplicateDropped, 1)
+		atomic.AddInt64(&t.memoryDuplicateDropped, 1)
 		return rec, core.ErrRecordFiltered // drop duplicate
+	}
+	if t.store != nil {
+		if _, ok, err := t.store.Get(ctx, t.pipeline, t.node, compositeKey); err != nil {
+			return rec, fmt.Errorf("deduplicate: get state: %w", err)
+		} else if ok {
+			if t.addKeyLocked(compositeKey) {
+				atomic.AddInt64(&t.evictedKeys, 1)
+			}
+			atomic.AddInt64(&t.duplicateDropped, 1)
+			atomic.AddInt64(&t.stateDuplicateDropped, 1)
+			return rec, core.ErrRecordFiltered
+		}
+		if err := t.store.Set(ctx, t.pipeline, t.node, compositeKey, []byte("1"), t.ttl); err != nil {
+			return rec, fmt.Errorf("deduplicate: set state: %w", err)
+		}
 	}
 
 	// Add to cache.
+	if t.addKeyLocked(compositeKey) {
+		atomic.AddInt64(&t.evictedKeys, 1)
+	}
+	atomic.AddInt64(&t.passed, 1)
+	return rec, nil
+}
+
+func (t *DeduplicatorTransform) addKeyLocked(compositeKey string) bool {
 	t.cacheMap[compositeKey] = true
 	if len(t.cache) < t.windowSize {
 		t.cache = append(t.cache, compositeKey)
-	} else {
-		// Evict oldest entry (ring buffer).
-		old := t.cache[t.pos]
-		delete(t.cacheMap, old)
-		t.cache[t.pos] = compositeKey
-		t.pos = (t.pos + 1) % t.windowSize
+		return false
 	}
+	// Evict oldest entry (ring buffer).
+	old := t.cache[t.pos]
+	delete(t.cacheMap, old)
+	t.cache[t.pos] = compositeKey
+	t.pos = (t.pos + 1) % t.windowSize
+	return true
+}
 
-	return rec, nil
+func (t *DeduplicatorTransform) Close() error {
+	if t.stateOwner && t.store != nil {
+		return t.store.Close()
+	}
+	return nil
+}
+
+func (t *DeduplicatorTransform) SnapshotState(ctx context.Context) (string, string, bool, error) {
+	if t.store == nil {
+		return "", "", false, nil
+	}
+	snap, err := t.store.Snapshot(ctx, t.pipeline, t.node)
+	if err != nil {
+		return t.node, "", false, fmt.Errorf("deduplicate: snapshot state: %w", err)
+	}
+	if snap == nil || len(snap.Entries) == 0 {
+		return t.node, "", false, nil
+	}
+	return t.node, snap.Version, true, nil
+}
+
+func (t *DeduplicatorTransform) StateMetrics(ctx context.Context) (core.StateMetrics, bool, error) {
+	return stateMetrics(ctx, t.store, t.pipeline, t.node, "deduplicate")
+}
+
+func (t *DeduplicatorTransform) TransformMetrics() core.TransformMetrics {
+	return core.TransformMetrics{
+		Node:      t.node,
+		Transform: t.Name(),
+		Counters: map[string]int64{
+			"processed":                atomic.LoadInt64(&t.processed),
+			"passed":                   atomic.LoadInt64(&t.passed),
+			"duplicate_dropped":        atomic.LoadInt64(&t.duplicateDropped),
+			"memory_duplicate_dropped": atomic.LoadInt64(&t.memoryDuplicateDropped),
+			"state_duplicate_dropped":  atomic.LoadInt64(&t.stateDuplicateDropped),
+			"evicted_keys":             atomic.LoadInt64(&t.evictedKeys),
+		},
+	}
 }
