@@ -880,8 +880,9 @@ function SpecImportModal({ t, onClose, onImported }: { t: (k: string) => string;
 // ════════════════════════════════════════════════
 // Pipeline Action Dropdown Menu
 // ════════════════════════════════════════════════
-function PipelineActionMenu({ p, onLogs, onDAG, onEdit, onDelete, onExport }: {
+function PipelineActionMenu({ p: _p, t, onLogs, onDAG, onEdit, onDelete, onExport }: {
   p: Pipeline;
+  t: TFunc;
   onLogs: () => void; onDAG: () => void; onEdit: () => void; onDelete: () => void; onExport: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -982,7 +983,7 @@ const PipelineRow = React.memo(function PipelineRow({ p, m, compact, selected, t
         <button className={`btn btn-sm ${p.status !== 'running' ? 'btn-ghost opacity-40' : 'btn-secondary'}`} disabled={p.status !== 'running'} onClick={() => onAction(`Stop ${p.name}`, () => api(`/api/v2/pipelines/${p.name}/stop`, { method: 'POST' }))}>
           ⏹
         </button>
-        <PipelineActionMenu p={p} onLogs={onShowLogs} onDAG={onShowDAG} onEdit={onEdit} onDelete={onDelete} onExport={onExport} />
+        <PipelineActionMenu p={p} t={t} onLogs={onShowLogs} onDAG={onShowDAG} onEdit={onEdit} onDelete={onDelete} onExport={onExport} />
       </div>
     </div>
   );
@@ -997,7 +998,8 @@ const PipelineRow = React.memo(function PipelineRow({ p, m, compact, selected, t
       p1.stats.started_at !== p2.stats.started_at ||
       p1.parallelism !== p2.parallelism ||
       prev.selected !== next.selected ||
-      prev.compact !== next.compact) {
+      prev.compact !== next.compact ||
+      prev.t !== next.t) {
     return false; // re-render
   }
   // Compare metrics that affect display

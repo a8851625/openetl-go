@@ -158,10 +158,12 @@ function ConfigForm({
   fields,
   config,
   onChange,
+  t,
 }: {
   fields: PluginSchemaField[];
   config: Record<string, unknown>;
   onChange: (cfg: Record<string, unknown>) => void;
+  t: TFunc;
 }) {
   if (!fields || fields.length === 0) {
     return <div className="text-xs text-slate-400">This plugin has no configurable fields.</div>;
@@ -511,7 +513,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   };
 
   const exportYaml = () => {
-    const spec = { ...buildSpec(), name: trimmedName };
+    const spec = { ...buildSpec(), name: pipelineName.trim() || pipelineName };
     const yamlStr = YAML.stringify(spec);
     setYamlOutput(yamlStr);
     return spec;
@@ -742,7 +744,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">{t('dag.config')}</label>
-                  <ConfigForm fields={schemaFields} config={selectedNode.data.config} onChange={updateNodeConfig} />
+                  <ConfigForm fields={schemaFields} config={selectedNode.data.config} onChange={updateNodeConfig} t={t} />
                 </div>
               </div>
             </div>
