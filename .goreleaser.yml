@@ -8,7 +8,9 @@ before:
     # Pack the frontend (resource/) into internal/packed/packed.go so the
     # resulting binary embeds the UI via gres and can run standalone without
     # a sibling resource/ directory. Matches `make build` (gf build -ew).
-    - sh -c 'curl -sSL https://github.com/gogf/gf/releases/latest/download/gf_$$(go env GOOS)_$$(go env GOARCH) -o /tmp/gf && chmod +x /tmp/gf && /tmp/gf pack resource internal/packed/packed.go --keepPath=true'
+    # Wrapped in hack/pack.sh to avoid $$(go env ...) shell quoting issues
+    # inside goreleaser's hook executor.
+    - ./hack/pack.sh
 
 builds:
   # ── Default build (pure Go, Lua included, no WASM) ──
