@@ -8,7 +8,6 @@ RUN apk add --no-cache ca-certificates tzdata wget \
 
 COPY openetl-go ./openetl-go
 COPY manifest ./manifest
-COPY resource ./resource
 COPY pipes ./pipes
 
 RUN chmod +x ./openetl-go \

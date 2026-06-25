@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"syscall"
 	"time"
@@ -65,20 +66,72 @@ func (a *sApp) SetupStaticFiles() {
 		// 从打包的资源中读取
 		file := gres.Get("resource/public" + filePath)
 		if file != nil {
-			r.Response.Write(file.Content())
+			writeStaticContent(r, filePath, file.Content())
 			return
 		}
 
 		// SPA 应用：所有未匹配的路由返回 index.html
 		indexFile := gres.Get("resource/public/index.html")
 		if indexFile != nil {
-			r.Response.Write(indexFile.Content())
+			writeStaticContent(r, "/index.html", indexFile.Content())
 			return
 		}
 
 		// 没有找到静态文件，返回 404
 		r.Response.WriteStatus(404)
 	})
+}
+
+// writeStaticContent writes embedded static bytes with the correct
+// Content-Type. Without an explicit Content-Type, GoFrame falls back to
+// http.DetectContentType, which misclassifies .js/.css/.svg as text/plain or
+// octet-stream. Browsers honor X-Content-Type-Options: nosniff and refuse to
+// execute them, leaving the SPA blank.
+func writeStaticContent(r *ghttp.Request, filePath string, content []byte) {
+	r.Response.Header().Set("Content-Type", contentTypeFor(filePath))
+	r.Response.Write(content)
+}
+
+// contentTypeFor maps common web extensions to MIME types. It uses
+// mime.TypeByExtension first and falls back to a small built-in table for
+// types that the stdlib may not return on every platform (e.g. .js under
+// some Go versions returns text/javascript only after Go 1.21).
+func contentTypeFor(filePath string) string {
+	ext := strings.ToLower(path.Ext(filePath))
+	switch ext {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".js", ".mjs":
+		return "text/javascript; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".json":
+		return "application/json; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".ico":
+		return "image/x-icon"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
+	case ".ttf":
+		return "font/ttf"
+	case ".eot":
+		return "application/vnd.ms-fontobject"
+	case ".map":
+		return "application/json; charset=utf-8"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 // etlReverseProxy 将 /api/v2/* 和 /metrics 请求代理到 ETL API 服务器

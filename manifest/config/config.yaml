@@ -10,7 +10,11 @@ server:
   address:     ":8000"
   openapiPath: "/api.json"
   swaggerPath: "/swagger"
-  serverRoot:  "resource/public"
+  # NOTE: 不要设置 serverRoot。前端 UI 资源已通过 gf pack 嵌入二进制
+  # (internal/packed/packed.go → gres)，由 internal/logic/app/app.go 的
+  # SetupStaticFiles 通过 gres.Get("resource/public/...") 提供 SPA 服务。
+  # 若在此设置 serverRoot，GoFrame 会在启动期校验磁盘上是否存在该目录
+  # (SetServerRoot → Fatalf)，导致裸二进制 / 未 COPY resource 的容器无法启动。
 
 # ETL 管道模式:启动后加载 pipes/ 下声明式管道,并对外暴露 /api/v2/*。
 etl:
