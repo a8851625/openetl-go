@@ -4,20 +4,20 @@
 
 ## [Unreleased]
 
-## [v0.2.0-beta1] — Wide-table beta and reliability preview
+## [v0.2.0] — Pipeline orchestration and reliability release
 
 ### Highlights
 - Fixed React production bundle blank-page regressions caused by undefined runtime variables in routed pages, and refreshed the packed `resource/public` assets used by the Go server.
-- Added a beta wide-table workflow around Kafka facts, lookup dimensions, tumbling aggregation, and ClickHouse output, including UI entries for Wide Table, Connections, and Schedules.
+- Added a pipeline orchestration path around Kafka facts, lookup dimensions, tumbling aggregation, and ClickHouse output, including UI entries for orchestration preview, Connections, and Schedules.
 - Added stable DLQ IDs for replay/delete flows, improved stateful transform metrics, and introduced state/checkpoint envelopes for state-backed deduplicate, lookup, join, and window paths.
-- Added connector/roadmap maturity guidance so source, sink, transform, storage, and plugin capabilities are presented as beta/production-candidate instead of over-claiming production readiness.
+- Added connector/roadmap maturity guidance so source, sink, transform, storage, and plugin capabilities are presented with explicit maturity instead of over-claiming production readiness.
 
-### Wide-table Validation
+### Pipeline Validation
 - Added `hack/e2e-wide-table.sh` for Podman-based Redpanda + MySQL + ClickHouse validation.
-- Covered Kafka -> lookup -> ClickHouse detail wide tables, Kafka -> deduplicate -> lookup -> tumbling aggregate -> ClickHouse aggregate tables, duplicate Kafka message absorption, schema drift DLQ, lookup miss DLQ and replay, lookup refresh failure DLQ, and ClickHouse outage DLQ/replay.
+- Covered Kafka -> lookup -> ClickHouse detail pipelines, Kafka -> deduplicate -> lookup -> tumbling aggregate -> ClickHouse pipelines, duplicate Kafka message absorption, schema drift DLQ, lookup miss DLQ and replay, lookup refresh failure DLQ, and ClickHouse outage DLQ/replay.
 
 ### Release Boundary
-- This is a beta / reliability-preview release. Kafka wide-table, ClickHouse wide-table sink usage, lookup stream-table joins, tumbling aggregation, and SQLite-backed state are available as production-candidate building blocks, not a blanket production-ready guarantee.
+- This is a 0.2.0 release. Kafka orchestration-based aggregation, ClickHouse sink usage, lookup stream-table joins, tumbling aggregation, and SQLite-backed state are available as validated building blocks, not a blanket production-ready guarantee.
 - Default delivery semantics remain at-least-once. Exactly-once, Kafka rebalance/crash guarantees, DAG/stateful replay, stream-stream production joins, complex windows, and full connector certification remain roadmap items.
 
 ### Verification

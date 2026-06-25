@@ -4,20 +4,20 @@
 
 ## [Unreleased]
 
-## [v0.2.0-beta1] — 宽表 Beta 与可靠性预览版
+## [v0.2.0] — Pipeline 编排与可靠性正式版
 
 ### 亮点
 - 修复 React 生产 bundle 中 routed page 因运行时未定义变量导致的前端空白页回归，并刷新 Go 服务内嵌的 `resource/public` 产物。
-- 新增围绕 Kafka 事实流、维表 lookup、tumbling 聚合和 ClickHouse 输出的宽表 beta 工作流，并补齐 Wide Table、Connections、Schedules 等 UI 入口。
+- 新增围绕 Kafka 事实流、维表 lookup、tumbling 聚合和 ClickHouse 输出的 pipeline 编排路径，并补齐编排预览、Connections、Schedules 等 UI 入口。
 - 新增 DLQ 稳定 ID replay/delete 流程，补强状态化 transform 指标，并为 deduplicate、lookup、join、window 等状态路径引入 state/checkpoint envelope。
 - 收束 connector/source/sink/transform/storage/plugin 成熟度口径，按 beta / production-candidate / production-ready 边界表达能力，避免把“已注册”误读为“生产承诺”。
 
-### 宽表验证
+### 编排验证
 - 新增 `hack/e2e-wide-table.sh`，基于 Podman 编排 Redpanda + MySQL + ClickHouse。
-- 覆盖 Kafka -> lookup -> ClickHouse 明细宽表、Kafka -> deduplicate -> lookup -> tumbling aggregate -> ClickHouse 聚合宽表、重复 Kafka 消息吸收、schema drift 入 DLQ、lookup miss 入 DLQ 并修复后 replay、lookup refresh failure 入 DLQ、ClickHouse 下线入 DLQ 并恢复后 replay。
+- 覆盖 Kafka -> lookup -> ClickHouse 明细 pipeline、Kafka -> deduplicate -> lookup -> tumbling aggregate -> ClickHouse 聚合 pipeline、重复 Kafka 消息吸收、schema drift 入 DLQ、lookup miss 入 DLQ 并修复后 replay、lookup refresh failure 入 DLQ、ClickHouse 下线入 DLQ 并恢复后 replay。
 
 ### 发布边界
-- 这是 beta / reliability preview 版本。Kafka 宽表链路、ClickHouse 宽表 sink 使用方式、lookup stream-table join、tumbling 聚合、SQLite-backed state 可以作为 production candidate 积木使用，但不宣称整条链路或连接器矩阵 production-ready。
+- 这是 0.2.0 正式版。Kafka 编排式聚合、ClickHouse sink 使用方式、lookup stream-table join、tumbling 聚合、SQLite-backed state 可以作为已验证积木使用，但不宣称任意复杂链路或连接器矩阵 production-ready。
 - 默认交付语义仍是 at-least-once。Exactly-once、Kafka rebalance/crash 保证、DAG/stateful replay、stream-stream production join、复杂 window、完整 connector certification 仍是 roadmap 项。
 
 ### 验证
