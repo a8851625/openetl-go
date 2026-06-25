@@ -98,6 +98,12 @@ type SinkMetric struct {
 func MetricsHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		metrics := getMetrics()
+		// Ensure empty result serializes as [] not null — the frontend calls
+		// .find()/.map() on `pipelines` and a JSON null crashes the SPA
+		// ("Cannot read properties of null (reading 'find')").
+		if metrics == nil {
+			metrics = []PipelineMetrics{}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"pipelines": metrics,

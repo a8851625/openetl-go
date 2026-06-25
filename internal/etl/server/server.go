@@ -2181,7 +2181,12 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		"schema":     configSchema(),
 	}
 	if s.pluginMgr != nil {
-		resp["installed"] = s.pluginMgr.List()
+		// Ensure empty list serializes as [] not null — frontend maps over it.
+		installed := s.pluginMgr.List()
+		if installed == nil {
+			installed = []*pluginsystem.PluginMeta{}
+		}
+		resp["installed"] = installed
 	}
 	json.NewEncoder(w).Encode(resp)
 }

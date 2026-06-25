@@ -200,8 +200,13 @@ function App() {
   const checkpoints = useApi<{ checkpoints: Checkpoint[] }>('/api/v2/checkpoints', refreshKey);
   const audit = useApi<{ events: AuditEvent[] }>('/api/v2/audit?limit=50', refreshKey);
 
-  const selected = pipelines.data?.pipelines.find((p) => p.name === selectedPipeline) || pipelines.data?.pipelines[0];
-  const selectedMetric = metrics.data?.pipelines.find((p) => p.name === selected?.name);
+  // Defend against API returning {pipelines: null} (Go nil slice → JSON null).
+  // Optional chaining only short-circuits on undefined, not on a present-but-null
+  // field, so `(d?.pipelines)` evaluates to null and `.find` would throw.
+  const pipelinesList = pipelines.data?.pipelines || [];
+  const metricsList = metrics.data?.pipelines || [];
+  const selected = pipelinesList.find((p) => p.name === selectedPipeline) || pipelinesList[0];
+  const selectedMetric = metricsList.find((p) => p.name === selected?.name);
 
   const totals = useMemo(() => {
     const list = pipelines.data?.pipelines || [];
@@ -992,8 +997,8 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
     }
     // Sort
     list = [...list].sort((a: Pipeline, b: Pipeline) => {
-      const mA = metrics.data?.pipelines.find((x: MetricsPipeline) => x.name === a.name);
-      const mB = metrics.data?.pipelines.find((x: MetricsPipeline) => x.name === b.name);
+      const mA = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => x.name === a.name);
+      const mB = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => x.name === b.name);
       switch (sortKey) {
         case 'name': return a.name.localeCompare(b.name);
         case 'status': return a.status.localeCompare(b.status);
@@ -1104,7 +1109,7 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
         </div>
         <div className="card-body space-y-1.5">
           {filteredPipelines.map((p: Pipeline) => {
-            const m = metrics.data?.pipelines.find((x: MetricsPipeline) => x.name === p.name);
+            const m = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => x.name === p.name);
             return (
               <PipelineRow
                 key={p.name}
