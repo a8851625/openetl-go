@@ -454,6 +454,59 @@ func TestRunnerCheckpointAfterCommit(t *testing.T) {
 	}
 }
 
+func TestRunnerCanRestartAfterCompletedCheckpointReset(t *testing.T) {
+	spec, _ := makeRunnerSpec(t, 5)
+	spec.CheckpointIntervalSec = 3600
+	store := newMemoryCPStore()
+	am := alert.NewManager()
+	t.Cleanup(am.Close)
+	r, err := NewRunner(spec, store, noopDLQ{}, am)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	r.Wait()
+	if r.Status() != StatusCompleted {
+		t.Fatalf("first status = %s, want completed (stats=%#v)", r.Status(), r.Stats())
+	}
+	if got := r.Stats().RecordsWritten; got != 5 {
+		t.Fatalf("first RecordsWritten = %d, want 5", got)
+	}
+
+	if err := store.Delete(context.Background(), spec.Name); err != nil {
+		t.Fatalf("Delete checkpoint: %v", err)
+	}
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	r.Wait()
+	if r.Status() != StatusCompleted {
+		t.Fatalf("second status = %s, want completed (stats=%#v)", r.Status(), r.Stats())
+	}
+	stats := r.Stats()
+	if stats.RecordsWritten != 5 {
+		t.Fatalf("second RecordsWritten = %d, want 5", stats.RecordsWritten)
+	}
+	if stats.LastCheckpoint.IsZero() {
+		t.Fatal("second LastCheckpoint is zero, want checkpoint after replay")
+	}
+	cp, err := store.Load(context.Background(), spec.Name)
+	if err != nil {
+		t.Fatalf("Load second checkpoint: %v", err)
+	}
+	if cp == nil {
+		t.Fatal("second checkpoint was not persisted after replay")
+	}
+	if strings.Contains(stats.LastError, "close of closed channel") {
+		t.Fatalf("second LastError = %q", stats.LastError)
+	}
+}
+
 func TestRunnerCheckpointIncludesStateSnapshotVersions(t *testing.T) {
 	store := newMemoryCPStore()
 	r := newCheckpointWriteBatchRunner(t, core.TransformChain{

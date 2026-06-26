@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,11 +24,33 @@ type PreflightIssue struct {
 	Remediation string `json:"remediation"` // how to fix it
 }
 
+// PreflightFieldIssue describes a schema-level problem tied to one field.
+type PreflightFieldIssue struct {
+	Level       string `json:"level"`
+	Field       string `json:"field"`
+	Check       string `json:"check"`
+	SourceType  string `json:"source_type,omitempty"`
+	TargetType  string `json:"target_type,omitempty"`
+	Message     string `json:"message"`
+	Remediation string `json:"remediation"`
+}
+
+// PreflightDDLPreview is an informational target DDL preview built from source
+// schema metadata. It is not executed by preflight.
+type PreflightDDLPreview struct {
+	Dialect    string   `json:"dialect"`
+	Table      string   `json:"table"`
+	Statements []string `json:"statements"`
+	Warnings   []string `json:"warnings,omitempty"`
+}
+
 // PreflightResult is the outcome of running all preflight checks.
 type PreflightResult struct {
-	Passed  bool             `json:"passed"`
-	Issues  []PreflightIssue `json:"issues,omitempty"`
-	Summary string           `json:"summary"`
+	Passed      bool                  `json:"passed"`
+	Issues      []PreflightIssue      `json:"issues,omitempty"`
+	FieldIssues []PreflightFieldIssue `json:"field_issues,omitempty"`
+	DDLPreview  *PreflightDDLPreview  `json:"ddl_preview,omitempty"`
+	Summary     string                `json:"summary"`
 }
 
 // RunPreflight validates a pipeline spec's source and sink connectivity
@@ -52,10 +75,12 @@ func (s *Server) RunPreflight(ctx context.Context, spec *pipeline.Spec) *Preflig
 		s.checkSchemaCompatibility(ctx, spec, sink, result)
 	}
 
-	if !result.Passed {
+	if len(result.Issues) == 0 {
+		result.Summary = "all checks passed"
+	} else if !result.Passed {
 		result.Summary = fmt.Sprintf("%d issue(s) found", len(result.Issues))
 	} else {
-		result.Summary = "all checks passed"
+		result.Summary = fmt.Sprintf("%d warning(s) found", len(result.Issues))
 	}
 	return result
 }
@@ -217,6 +242,11 @@ func (s *Server) checkSinkReachable(ctx context.Context, spec *pipeline.Spec, re
 			Message:     fmt.Sprintf("sink %q is not reachable: %v", spec.Sink.Type, err),
 			Remediation: remediation,
 		})
+		if isMaxComputeSinkType(spec.Sink.Type) {
+			// The writer is disabled, but MaxCompute's local schema and
+			// partition contract is still useful preflight evidence.
+			return sink, true
+		}
 		// Generic reachability failure is a warning because the target may
 		// become available later; build-disabled experimental sinks are errors.
 		return nil, false
@@ -270,6 +300,8 @@ func (s *Server) checkSchemaCompatibility(ctx context.Context, spec *pipeline.Sp
 		return
 	}
 
+	result.DDLPreview = buildPreflightDDLPreview(spec, schema)
+
 	if err := validator.ValidateSchema(probeCtx, schema); err != nil {
 		result.Issues = append(result.Issues, PreflightIssue{
 			Level:       "error",
@@ -277,8 +309,456 @@ func (s *Server) checkSchemaCompatibility(ctx context.Context, spec *pipeline.Sp
 			Message:     fmt.Sprintf("source %q is not compatible with sink %q: %v", spec.Source.Type, spec.Sink.Type, err),
 			Remediation: "update the target schema, enable auto_create/schema_drift when supported, or add a transform/type_convert step",
 		})
+		result.FieldIssues = append(result.FieldIssues, parseSchemaFieldIssues(err.Error(), schema)...)
 		result.Passed = false
 	}
+}
+
+func buildPreflightDDLPreview(spec *pipeline.Spec, schema core.SchemaInfo) *PreflightDDLPreview {
+	dialect := ddlDialectForSink(spec.Sink.Type)
+	if dialect == "" || len(schema.Columns) == 0 {
+		return nil
+	}
+	table := targetTableName(spec, dialect)
+	if table == "" {
+		return nil
+	}
+
+	columns := append([]core.ColumnInfo(nil), schema.Columns...)
+	sort.SliceStable(columns, func(i, j int) bool {
+		return strings.ToLower(columns[i].Name) < strings.ToLower(columns[j].Name)
+	})
+
+	warnings := []string{}
+	if !boolField(spec.Sink.Config, "auto_create", false) {
+		warnings = append(warnings, "auto_create is disabled; this preview is informational and will not be applied automatically")
+	}
+	statement, stmtWarnings := createTablePreviewStatement(dialect, table, columns, spec.Sink.Config)
+	warnings = append(warnings, stmtWarnings...)
+	if statement == "" {
+		return nil
+	}
+	return &PreflightDDLPreview{
+		Dialect:    dialect,
+		Table:      table,
+		Statements: []string{statement},
+		Warnings:   warnings,
+	}
+}
+
+func ddlDialectForSink(sinkType string) string {
+	switch strings.ToLower(sinkType) {
+	case "mysql":
+		return "mysql"
+	case "postgres", "postgresql":
+		return "postgresql"
+	case "clickhouse":
+		return "clickhouse"
+	case "doris":
+		return "doris"
+	case "maxcompute", "odps":
+		return "maxcompute"
+	default:
+		return ""
+	}
+}
+
+func targetTableName(spec *pipeline.Spec, dialect string) string {
+	cfg := spec.Sink.Config
+	table := stringField(cfg, "table", "")
+	if table == "" {
+		return ""
+	}
+	switch dialect {
+	case "mysql", "clickhouse", "doris":
+		if database := stringField(cfg, "database", ""); database != "" {
+			return database + "." + table
+		}
+	case "postgresql":
+		schema := stringField(cfg, "schema", "public")
+		return schema + "." + table
+	case "maxcompute":
+		if project := stringField(cfg, "project", ""); project != "" {
+			return project + "." + table
+		}
+	}
+	return table
+}
+
+func createTablePreviewStatement(dialect, table string, columns []core.ColumnInfo, cfg map[string]any) (string, []string) {
+	switch dialect {
+	case "mysql":
+		return createRelationalDDLPreview(dialect, table, columns, "`", "`", " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"), nil
+	case "postgresql":
+		return createRelationalDDLPreview(dialect, table, columns, `"`, `"`, ""), nil
+	case "doris":
+		stmt := createRelationalDDLPreview(dialect, table, columns, "`", "`", " ENGINE=OLAP DUPLICATE KEY() DISTRIBUTED BY HASH() BUCKETS 1")
+		return stmt, []string{"Doris distribution/key model is workload-specific; review DUPLICATE KEY and distribution clauses before applying"}
+	case "clickhouse":
+		return createClickHouseDDLPreview(table, columns, cfg), nil
+	case "maxcompute":
+		return createMaxComputeDDLPreview(table, columns, cfg), nil
+	default:
+		return "", nil
+	}
+}
+
+func createRelationalDDLPreview(dialect, table string, columns []core.ColumnInfo, quoteLeft, quoteRight, suffix string) string {
+	defs := make([]string, 0, len(columns))
+	for _, col := range columns {
+		colType := preflightDDLType(dialect, col.DataType)
+		def := fmt.Sprintf("%s %s", quoteQualifiedIdentifier(col.Name, quoteLeft, quoteRight), colType)
+		if !col.Nullable {
+			def += " NOT NULL"
+		}
+		defs = append(defs, def)
+	}
+	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n)%s;",
+		quoteQualifiedIdentifier(table, quoteLeft, quoteRight), strings.Join(defs, ",\n  "), suffix)
+}
+
+func createClickHouseDDLPreview(table string, columns []core.ColumnInfo, cfg map[string]any) string {
+	versionCol := stringField(cfg, "version_column", "_version")
+	defs := make([]string, 0, len(columns)+1)
+	fieldSet := map[string]bool{}
+	for _, col := range columns {
+		fieldSet[strings.ToLower(col.Name)] = true
+		defs = append(defs, fmt.Sprintf("%s %s", quoteQualifiedIdentifier(col.Name, "`", "`"), preflightDDLType("clickhouse", col.DataType)))
+	}
+	if !fieldSet[strings.ToLower(versionCol)] {
+		defs = append(defs, fmt.Sprintf("%s Int64", quoteQualifiedIdentifier(versionCol, "`", "`")))
+	}
+	orderBy := "tuple()"
+	pkCols := stringSliceField(cfg, "pk_columns")
+	if len(pkCols) == 0 && fieldSet["id"] {
+		pkCols = []string{"id"}
+	}
+	if len(pkCols) > 0 {
+		quoted := make([]string, 0, len(pkCols))
+		for _, col := range pkCols {
+			quoted = append(quoted, quoteQualifiedIdentifier(col, "`", "`"))
+		}
+		orderBy = strings.Join(quoted, ", ")
+	}
+	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n) ENGINE = ReplacingMergeTree(%s) ORDER BY (%s);",
+		quoteQualifiedIdentifier(table, "`", "`"), strings.Join(defs, ",\n  "), quoteQualifiedIdentifier(versionCol, "`", "`"), orderBy)
+}
+
+func createMaxComputeDDLPreview(table string, columns []core.ColumnInfo, cfg map[string]any) string {
+	partitions := maxComputePartitionColumns(cfg)
+	partitionSet := map[string]bool{}
+	for _, p := range partitions {
+		partitionSet[strings.ToLower(p)] = true
+	}
+	targetTypes := stringMapField(cfg, "columns")
+	defs := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if partitionSet[strings.ToLower(col.Name)] {
+			continue
+		}
+		colType := targetTypes[col.Name]
+		if colType == "" {
+			colType = targetTypes[strings.ToLower(col.Name)]
+		}
+		if colType == "" {
+			colType = preflightDDLType("maxcompute", col.DataType)
+		}
+		defs = append(defs, fmt.Sprintf("%s %s", quoteQualifiedIdentifier(col.Name, "`", "`"), colType))
+	}
+	if len(defs) == 0 {
+		return ""
+	}
+	stmt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n)",
+		quoteQualifiedIdentifier(table, "`", "`"), strings.Join(defs, ",\n  "))
+	if len(partitions) > 0 {
+		partDefs := make([]string, 0, len(partitions))
+		for _, p := range partitions {
+			partDefs = append(partDefs, fmt.Sprintf("%s STRING", quoteQualifiedIdentifier(p, "`", "`")))
+		}
+		stmt += fmt.Sprintf("\nPARTITIONED BY (\n  %s\n)", strings.Join(partDefs, ",\n  "))
+	}
+	return stmt + ";"
+}
+
+func maxComputePartitionColumns(cfg map[string]any) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[strings.ToLower(name)] {
+			return
+		}
+		seen[strings.ToLower(name)] = true
+		out = append(out, name)
+	}
+	for k := range stringMapField(cfg, "partition") {
+		add(k)
+	}
+	for _, field := range stringSliceField(cfg, "partition_fields") {
+		add(field)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func preflightDDLType(dialect, sourceType string) string {
+	family := preflightTypeFamily(sourceType)
+	switch family {
+	case "int":
+		switch dialect {
+		case "clickhouse":
+			return "Int64"
+		case "postgresql":
+			return "BIGINT"
+		default:
+			return "BIGINT"
+		}
+	case "uint":
+		switch dialect {
+		case "clickhouse":
+			return "UInt64"
+		case "postgresql":
+			return "NUMERIC(20,0)"
+		default:
+			return "BIGINT"
+		}
+	case "float":
+		if dialect == "clickhouse" {
+			return "Float64"
+		}
+		if dialect == "postgresql" {
+			return "DOUBLE PRECISION"
+		}
+		return "DOUBLE"
+	case "decimal":
+		if dialect == "clickhouse" {
+			return "Decimal(38,10)"
+		}
+		return "DECIMAL(38,10)"
+	case "bool":
+		switch dialect {
+		case "clickhouse":
+			return "UInt8"
+		case "mysql":
+			return "TINYINT(1)"
+		default:
+			return "BOOLEAN"
+		}
+	case "date":
+		return "DATE"
+	case "time":
+		switch dialect {
+		case "clickhouse":
+			return "DateTime64(3)"
+		case "postgresql":
+			return "TIMESTAMP(3)"
+		case "maxcompute":
+			return "TIMESTAMP"
+		default:
+			return "DATETIME(3)"
+		}
+	case "json":
+		switch dialect {
+		case "postgresql":
+			return "JSONB"
+		case "clickhouse":
+			return "String"
+		case "maxcompute":
+			return "STRING"
+		default:
+			return "JSON"
+		}
+	case "bytes":
+		switch dialect {
+		case "postgresql":
+			return "BYTEA"
+		case "clickhouse":
+			return "String"
+		case "maxcompute":
+			return "STRING"
+		default:
+			return "BLOB"
+		}
+	default:
+		switch dialect {
+		case "clickhouse":
+			return "String"
+		case "maxcompute":
+			return "STRING"
+		case "postgresql":
+			return "TEXT"
+		default:
+			return "VARCHAR(255)"
+		}
+	}
+}
+
+func preflightTypeFamily(t string) string {
+	t = strings.ToLower(strings.TrimSpace(t))
+	if t == "" {
+		return "string"
+	}
+	t = unwrapPreflightType(t, "nullable")
+	t = unwrapPreflightType(t, "lowcardinality")
+	if strings.HasPrefix(t, "array(") || strings.HasPrefix(t, "map(") || strings.HasPrefix(t, "tuple(") {
+		return "json"
+	}
+	base := t
+	if idx := strings.IndexAny(base, "( "); idx >= 0 {
+		base = base[:idx]
+	}
+	base = strings.Trim(base, "`\"")
+	switch base {
+	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "serial", "bigserial", "int1", "int2", "int4", "int8", "int16", "int32", "int64":
+		return "int"
+	case "uint8", "uint16", "uint32", "uint64":
+		return "uint"
+	case "float", "double", "real", "float4", "float8", "float32", "float64":
+		return "float"
+	case "decimal", "numeric", "number", "decimal32", "decimal64", "decimal128", "decimal256":
+		return "decimal"
+	case "bool", "boolean":
+		return "bool"
+	case "date", "date32":
+		return "date"
+	case "datetime", "timestamp", "timestamptz", "time", "timetz", "datetime64":
+		return "time"
+	case "binary", "varbinary", "blob", "tinyblob", "mediumblob", "longblob", "bytea":
+		return "bytes"
+	case "json", "jsonb", "object":
+		return "json"
+	default:
+		if strings.Contains(t, "unsigned") && strings.Contains(t, "int") {
+			return "uint"
+		}
+		return "string"
+	}
+}
+
+func unwrapPreflightType(t, wrapper string) string {
+	prefix := wrapper + "("
+	for strings.HasPrefix(t, prefix) && strings.HasSuffix(t, ")") {
+		t = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(t, prefix), ")"))
+	}
+	return t
+}
+
+func quoteQualifiedIdentifier(name, left, right string) string {
+	parts := strings.Split(name, ".")
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		parts[i] = left + strings.ReplaceAll(part, right, right+right) + right
+	}
+	return strings.Join(parts, ".")
+}
+
+func parseSchemaFieldIssues(message string, schema core.SchemaInfo) []PreflightFieldIssue {
+	sourceTypes := map[string]string{}
+	for _, col := range schema.Columns {
+		sourceTypes[strings.ToLower(col.Name)] = col.DataType
+	}
+	var issues []PreflightFieldIssue
+	for _, field := range bracketedCSVAfter(message, "missing target columns [") {
+		issues = append(issues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       field,
+			Check:       "schema-field-missing",
+			SourceType:  sourceTypes[strings.ToLower(field)],
+			Message:     fmt.Sprintf("field %q is missing from the target schema", field),
+			Remediation: "add the target column, enable schema_drift=add_columns when supported, or project the field out before the sink",
+		})
+	}
+	for _, field := range bracketedCSVAfter(message, "partition field(s) [") {
+		issues = append(issues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       field,
+			Check:       "schema-partition-field-missing",
+			SourceType:  sourceTypes[strings.ToLower(field)],
+			Message:     fmt.Sprintf("partition field %q is missing from the source schema", field),
+			Remediation: "add the field with project/add_field before the sink or configure it as a static partition",
+		})
+	}
+	for _, item := range bracketedSemicolonAfter(message, "incompatible target column types [") {
+		field, sourceType, targetType := parseIncompatibleField(item)
+		if field == "" {
+			continue
+		}
+		if sourceType == "" {
+			sourceType = sourceTypes[strings.ToLower(field)]
+		}
+		issues = append(issues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       field,
+			Check:       "schema-field-type",
+			SourceType:  sourceType,
+			TargetType:  targetType,
+			Message:     fmt.Sprintf("field %q has incompatible source and target types", field),
+			Remediation: "change the target column type or add a transform/type_convert step before the sink",
+		})
+	}
+	return issues
+}
+
+func bracketedCSVAfter(s, marker string) []string {
+	body := bracketedBodyAfter(s, marker)
+	if body == "" {
+		return nil
+	}
+	parts := strings.Split(body, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func bracketedSemicolonAfter(s, marker string) []string {
+	body := bracketedBodyAfter(s, marker)
+	if body == "" {
+		return nil
+	}
+	parts := strings.Split(body, ";")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func bracketedBodyAfter(s, marker string) string {
+	idx := strings.Index(s, marker)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(marker)
+	end := strings.Index(s[start:], "]")
+	if end < 0 {
+		return ""
+	}
+	return s[start : start+end]
+}
+
+func parseIncompatibleField(item string) (field, sourceType, targetType string) {
+	tokens := strings.Fields(item)
+	if len(tokens) == 0 {
+		return "", "", ""
+	}
+	field = tokens[0]
+	for _, token := range tokens[1:] {
+		switch {
+		case strings.HasPrefix(token, "source="):
+			sourceType = strings.TrimPrefix(token, "source=")
+		case strings.HasPrefix(token, "target="):
+			targetType = strings.TrimPrefix(token, "target=")
+		}
+	}
+	return field, sourceType, targetType
 }
 
 // ── MySQL grant checker ──────────────────────────────────────────────
@@ -342,6 +822,13 @@ func intField(cfg map[string]any, key string, def int) int {
 	return def
 }
 
+func boolField(cfg map[string]any, key string, def bool) bool {
+	if v, ok := cfg[key].(bool); ok {
+		return v
+	}
+	return def
+}
+
 func stringSliceField(cfg map[string]any, key string) []string {
 	var result []string
 	switch arr := cfg[key].(type) {
@@ -351,6 +838,23 @@ func stringSliceField(cfg map[string]any, key string) []string {
 		for _, v := range arr {
 			if s, ok := v.(string); ok {
 				result = append(result, s)
+			}
+		}
+	}
+	return result
+}
+
+func stringMapField(cfg map[string]any, key string) map[string]string {
+	result := map[string]string{}
+	switch m := cfg[key].(type) {
+	case map[string]string:
+		for k, v := range m {
+			result[k] = v
+		}
+	case map[string]any:
+		for k, v := range m {
+			if s, ok := v.(string); ok {
+				result[k] = s
 			}
 		}
 	}

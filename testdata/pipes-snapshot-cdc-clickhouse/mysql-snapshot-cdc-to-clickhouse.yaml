@@ -1,0 +1,46 @@
+name: "mysql-snapshot-cdc-to-clickhouse"
+source:
+  type: mysql_snapshot_cdc
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    table: "snap_cdc_clickhouse"
+    pk_column: "id"
+    limit: 2
+    server_id: 2501
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: clickhouse
+  config:
+    host: "host.docker.internal"
+    port: 9000
+    user: "default"
+    password: "dzh123456"
+    database: "dzh3136_go"
+    table: ""
+    pk_columns:
+      - "id"
+    version_column: "_version"
+    auto_create: true
+    schema_drift: "add_columns"
+    ddl_policy: "apply"
+    source_dialect: "mysql"
+
+batch_size: 2
+checkpoint_interval_sec: 1
+backpressure_buffer: 20
+
+retry:
+  max_attempts: 2
+  initial_interval_ms: 100
+  max_interval_ms: 500
+
+dlq:
+  enable: true

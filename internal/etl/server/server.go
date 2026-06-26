@@ -781,7 +781,8 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 	// indicate a hard misconfiguration (e.g., MySQL binlog format) and
 	// should prevent pipeline creation. Reachability warnings don't.
 	preflightValid := true
-	if preflightResult := s.RunPreflight(r.Context(), &spec); preflightResult != nil {
+	preflightResult := s.RunPreflight(r.Context(), &spec)
+	if preflightResult != nil {
 		for _, issue := range preflightResult.Issues {
 			if issue.Level == "error" {
 				warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
@@ -791,7 +792,7 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	json.NewEncoder(w).Encode(map[string]any{"valid": preflightValid, "warnings": warnings, "spec": spec})
+	json.NewEncoder(w).Encode(map[string]any{"valid": preflightValid, "warnings": warnings, "spec": spec, "preflight": preflightResult})
 }
 
 func (s *Server) handleConnectionTest(w http.ResponseWriter, r *http.Request) {
@@ -1151,13 +1152,15 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		// format, missing grants, bad source credentials) fail before the
 		// pipeline is persisted. Warning-level issues are returned but do not
 		// block creation.
-		createWarnings, hasPreflightError := formatPreflightIssues(s.RunPreflight(r.Context(), &spec))
+		createPreflight := s.RunPreflight(r.Context(), &spec)
+		createWarnings, hasPreflightError := formatPreflightIssues(createPreflight)
 		if hasPreflightError {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{
 				"error":              "preflight failed",
 				"preflight_valid":    false,
 				"preflight_warnings": createWarnings,
+				"preflight":          createPreflight,
 			})
 			return
 		}
@@ -1192,6 +1195,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			"status":             runner.Status(),
 			"preflight_valid":    true,
 			"preflight_warnings": createWarnings,
+			"preflight":          createPreflight,
 		})
 
 	case http.MethodPut:
@@ -1328,13 +1332,15 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		updateWarnings, hasPreflightError := formatPreflightIssues(s.RunPreflight(r.Context(), &spec))
+		updatePreflight := s.RunPreflight(r.Context(), &spec)
+		updateWarnings, hasPreflightError := formatPreflightIssues(updatePreflight)
 		if hasPreflightError {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{
 				"error":              "preflight failed",
 				"preflight_valid":    false,
 				"preflight_warnings": updateWarnings,
+				"preflight":          updatePreflight,
 				"spec_changed":       specChanged,
 				"checkpoint_warning": checkpointWarning,
 				"checkpoint_reset":   req.ResetCheckpoint,
@@ -1379,6 +1385,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			"status":             runner.Status(),
 			"preflight_valid":    true,
 			"preflight_warnings": updateWarnings,
+			"preflight":          updatePreflight,
 			"spec_changed":       specChanged,
 			"checkpoint_warning": checkpointWarning,
 			"checkpoint_reset":   req.ResetCheckpoint,

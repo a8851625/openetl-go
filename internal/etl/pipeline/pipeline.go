@@ -84,7 +84,10 @@ type Runner struct {
 	cancel context.CancelFunc
 	stopCh chan struct{}
 	done   chan struct{}
-	reader core.RecordReader
+	// runActive is true after Start has reserved a runLoop slot and remains
+	// true until that runLoop has closed its own done channel.
+	runActive bool
+	reader    core.RecordReader
 
 	hooks map[core.HookKind]core.LifecycleHook
 
@@ -378,19 +381,43 @@ func (r *Runner) Start(ctx context.Context) error {
 		r.mu.Unlock()
 		return fmt.Errorf("pipeline %s is already running", r.spec.Name)
 	}
+	if r.runActive {
+		r.mu.Unlock()
+		return fmt.Errorf("pipeline %s is still stopping", r.spec.Name)
+	}
 	r.logBuf = NewLogBuffer(500)
 	r.status = StatusRunning
 	r.frozenDuration = 0
 	now := time.Now()
 	r.stats = Stats{StartedAt: &now}
+	r.lastCheckpointSave = time.Time{}
+	r.uncheckpointedBatches = 0
+	r.done = make(chan struct{})
+	r.runActive = true
+	done := r.done
 	r.mu.Unlock()
 
 	ctx, r.cancel = context.WithCancel(ctx)
+	markStartFailed := func() {
+		r.mu.Lock()
+		active := r.runActive
+		if active {
+			r.runActive = false
+		}
+		r.mu.Unlock()
+		if active {
+			close(done)
+		}
+		if r.cancel != nil {
+			r.cancel()
+		}
+	}
 
 	g.Log().Infof(ctx, "[%s] Opening sink...", r.spec.Name)
 	if err := r.sink.Open(ctx); err != nil {
 		r.setStatus(StatusFailed)
 		r.logError(fmt.Sprintf("Failed to open sink: %v", err))
+		markStartFailed()
 		return fmt.Errorf("open sink: %w", err)
 	}
 
@@ -403,12 +430,14 @@ func (r *Runner) Start(ctx context.Context) error {
 				r.setStatus(StatusFailed)
 				r.logError(fmt.Sprintf("Source schema description failed: %v", err))
 				_ = r.sink.Close()
+				markStartFailed()
 				return fmt.Errorf("describe source schema: %w", err)
 			} else if len(schema.Columns) > 0 {
 				if err := validator.ValidateSchema(ctx, schema); err != nil {
 					r.setStatus(StatusFailed)
 					r.logError(fmt.Sprintf("Schema validation failed: %v", err))
 					_ = r.sink.Close()
+					markStartFailed()
 					return fmt.Errorf("schema validation: %w", err)
 				}
 				r.logInfo(fmt.Sprintf("Schema validated: %d columns", len(schema.Columns)))
@@ -431,6 +460,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		r.setStatus(StatusFailed)
 		r.logError(fmt.Sprintf("Failed to open source: %v", err))
 		_ = r.sink.Close()
+		markStartFailed()
 		return fmt.Errorf("open source: %w", err)
 	}
 
@@ -455,7 +485,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	})
 
 	r.logInfo(fmt.Sprintf("Pipeline started (%s → %s)", r.spec.Source.Type, r.spec.Sink.Type))
-	go r.runLoop(ctx)
+	go r.runLoop(ctx, done)
 	return nil
 }
 
@@ -525,7 +555,7 @@ func (r *Runner) setStatus(s Status) {
 	r.status = s
 }
 
-func (r *Runner) runLoop(ctx context.Context) {
+func (r *Runner) runLoop(ctx context.Context, done chan struct{}) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			r.mu.Lock()
@@ -554,6 +584,15 @@ func (r *Runner) runLoop(ctx context.Context) {
 		}
 		r.mu.Unlock()
 		r.logInfo(fmt.Sprintf("Pipeline finished. written=%d read=%d failed=%d", r.recordsWritten(), r.recordsRead(), r.recordsFailed()))
+		if r.cancel != nil {
+			r.cancel()
+		}
+		r.mu.Lock()
+		if r.done == done {
+			r.runActive = false
+		}
+		r.mu.Unlock()
+		close(done)
 	}()
 
 	records := make(chan core.Record, r.backpressureBuffer)
@@ -616,10 +655,6 @@ func (r *Runner) runLoop(ctx context.Context) {
 	}
 
 	rwg.Wait()
-	close(r.done)
-	if r.cancel != nil {
-		r.cancel()
-	}
 }
 
 func (r *Runner) Wait() {

@@ -172,9 +172,9 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 交付项：
 
 - 为三条主路径补齐 e2e：
-  - MySQL snapshot/CDC -> ClickHouse，覆盖 schema drift、重启恢复、重复吸收、DLQ/replay。
-  - MySQL batch/CDC -> MySQL/PostgreSQL，覆盖 upsert/delete、事务批写、checkpoint 恢复。
-  - Kafka JSON/Debezium -> lookup -> deduplicate -> tumbling window -> ClickHouse，覆盖重复消息、lookup miss、状态恢复、ClickHouse 下线和 replay。
+  - MySQL snapshot/CDC -> ClickHouse，覆盖 schema drift、重启恢复、重复吸收、DLQ/replay。MySQL snapshot+CDC -> ClickHouse 已补 Docker e2e，覆盖 auto-create、DDL/schema drift add-column、CDC update/delete/insert、checkpoint restart、checkpoint reset replay 后 ReplacingMergeTree 吸收重复，以及 ClickHouse 下线 DLQ/replay。
+  - MySQL batch/CDC -> MySQL/PostgreSQL，覆盖 upsert/delete、事务批写、checkpoint 恢复。MySQL batch custom-query/JOIN -> PostgreSQL upsert 已补 Docker e2e，覆盖 schema preflight 拦截和 checkpoint reset replay 后 upsert 吸收重复；MySQL CDC -> PostgreSQL 已补 Docker e2e，覆盖 insert/update/delete 和 stop/restart checkpoint 恢复。
+  - Kafka JSON/Debezium -> lookup -> deduplicate -> tumbling window -> ClickHouse，覆盖重复消息、lookup miss、状态恢复、ClickHouse 下线和 replay。wide-table Docker e2e 已覆盖重复吸收、lookup miss DLQ/replay、lookup refresh failure、ClickHouse 下线 DLQ/replay，以及 SIGKILL 后 deduplicate/window SQLite StateStore 恢复；lookup StateStore 已补独立 Docker e2e，覆盖维表查询不可用后从 SQLite cache 恢复。
 - 增加 Kafka 报文解析到 ODS Kafka 的生产候选链路：
   - Kafka raw message -> parser plugin + `flat_map` / `udtf` -> lookup 维表 -> `project` / `type_convert` -> Kafka JSON sink（Lua parser fixture 和 Docker e2e 已覆盖第一版链路）。
   - 第一版维表优先使用 MySQL/PostgreSQL 缓存；ODPS/MaxCompute 作为后续 connector 增强。
@@ -190,10 +190,10 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
   - preflight 校验目标 project/table/partition 权限、字段缺失、类型兼容和分区字段存在性（当前已覆盖本地字段/分区合约和 writer-disabled error；远端权限/表探测待集成环境）。
   - 明确 at-least-once 重放边界：默认 append 可能重复；推荐事件唯一键、分区 staging + merge/overwrite 或 sink 侧可证明的幂等提交策略。
 - Kafka 链路增加 consumer crash、broker restart、consumer group rebalance、offset replay 测试。
-- StateStore 恢复扩展到 e2e，明确 lookup、deduplicate、window 的恢复边界。
-- Elasticsearch item-level bulk DLQ 已接入 runner/sink；后续补 mapping conflict e2e。
-- S3/File 只补回填所需 deterministic prefix/manifest，不承诺通用 exactly-once 文件输出。
-- Preflight 输出风险等级、字段级错误、幂等建议和目标 DDL 预览。
+- StateStore 恢复扩展到 e2e，明确 lookup、deduplicate、window 的恢复边界；lookup、deduplicate、window 均已补 Docker e2e 恢复证据。
+- Elasticsearch item-level bulk DLQ 已接入 runner/sink；mapping conflict Docker e2e 已覆盖好记录写入、失败记录进入 schema DLQ、修复 mapping 后按 ID replay。
+- S3/File 只补回填所需 deterministic prefix/manifest，不承诺通用 exactly-once 文件输出；当前 S3/File sink 已使用 content-addressed key 吸收相同批次 replay，S3 MinIO e2e 已覆盖 checkpoint reset 后同一对象 key 不重复，first-class manifest 文件仍待补。
+- Preflight 输出风险等级、字段级错误、幂等建议和目标 DDL 预览；当前已补 sink reachability 真实 `Open` 检查、warning 不阻断创建、结构化 `field_issues` 和关系型/MaxCompute `ddl_preview` 的单测证据；幂等建议与更广泛 connector DDL 预览仍需继续完善。
 - `flat_map` / `udtf` transform 已进入核心 transform 集合，Lua 第一版 ABI 支持返回多条记录，并暴露 `input_records`、`output_records`、`dropped_records`、`parse_errors` 等 metrics；JS/TS transform 已支持返回 record/data 数组并可通过 dry-run 预览；WASM/plugin transform 已支持通用数组返回 ABI，插件 dry-run API 已返回多输出；GB32960 fixture 已覆盖 Lua parser 样板，真实 WASM e2e 后续补齐。
 - `project` / `select_fields` transform 已进入核心 transform 集合，用于宽字段投影、常量字段、字段别名和基础时间转换；后续补 Kafka ODS / MaxCompute e2e。
 

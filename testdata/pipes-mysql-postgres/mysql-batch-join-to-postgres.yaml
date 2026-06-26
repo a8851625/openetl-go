@@ -1,0 +1,44 @@
+name: "mysql-batch-join-to-postgres"
+source:
+  type: mysql_batch
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    table: "user_order"
+    pk_column: "order_id"
+    cursor_column: "order_id"
+    query: "SELECT o.id AS order_id, u.id AS user_id, u.name AS user_name, u.email AS user_email, u.city AS user_city, o.product, o.amount, o.status, o.created_at FROM pg_e2e_orders o JOIN pg_e2e_users u ON o.user_id = u.id"
+    limit: 100
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: postgres
+  config:
+    host: "host.docker.internal"
+    port: 15433
+    user: "etl"
+    password: "etl123"
+    database: "analytics"
+    table: "user_order"
+    batch_mode: "upsert"
+    pk_columns:
+      - "order_id"
+    schema_drift: "ignore"
+
+batch_size: 100
+checkpoint_interval_sec: 1
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

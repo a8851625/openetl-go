@@ -17,8 +17,8 @@ The runtime provides at-least-once delivery. A checkpoint is committed only afte
 | ClickHouse | ReplacingMergeTree-compatible table with `_version`, or ETL `auto_create: true` | Later versions collapse with `FINAL`; raw duplicate rows may exist before merge | Queries that require exact current state should use `FINAL` or downstream materialization. Deletes rely on table design/tombstone strategy. |
 | Kafka sink | Producer writes are at-least-once | Duplicate messages can appear | Use deterministic message keys and consumer-side idempotency. Kafka exactly-once transactions are not implemented yet. |
 | Elasticsearch | Stable document `_id` derived from primary key | Replayed documents replace the same ID | Partial bulk item errors expose failed record indexes, so the runner writes only failed records to DLQ and does not re-write accepted records. |
-| S3/OSS/file sink | New object/file per batch | Replayed batches can create additional objects | Use manifests or deterministic output prefixes for backfill jobs. Object manifest support is pending. |
-| Local file sink | New file per flushed batch | Replayed batches can create additional files | Suitable for extract/debug flows; consumers must deduplicate if exactly-once output is required. |
+| S3/OSS/file sink | Content-addressed object/file key per flushed batch | Replaying the identical batch overwrites the same key within the same date prefix; changed batch boundaries produce different keys | Use a stable prefix per backfill job and treat the object set as the manifest until first-class manifests are available. |
+| Local file sink | Content-addressed file path per flushed batch | Replaying the identical batch overwrites the same file within the same date prefix | Suitable for extract/debug flows; consumers must deduplicate if batches are split differently across runs. |
 
 ## Source Guidance
 
@@ -42,4 +42,4 @@ The runtime provides at-least-once delivery. A checkpoint is committed only afte
 
 - Cross-sink atomic fanout is not implemented.
 - Kafka transactional exactly-once is not implemented.
-- S3/file deterministic object manifests are not implemented.
+- First-class S3/file manifest files are not implemented; current protection is deterministic content-addressed object/file keys.

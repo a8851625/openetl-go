@@ -37,8 +37,26 @@ wait_http_down() {
   return 1
 }
 
-echo "==> Build image"
-docker build -t "$IMAGE" -f Dockerfile .
+run_wide_app() {
+  docker run -d \
+    --add-host host.docker.internal:host-gateway \
+    --name "$APP_CONTAINER" \
+    -p 8018:8001 \
+    -v "$ROOT_DIR/testdata/pipes-wide-table:/app/pipes:ro" \
+    -v "$ROOT_DIR/testdata:/app/testdata:ro" \
+    -v "$ROOT_DIR/data-wide-table:/app/data" \
+    -v "$ROOT_DIR/logs:/app/logs" \
+    "$IMAGE" >/dev/null
+
+  wait_http "http://127.0.0.1:8018/api/v2/health"
+}
+
+if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
+  echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
+else
+  echo "==> Build image"
+  docker build -t "$IMAGE" -f Dockerfile .
+fi
 
 echo "==> Start Redpanda, MySQL, and ClickHouse"
 docker compose -f docker-compose.dev.yml up -d redpanda mysql-source clickhouse
@@ -115,17 +133,7 @@ chmod a+rwX logs
 
 echo "==> Run wide-table pipelines"
 docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
-  --add-host host.docker.internal:host-gateway \
-  --name "$APP_CONTAINER" \
-  -p 8018:8001 \
-  -v "$ROOT_DIR/testdata/pipes-wide-table:/app/pipes:ro" \
-  -v "$ROOT_DIR/testdata:/app/testdata:ro" \
-  -v "$ROOT_DIR/data-wide-table:/app/data" \
-  -v "$ROOT_DIR/logs:/app/logs" \
-  "$IMAGE"
-
-wait_http "http://127.0.0.1:8018/api/v2/health"
+run_wide_app
 
 echo "==> Produce Debezium-like order events"
 cat <<'JSON' | docker exec -i "$REDPANDA_CONTAINER" rpk topic produce orders.cdc --brokers localhost:9092 >/dev/null
@@ -182,6 +190,70 @@ duplicate_final_count="$(docker exec "$CH_CONTAINER" clickhouse-client --passwor
 test "$duplicate_final_count" = "1"
 detail_count_after_duplicate="$(docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_detail_wide FINAL WHERE id IN (10001,10002)" | tr -d '[:space:]')"
 test "$detail_count_after_duplicate" = "2"
+
+echo "==> Verify stateful deduplicate/window recovery after app crash"
+crash_ms="$(date +%s)000"
+cat <<JSON | docker exec -i "$REDPANDA_CONTAINER" rpk topic produce orders.cdc --brokers localhost:9092 >/dev/null
+{"payload":{"op":"c","ts_ms":${crash_ms},"source":{"table":"orders"},"after":{"id":30001,"user_id":1001,"amount":77.77,"_version":1}}}
+JSON
+
+i=0
+while [ "$i" -lt 90 ]; do
+  crash_detail_count="$(docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_detail_wide FINAL WHERE id = 30001" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ "$crash_detail_count" = "1" ]; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+test "$crash_detail_count" = "1"
+
+pre_crash_aggregate_count="$(docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_minute_aggregate FINAL WHERE region = 'east' AND tier = 'vip' AND order_count = 1 AND abs(total_amount - 77.77) < 0.001" | tr -d '[:space:]')"
+test "$pre_crash_aggregate_count" = "0"
+
+i=0
+while [ "$i" -lt 90 ]; do
+  window_state_keys="$(curl -fsS http://127.0.0.1:8018/metrics 2>/dev/null | grep 'etl_state_keys{pipeline="kafka-orders-aggregate-clickhouse",node="window-3"}' | awk '{print $2}' | tr -d '[:space:]' || true)"
+  if [ "$window_state_keys" != "" ] && [ "$window_state_keys" -ge 1 ]; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+test "${window_state_keys:-0}" -ge 1
+
+docker kill "$APP_CONTAINER" >/dev/null
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+run_wide_app
+
+cat <<JSON | docker exec -i "$REDPANDA_CONTAINER" rpk topic produce orders.cdc --brokers localhost:9092 >/dev/null
+{"payload":{"op":"c","ts_ms":${crash_ms},"source":{"table":"orders"},"after":{"id":30001,"user_id":1001,"amount":77.77,"_version":1}}}
+JSON
+
+now_sec="$(date +%S | sed 's/^0//')"
+if [ -z "$now_sec" ]; then
+  now_sec=0
+fi
+sleep_for=$((65 - now_sec))
+if [ "$sleep_for" -lt 3 ]; then
+  sleep_for=3
+fi
+sleep "$sleep_for"
+tick_ms="$(date +%s)000"
+cat <<JSON | docker exec -i "$REDPANDA_CONTAINER" rpk topic produce orders.cdc --brokers localhost:9092 >/dev/null
+{"payload":{"op":"c","ts_ms":${tick_ms},"source":{"table":"orders"},"after":{"id":30002,"user_id":1002,"amount":1.23,"_version":1}}}
+JSON
+
+i=0
+while [ "$i" -lt 90 ]; do
+  recovered_count="$(docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_minute_aggregate FINAL WHERE region = 'east' AND tier = 'vip' AND order_count = 1 AND abs(total_amount - 77.77) < 0.001" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ "$recovered_count" = "1" ]; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+test "$recovered_count" = "1"
 
 body="$(curl -fsS http://127.0.0.1:8018/api/v2/pipelines)"
 echo "$body"

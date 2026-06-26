@@ -40,6 +40,9 @@ transforms:
       window_type: tumbling
       window_size_seconds: 60
       allowed_lateness_seconds: 10
+      state_backend: sqlite
+      state_path: /app/data/wide-table-window-state.db
+      state_ttl_seconds: 86400
       group_by:
         - region
         - tier

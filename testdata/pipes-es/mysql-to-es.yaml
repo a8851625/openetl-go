@@ -9,6 +9,7 @@ source:
     database: "dzh3136_go"
     table: "customers"
     pk_column: "id"
+    query: "SELECT id, name, email, phone, status, amount FROM customers WHERE id BETWEEN 9401 AND 9403"
     limit: 100
 
 transforms:
@@ -22,7 +23,11 @@ sink:
       - "http://host.docker.internal:9200"
     index: "customers"
     id_column: "id"
+    max_retries: 0
 
 batch_size: 100
 checkpoint_interval_sec: 5
 backpressure_buffer: 100
+
+dlq:
+  enable: true

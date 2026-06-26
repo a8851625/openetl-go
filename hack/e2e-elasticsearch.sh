@@ -9,6 +9,8 @@ ES_CONTAINER="etl-opensearch"
 APP_CONTAINER="etl-openetl-go-es"
 ES_PORT=9200
 ES_IMAGE="docker.io/opensearchproject/opensearch:2.15.0"
+PIPELINE="mysql-to-elasticsearch"
+INDEX="customers"
 
 wait_http() {
   url="$1"
@@ -20,8 +22,12 @@ wait_http() {
   return 1
 }
 
-echo "==> Build image (or use cache)"
-docker build -t "$IMAGE" -f Dockerfile . 2>&1 | tail -1
+if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
+  echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
+else
+  echo "==> Build image (or use cache)"
+  docker build -t "$IMAGE" -f Dockerfile . 2>&1 | tail -1
+fi
 
 echo "==> Start OpenSearch"
 docker rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
@@ -42,6 +48,23 @@ if ! wait_http "http://127.0.0.1:$ES_PORT/_cluster/health"; then
 fi
 echo "==> OpenSearch is ready"
 
+echo "==> Prepare OpenSearch mapping"
+curl -fsS -X DELETE "http://127.0.0.1:$ES_PORT/$INDEX" >/dev/null 2>&1 || true
+curl -fsS -X PUT "http://127.0.0.1:$ES_PORT/$INDEX" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mappings": {
+      "properties": {
+        "id": {"type": "long"},
+        "name": {"type": "keyword"},
+        "email": {"type": "keyword"},
+        "phone": {"type": "long"},
+        "status": {"type": "keyword"},
+        "amount": {"type": "double"}
+      }
+    }
+  }' >/dev/null
+
 echo "==> Start MySQL source"
 docker compose -f docker-compose.dev.yml up -d mysql-source
 
@@ -60,7 +83,7 @@ DELETE FROM dzh3136_go.customers WHERE id >= 9400;
 INSERT INTO dzh3136_go.customers (id, name, email, phone, status, amount) VALUES
   (9401, 'ES Alice', 'es-alice@example.com', '13900009401', 'active', 100.00),
   (9402, 'ES Bob', 'es-bob@example.com', '13900009402', 'active', 200.00),
-  (9403, 'ES Charlie', 'es-charlie@example.com', '13900009403', 'inactive', 300.00);
+  (9403, 'ES Conflict', 'es-conflict@example.com', 'not-a-number', 'inactive', 300.00);
 "
 
 echo "==> Reset ETL data"
@@ -68,39 +91,6 @@ rm -rf data-es
 mkdir -p data-es/output data-es/checkpoint data-es/dlq logs
 chmod -R a+rwX data-es
 chmod a+rwX logs
-
-echo "==> Write ES pipeline spec"
-mkdir -p testdata/pipes-es
-cat > testdata/pipes-es/mysql-to-es.yaml <<'SPEC'
-name: "mysql-to-elasticsearch"
-source:
-  type: mysql_batch
-  config:
-    host: "host.docker.internal"
-    port: 13306
-    user: "sync_user"
-    password: "sync_password_123"
-    database: "dzh3136_go"
-    table: "customers"
-    pk_column: "id"
-    limit: 100
-
-transforms:
-  - type: identity
-    config: {}
-
-sink:
-  type: elasticsearch
-  config:
-    hosts:
-      - "http://host.docker.internal:9200"
-    index: "customers"
-    id_column: "id"
-
-batch_size: 100
-checkpoint_interval_sec: 5
-backpressure_buffer: 100
-SPEC
 
 echo "==> Run ETL pipeline"
 docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
@@ -119,32 +109,88 @@ wait_http "http://127.0.0.1:8018/api/v2/health"
 echo "==> Wait for pipeline to complete"
 i=0
 while [ "$i" -lt 60 ]; do
-  status="$(curl -fsS http://127.0.0.1:8018/api/v2/pipelines/mysql-to-elasticsearch 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+  status="$(curl -fsS "http://127.0.0.1:8018/api/v2/pipelines/$PIPELINE" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
   if [ "$status" = "completed" ] || [ "$status" = "stopped" ]; then break; fi
   i=$((i + 1)); sleep 2
 done
 
-echo "==> Verify data in OpenSearch"
+echo "==> Verify successful bulk items in OpenSearch"
 i=0
 count=0
 while [ "$i" -lt 30 ]; do
-  count="$(curl -fsS "http://127.0.0.1:$ES_PORT/customers/_count" 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2 || echo 0)"
-  if [ "$count" -ge 3 ]; then break; fi
+  count="$(curl -fsS "http://127.0.0.1:$ES_PORT/$INDEX/_count" 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2 || echo 0)"
+  if [ "$count" = "2" ]; then break; fi
   i=$((i + 1)); sleep 2
 done
 echo "==> ES document count: $count"
-test "$count" -ge 3
+test "$count" = "2"
 
 echo "==> Verify specific document"
-doc="$(curl -fsS "http://127.0.0.1:$ES_PORT/customers/_doc/9401" 2>/dev/null)"
+doc="$(curl -fsS "http://127.0.0.1:$ES_PORT/$INDEX/_doc/9401" 2>/dev/null)"
 echo "$doc" | grep '"found":true'
 echo "$doc" | grep 'ES Alice'
+missing="$(curl -sS "http://127.0.0.1:$ES_PORT/$INDEX/_doc/9403" 2>/dev/null || true)"
+echo "$missing" | grep '"found":false'
+
+echo "==> Verify mapping conflict item is in DLQ"
+i=0
+dlq_body=""
+while [ "$i" -lt 60 ]; do
+  dlq_body="$(curl -fsS "http://127.0.0.1:8018/api/v2/dlq/$PIPELINE?contains=9403&limit=10" 2>/dev/null || true)"
+  if echo "$dlq_body" | grep -q 'mapper_parsing_exception'; then
+    break
+  fi
+  i=$((i + 1)); sleep 1
+done
+echo "$dlq_body"
+echo "$dlq_body" | grep '9403'
+echo "$dlq_body" | grep 'mapper_parsing_exception'
+echo "$dlq_body" | grep '"error_class":"schema"'
+dlq_id="$(echo "$dlq_body" | grep -o '"id":[0-9][0-9]*' | head -n1 | sed 's/[^0-9]//g')"
+test "$dlq_id" != ""
+
+echo "==> Repair mapping and replay DLQ"
+curl -fsS -X DELETE "http://127.0.0.1:$ES_PORT/$INDEX" >/dev/null
+curl -fsS -X PUT "http://127.0.0.1:$ES_PORT/$INDEX" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mappings": {
+      "properties": {
+        "id": {"type": "long"},
+        "name": {"type": "keyword"},
+        "email": {"type": "keyword"},
+        "phone": {"type": "keyword"},
+        "status": {"type": "keyword"},
+        "amount": {"type": "double"}
+      }
+    }
+  }' >/dev/null
+replay_body="$(curl -fsS -X POST "http://127.0.0.1:8018/api/v2/dlq/$PIPELINE/$dlq_id/replay")"
+echo "$replay_body"
+echo "$replay_body" | grep '"replayed":1'
+
+i=0
+while [ "$i" -lt 30 ]; do
+  replayed="$(curl -fsS "http://127.0.0.1:$ES_PORT/$INDEX/_doc/9403" 2>/dev/null || true)"
+  if echo "$replayed" | grep -q '"found":true'; then
+    break
+  fi
+  i=$((i + 1)); sleep 1
+done
+echo "$replayed" | grep '"found":true'
+echo "$replayed" | grep 'ES Conflict'
+dlq_after="$(curl -fsS "http://127.0.0.1:8018/api/v2/dlq/$PIPELINE?contains=9403&limit=10")"
+echo "$dlq_after"
+if echo "$dlq_after" | grep -q "\"id\":${dlq_id}"; then
+  echo "replayed DLQ id ${dlq_id} was not deleted" >&2
+  exit 1
+fi
 
 body="$(curl -fsS http://127.0.0.1:8018/api/v2/pipelines)"
 echo "$body"
-echo "$body" | grep '"name":"mysql-to-elasticsearch"'
+echo "$body" | grep "\"name\":\"$PIPELINE\""
 
 docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
 docker rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
 
-echo "Elasticsearch E2E passed"
+echo "Elasticsearch mapping conflict E2E passed"

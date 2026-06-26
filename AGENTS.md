@@ -16,12 +16,15 @@
 - Local Go may be unavailable; use `docker run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c "go test ./..."` for tests.
 - `make test` runs unit tests with `-race`; `make test-quick` runs only `./internal/etl/...`; `make test-integration` requires MySQL + ClickHouse containers.
 - `hack/e2e.sh` builds the app image and validates file→file, MySQL batch→file, and MySQL batch→MySQL via Docker.
+- `hack/e2e-mysql-postgres.sh` validates MySQL batch custom-query/JOIN→PostgreSQL upsert, schema preflight rejection, and checkpoint reset replay absorption.
 - `hack/e2e-cdc-mysql.sh` validates MySQL CDC→MySQL.
+- `hack/e2e-cdc-postgres.sh` validates MySQL CDC→PostgreSQL insert/update/delete and checkpoint stop/restart recovery.
 - `hack/e2e-clickhouse.sh` validates MySQL CDC→ClickHouse; it requires `docker.io/clickhouse/clickhouse-server:24.3-alpine` locally.
 - `hack/e2e-dlq.sh` validates DLQ list/replay against MySQL.
 - `hack/e2e-snapshot-cdc.sh` validates integrated MySQL snapshot+CDC→MySQL.
 - `hack/e2e-clickhouse-autocreate.sh` validates ClickHouse auto-create and schema drift add-columns.
-- `hack/e2e-s3-minio.sh` validates S3 sink against MinIO.
+- `hack/e2e-snapshot-cdc-clickhouse.sh` validates MySQL snapshot+CDC→ClickHouse, including schema drift, checkpoint restart recovery, checkpoint reset replay absorption, and ClickHouse outage DLQ/replay.
+- `hack/e2e-s3-minio.sh` validates S3 sink against MinIO, including deterministic content-addressed object replay after checkpoint reset.
 - `hack/e2e-http-source.sh` validates HTTP source pagination/auth headers.
 - `hack/e2e-auth-audit.sh` validates ETL API token auth and audit logging.
 - `hack/e2e-crash-recovery.sh` validates committed checkpoints and container crash recovery.
@@ -29,10 +32,12 @@
 - `hack/e2e-duplicate-spec.sh` validates duplicate pipeline spec detection.
 - `hack/e2e-api-conflict.sh` validates duplicate runtime pipeline create conflicts.
 - `hack/e2e-kafka.sh` validates Kafka source/sink via Redpanda (file→Kafka, Kafka→file).
+- `hack/e2e-lookup-state.sh` validates Kafka→lookup→ClickHouse lookup StateStore crash recovery when the dimension query becomes unavailable after restart.
+- `hack/e2e-wide-table.sh` validates Kafka JSON/Debezium→lookup/deduplicate/window→ClickHouse, including duplicate absorption, lookup DLQ/replay, ClickHouse outage DLQ/replay, and SIGKILL state recovery for deduplicate/window.
 - `hack/e2e-kafka-raw-ods.sh` validates Kafka raw protocol messages -> Lua `flat_map` parser -> MySQL `lookup` -> `project`/`type_convert` -> Kafka ODS, including parser DLQ, lookup-miss DLQ, and offset replay append-duplicate boundary.
 - `hack/e2e-debezium-mysql.sh` validates Debezium Kafka CDC→MySQL ODS upsert with source include/exclude, snapshot/delete skips, DDL drop/reject policy, Kafka offset replay, Redpanda broker restart recovery, consumer group rebalance recovery, MySQL lock-wait retry, and DLQ replay after a MySQL value-range write failure.
 - `hack/e2e-ui.sh` validates the built React UI served by the app container using Playwright CLI.
-- `hack/e2e-elasticsearch.sh` validates Elasticsearch/OpenSearch bulk indexing (mysql_batch→ES).
+- `hack/e2e-elasticsearch.sh` validates Elasticsearch/OpenSearch bulk indexing and mapping-conflict item DLQ/replay (mysql_batch→ES).
 - `hack/e2e-snapshot-cdc-crash.sh` validates snapshot+CDC crash recovery during both snapshot and CDC phases.
 - `hack/e2e-storage-mysql.sh` / `hack/e2e-storage-postgres.sh` validate MySQL/PostgreSQL storage backends.
 - `hack/e2e-distributed.sh` validates master-worker distributed dispatch with 2 workers.
@@ -49,6 +54,7 @@
 - At-least-once delivery and sink idempotency expectations are documented in `docs/etl-idempotency.md`.
 - YAML spec shape and connector config fields are documented in `docs/etl-config-schema.md`.
 - Plugin config schema is available at `GET /api/v2/plugins/schema` with typed fields, required markers, defaults, secret flags, and examples for every connector.
+- Preflight opens sinks with a short timeout for real reachability checks; generic sink outages are returned as warnings while writer-disabled experimental sinks such as MaxCompute remain blocking errors. Preflight responses include structured `field_issues` and best-effort target `ddl_preview` when source schema metadata is available.
 - Pipeline metrics include: `source_read_latency_ms`, `sink_write_latency_ms`, `last_batch_size`, `avg_batch_size`, `batch_count`, `checkpoint_age_seconds`, `dlq_file_count`, `dlq_replay_count`, `dlq_delete_count`, `cdc_lag_ms`.
 - Spec validation (`POST /api/v2/specs/validate`) returns idempotency warnings for dangerous source/sink combinations (CDC+file, batch+insert, etc.).
 - `TZ` is honored at startup; `TZ=CST-8` is special-cased to a fixed UTC+8 zone.
