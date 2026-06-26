@@ -221,6 +221,10 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 				continue
 			}
 
+			if err := s.resolveDAGConnections(ctx, &dagSpec); err != nil {
+				g.Log().Warningf(ctx, "Skip DAG pipeline %s from DB: %v", dagSpec.Name, err)
+				continue
+			}
 			exec, err := orchestrator.NewDAGExecutor(&dagSpec, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
 				g.Log().Warningf(ctx, "Skip DAG pipeline %s from DB: %v", dagSpec.Name, err)
@@ -244,6 +248,14 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 			continue
 		}
 		pipeline.ApplyDefaults(&spec)
+		if err := s.resolvePipelineConnections(ctx, &spec); err != nil {
+			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", spec.Name, err)
+			continue
+		}
+		if err := pipeline.ValidateSpec(&spec); err != nil {
+			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", spec.Name, err)
+			continue
+		}
 
 		s.mu.RLock()
 		_, exists := s.pipelines[spec.Name]
@@ -300,6 +312,16 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 		specPath := filepath.Join(s.specsDir, entry.Name())
 		spec, err := pipeline.LoadSpec(specPath)
 		if err != nil {
+			result.Errors[entry.Name()] = err.Error()
+			g.Log().Warningf(ctx, "Skip spec %s: %v", entry.Name(), err)
+			continue
+		}
+		if err := s.resolvePipelineConnections(ctx, spec); err != nil {
+			result.Errors[entry.Name()] = err.Error()
+			g.Log().Warningf(ctx, "Skip spec %s: %v", entry.Name(), err)
+			continue
+		}
+		if err := pipeline.ValidateSpec(spec); err != nil {
 			result.Errors[entry.Name()] = err.Error()
 			g.Log().Warningf(ctx, "Skip spec %s: %v", entry.Name(), err)
 			continue
@@ -612,7 +634,6 @@ func (s *Server) RegisterHTTPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/connections/", s.handleConnectionAction)
 	mux.HandleFunc("/api/v2/connections/test", s.handleConnectionTest)
 	mux.HandleFunc("/api/v2/transforms/dry-run", s.handleTransformDryRun)
-	mux.HandleFunc("/api/v2/wide-table/preview", s.handleWideTablePreview)
 	mux.HandleFunc("/api/v2/audit", s.handleAudit)
 	mux.HandleFunc("/api/v2/checkpoints", s.handleCheckpoints)
 	mux.HandleFunc("/api/v2/checkpoints/", s.handleCheckpointAction)
@@ -702,6 +723,11 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{"name is required"}})
 			return
 		}
+		if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
+			return
+		}
 		// Validate DAG nodes/edges
 		if err := dagSpec.DAG.Validate(); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -728,6 +754,11 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pipeline.ApplyDefaults(&spec)
+	if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
+		return
+	}
 	if err := pipeline.ValidateSpec(&spec); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
@@ -1001,6 +1032,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				dagSpec.Retry = &orchestrator.RetryConfig{MaxAttempts: 3, InitialIntervalMs: 1000, MaxIntervalMs: 30000}
 			}
 
+			if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
 			exec, err := orchestrator.NewDAGExecutor(&dagSpec, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -1040,6 +1076,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pipeline.ApplyDefaults(&spec)
+		if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
 		if err := pipeline.ValidateSpec(&spec); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -1148,6 +1189,12 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				_ = oldDagSpec // could compare fields if needed
 			}
 
+			if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
+
 			// Stop old runner if exists
 			s.mu.Lock()
 			if oldRunner, ok := s.pipelines[dagSpec.Name]; ok {
@@ -1195,6 +1242,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pipeline.ApplyDefaults(&spec)
+		if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
 		if err := pipeline.ValidateSpec(&spec); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -1783,20 +1835,25 @@ func (s *Server) handlePipelineVersionRollback(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Stop existing runner if running
+	// Create new runner
+	pipeline.ApplyDefaults(&spec)
+	if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	if err := pipeline.ValidateSpec(&spec); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Stop existing runner only after the target version has been validated.
 	s.mu.RLock()
 	oldRunner, exists := s.pipelines[name]
 	s.mu.RUnlock()
 	if exists {
 		oldRunner.Stop()
-	}
-
-	// Create new runner
-	pipeline.ApplyDefaults(&spec)
-	if err := pipeline.ValidateSpec(&spec); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
 	}
 
 	runner, err := s.newRunner(&spec)
@@ -1926,6 +1983,11 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pipeline.ApplyDefaults(&spec)
+	if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
 	if err := pipeline.ValidateSpec(&spec); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -1939,7 +2001,11 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 
 	if exists {
 		// Update existing
-		_ = s.handlePipelinesPut(r.Context(), &spec)
+		if err := s.handlePipelinesPut(r.Context(), &spec); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
 		s.audit(r, "spec.import.update", spec.Name)
 		json.NewEncoder(w).Encode(map[string]any{"name": spec.Name, "action": "updated"})
 	} else {
@@ -1966,6 +2032,13 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePipelinesPut(ctx context.Context, spec *pipeline.Spec) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.resolvePipelineConnections(ctx, spec); err != nil {
+		return err
+	}
+	if err := pipeline.ValidateSpec(spec); err != nil {
+		return err
+	}
 
 	if oldRunner, ok := s.pipelines[spec.Name]; ok {
 		oldRunner.Stop()
@@ -3536,7 +3609,12 @@ dlq:
 		}
 	} else {
 		pipeline.ApplyDefaults(&spec)
-		if err := pipeline.ValidateSpec(&spec); err != nil {
+		if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
+			validation = map[string]any{
+				"valid":  false,
+				"errors": []string{err.Error()},
+			}
+		} else if err := pipeline.ValidateSpec(&spec); err != nil {
 			validation = map[string]any{
 				"valid":  false,
 				"errors": []string{err.Error()},

@@ -31,9 +31,16 @@ type PluginSchemaResp = {
 
 type PluginListResp = { sources: string[]; sinks: string[]; transforms: string[] };
 
+type ConnectionEntry = {
+  name: string;
+  kind: 'source' | 'sink' | 'transform';
+  type: string;
+};
+
 type DAGNodeData = {
   kind: string;
   plugin: string;
+  connection?: string;
   config: Record<string, unknown>;
   label: string;
 };
@@ -326,6 +333,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [hooks, setHooks] = useState<Record<string, { type: string; code: string; name: string; enabled: boolean }>>({});
   const [showNodeProps, setShowNodeProps] = useState(false);
   const [testResult, setTestResult] = useState<string>('');
+  const [connections, setConnections] = useState<ConnectionEntry[]>([]);
 
   const testNodeConnection = async () => {
     if (!selectedNode) {
@@ -335,6 +343,15 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setTestResult('⏳ ' + t('dag.testing'));
     try {
       const kind = selKind === 'source' ? 'source' : selKind === 'sink' ? 'sink' : 'transform';
+      if (selectedNode.data.connection) {
+        const res = await apiPost(`/api/v2/connections/${encodeURIComponent(selectedNode.data.connection)}/test`, { open: true });
+        if (res.ok) {
+          setTestResult(`✅ ${selectedNode.data.connection} connection OK`);
+        } else {
+          setTestResult(`❌ ${res.stage || 'error'}: ${res.error}`);
+        }
+        return;
+      }
       const res = await apiPost('/api/v2/connections/test', {
         kind,
         type: selPlugin,
@@ -352,6 +369,12 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     }
   };
 
+  useEffect(() => {
+    apiGet<{ connections?: ConnectionEntry[] }>('/api/v2/connections')
+      .then((res) => setConnections(res.connections || []))
+      .catch(() => setConnections([]));
+  }, []);
+
   // Load pipeline when editTarget changes
   useEffect(() => {
     if (!editTarget) return;
@@ -361,13 +384,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         setPipelineName(spec.name);
         const newNodes: Node<DAGNodeData>[] = [];
         const newEdges: Edge[] = [];
-        newNodes.push({ id: 'source-1', type: 'pipelineNode', position: { x: 250, y: 50 }, data: { kind: 'source', plugin: spec.source.type, config: spec.source.config || {}, label: 'source-1' } });
+        newNodes.push({ id: 'source-1', type: 'pipelineNode', position: { x: 250, y: 50 }, data: { kind: 'source', plugin: spec.source.type, connection: spec.source.connection || spec.source.connection_ref || '', config: spec.source.config || {}, label: 'source-1' } });
         const tfms = spec.transforms || [];
         tfms.forEach((tf: any, i: number) => {
-          newNodes.push({ id: `transform-${i + 1}`, type: 'pipelineNode', position: { x: 250, y: 150 + i * 100 }, data: { kind: 'transform', plugin: tf.type, config: tf.config || {}, label: `transform-${i + 1}` } });
+          newNodes.push({ id: `transform-${i + 1}`, type: 'pipelineNode', position: { x: 250, y: 150 + i * 100 }, data: { kind: 'transform', plugin: tf.type, connection: tf.connection || tf.connection_ref || '', config: tf.config || {}, label: `transform-${i + 1}` } });
         });
         const lastY = 150 + tfms.length * 100;
-        newNodes.push({ id: 'sink-1', type: 'pipelineNode', position: { x: 250, y: lastY }, data: { kind: 'sink', plugin: spec.sink?.type || 'file_sink', config: spec.sink?.config || {}, label: 'sink-1' } });
+        newNodes.push({ id: 'sink-1', type: 'pipelineNode', position: { x: 250, y: lastY }, data: { kind: 'sink', plugin: spec.sink?.type || 'file_sink', connection: spec.sink?.connection || spec.sink?.connection_ref || '', config: spec.sink?.config || {}, label: 'sink-1' } });
         for (let i = 0; i < newNodes.length - 1; i++) {
           newEdges.push({ id: `e-${i}`, source: newNodes[i].id, target: newNodes[i + 1].id, animated: true, markerEnd: { type: MarkerType.ArrowClosed } });
         }
@@ -434,12 +457,28 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
 
   const updateNodePlugin = (plugin: string) => {
     if (!selectedNodeId) return;
-    setNodes((nds) => nds.map((n) => n.id === selectedNodeId ? { ...n, data: { ...n.data, plugin, config: {} } } : n));
+    setNodes((nds) => nds.map((n) => n.id === selectedNodeId ? { ...n, data: { ...n.data, plugin, connection: '', config: {} } } : n));
   };
 
   const updateNodeLabel = (label: string) => {
     if (!selectedNodeId) return;
     setNodes((nds) => nds.map((n) => n.id === selectedNodeId ? { ...n, data: { ...n.data, label } } : n));
+  };
+
+  const updateNodeConnection = (connectionName: string) => {
+    if (!selectedNodeId) return;
+    const conn = connections.find((c) => c.name === connectionName);
+    setNodes((nds) => nds.map((n) => {
+      if (n.id !== selectedNodeId) return n;
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          connection: connectionName || '',
+          plugin: conn?.type || n.data.plugin,
+        },
+      };
+    }));
   };
 
   // ── Export & Create ───────────────────────────────────────────────
@@ -471,6 +510,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
             id: n.id,
             kind: n.data.kind,
             plugin: n.data.plugin || n.data.kind,
+            connection: n.data.connection || undefined,
             config: n.data.config || {},
             x: n.position.x,
             y: n.position.y,
@@ -497,9 +537,9 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     // pipeline. Leave source/sink undefined so validateAndCreate() rejects it.
     return {
       name: pipelineName,
-      source: sourceNode ? { type: sourceNode.data.plugin || 'file', config: sourceNode.data.config || {} } : undefined,
-      transforms: transforms.map((n) => ({ type: n.data.plugin, config: n.data.config })),
-      sink: sinkNode ? { type: sinkNode.data.plugin || 'file_sink', config: sinkNode.data.config || {} } : undefined,
+      source: sourceNode ? { type: sourceNode.data.plugin || 'file', connection: sourceNode.data.connection || undefined, config: sourceNode.data.config || {} } : undefined,
+      transforms: transforms.map((n) => ({ type: n.data.plugin, connection: n.data.connection || undefined, config: n.data.config })),
+      sink: sinkNode ? { type: sinkNode.data.plugin || 'file_sink', connection: sinkNode.data.connection || undefined, config: sinkNode.data.config || {} } : undefined,
       schedule: schedule.type !== 'streaming' ? schedule : undefined,
       tags: tagList.length > 0 ? tagList : undefined,
       worker_selector: Object.keys(matchLabels).length > 0 ? { match_labels: matchLabels } : undefined,
@@ -642,6 +682,9 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     return (schema.data[kindKey]?.[selPlugin] || []) as PluginSchemaField[];
   }, [schema, selKind, selPlugin]);
 
+  const nodeConnectionKind = selKind === 'source' ? 'source' : selKind === 'sink' ? 'sink' : 'transform';
+  const matchingConnections = connections.filter((c) => c.kind === nodeConnectionKind);
+
   // Toggle drawer: clicking same tab again closes it
   const toggleDrawer = (tab: string) => setDrawerTab((prev) => (prev === tab ? null : tab));
 
@@ -740,6 +783,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('dag.plugin')}</label>
                   <select className="input w-full text-sm" value={selPlugin} onChange={(e) => updateNodePlugin(e.target.value)}>
                     {pluginList.length > 0 ? pluginList.map((p) => <option key={p} value={p}>{p}</option>) : <option value={selPlugin}>{selPlugin}</option>}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-500">{t('conn.useSaved')}</label>
+                  <select className="input w-full text-sm" value={selectedNode.data.connection || ''} onChange={(e) => updateNodeConnection(e.target.value)}>
+                    <option value="">{t('conn.noSaved')}</option>
+                    {matchingConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type}</option>)}
                   </select>
                 </div>
                 <div>

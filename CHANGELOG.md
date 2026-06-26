@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [v0.2.1] — Pipeline orchestration cleanup and connection reuse
+
+### Highlights
+- Removed the standalone wide-table preview API and dedicated frontend page. Wide-table detail and aggregate use cases are now documented as ordinary pipeline/DAG orchestration patterns built from source, transform, state, and sink capabilities.
+- Added saved connection references to linear pipeline specs and DAG nodes through `connection` / `connection_ref`, allowing shared connector credentials and base configs to live in the connection catalog while per-pipeline fields stay inline.
+- Reworked the English and Chinese READMEs into a clearer product entrypoint covering quick start, minimal specs, connection reuse, orchestration-based wide-table aggregation, connector surfaces, runtime model, and documentation links.
+
+### Validation
+- `go test ./internal/etl/server ./internal/etl/pipeline ./internal/etl/orchestrator`
+- `npm run build` in `web/`
+
 ## [v0.2.0] — Pipeline orchestration and reliability release
 
 ### Highlights

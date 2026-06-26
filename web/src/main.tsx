@@ -8,7 +8,6 @@ import { WorkersPage } from './WorkersPage';
 import { MyPluginsPage } from './MyPluginsPage';
 import { SchedulesPage } from './SchedulesPage';
 import { ConnectionsPage } from './ConnectionsPage';
-import { WideTablePage } from './WideTablePage';
 
 // ════════════════════════════════════════════════
 // Types
@@ -210,13 +209,13 @@ const PAGE_ICONS: Record<string, (p: any) => JSX.Element> = {
   dashboard: Icon.Dashboard, pipelines: Icon.Pipeline, designer: Icon.Flow,
   dlq: Icon.DLQ, plugins: Icon.Plugin, audit: Icon.Audit,
   workers: Icon.Server, myPlugins: Icon.Plugin, schedules: Icon.Clock,
-  connections: Icon.Server, wideTable: Icon.Flow,
+  connections: Icon.Server,
 };
 
 // ════════════════════════════════════════════════
 // App
 // ════════════════════════════════════════════════
-type Page = 'dashboard' | 'pipelines' | 'designer' | 'dlq' | 'plugins' | 'audit' | 'workers' | 'myPlugins' | 'schedules' | 'connections' | 'wideTable';
+type Page = 'dashboard' | 'pipelines' | 'designer' | 'dlq' | 'plugins' | 'audit' | 'workers' | 'myPlugins' | 'schedules' | 'connections';
 type Toast = { id: number; type: 'success' | 'error' | 'info'; msg: string };
 
 function App() {
@@ -292,7 +291,6 @@ function App() {
     { id: 'dashboard', key: 'nav.dashboard' },
     { id: 'pipelines', key: 'nav.pipelines' },
     { id: 'connections', key: 'nav.connections' },
-    { id: 'wideTable', key: 'nav.wideTable' },
     { id: 'designer', key: 'nav.designer' },
     { id: 'dlq', key: 'nav.dlq' },
     { id: 'plugins', key: 'nav.plugins' },
@@ -376,7 +374,6 @@ function App() {
           {page === 'dashboard' && <DashboardPage t={t} lang={lang} totals={totals} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} />}
           {page === 'pipelines' && <PipelinesPage t={t} lang={lang} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} onAction={runAction} checkpoints={checkpoints} onResetCheckpoint={(name: string) => runAction(`${t('toast.resetCheckpoint')}: ${name}`, () => api(`/api/v2/pipelines/${name}/checkpoint/reset`, { method: 'POST' }))} onEdit={editPipeline} refreshKey={refreshKey} onShowToast={toast} />}
           {page === 'connections' && <ConnectionsPage t={t} lang={lang} />}
-          {page === 'wideTable' && <WideTablePage t={t} lang={lang} />}
           {page === 'designer' && <DagEditorPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} onAction={runAction} editTarget={editTarget} />}
           {page === 'dlq' && <DLQPage t={t} lang={lang} pipelines={pipelines} selected={selected} onSelect={setSelectedPipeline} onAction={runAction} />}
           {page === 'plugins' && <PluginsPage t={t} lang={lang} plugins={plugins} />}

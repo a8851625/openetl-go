@@ -1,48 +1,139 @@
-# OpenETL-Go — Lightweight ETL/CDC Engine (Single Binary)
+# OpenETL-Go
 
-> **OpenETL-Go** is a single-binary, plugin-based ETL/CDC engine: `Source → Transform → Sink`.
-> Sources: MySQL binlog / PostgreSQL logical replication / Kafka / File / HTTP / Redis.
-> Sinks: ClickHouse / MySQL / PostgreSQL / Doris / Elasticsearch / Kafka / Redis / S3 / JDBC.
-> Standalone mode uses SQLite (zero external dependencies); scale-out uses MySQL/PostgreSQL shared storage + master-worker sharding.
+Single-binary ETL/CDC orchestration for moving, shaping, and operating data
+pipelines.
 
-## Capability Matrix
+[中文 README](./README.zh.md)
 
-| Stage | Connectors / Operators |
-|-------|----------------------|
-| **Source** | `mysql_cdc` (binlog), `mysql_snapshot_cdc` (snapshot+CDC handoff), `postgres_cdc` (logical replication), `mysql_batch`, `kafka`, `redis` (SCAN), `http` (paginated+checkpoint), `file` (JSON/CSV) |
-| **Transform** | `filter` (expression engine), `deduplicate`, `validate` (8 rule types), `rename`/`drop_field`/`add_field`, `type_convert`, `enricher`, `lookup`, `join`, `window`, `router` (conditional routing), `fanout`, `tap`, `rate_limiter`; scripting: `lua` (default, gopher-lua), `javascript`/`typescript` (QuickJS, CGO), WASM plugins (extism) |
-| **Sink** | `clickhouse` (auto-create + DDL translation), `mysql`/`postgres` (batch + idempotent upsert), `doris` (Stream Load), `kafka` (idempotent producer), `elasticsearch` (bulk API, round-robin), `redis` (HASH/STRING/LIST), `s3`/minio (multipart, Parquet), `jdbc` (any JDBC DB), `file` |
-| **Reliability** | at-least-once + idempotent sinks + DLQ dead-letter queue + 3-state circuit breaker + exponential backoff retry + checkpoint; **zero silent data loss** (SPEC §6.1) |
-| **Execution Modes** | Linear pipeline / DAG multi-source multi-sink / ParallelRunner sharding / master-worker distributed (A11-redo verified) |
-| **Operations** | REST API `/api/v2/*`, preflight checks, Prometheus `/metrics`, JSON structured logging, SQLite/MySQL/PostgreSQL metastore, Web management UI |
+OpenETL-Go runs `Source -> Transform -> Sink` pipelines from one binary. It can
+stay simple for file or database sync jobs, then grow into DAG orchestration,
+parallel execution, and master-worker distributed processing when a pipeline
+needs multiple sources, branches, joins, windows, or sinks.
 
-## 🚀 5-Minute Quickstart
+The project does not keep a separate wide-table product area. Denormalized
+detail tables and real-time aggregate tables are expressed as normal pipeline or
+DAG specs using sources, transforms, state, and sinks.
+
+## What It Does
+
+| Area | Capability |
+| --- | --- |
+| Pipeline orchestration | Linear pipelines, DAG nodes/edges, conditional routing, fanout, parallel shards, scheduled/streaming execution |
+| Data movement | CDC, batch, stream, file, HTTP, Redis, object storage, warehouse and search/index sinks |
+| Data shaping | Filter, validate, type conversion, rename/drop/add fields, envelope normalization, lookup/enrichment, join, tumbling windows, deduplicate, Lua/JS/TS/WASM extension points |
+| Operations | Web UI, REST API, saved connection catalog, pipeline validation, connection test, transform dry-run, Prometheus metrics, audit log |
+| Reliability | At-least-once delivery by default, checkpoints, retry/backoff, DLQ list/replay/delete, idempotent sink modes where supported |
+| Runtime | SQLite standalone mode, MySQL/PostgreSQL shared storage, master-worker distributed dispatch |
+
+Connector coverage is broad, but maturity is not identical across every
+connector and edge case. Treat the default contract as at-least-once, then use
+business keys, versions, upserts, or sink-specific idempotency to remove
+duplicate effects. See [idempotency](./docs/etl-idempotency.md) and the
+[roadmap](./docs/ROADMAP.zh.md) for current production-readiness notes.
+
+## Quick Start
+
+Run the bundled MySQL CDC to ClickHouse demo:
 
 ```bash
-# 1. Start dependencies (MySQL source + ClickHouse target)
 podman compose -f docker-compose.quickstart.yml up -d
-
-# 2. Example pipeline MySQL CDC → ClickHouse (auto-create) is in pipes-quickstart/
-#    You can also use: pipes/mysql-cdc-to-clickhouse.yaml
-
-# 3. Open the management UI: http://localhost:8000   (REST API: /api/v2/*)
 ```
 
-- **Example specs**: `pipes-quickstart/mysql-to-clickhouse.yaml`, `pipes/mysql-cdc-to-clickhouse.yaml`
-- **Full walkthrough**: [`docs/quickstart.md`](./docs/quickstart.md)
+Then open:
 
-## Installation
+- Web UI and proxied API: <http://localhost:8000>
+- Direct ETL API: <http://localhost:8001>
 
-### Download Release (Recommended)
+Example specs are loaded from [`pipes-quickstart/`](./pipes-quickstart). The
+full walkthrough is in [docs/quickstart.md](./docs/quickstart.md).
 
-Go to [Releases](../../releases) and download the archive for your platform (Linux/macOS/Windows × amd64/arm64), then:
+## Minimal Pipeline Spec
 
-```bash
-tar -xzf openetl-go_*.tar.gz
-./openetl-go                           # reads manifest/config/config.yaml by default
+Pipeline specs are YAML files under `pipes/` or the configured
+`etl.specsDir`.
+
+```yaml
+name: file-to-file
+source:
+  type: file
+  config:
+    path: /app/data/input/orders.jsonl
+    format: json
+sink:
+  type: file_sink
+  config:
+    output_dir: /app/data/output
 ```
 
-### Docker
+Full connector fields are documented in
+[docs/etl-config-schema.md](./docs/etl-config-schema.md).
+
+## Reusing Saved Connections
+
+Connections created through the UI or `POST /api/v2/connections` can be used by
+linear pipelines and DAG nodes. The saved connection supplies `kind`, `type`, and
+shared config; inline `config` overrides per-pipeline fields such as table,
+topic, query, or output path.
+
+```yaml
+source:
+  connection: orders-mysql
+  config:
+    table: orders
+sink:
+  connection_ref: warehouse-clickhouse
+  config:
+    table: orders_wide
+```
+
+The DAG designer can select saved connections directly, and connection tests can
+run before a spec is saved or started.
+
+## Advanced Aggregation By Orchestration
+
+Wide-table and real-time aggregate use cases are built from ordinary pipeline
+pieces:
+
+```text
+Kafka/MySQL CDC facts
+  -> normalize_envelope / filter / type_convert
+  -> lookup or join dimension data
+  -> optional deduplicate and tumbling window aggregate
+  -> ClickHouse / MySQL / PostgreSQL / Doris / S3 / Kafka sink
+```
+
+Current examples:
+
+- [`testdata/pipes-wide-table/kafka-orders-detail-clickhouse.yaml`](./testdata/pipes-wide-table/kafka-orders-detail-clickhouse.yaml) -
+  Kafka order events enriched with MySQL dimensions and written to ClickHouse.
+- [`testdata/pipes-wide-table/kafka-orders-aggregate-clickhouse.yaml`](./testdata/pipes-wide-table/kafka-orders-aggregate-clickhouse.yaml) -
+  Kafka order events deduplicated, enriched, window-aggregated, and written to
+  ClickHouse.
+- [`docs/adr/0001-kafka-wide-table.zh.md`](./docs/adr/0001-kafka-wide-table.zh.md) -
+  design note for the orchestration approach.
+
+This means the pipeline engine has the building blocks for denormalized detail
+tables and tumbling-window aggregates today. More complex stream-stream joins,
+sliding/session windows, CDC dimension updates, late-data handling, and
+DAG/stateful replay still need tighter production certification; those gaps are
+tracked in the roadmap rather than in a separate module.
+
+## Connectors And Operators
+
+| Stage | Built-in surface |
+| --- | --- |
+| Sources | `mysql_cdc`, `mysql_snapshot_cdc`, `postgres_cdc`, `mysql_batch`, `kafka`, `file`, `http`, `redis` |
+| Transforms | `normalize_envelope`, `filter`, `validate`, `type_convert`, `rename`, `drop_field`, `add_field`, `deduplicate`, `lookup`, `enricher`, `join`, `window`, `router`, `fanout`, `tap`, `rate_limiter`, `lua`, `javascript`, `typescript`, WASM plugins |
+| Sinks | `clickhouse`, `mysql`, `postgres`/`postgresql`, `doris`, `elasticsearch`/`es`, `kafka`, `redis`, `s3`, `file_sink`, `jdbc` |
+
+For exact fields, defaults, secret markers, and examples, use the plugin schema
+API (`GET /api/v2/plugins/schema`) or
+[docs/etl-config-schema.md](./docs/etl-config-schema.md).
+
+## Run And Build
+
+Download a release archive from [Releases](../../releases), or run the container
+image:
 
 ```bash
 docker run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
@@ -50,123 +141,55 @@ docker run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
   ghcr.io/a8851625/openetl-go:latest
 ```
 
-### Build from Source
+Build from source:
 
 ```bash
-go build -o openetl-go .                # Default build (pure Go, includes Lua)
-# Optional runtimes:
-go build -tags=extism -o openetl-go .   # Enable WASM plugins (wazero, pure Go)
-go build -tags=nolua -o openetl-go .    # Strip Lua runtime for a smaller binary
-CGO_ENABLED=1 go build -o openetl-go .  # Enable JS/TS transforms (QuickJS, requires CGO)
+make build
 ```
 
-## Build Tags
+Useful development commands:
 
-| Tag | Effect | Default |
-|-----|--------|---------|
-| *(none)* | Pure Go core + all sinks/sources + Lua (gopher-lua); no WASM, no QuickJS, no CGO | ✅ |
-| `-tags=extism` | + WASM plugin runtime (wazero, pure Go) | — |
-| `-tags=nolua` | Strip Lua runtime (`type:lua` returns a clear error); smaller binary | — |
-| `CGO_ENABLED=1` | + JavaScript/TypeScript transform (QuickJS, requires C toolchain) | — |
-
-## Running Modes
-
-- **Standalone (default)**: SQLite storage, zero external dependencies, one process runs all pipelines.
-- **Scalable**: Switch `etl.storage.type` to `mysql` or `postgresql`, then use `etl.role=master` + multiple `etl.role=worker` for true distributed sharding (linear specs distributed across workers with no overlap; worker crash triggers shard reassignment).
-
-Minimal config at [`manifest/config/config.yaml`](./manifest/config/config.yaml); full field reference at [`docs/etl-config-schema.md`](./docs/etl-config-schema.md).
-
-## Architecture
-
-### Pipeline Model
-
-```
-┌──────────┐     ┌──────────────────┐     ┌──────────┐
-│  Source   │ ──► │  Transform Chain  │ ──► │   Sink   │
-│ (read)    │     │ (filter/enrich/…) │     │ (write)  │
-└──────────┘     └──────────────────┘     └──────────┘
-       │                                        │
-       └──────────── checkpoint ◄───────────────┘
-                         │
-                    DLQ (failed records)
-```
-
-### Execution Modes
-
-| Mode | Use Case | Config |
-|------|----------|--------|
-| **Linear Pipeline** | Single source → transforms → single sink | `spec.source` + `spec.sink` |
-| **DAG** | Multi-source, multi-sink, conditional edges | `spec.dag.nodes` + `spec.dag.edges` |
-| **ParallelRunner** | Single source, N parallel shards writing independently | `parallelism.count: N` |
-| **Master-Worker** | Distributed across multiple processes/nodes | `etl.role: master\|worker` |
-
-### Storage Backend
-
-| Backend | Use Case | Config |
-|---------|----------|--------|
-| **SQLite** | Standalone, zero-dependency deployments | `etl.storage.type: sqlite` (default) |
-| **MySQL** | Multi-node shared state | `etl.storage.type: mysql` |
-| **PostgreSQL** | Multi-node shared state | `etl.storage.type: postgresql` |
-
-### Reliability Stack
-
-1. **At-least-once delivery**: Checkpoints advance only after sink write succeeds
-2. **Idempotent sinks**: MySQL/PostgreSQL upsert, ClickHouse ReplacingMergeTree, ES document `_id`
-3. **DLQ (Dead Letter Queue)**: Failed records persisted with error classification; list/replay/delete via API
-4. **Circuit Breaker**: Per-sink 3-state breaker (closed→open→half-open) prevents cascading failures
-5. **Exponential Backoff**: `retry.Do` with configurable initial/max intervals on transient errors
-6. **Panic Recovery**: Per-goroutine recovery in readLoop/writeLoop; panics route to DLQ
-
-## Security
-
-### API Authentication
 ```bash
-# Enable token auth (required for production)
-export ETL_API_TOKEN=$(openssl rand -hex 32)
+make test          # unit tests with -race
+make test-quick    # faster internal ETL test loop
 
-# Clients pass token via header
-curl -H "X-API-Token: $ETL_API_TOKEN" http://localhost:8000/api/v2/pipelines
-curl -H "Authorization: Bearer $ETL_API_TOKEN" http://localhost:8000/api/v2/pipelines
+cd web
+npm install
+npm run build      # rebuild resource/public
 ```
 
-### Spec Encryption
-```bash
-# Encrypt pipeline specs at rest in the database
-export ETL_SPEC_ENCRYPTION_KEY=$(openssl rand -base64 32)
-```
+Optional runtime builds:
 
-### TLS
-```bash
-# Enable TLS on the API server
-export ETL_TLS_CERT=/path/to/cert.pem
-export ETL_TLS_KEY=/path/to/key.pem
-```
+| Build option | Effect |
+| --- | --- |
+| default | Pure Go core plus built-in connectors and Lua |
+| `-tags=extism` | Enable WASM plugin runtime |
+| `-tags=nolua` | Remove Lua runtime for a smaller binary |
+| `CGO_ENABLED=1` | Enable JavaScript/TypeScript transforms through QuickJS |
 
-### Alerting
-```bash
-# Configure alert channels for DLQ overflow / breaker trips
-export ALERT_DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=...
-export ALERT_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/...
-export ALERT_SLACK_WEBHOOK=https://hooks.slack.com/services/...
-```
+## Runtime Model
+
+- Config: [`manifest/config/config.yaml`](./manifest/config/config.yaml).
+- Specs: YAML files under `pipes/` or `etl.specsDir`, hot-reloaded by file watch.
+- Storage: SQLite by default; MySQL/PostgreSQL for shared state and distributed
+  mode.
+- API auth: set `ETL_API_TOKEN`, then use `X-API-Token` or
+  `Authorization: Bearer <token>`.
+- Metrics: Prometheus endpoint at `/metrics`.
+- UI/API: GoFrame serves the Web UI on `:8000` and proxies `/api/v2/*` to the
+  ETL API server on `:8001`.
 
 ## Documentation
 
-- [`docs/quickstart.md`](./docs/quickstart.md) (EN) | [`docs/quickstart.zh.md`](./docs/quickstart.zh.md) (中文) — 5-minute walkthrough
-- [`docs/etl-api.md`](./docs/etl-api.md) (EN) | [`docs/etl-api.zh.md`](./docs/etl-api.zh.md) (中文) — REST API reference
-- [`docs/etl-config-schema.md`](./docs/etl-config-schema.md) (EN) | [`docs/etl-config-schema.zh.md`](./docs/etl-config-schema.zh.md) (中文) — Config field reference
-- [`docs/etl-idempotency.md`](./docs/etl-idempotency.md) (EN) | [`docs/etl-idempotency.zh.md`](./docs/etl-idempotency.zh.md) (中文) — Idempotency & exactly-once semantics
-- [`docs/parallelism-and-batching.md`](./docs/parallelism-and-batching.md) (EN) | [`docs/parallelism-and-batching.zh.md`](./docs/parallelism-and-batching.zh.md) (中文) — Parallelism & batching
-- [`docs/GITHUB_ACTIONS_DEPLOY.md`](./docs/GITHUB_ACTIONS_DEPLOY.md) (EN) | [`docs/GITHUB_ACTIONS_DEPLOY.zh.md`](./docs/GITHUB_ACTIONS_DEPLOY.zh.md) (中文) — GitHub Actions release and deployment
-- [`docs/SPEC-v2-reaudit-2026-06.md`](./docs/SPEC-v2-reaudit-2026-06.md) (EN) | [`docs/SPEC-v2-reaudit-2026-06.zh.md`](./docs/SPEC-v2-reaudit-2026-06.zh.md) (中文) — v2 production-readiness re-audit
-- [`docs/ROADMAP.zh.md`](./docs/ROADMAP.zh.md) (中文) — Product capability gaps and improvement roadmap
-- [`SPEC.md`](./SPEC.md) — Architecture & production-readiness standard
-- [`CHANGELOG.md`](./CHANGELOG.md) (EN) | [`CHANGELOG.zh.md`](./CHANGELOG.zh.md) (中文) — Release notes
-
-## Contributing
-
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) (EN) | [`CONTRIBUTING.zh.md`](./CONTRIBUTING.zh.md) (中文). Please read SPEC's code style and testing conventions (§3-§5) before making changes; tests run with `-race` by default.
+- [Quick start](./docs/quickstart.md) / [中文](./docs/quickstart.zh.md)
+- [REST API](./docs/etl-api.md) / [中文](./docs/etl-api.zh.md)
+- [YAML config reference](./docs/etl-config-schema.md) / [中文](./docs/etl-config-schema.zh.md)
+- [Idempotency and delivery semantics](./docs/etl-idempotency.md) / [中文](./docs/etl-idempotency.zh.md)
+- [Parallelism and batching](./docs/parallelism-and-batching.md) / [中文](./docs/parallelism-and-batching.zh.md)
+- [Roadmap and maturity notes](./docs/ROADMAP.zh.md)
+- [Architecture standard](./SPEC.md)
+- [Contributing](./CONTRIBUTING.md) / [中文](./CONTRIBUTING.zh.md)
 
 ## License
 
-MIT, see [`LICENSE`](./LICENSE).
+MIT, see [LICENSE](./LICENSE).

@@ -382,6 +382,7 @@ paths:
     post:
       tags: [Connections]
       summary: Create or update a saved reusable connection
+      description: Saved connections can be referenced from pipeline source/sink/transform specs and DAG nodes with `connection` or `connection_ref`; inline config overrides saved config.
       requestBody:
         content:
           application/json:
@@ -463,25 +464,6 @@ paths:
       summary: Dry-run transforms against a sample record
       responses:
         '200': { description: Transformed record }
-
-  /wide-table/preview:
-    post:
-      tags: [WideTable]
-      summary: Preview Kafka wide-table pipeline fields, joins, window aggregate, and ClickHouse DDL
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                spec: { type: object }
-                samples:
-                  type: array
-                  items: { type: object }
-                run_preflight: { type: boolean, default: false }
-      responses:
-        '200': { description: Wide-table preview result }
-        '400': { description: Invalid spec or preflight errors }
 
   /specs/validate:
     post:

@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [v0.2.1] — Pipeline 编排口径收敛与连接复用
+
+### 亮点
+- 移除独立宽表 preview API 和专用前端页面。明细宽表与聚合表场景统一通过普通 pipeline/DAG 编排表达，由 source、transform、state 和 sink 组合实现。
+- 为线性 pipeline spec 和 DAG node 增加 `connection` / `connection_ref` 引用能力，可以把账号、地址等共享连接配置放入连接目录，任务级 table、topic、query 等字段继续保留在 spec 内。
+- 重整英文和中文 README，收敛为快速开始、最小 spec、连接复用、编排式宽表汇聚、连接器能力面、运行模型和文档入口，避免把“已注册能力”误读成“独立产品模块”。
+
+### 验证
+- `go test ./internal/etl/server ./internal/etl/pipeline ./internal/etl/orchestrator`
+- `web/` 下执行 `npm run build`
+
 ## [v0.2.0] — Pipeline 编排与可靠性正式版
 
 ### 亮点

@@ -22,12 +22,14 @@ const (
 
 // Node represents a single processing unit in the pipeline DAG.
 type Node struct {
-	ID     string                 `yaml:"id" json:"id"`
-	Kind   NodeKind               `yaml:"kind" json:"kind"`
-	Plugin string                 `yaml:"plugin" json:"plugin"`
-	Config map[string]interface{} `yaml:"config,omitempty" json:"config,omitempty"`
-	X      float64                `yaml:"x,omitempty" json:"x,omitempty"`
-	Y      float64                `yaml:"y,omitempty" json:"y,omitempty"`
+	ID            string                 `yaml:"id" json:"id"`
+	Kind          NodeKind               `yaml:"kind" json:"kind"`
+	Plugin        string                 `yaml:"plugin" json:"plugin"`
+	Connection    string                 `yaml:"connection,omitempty" json:"connection,omitempty"`
+	ConnectionRef string                 `yaml:"connection_ref,omitempty" json:"connection_ref,omitempty"`
+	Config        map[string]interface{} `yaml:"config,omitempty" json:"config,omitempty"`
+	X             float64                `yaml:"x,omitempty" json:"x,omitempty"`
+	Y             float64                `yaml:"y,omitempty" json:"y,omitempty"`
 }
 
 // ConditionOp defines comparison operators for edge routing.

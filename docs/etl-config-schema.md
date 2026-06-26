@@ -8,12 +8,15 @@ Pipeline specs are YAML files under `pipes/` or the configured `etl.specsDir`. E
 name: example-pipeline
 source:
   type: file
+  connection: saved-source
   config: {}
 transforms:
   - type: identity
+    connection: saved-transform
     config: {}
 sink:
   type: file_sink
+  connection: saved-sink
   config: {}
 batch_size: 1000
 checkpoint_interval_sec: 30
@@ -29,16 +32,35 @@ dlq:
 | Field | Required | Description |
 | --- | --- | --- |
 | `name` | yes | Unique pipeline name. Duplicate runtime creates return `409`; duplicate files are skipped. |
-| `source.type` | yes | Registered source plugin name. |
+| `source.type` | yes unless `source.connection` is set | Registered source plugin name. If omitted with `connection`, it is inferred from the saved connection. |
+| `source.connection` / `source.connection_ref` | no | Saved connection catalog entry to use as the base source config. Inline `source.config` overrides fields from the saved connection. |
 | `source.config` | no | Source-specific settings. Defaults to `{}`. |
-| `transforms` | no | Ordered transform chain. Omit for no transforms. |
-| `sink.type` | yes | Registered sink plugin name. |
+| `transforms` | no | Ordered transform chain. Omit for no transforms. Each transform can also use `connection` / `connection_ref`. |
+| `sink.type` | yes unless `sink.connection` is set | Registered sink plugin name. If omitted with `connection`, it is inferred from the saved connection. |
+| `sink.connection` / `sink.connection_ref` | no | Saved connection catalog entry to use as the base sink config. Inline `sink.config` overrides fields from the saved connection. |
 | `sink.config` | no | Sink-specific settings. Defaults to `{}`. |
 | `batch_size` | no | Sink flush size. Default `1000`. |
 | `checkpoint_interval_sec` | no | Reserved interval setting; checkpoints currently advance after successful writes. Default `30`. |
 | `backpressure_buffer` | no | Internal record channel size. Default `100`. |
 | `retry` | no | Retry policy. Defaults shown above. |
 | `dlq.enable` | no | Enable file DLQ. |
+
+### Reusing Saved Connections
+
+Connections saved through `GET/POST /api/v2/connections` can be referenced by linear pipeline endpoints and DAG nodes:
+
+```yaml
+source:
+  connection: orders-mysql
+  config:
+    table: orders
+sink:
+  connection_ref: warehouse-clickhouse
+  config:
+    table: orders_wide
+```
+
+The saved connection supplies `kind`, `type`, and base `config`. The pipeline endpoint must use a connection with the matching kind (`source`, `sink`, or `transform`). Inline `config` wins over saved config, so shared credentials can live in the catalog while per-pipeline fields such as `table`, `topic`, or `query` remain in the spec.
 
 ## Sources
 
@@ -670,7 +692,6 @@ transforms:
 - Test ad-hoc connection: `POST /api/v2/connections/test`
 - Connector descriptors: `GET /api/v2/connectors/descriptors` — returns Connector Descriptor v1 records merged from registry, config schema, secret markers, capabilities, and maturity metadata
 - Transform dry-run: `POST /api/v2/transforms/dry-run`
-- Wide-table preview: `POST /api/v2/wide-table/preview` — returns envelope/lookup/window/sink preview, sample field types, proposed ClickHouse DDL, and preflight result
 - Reload specs: `POST /api/v2/specs/reload`
 - Plugin schema: `GET /api/v2/plugins/schema` — returns typed field schemas with secret markers
 

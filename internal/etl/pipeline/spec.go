@@ -20,18 +20,24 @@ type ScheduleConfig struct {
 }
 
 type SourceSpec struct {
-	Type   string         `yaml:"type" json:"type"`
-	Config map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
+	Type          string         `yaml:"type" json:"type"`
+	Connection    string         `yaml:"connection,omitempty" json:"connection,omitempty"`
+	ConnectionRef string         `yaml:"connection_ref,omitempty" json:"connection_ref,omitempty"`
+	Config        map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
 }
 
 type SinkSpec struct {
-	Type   string         `yaml:"type" json:"type"`
-	Config map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
+	Type          string         `yaml:"type" json:"type"`
+	Connection    string         `yaml:"connection,omitempty" json:"connection,omitempty"`
+	ConnectionRef string         `yaml:"connection_ref,omitempty" json:"connection_ref,omitempty"`
+	Config        map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
 }
 
 type TransformSpec struct {
-	Type   string         `yaml:"type" json:"type"`
-	Config map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
+	Type          string         `yaml:"type" json:"type"`
+	Connection    string         `yaml:"connection,omitempty" json:"connection,omitempty"`
+	ConnectionRef string         `yaml:"connection_ref,omitempty" json:"connection_ref,omitempty"`
+	Config        map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
 }
 
 type RetrySpec struct {
@@ -316,17 +322,17 @@ func ValidateSpec(spec *Spec) error {
 	if strings.TrimSpace(spec.Name) == "" {
 		problems = append(problems, "name is required")
 	}
-	if strings.TrimSpace(spec.Source.Type) == "" {
+	if strings.TrimSpace(spec.Source.Type) == "" && connectionRef(spec.Source.Connection, spec.Source.ConnectionRef) == "" {
 		problems = append(problems, "source.type is required")
-	} else if !registry.HasSource(spec.Source.Type) {
+	} else if strings.TrimSpace(spec.Source.Type) != "" && !registry.HasSource(spec.Source.Type) {
 		problems = append(problems, fmt.Sprintf("unknown source.type %q", spec.Source.Type))
 	}
 	if spec.Source.Config == nil {
 		spec.Source.Config = map[string]any{}
 	}
-	if strings.TrimSpace(spec.Sink.Type) == "" {
+	if strings.TrimSpace(spec.Sink.Type) == "" && connectionRef(spec.Sink.Connection, spec.Sink.ConnectionRef) == "" {
 		problems = append(problems, "sink.type is required")
-	} else if !registry.HasSink(spec.Sink.Type) {
+	} else if strings.TrimSpace(spec.Sink.Type) != "" && !registry.HasSink(spec.Sink.Type) {
 		problems = append(problems, fmt.Sprintf("unknown sink.type %q", spec.Sink.Type))
 	}
 	if spec.Sink.Config == nil {
@@ -334,9 +340,9 @@ func ValidateSpec(spec *Spec) error {
 	}
 	for i := range spec.Transforms {
 		tr := &spec.Transforms[i]
-		if strings.TrimSpace(tr.Type) == "" {
+		if strings.TrimSpace(tr.Type) == "" && connectionRef(tr.Connection, tr.ConnectionRef) == "" {
 			problems = append(problems, fmt.Sprintf("transforms[%d].type is required", i))
-		} else if !registry.HasTransform(tr.Type) {
+		} else if strings.TrimSpace(tr.Type) != "" && !registry.HasTransform(tr.Type) {
 			problems = append(problems, fmt.Sprintf("unknown transforms[%d].type %q", i, tr.Type))
 		}
 		if tr.Config == nil {
@@ -385,6 +391,13 @@ func ValidateSpec(spec *Spec) error {
 	}
 
 	return nil
+}
+
+func connectionRef(connection, connectionRef string) string {
+	if strings.TrimSpace(connection) != "" {
+		return strings.TrimSpace(connection)
+	}
+	return strings.TrimSpace(connectionRef)
 }
 
 func ValidateIdempotency(spec *Spec) []string {
