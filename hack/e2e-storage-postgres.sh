@@ -18,13 +18,14 @@ PASS="etl123"
 HOST_PORT="15432"
 
 cleanup() {
-  podman rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
 echo "==> Start throwaway PostgreSQL 16 container (port $HOST_PORT)"
 cleanup
-podman run -d --name "$CONTAINER" \
+docker run -d --name "$CONTAINER" \
+  --add-host host.docker.internal:host-gateway \
   -e POSTGRES_DB="$DB" \
   -e POSTGRES_USER="$USER" \
   -e POSTGRES_PASSWORD="$PASS" \
@@ -34,7 +35,7 @@ podman run -d --name "$CONTAINER" \
 echo "==> Wait for PostgreSQL to accept connections"
 i=0
 while [ "$i" -lt 60 ]; do
-  if podman exec "$CONTAINER" pg_isready -U "$USER" -d "$DB" >/dev/null 2>&1; then
+  if docker exec "$CONTAINER" pg_isready -U "$USER" -d "$DB" >/dev/null 2>&1; then
     break
   fi
   i=$((i + 1)); sleep 2
@@ -46,10 +47,10 @@ fi
 DSN="postgres://${USER}:${PASS}@127.0.0.1:${HOST_PORT}/${DB}?sslmode=disable"
 
 echo "==> Run storage conformance suite (SQLite always + PostgreSQL)"
-if podman ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
-  HOST_GATEWAY="host.containers.internal"
+if docker ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
+  HOST_GATEWAY="host.docker.internal"
   DEV_DSN="postgres://${USER}:${PASS}@${HOST_GATEWAY}:${HOST_PORT}/${DB}?sslmode=disable"
-  podman exec -e POSTGRES_DSN="$DEV_DSN" -w /workspace etl-go-dev \
+  docker exec -e POSTGRES_DSN="$DEV_DSN" -w /workspace etl-go-dev \
     go test -race -count=1 -v -run 'TestSQLiteConformance|TestPostgresConformance' ./internal/etl/storage/
 else
   echo "   (etl-go-dev container not found — running tests on host Go toolchain)"

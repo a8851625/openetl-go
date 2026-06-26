@@ -20,6 +20,8 @@ type ConnectorDescriptor struct {
 	Registered   bool          `json:"registered"`
 }
 
+var connectorMaturityLevels = []string{"production", "beta", "experimental", "dev-only"}
+
 func (s *Server) handleConnectorDescriptors(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodGet {
@@ -28,8 +30,9 @@ func (s *Server) handleConnectorDescriptors(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]any{
-		"version":     "v1",
-		"descriptors": connectorDescriptors(),
+		"version":         "v1",
+		"maturity_levels": connectorMaturityLevels,
+		"descriptors":     connectorDescriptors(),
 	})
 }
 
@@ -72,9 +75,7 @@ func descriptorsForKind(kind string, registered []string, schemas map[string][]C
 		var capabilities []string
 		if info, ok := metadata[name].(map[string]any); ok {
 			maturity, _ = info["maturity"].(string)
-			if maturity == "" {
-				maturity = "experimental"
-			}
+			maturity = normalizeConnectorMaturity(maturity)
 			if caps, ok := info["capabilities"].([]string); ok {
 				capabilities = append(capabilities, caps...)
 			}
@@ -100,6 +101,15 @@ func descriptorsForKind(kind string, registered []string, schemas map[string][]C
 		})
 	}
 	return out
+}
+
+func normalizeConnectorMaturity(maturity string) string {
+	for _, allowed := range connectorMaturityLevels {
+		if maturity == allowed {
+			return maturity
+		}
+	}
+	return "experimental"
 }
 
 func requiredFields(fields []ConfigField) []string {

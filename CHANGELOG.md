@@ -24,7 +24,7 @@
 - Added connector/roadmap maturity guidance so source, sink, transform, storage, and plugin capabilities are presented with explicit maturity instead of over-claiming production readiness.
 
 ### Pipeline Validation
-- Added `hack/e2e-wide-table.sh` for Podman-based Redpanda + MySQL + ClickHouse validation.
+- Added `hack/e2e-wide-table.sh` for Docker-based Redpanda + MySQL + ClickHouse validation.
 - Covered Kafka -> lookup -> ClickHouse detail pipelines, Kafka -> deduplicate -> lookup -> tumbling aggregate -> ClickHouse pipelines, duplicate Kafka message absorption, schema drift DLQ, lookup miss DLQ and replay, lookup refresh failure DLQ, and ClickHouse outage DLQ/replay.
 
 ### Release Boundary
@@ -34,13 +34,13 @@
 ### Verification
 - `./hack/e2e-wide-table.sh`
 - `./hack/e2e-ui.sh` — 73 passed, 0 failed
-- Podman: `go test -timeout 120s ./internal/etl/...`
+- Docker: `go test -timeout 120s ./internal/etl/...`
 
 ## [v0.1.0-beta2] — Phase 5 reliability and usability release
 
 ### Highlights
 - Closed the beta2 P0/P1 reliability bar: standalone runner creation, file-source resume, zero-survivor checkpoint safety, Postgres CDC pgoutput parsing, worker slot accounting, sink error metrics, and preflight rejection for hard pipeline misconfigurations.
-- Reworked the public quickstart surface around OpenETL-Go: canonical MySQL CDC -> ClickHouse examples, aligned Podman compose settings, richer `/api/v2/plugins/schema` metadata, and updated README/quickstart/deployment docs.
+- Reworked the public quickstart surface around OpenETL-Go: canonical MySQL CDC -> ClickHouse examples, aligned Docker compose settings, richer `/api/v2/plugins/schema` metadata, and updated README/quickstart/deployment docs.
 - Improved the lightweight release shape by excluding test fixtures from runtime images and publishing `-tags=nolua` as the Lua-free build option while keeping default Lua compatibility.
 
 ### Verification

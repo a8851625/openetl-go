@@ -4,7 +4,7 @@ source:
   type: kafka
   config:
     brokers:
-      - host.containers.internal:19092
+      - host.docker.internal:19092
     topic: orders.lookup_miss
     group_id: openetl-wide-table-lookup-miss-dlq
     initial_offset: oldest
@@ -15,7 +15,7 @@ transforms:
       keep_metadata: true
   - type: lookup
     config:
-      dsn: root:root123456@tcp(host.containers.internal:13306)/dzh3136_go?timeout=5s&readTimeout=5s&writeTimeout=5s
+      dsn: root:root123456@tcp(host.docker.internal:13306)/dzh3136_go?timeout=5s&readTimeout=5s&writeTimeout=5s
       query: SELECT id, tier, region FROM dim_users
       join_key: user_id
       dim_key: id
@@ -29,7 +29,7 @@ transforms:
 sink:
   type: clickhouse
   config:
-    host: host.containers.internal
+    host: host.docker.internal
     port: 9000
     user: default
     password: dzh123456

@@ -21,11 +21,12 @@ wait_http() {
 }
 
 echo "==> Build image (or use cache)"
-podman build -t "$IMAGE" -f Dockerfile . 2>&1 | tail -1
+docker build -t "$IMAGE" -f Dockerfile . 2>&1 | tail -1
 
 echo "==> Start OpenSearch"
-podman rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$ES_CONTAINER" \
   -e "discovery.type=single-node" \
   -e "DISABLE_SECURITY_PLUGIN=true" \
@@ -36,25 +37,25 @@ podman run -d \
 echo "==> Wait OpenSearch ready"
 if ! wait_http "http://127.0.0.1:$ES_PORT/_cluster/health"; then
   echo "OpenSearch failed to start"
-  podman rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
   exit 1
 fi
 echo "==> OpenSearch is ready"
 
 echo "==> Start MySQL source"
-podman-compose -f docker-compose.dev.yml up -d mysql-source
+docker compose -f docker-compose.dev.yml up -d mysql-source
 
 echo "==> Wait MySQL healthy"
 i=0
 while [ "$i" -lt 60 ]; do
-  status="$(podman inspect -f '{{.State.Health.Status}}' etl-mysql-source 2>/dev/null || true)"
+  status="$(docker inspect -f '{{.State.Health.Status}}' etl-mysql-source 2>/dev/null || true)"
   if [ "$status" = "healthy" ]; then break; fi
   i=$((i + 1)); sleep 2
 done
-[ "$(podman inspect -f '{{.State.Health.Status}}' etl-mysql-source)" = "healthy" ]
+[ "$(docker inspect -f '{{.State.Health.Status}}' etl-mysql-source)" = "healthy" ]
 
 echo "==> Prepare source data"
-podman exec etl-mysql-source mysql -uroot -proot123456 -e "
+docker exec etl-mysql-source mysql -uroot -proot123456 -e "
 DELETE FROM dzh3136_go.customers WHERE id >= 9400;
 INSERT INTO dzh3136_go.customers (id, name, email, phone, status, amount) VALUES
   (9401, 'ES Alice', 'es-alice@example.com', '13900009401', 'active', 100.00),
@@ -65,6 +66,8 @@ INSERT INTO dzh3136_go.customers (id, name, email, phone, status, amount) VALUES
 echo "==> Reset ETL data"
 rm -rf data-es
 mkdir -p data-es/output data-es/checkpoint data-es/dlq logs
+chmod -R a+rwX data-es
+chmod a+rwX logs
 
 echo "==> Write ES pipeline spec"
 mkdir -p testdata/pipes-es
@@ -73,7 +76,7 @@ name: "mysql-to-elasticsearch"
 source:
   type: mysql_batch
   config:
-    host: "host.containers.internal"
+    host: "host.docker.internal"
     port: 13306
     user: "sync_user"
     password: "sync_password_123"
@@ -90,7 +93,7 @@ sink:
   type: elasticsearch
   config:
     hosts:
-      - "http://host.containers.internal:9200"
+      - "http://host.docker.internal:9200"
     index: "customers"
     id_column: "id"
 
@@ -100,8 +103,9 @@ backpressure_buffer: 100
 SPEC
 
 echo "==> Run ETL pipeline"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8018:8001 \
   -v "$ROOT_DIR/testdata/pipes-es:/app/pipes:ro" \
@@ -140,7 +144,7 @@ body="$(curl -fsS http://127.0.0.1:8018/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep '"name":"mysql-to-elasticsearch"'
 
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
 
 echo "Elasticsearch E2E passed"

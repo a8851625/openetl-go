@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -38,6 +39,86 @@ func (s *recordingSink) Write(_ context.Context, _ []core.Record) error {
 	return nil
 }
 func (s *recordingSink) Close() error { return nil }
+
+type partialBatchSink struct {
+	batchCalls  int32
+	singleCalls int32
+}
+
+func (s *partialBatchSink) Name() string               { return "partial-batch" }
+func (s *partialBatchSink) Open(context.Context) error { return nil }
+func (s *partialBatchSink) Write(_ context.Context, records []core.Record) error {
+	if len(records) > 1 {
+		atomic.AddInt32(&s.batchCalls, 1)
+		return testPartialBatchError{}
+	}
+	atomic.AddInt32(&s.singleCalls, 1)
+	return errors.New("single-row isolation should not run")
+}
+func (s *partialBatchSink) Close() error { return nil }
+
+type testPartialBatchError struct{}
+
+func (e testPartialBatchError) Error() string { return "partial batch failed" }
+func (e testPartialBatchError) FailedRecordIndices() []int {
+	return []int{1}
+}
+func (e testPartialBatchError) ErrorForRecord(index int) error {
+	if index != 1 {
+		return nil
+	}
+	return core.ClassifiedError{Class: core.ErrorClassSchema, Err: errors.New("record 1 schema mismatch")}
+}
+
+type transientThenSuccessSink struct {
+	failures int32
+	calls    int32
+}
+
+func (s *transientThenSuccessSink) Name() string               { return "transient-then-success" }
+func (s *transientThenSuccessSink) Open(context.Context) error { return nil }
+func (s *transientThenSuccessSink) Write(_ context.Context, _ []core.Record) error {
+	call := atomic.AddInt32(&s.calls, 1)
+	if call <= s.failures {
+		return errors.New("Error 1205 (HY000): Lock wait timeout exceeded; try restarting transaction")
+	}
+	return nil
+}
+func (s *transientThenSuccessSink) Close() error { return nil }
+
+type schemaSource struct {
+	schema    core.SchemaInfo
+	openCalls int32
+}
+
+func (s *schemaSource) Name() string { return "schema-source" }
+func (s *schemaSource) Open(_ context.Context, _ *core.Checkpoint) (core.RecordReader, error) {
+	atomic.AddInt32(&s.openCalls, 1)
+	return checkpointTestReader{}, nil
+}
+func (s *schemaSource) Describe(_ context.Context) (core.SchemaInfo, error) {
+	return s.schema, nil
+}
+
+type schemaValidatingSink struct {
+	validateErr error
+	openCalls   int32
+	closeCalls  int32
+}
+
+func (s *schemaValidatingSink) Name() string { return "schema-validating-sink" }
+func (s *schemaValidatingSink) Open(_ context.Context) error {
+	atomic.AddInt32(&s.openCalls, 1)
+	return nil
+}
+func (s *schemaValidatingSink) Write(_ context.Context, _ []core.Record) error { return nil }
+func (s *schemaValidatingSink) Close() error {
+	atomic.AddInt32(&s.closeCalls, 1)
+	return nil
+}
+func (s *schemaValidatingSink) ValidateSchema(_ context.Context, _ core.SchemaInfo) error {
+	return s.validateErr
+}
 
 type checkpointTestReader struct{}
 
@@ -78,6 +159,23 @@ func (t zeroBatchTransform) Apply(_ context.Context, rec core.Record) (core.Reco
 }
 func (t zeroBatchTransform) ApplyBatch(_ context.Context, _ []core.Record) ([]core.Record, error) {
 	return nil, nil
+}
+
+type partialFailureTransform struct{}
+
+func (t partialFailureTransform) Name() string { return "partial-failure" }
+func (t partialFailureTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
+	return rec, nil
+}
+func (t partialFailureTransform) ApplyBatch(_ context.Context, recs []core.Record) ([]core.Record, error) {
+	if len(recs) < 2 {
+		return recs, nil
+	}
+	failures := []core.TransformRecordFailure{{
+		Record: recs[1],
+		Err:    core.ClassifiedError{Class: core.ErrorClassData, Err: errors.New("record 2 parse failed")},
+	}}
+	return []core.Record{recs[0]}, core.NewPartialTransformError("partial transform failed", failures)
 }
 
 type stateSnapshotTransform struct {
@@ -162,6 +260,44 @@ func checkpointTestBatch() []core.Record {
 	}
 }
 
+func TestRunnerFailsStartupOnSchemaValidationError(t *testing.T) {
+	src := &schemaSource{schema: core.SchemaInfo{Columns: []core.ColumnInfo{{Name: "id", DataType: "bigint"}}}}
+	snk := &schemaValidatingSink{validateErr: errors.New("missing target columns [id]")}
+	r := &Runner{
+		spec:   &Spec{Name: "schema-startup"},
+		source: src,
+		sink:   snk,
+	}
+
+	err := r.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start() = nil, want schema validation error")
+	}
+	if !strings.Contains(err.Error(), "schema validation") {
+		t.Fatalf("Start() error = %v, want schema validation", err)
+	}
+	if atomic.LoadInt32(&snk.openCalls) != 1 || atomic.LoadInt32(&snk.closeCalls) != 1 {
+		t.Fatalf("sink open/close = %d/%d, want 1/1", atomic.LoadInt32(&snk.openCalls), atomic.LoadInt32(&snk.closeCalls))
+	}
+	if atomic.LoadInt32(&src.openCalls) != 0 {
+		t.Fatalf("source Open calls = %d, want 0 before schema-compatible startup", atomic.LoadInt32(&src.openCalls))
+	}
+	if r.Status() != StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status())
+	}
+}
+
+func TestSchemaValidatorForSinkUnwrapsSinkWriteHook(t *testing.T) {
+	snk := &schemaValidatingSink{}
+	validator, ok := schemaValidatorForSink(&SinkWriteHook{Hooks: &MetricsHooks{}, Sink: snk})
+	if !ok {
+		t.Fatal("schemaValidatorForSink() ok = false, want true")
+	}
+	if validator != snk {
+		t.Fatalf("schemaValidatorForSink() = %T, want wrapped sink", validator)
+	}
+}
+
 func TestRunnerCheckpointAdvancesWhenAllRecordsFiltered(t *testing.T) {
 	store := newMemoryCPStore()
 	r := newCheckpointWriteBatchRunner(t, core.TransformChain{filterAllTransform{}}, store, noopDLQ{})
@@ -187,6 +323,95 @@ func TestRunnerDoesNotCheckpointZeroSurvivorTransformFailures(t *testing.T) {
 	defer dlq.mu.Unlock()
 	if len(dlq.entries) != len(checkpointTestBatch()) {
 		t.Fatalf("DLQ entries = %d, want %d", len(dlq.entries), len(checkpointTestBatch()))
+	}
+}
+
+func TestRunnerUsesPartialBatchErrorForDLQAttribution(t *testing.T) {
+	dlq := &captureDLQ{}
+	sink := &partialBatchSink{}
+	r := newCheckpointWriteBatchRunner(t, nil, newMemoryCPStore(), dlq)
+	r.sink = sink
+	r.retryConfig.MaxAttempts = 1
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	if atomic.LoadInt32(&sink.batchCalls) != 1 {
+		t.Fatalf("batch calls = %d, want 1", atomic.LoadInt32(&sink.batchCalls))
+	}
+	if atomic.LoadInt32(&sink.singleCalls) != 0 {
+		t.Fatalf("single-row isolation calls = %d, want 0 for partial batch error", atomic.LoadInt32(&sink.singleCalls))
+	}
+	dlq.mu.Lock()
+	defer dlq.mu.Unlock()
+	if len(dlq.entries) != 1 {
+		t.Fatalf("DLQ entries = %d, want 1", len(dlq.entries))
+	}
+	if got := dlq.entries[0].Record.Data["id"]; got != 2 {
+		t.Fatalf("DLQ record id = %v, want 2", got)
+	}
+	if dlq.entries[0].ErrorClass != string(core.ErrorClassSchema) {
+		t.Fatalf("DLQ error class = %q, want %q", dlq.entries[0].ErrorClass, core.ErrorClassSchema)
+	}
+	stats := r.Stats()
+	if stats.RecordsWritten != 1 || stats.RecordsFailed != 1 || stats.RecordsDLQ != 1 {
+		t.Fatalf("stats written/failed/dlq = %d/%d/%d, want 1/1/1", stats.RecordsWritten, stats.RecordsFailed, stats.RecordsDLQ)
+	}
+}
+
+func TestRunnerRetriesTransientSinkFailureWithoutDLQ(t *testing.T) {
+	store := newMemoryCPStore()
+	dlq := &captureDLQ{}
+	sink := &transientThenSuccessSink{failures: 1}
+	r := newCheckpointWriteBatchRunner(t, nil, store, dlq)
+	r.sink = sink
+	r.retryConfig.MaxAttempts = 3
+	r.retryConfig.InitialInterval = time.Millisecond
+	r.retryConfig.MaxInterval = time.Millisecond
+	r.retryConfig.Multiplier = 1
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	if got := atomic.LoadInt32(&sink.calls); got != 2 {
+		t.Fatalf("sink calls = %d, want 2", got)
+	}
+	dlq.mu.Lock()
+	defer dlq.mu.Unlock()
+	if len(dlq.entries) != 0 {
+		t.Fatalf("DLQ entries = %d, want 0", len(dlq.entries))
+	}
+	stats := r.Stats()
+	if stats.RecordsWritten != int64(len(checkpointTestBatch())) || stats.RecordsFailed != 0 || stats.RecordsDLQ != 0 {
+		t.Fatalf("stats written/failed/dlq = %d/%d/%d, want %d/0/0", stats.RecordsWritten, stats.RecordsFailed, stats.RecordsDLQ, len(checkpointTestBatch()))
+	}
+	if !checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint did not advance after transient sink retry succeeded")
+	}
+}
+
+func TestRunnerUsesPartialTransformErrorForDLQAttribution(t *testing.T) {
+	store := newMemoryCPStore()
+	dlq := &captureDLQ{}
+	r := newCheckpointWriteBatchRunner(t, core.TransformChain{partialFailureTransform{}}, store, dlq)
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	dlq.mu.Lock()
+	defer dlq.mu.Unlock()
+	if len(dlq.entries) != 1 {
+		t.Fatalf("DLQ entries = %d, want 1", len(dlq.entries))
+	}
+	if got := dlq.entries[0].Record.Data["id"]; got != 2 {
+		t.Fatalf("DLQ record id = %v, want 2", got)
+	}
+	if dlq.entries[0].ErrorClass != string(core.ErrorClassData) {
+		t.Fatalf("DLQ error class = %q, want %q", dlq.entries[0].ErrorClass, core.ErrorClassData)
+	}
+	stats := r.Stats()
+	if stats.RecordsWritten != 1 || stats.RecordsFailed != 1 || stats.RecordsDLQ != 1 {
+		t.Fatalf("stats written/failed/dlq = %d/%d/%d, want 1/1/1", stats.RecordsWritten, stats.RecordsFailed, stats.RecordsDLQ)
+	}
+	if !checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint did not advance after survivor write and failed record DLQ")
 	}
 }
 

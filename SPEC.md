@@ -163,14 +163,14 @@ openetl-go is production-ready when, for **both** modes:
 | `make test` | Unit tests with `-race` across `internal/etl/...`, `internal/logic/...`, `internal/controller/...` |
 | `make test-quick` | Same without `-race` |
 | `make test-pkg PKG=pipeline` | One package, verbose |
-| `make test-integration` | Integration tests with podman-compose services (MySQL + ClickHouse + …) |
+| `make test-integration` | Integration tests with docker compose services (MySQL + ClickHouse + …) |
 
 Integration tests use the **`integration` build tag** and require live databases. Go runs inside
-the `etl-go-dev` podman container (host has no `go`).
+the `etl-go-dev` docker container (host has no `go`).
 
 ### 2.3 Dev environment
 
-- **podman** is the supported runtime (`podman compose -f docker-compose.dev.yml`).
+- **docker** is the supported runtime (`docker compose -f docker-compose.dev.yml`).
 - `etl-go-dev` container (golang:1.24) mounts the workspace; builds/tests run there.
 - Services: `mysql-source` (binlog enabled), `clickhouse`, plus `minio`/`redpanda`/`postgres` as needed.
 
@@ -232,10 +232,12 @@ registers via `registry.Register*` in `init()`. Optional interfaces extend behav
 `server.go pluginMetadata()` table is advisory only and must not diverge from actual interface
 implementation.
 
-> **Honesty note (P4-19, verified):** `SchemaValidator`/`SchemaDescriptor` currently have **no
-> built-in implementors**; the wiring (`pipeline.go:382-383`) is an intentional no-op, documented
-> as such in `core.go`. They are extension points for SDK-built custom plugins, not a shipped
-> feature. This is the honest state; do not re-advertise them as active.
+> **Schema validation status (P4-19):** `SchemaDescriptor`/`SchemaValidator` are now active for
+> the first built-in paths: `mysql_batch`, single-table `mysql_cdc`, and single-table
+> `mysql_snapshot_cdc` can describe source columns, and MySQL/PostgreSQL/ClickHouse sinks validate
+> target existence, missing columns, and coarse type compatibility during create/update preflight
+> and runner startup. Coverage remains partial; multi-table CDC and other sources/sinks must not be
+> advertised as schema-aware until they implement these optional interfaces and have tests.
 
 ### 3.3 Dual-mode storage boundary
 
@@ -319,8 +321,8 @@ error, to keep specs forward-compatible.
 | Layer | Scope | Tooling | Required for PR |
 |-------|-------|---------|-----------------|
 | **Unit** | Pure functions, interfaces, type mappers, DDL, DAG routing, retry, breaker | `go test -race` in-package | ✅ All |
-| **Integration** | Sink writes vs live DBs (type inference, idempotency, auto-create), source resume | `_test.go` `//go:build integration`, podman | ✅ Changed plugin |
-| **E2E** | Full pipeline MySQL CDC → ClickHouse, crash recovery, DLQ replay, distributed | `hack/e2e-*.sh` over podman-compose | ✅ Pipeline/core changes |
+| **Integration** | Sink writes vs live DBs (type inference, idempotency, auto-create), source resume | `_test.go` `//go:build integration`, docker | ✅ Changed plugin |
+| **E2E** | Full pipeline MySQL CDC → ClickHouse, crash recovery, DLQ replay, distributed | `hack/e2e-*.sh` over docker compose | ✅ Pipeline/core changes |
 
 ### 5.2 Test matrix for dual-mode
 
@@ -475,7 +477,7 @@ Carried-forward v2 items keep their `P4-n` ID. Evidence and fix sketches are sum
 | P5-22 | Lua (`gopher-lua`) linked into the default binary (`lua.go` + `pipeline/hooks.go`). | ✅ **Done (Wave 4)**: opt-out `//go:build !nolua` — the default build keeps Lua (non-breaking), `-tags=nolua` drops gopher-lua via `lua_nolua.go` + `lua_hook_nolua.go` stubs; `type:lua` returns a clear error under nolua. Verified: `go list -deps -tags=nolua` is free of gopher-lua. | — | done |
 | P5-23 | GoFrame HTTP server boots alongside the ETL API. | **Retracted/deferred**: the GoFrame server (`:8000`) serves the UI (`resource/public`) AND proxies `/api/v2/*` to `:8001` — "skipping" it removes the UI. The dual-listener is intentional (unified port). A headless API-only mode is a feature, not a fix. | — | retracted |
 | P5-25 | `config.yaml` was legacy-Canal-heavy. | ✅ Default `manifest/config/config.yaml` is now a minimal single-node ETL template (server+etl+logger, SQLite, no Canal/sync/database). | 0.5d | done |
-| P5-26 | Default `extismPkg` unpinned. | ✅ Pinned `@extism/js-pdk@1.1.0` (Wave 2); env overrides. | 0.1d | done |
+| P5-26 | Default `extismPkg` unpinned. | ✅ Closed: request-path npx fallback is disabled by default and no longer assumes `@extism/js-pdk` provides the `extism-js` compiler; development fallback requires explicit `OPENETL_EXTISM_JS_PKG`, otherwise operators should pre-install `extism-js` or compile plugins offline. | 0.1d | done |
 | P5-24 *(optional/defer)* | All 9 sink connectors linked unconditionally (~77MB binary is sink-dominated). | Per-sink build tags with no-op stubs, or a `sinks_all` default. | 2–3d | M |
 
 ### Tier E — Carry-forward (verify open / finish)
@@ -516,16 +518,16 @@ Carry-forward: P4-3 folds into Wave 3 (P5-22).
 
 ```bash
 # Wave 0 smoke: standalone pipelines boot again
-podman exec etl-go-dev go build ./...
-podman exec etl-go-dev go test -race -count=1 ./internal/etl/server/... ./internal/etl/source/...
+docker exec etl-go-dev go build ./...
+docker exec etl-go-dev go test -race -count=1 ./internal/etl/server/... ./internal/etl/source/...
 
 # Waves 1–3: full reliability + race
-podman exec etl-go-dev go test -race -count=1 ./internal/etl/...
+docker exec etl-go-dev go test -race -count=1 ./internal/etl/...
 
 # Lightweight: default build excludes all opt-in runtimes
-podman exec etl-go-dev go list -deps ./... | grep -E 'gopher-lua|quickjs|extism|wazero'   # must be EMPTY for default
-podman exec etl-go-dev go build -tags=extism -o /tmp/oa-extism .                          # still compiles
-podman exec etl-go-dev go build -tags=nolua -o /tmp/oa-nolua .                            # 轻量: Lua opt-out (P5-22)
+docker exec etl-go-dev go list -deps ./... | grep -E 'gopher-lua|quickjs|extism|wazero'   # must be EMPTY for default
+docker exec etl-go-dev go build -tags=extism -o /tmp/oa-extism .                          # still compiles
+docker exec etl-go-dev go build -tags=nolua -o /tmp/oa-nolua .                            # 轻量: Lua opt-out (P5-22)
 
 # Dual-mode E2E
 ./hack/e2e.sh                       # file→file, mysql_batch→mysql
@@ -558,7 +560,7 @@ Verified against code (not the TODO log) by the three-pillar audit:
 | P4-15 (per-record panic recovery) | ✅ landed | `executor.go:620-629`; `pipeline.go:549-556` (recover→StatusFailed) |
 | P4-5 (WASM compile name validation) | ✅ landed | `server.go:2347-2373` (charset+`..`+len), both upload sites; **P5-26: pkg still unpinned by default** |
 | P4-22 (CH+Doris unified typing) | ✅ landed | `clickhouse.go:1162-1167`, `doris.go:884-889` → `typing.InferFromValue` |
-| P4-19 (SchemaValidator honesty) | ✅ landed | `core.go:113-142` documented as extension-only |
+| P4-19 (SchemaDescriptor/Validator first built-ins) | ✅ partial | `source/{mysql_batch,mysql_cdc,mysql_snapshot_cdc}.go`, `sink/{mysql,postgres,clickhouse}.go`, `sink/schema_validator.go`, `server/preflight.go`; create/update preflight and runner startup validate covered paths, while multi-table CDC and more connectors still need coverage |
 | P4-24 (AI generate mounted+validated) | ✅ landed | route `server.go:624`; `ValidateSpec`+`RunPreflight` at `:3296-3303` |
 | P4-25 (WASM build tag) | ✅ landed | `types.go` (no tag), `manager.go`/`hostfunc.go`/`source_sink.go`/`transform.go` (`extism`), `nop.go` (`!extism`); both builds compile; wazero excluded from default |
 | A11-redo (real distributed) | ✅ landed (real) | `worker/executor.go:39-71`, `worker/worker.go:64-81`, `master/dispatch.go:33-101`, `pipeline/parallel.go:210-259`, `pipeline/shard_builder.go:26-68`, `logic/app/app.go:206-272`; **P5-11: worker slot accounting broken** |

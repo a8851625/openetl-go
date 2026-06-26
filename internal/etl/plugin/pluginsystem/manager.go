@@ -180,41 +180,76 @@ func (m *Manager) Get(name string) (*PluginMeta, error) {
 
 // ExecTransform runs a transform plugin on a single record.
 // The WASM plugin must export a function named "transform" that accepts
-// and returns a JSON-encoded Record.
+// a JSON-encoded Record and returns either an empty output, one JSON-encoded
+// Record/data object, or an array of Record/data objects.
 func (m *Manager) ExecTransform(ctx context.Context, pluginName string, rec core.Record) (core.Record, error) {
+	records, err := m.ExecTransformRecords(ctx, pluginName, rec)
+	if err != nil {
+		return rec, err
+	}
+	switch len(records) {
+	case 0:
+		return rec, core.ErrRecordFiltered
+	case 1:
+		return records[0], nil
+	default:
+		return rec, fmt.Errorf("plugin %s produced %d records; use batch execution for multi-output transform results", pluginName, len(records))
+	}
+}
+
+// ExecTransformRecords runs a transform plugin on a single record and returns
+// zero, one, or many output records according to Plugin ABI v1.
+func (m *Manager) ExecTransformRecords(ctx context.Context, pluginName string, rec core.Record) ([]core.Record, error) {
 	m.mu.RLock()
 	lp, ok := m.plugins[pluginName]
 	m.mu.RUnlock()
 	if !ok {
-		return rec, fmt.Errorf("plugin %s not found", pluginName)
+		return nil, fmt.Errorf("plugin %s not found", pluginName)
 	}
 
 	input, err := json.Marshal(rec)
 	if err != nil {
-		return rec, fmt.Errorf("marshal record: %w", err)
+		return nil, fmt.Errorf("marshal record: %w", err)
 	}
 
 	_, output, err := lp.extism.CallWithContext(ctx, "transform", input)
 	if err != nil {
-		return rec, fmt.Errorf("plugin %s call failed: %w", pluginName, err)
+		return nil, fmt.Errorf("plugin %s call failed: %w", pluginName, err)
 	}
 
-	var result core.Record
-	if err := json.Unmarshal(output, &result); err != nil {
-		return rec, fmt.Errorf("unmarshal plugin output: %w", err)
+	records, err := pluginTransformOutputToRecords(output, rec)
+	if err != nil {
+		return nil, fmt.Errorf("parse plugin %s transform output: %w", pluginName, err)
 	}
-	return result, nil
+	return records, nil
 }
 
 // ExecTransformWithConfig runs a transform plugin with an updated config context.
 // The config map is merged into the plugin's HostFunctionContext so that
 // host_config_get() calls inside the WASM plugin can read the values.
 func (m *Manager) ExecTransformWithConfig(ctx context.Context, pluginName string, rec core.Record, config map[string]any) (core.Record, error) {
+	records, err := m.ExecTransformRecordsWithConfig(ctx, pluginName, rec, config)
+	if err != nil {
+		return rec, err
+	}
+	switch len(records) {
+	case 0:
+		return rec, core.ErrRecordFiltered
+	case 1:
+		return records[0], nil
+	default:
+		return rec, fmt.Errorf("plugin %s produced %d records; use batch execution for multi-output transform results", pluginName, len(records))
+	}
+}
+
+// ExecTransformRecordsWithConfig runs a transform plugin with an updated config
+// context and returns all output records.
+func (m *Manager) ExecTransformRecordsWithConfig(ctx context.Context, pluginName string, rec core.Record, config map[string]any) ([]core.Record, error) {
 	m.mu.RLock()
 	lp, ok := m.plugins[pluginName]
 	m.mu.RUnlock()
 	if !ok {
-		return rec, fmt.Errorf("plugin %s not found", pluginName)
+		return nil, fmt.Errorf("plugin %s not found", pluginName)
 	}
 
 	// Update config on the host function context.
@@ -226,7 +261,117 @@ func (m *Manager) ExecTransformWithConfig(ctx context.Context, pluginName string
 		lp.hctx.mu.Unlock()
 	}
 
-	return m.ExecTransform(ctx, pluginName, rec)
+	return m.ExecTransformRecords(ctx, pluginName, rec)
+}
+
+func pluginTransformOutputToRecords(output []byte, base core.Record) ([]core.Record, error) {
+	trimmed := string(bytesTrimSpace(output))
+	switch {
+	case trimmed == "", trimmed == "null", trimmed == "undefined", trimmed == "false":
+		return nil, nil
+	case len(trimmed) > 0 && trimmed[0] == '[':
+		var items []json.RawMessage
+		if err := json.Unmarshal([]byte(trimmed), &items); err != nil {
+			return nil, fmt.Errorf("array unmarshal: %w", err)
+		}
+		records := make([]core.Record, 0, len(items))
+		for i, item := range items {
+			rec, err := pluginTransformRecordFromJSON(item, base)
+			if err != nil {
+				return nil, fmt.Errorf("result[%d]: %w", i, err)
+			}
+			records = append(records, rec)
+		}
+		return records, nil
+	case len(trimmed) > 0 && trimmed[0] == '{':
+		rec, err := pluginTransformRecordFromJSON(json.RawMessage(trimmed), base)
+		if err != nil {
+			return nil, err
+		}
+		return []core.Record{rec}, nil
+	default:
+		return nil, fmt.Errorf("result must be empty/null/false, a record or data object, or an array of records/data objects")
+	}
+}
+
+func pluginTransformRecordFromJSON(raw json.RawMessage, base core.Record) (core.Record, error) {
+	trimmed := string(bytesTrimSpace(raw))
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return base, fmt.Errorf("record output must be an object")
+	}
+
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return base, fmt.Errorf("record output unmarshal: %w", err)
+	}
+
+	if _, ok := probe["data"]; ok || pluginJSONHasAnyKey(probe, "before", "metadata", "operation") {
+		out := base
+		out.Data = clonePluginDataMap(base.Data)
+		out.Before = clonePluginDataMap(base.Before)
+		if _, hasData := probe["data"]; hasData {
+			out.Data = nil
+		}
+		if _, hasBefore := probe["before"]; hasBefore {
+			out.Before = nil
+		}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return base, fmt.Errorf("record output unmarshal: %w", err)
+		}
+		return out, nil
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return base, fmt.Errorf("data output unmarshal: %w", err)
+	}
+	out := base
+	out.Data = data
+	return out, nil
+}
+
+func pluginJSONHasAnyKey(m map[string]json.RawMessage, keys ...string) bool {
+	for _, key := range keys {
+		if _, ok := m[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func clonePluginDataMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func bytesTrimSpace(in []byte) []byte {
+	start := 0
+	for start < len(in) {
+		switch in[start] {
+		case ' ', '\n', '\r', '\t':
+			start++
+		default:
+			goto foundStart
+		}
+	}
+	return nil
+foundStart:
+	end := len(in)
+	for end > start {
+		switch in[end-1] {
+		case ' ', '\n', '\r', '\t':
+			end--
+		default:
+			return in[start:end]
+		}
+	}
+	return in[start:end]
 }
 
 // Close unloads all plugins.

@@ -16,7 +16,7 @@
 | MySQL/TiDB | `batch_mode: upsert` + `pk_columns` | 重放行覆盖相同主键 | CDC 和崩溃恢复（使用可变表时）必须使用此模式。普通 insert 仅对追加型唯一事件安全。 |
 | ClickHouse | 兼容 ReplacingMergeTree 的表（含 `_version`），或 ETL `auto_create: true` | 后续版本通过 `FINAL` 去重；合并前可能存在原始重复行 | 需要精确当前状态的查询应使用 `FINAL` 或下游物化。删除依赖表设计/墓碑策略。 |
 | Kafka Sink | 生产者写入为 at-least-once | 可能出现重复消息 | 使用确定性消息 key 和消费者端幂等。Kafka 精确一次事务尚未实现。 |
-| Elasticsearch | 基于主键的稳定文档 `_id` | 重放文档替换相同 ID | 部分 bulk 失败拆分尚未实现，因此失败的 bulk 批次可能将多条记录放入 DLQ。 |
+| Elasticsearch | 基于主键的稳定文档 `_id` | 重放文档替换相同 ID | 局部 bulk 条目错误会暴露失败记录索引，runner 只把失败记录写入 DLQ，不会重写已被接受的记录。 |
 | S3/OSS/File Sink | 每批次新建对象/文件 | 重放批次可能创建额外对象 | 回填任务使用清单文件或确定性输出前缀。对象清单支持尚未实现。 |
 | 本地 File Sink | 每次 flush 新建文件 | 重放批次可能创建额外文件 | 适用于提取/调试流程；如需精确一次输出，消费者必须去重。 |
 
@@ -43,4 +43,3 @@
 - 跨 Sink 原子扇出尚未实现。
 - Kafka 事务性精确一次尚未实现。
 - S3/File 确定性对象清单尚未实现。
-- Elasticsearch 局部 bulk 条目级 DLQ 尚未实现。

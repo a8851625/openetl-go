@@ -6,7 +6,7 @@ Accepted
 
 ## 背景
 
-OpenETL 已具备 Kafka source、lookup/window transform、ClickHouse sink、checkpoint、DLQ 和 Podman e2e 基础。下一阶段首要产品方向是把这些能力收敛成一条可验证的实时宽表链路，而不是继续横向扩展 connector 数量。
+OpenETL 已具备 Kafka source、lookup/window transform、ClickHouse sink、checkpoint、DLQ 和 Docker e2e 基础。下一阶段首要产品方向是把这些能力收敛成一条可验证的实时宽表链路，而不是继续横向扩展 connector 数量。
 
 ## 决策
 
@@ -46,7 +46,7 @@ Kafka JSON/Debezium 订单事件
 
 ## 验收测试
 
-首条链路必须新增 Podman e2e，至少覆盖：
+首条链路必须新增 Docker e2e，至少覆盖：
 
 - Redpanda + MySQL/PostgreSQL 维表 + ClickHouse 正常写入。
 - Kafka consumer crash/restart。

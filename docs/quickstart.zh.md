@@ -1,6 +1,8 @@
 # ETL/CDC 快速入门
 
-> 轻量级声明式 ETL/CDC 数据同步平台。YAML 定义管道，支持 MySQL CDC、Kafka、ClickHouse、PostgreSQL、Doris、Elasticsearch、S3 等 20+ 连接器。
+> 轻量、自托管、开源的 CDC/ETL 数据同步、清洗、汇聚运行时。用 YAML、API 或 Web UI 定义 `Source -> Transform -> Sink` 管道，支持 MySQL CDC、Kafka、ClickHouse、PostgreSQL、Doris、Elasticsearch、S3 等连接器。
+
+OpenETL-Go 适合常见同步、清洗、补维、去重和 tumbling window 汇聚；不定位为 Flink/Spark 级复杂流计算、Airflow 级通用调度器或 Airbyte 级 SaaS ELT 连接器目录。完整边界见[产品定位](./positioning.zh.md)。
 
 ---
 
@@ -14,7 +16,7 @@ git clone <repo-url> openetl-go
 cd openetl-go
 
 # 启动全部依赖（MySQL、ClickHouse、MinIO、Redpanda）+ ETL 服务
-podman compose -f docker-compose.quickstart.yml up -d
+docker compose -f docker-compose.quickstart.yml up -d
 
 # 验证服务
 curl http://localhost:8000/api/v2/health
@@ -31,7 +33,7 @@ export ETL_API_TOKEN=$(openssl rand -hex 16)
 export ETL_SPEC_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
 # 重启服务使配置生效
-podman compose -f docker-compose.quickstart.yml restart etl
+docker compose -f docker-compose.quickstart.yml restart etl
 ```
 
 ---
@@ -138,10 +140,10 @@ curl http://localhost:8000/metrics
 | | `s3` | S3/MinIO（Parquet/JSON，分片上传） |
 | | `jdbc` | 任意 JDBC 数据库 |
 | | `file_sink` | 本地文件输出 |
-| **Transform** | `filter`、`rename`、`add_field`、`drop_field`、`type_convert` | 基础转换 |
+| **Transform** | `filter`、`project`、`select_fields`、`flat_map`、`udtf`、`rename`、`add_field`、`drop_field`、`type_convert` | 基础转换 |
 | | `deduplicate`、`validate` | 数据清洗 |
 | | `lua` | Lua 脚本（内联，gopher-lua 纯 Go） |
-| | `normalize_envelope`、`lookup`、`window` | Kafka envelope 标准化 / 维表 JOIN / tumbling 窗口聚合 |
+| | `normalize_envelope`、`debezium_cdc`、`cdc_policy`、`ddl_guard`、`lookup`、`window` | Kafka envelope/CDC 策略 / 维表 JOIN / tumbling 窗口聚合 |
 | | `join` | 流流 interval JOIN，可选 SQLite 状态恢复；生产级 crash/rebalance 认证仍在 roadmap 中 |
 | | `router`、`fanout`、`tap` | 条件路由 / 扇出 / 旁路 |
 | | `enricher`、`lookup` | 数据增强 / 维表查找 |

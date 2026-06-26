@@ -2,7 +2,7 @@ name: "mysql-cdc-to-clickhouse"
 source:
   type: mysql_cdc
   config:
-    host: "host.containers.internal"
+    host: "host.docker.internal"
     port: 13306
     user: "sync_user"
     password: "sync_password_123"
@@ -18,7 +18,7 @@ transforms:
 sink:
   type: clickhouse
   config:
-    host: "host.containers.internal"
+    host: "host.docker.internal"
     port: 9000
     user: "default"
     password: "dzh123456"

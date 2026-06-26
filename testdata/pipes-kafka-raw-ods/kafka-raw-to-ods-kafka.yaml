@@ -1,0 +1,118 @@
+name: kafka-raw-to-ods-kafka
+
+source:
+  type: kafka
+  config:
+    brokers:
+      - host.docker.internal:19092
+    topic: raw-device-protocol
+    group_id: ${RAW_ODS_GROUP_ID:-openetl-raw-ods}
+    initial_offset: oldest
+    value_column: raw_payload
+
+transforms:
+  - type: flat_map
+    config:
+      language: lua
+      on_error: dlq
+      timeout_ms: 2000
+      script: |
+        local raw = data.raw_payload
+        if raw == nil or raw == "" then
+          error("raw parser: missing raw_payload")
+        end
+
+        local fields = {}
+        for token in string.gmatch(raw, "([^;]+)") do
+          local key, value = string.match(token, "^([^=]+)=(.*)$")
+          if key ~= nil and value ~= nil then
+            fields[key] = value
+          end
+        end
+
+        if fields.device == nil or fields.ts == nil or fields.events == nil then
+          error("raw parser: required fields device, ts, events")
+        end
+
+        local out = {}
+        for event in string.gmatch(fields.events, "([^|]+)") do
+          local metric, value = string.match(event, "^([^:]+):([^:]+)$")
+          if metric == nil or value == nil then
+            error("raw parser: invalid event " .. event)
+          end
+          local event_id = fields.device .. ":" .. fields.ts .. ":" .. metric
+          out[#out + 1] = {
+            operation = "INSERT",
+            data = {
+              event_id = event_id,
+              device_id = fields.device,
+              event_time = fields.ts,
+              dt = string.sub(fields.ts, 1, 10),
+              metric_type = metric,
+              metric_value = value
+            },
+            metadata = {
+              table = "raw_device_ods",
+              key = event_id
+            }
+          }
+        end
+
+        if #out == 0 then
+          error("raw parser: no events")
+        end
+        return out
+  - type: lookup
+    config:
+      dsn: root:root123456@tcp(host.docker.internal:13306)/dzh3136_go?timeout=5s&readTimeout=5s&writeTimeout=5s
+      query: SELECT device_id, model, region FROM dim_devices
+      join_key: device_id
+      dim_key: device_id
+      fields:
+        - model
+        - region
+      refresh_interval_sec: 0
+      max_cache_entries: 100000
+      on_miss: dlq
+      on_refresh_error: error
+  - type: project
+    config:
+      fields:
+        - event_id
+        - device_id
+        - metric_type
+        - metric_value
+        - event_time
+        - dt
+      mappings:
+        model: device_model
+        region: device_region
+      constants:
+        source_system: raw-device-protocol
+      keep_unmapped: false
+  - type: type_convert
+    config:
+      conversions:
+        metric_value: float
+        event_time: timestamp
+
+sink:
+  type: kafka
+  config:
+    brokers:
+      - host.docker.internal:19092
+    topic: raw-device-ods
+    key_column: event_id
+    auto_create_topic: false
+
+batch_size: 10
+checkpoint_interval_sec: 1
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 500
+  max_interval_ms: 5000
+
+dlq:
+  enable: true

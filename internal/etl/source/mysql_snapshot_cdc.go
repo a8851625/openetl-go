@@ -194,6 +194,19 @@ func NewMySQLSnapshotCDCSource(config map[string]any) (*MySQLSnapshotCDCSource, 
 
 func (s *MySQLSnapshotCDCSource) Name() string { return s.name }
 
+func (s *MySQLSnapshotCDCSource) Describe(ctx context.Context) (core.SchemaInfo, error) {
+	table, ok := singleDescribableMySQLTable(s.tables)
+	if !ok {
+		return core.SchemaInfo{}, nil
+	}
+	db, err := openMySQLSchemaDB(ctx, s.user, s.password, s.host, s.port, s.database)
+	if err != nil {
+		return core.SchemaInfo{}, err
+	}
+	defer db.Close()
+	return describeMySQLTableSchema(ctx, db, s.database, table, nil)
+}
+
 func (s *MySQLSnapshotCDCSource) listTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name`,

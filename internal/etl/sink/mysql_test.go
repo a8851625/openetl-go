@@ -96,6 +96,52 @@ func TestMySQLBatchChunking(t *testing.T) {
 	}
 }
 
+func TestNormalizeMySQLValueParsesTimestampStrings(t *testing.T) {
+	cases := []struct {
+		name string
+		in   any
+		want time.Time
+		ok   bool
+	}{
+		{
+			name: "rfc3339_millis",
+			in:   "2024-03-09T16:00:01.123Z",
+			want: time.Date(2024, 3, 9, 16, 0, 1, 123000000, time.UTC),
+			ok:   true,
+		},
+		{
+			name: "mysql_datetime",
+			in:   "2024-03-09 16:00:01",
+			want: time.Date(2024, 3, 9, 16, 0, 1, 0, time.UTC),
+			ok:   true,
+		},
+		{
+			name: "plain_string",
+			in:   "VIN-9001",
+			ok:   false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeMySQLValue(tc.in)
+			if !tc.ok {
+				if got != tc.in {
+					t.Fatalf("normalizeMySQLValue(%v) = %#v, want unchanged", tc.in, got)
+				}
+				return
+			}
+			ts, ok := got.(time.Time)
+			if !ok {
+				t.Fatalf("normalizeMySQLValue(%v) = %T, want time.Time", tc.in, got)
+			}
+			if !ts.Equal(tc.want) {
+				t.Fatalf("normalizeMySQLValue(%v) = %s, want %s", tc.in, ts, tc.want)
+			}
+		})
+	}
+}
+
 // TestMySQLBenchmarkRealDB is an integration test gated by MYSQL_HOST.
 func TestMySQLBenchmarkRealDB(t *testing.T) {
 	host := os.Getenv("MYSQL_HOST")

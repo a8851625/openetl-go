@@ -20,18 +20,21 @@ wait_http() {
 }
 
 echo "==> Build image"
-if ! podman build -t "$IMAGE" -f Dockerfile .; then
-  podman image exists "$IMAGE"
+if ! docker build -t "$IMAGE" -f Dockerfile .; then
+  docker image inspect "$IMAGE" >/dev/null
   echo "==> Build failed; reusing existing $IMAGE"
 fi
 
 echo "==> Reset ETL data"
 rm -rf data-auth
 mkdir -p data-auth/output data-auth/checkpoint data-auth/dlq logs
+chmod -R a+rwX data-auth
+chmod a+rwX logs
 
 echo "==> Run auth-enabled pipeline"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8011:8001 \
   -e ETL_API_TOKEN="$TOKEN" \

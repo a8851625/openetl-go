@@ -1,426 +1,337 @@
-# OpenETL 后续改进 Roadmap
+# OpenETL-Go Roadmap
 
-本文面向项目目标：成为一个开放、易用、可扩展的数据同步与数据处理工具。结论来自当前代码、文档与已发布能力的抽样审计，优先关注产品能力缺口、设计风险和可验证的落地路径。
+本文是项目当前阶段的产品和工程路线图。它围绕一个收束后的定位展开：
+
+> OpenETL-Go 是轻量、自托管、开源的 CDC/ETL 数据同步、清洗、汇聚运行时。
+
+详细定位见 [docs/positioning.zh.md](./positioning.zh.md)。Roadmap 的目标不是把项目做成 Flink、Airbyte、Airflow 或 Kafka Connect 的非完整替代品，而是把常见自托管数据管道做到可信、易用、可扩展、轻量。
 
 ## 当前基线
 
-OpenETL 已经具备较好的雏形：单二进制部署、GoFrame HTTP 服务、React UI、SQL 存储后端、Pipeline/DAG 执行、DLQ、checkpoint、审计、指标、插件安装、主从 worker、较丰富的 source/sink/transform 注册体系，以及多条 Podman e2e 脚本。
+OpenETL-Go 已经具备较宽的能力面：
 
-当前更像“能力广、端到端可运行”的工程平台，但距离“开放、易用、可扩展”的产品目标还有几类关键缺口：
+- 数据路径：`Source -> Transform -> Sink` 线性 pipeline，DAG 节点/边，条件路由，fanout，并行分片，定时和流式执行。
+- 数据来源和目标：MySQL batch/CDC/snapshot+CDC、PostgreSQL CDC、Kafka、file、HTTP、Redis、ClickHouse、MySQL、PostgreSQL、Doris、Elasticsearch、Kafka、Redis、S3、JDBC、file sink。
+- 数据处理：filter、validate、type_convert、project/select_fields、flat_map/udtf（Lua 第一版 ABI）、debezium_cdc、cdc_policy/ddl_guard、rename/drop/add field、normalize_envelope、lookup、enricher、join、deduplicate、tumbling window、router、fanout、tap、rate_limiter、Lua/JS/TS/WASM。
+- 运行治理：Web UI、REST API、Connection Catalog、spec validate、connection test、transform dry-run、checkpoint、DLQ list/replay/delete、audit、metrics、health。
+- 运行形态：SQLite 单机，MySQL/PostgreSQL 共享存储，master-worker 分布式调度，build-tag gated WASM/QuickJS，Lua 可裁剪。
 
-- 可靠性契约仍需收紧：部分错误路径仍可能跳过记录或缺少 DAG/stateful replay 语义，跨 sink fanout、Kafka 事务、S3/file deterministic manifest、ES item-level DLQ 等也在现有幂等性文档中被列为未保证能力。
-- 易用性还偏工程化：UI 已有 dashboard、pipeline、designer、DLQ、plugin、worker、audit，但缺少一等公民的连接管理、向导式建管道、schema 预览、运行前影响评估、错误修复建议和调度入口。
-- 扩展接口没有闭环：`SchemaDescriptor` / `SchemaValidator` 已定义但内置 connector 尚未实现，插件元数据与真实能力可能漂移，插件编译仍可在请求时走 `npx` fallback。
-- 数据处理能力偏基础：窗口 transform 实际主要支持 tumbling，watermark/late data 只是部分支持；sliding/session window、schema registry、Avro/Protobuf、join miss policy、lineage 还未产品化。
-- 开放生态建设不足：README 与真实成熟度之间需要自动化矩阵校准，贡献指南、兼容性策略、插件认证、公开 roadmap 和 issue 模板还不足以支撑外部贡献者规模化参与。
+必须持续保持的边界：
 
-## 编排能力：高级聚合作为 pipeline 结果
+- 默认投递语义是 at-least-once，不承诺 exactly-once。
+- 生产链路通过业务主键、版本列、upsert、ReplacingMergeTree、deduplicate 或显式补偿吸收重放影响。
+- SQLite 是轻量单机入口，不宣称分布式保证。
+- DAG、复杂 join/window、插件生态和部分连接器必须按成熟度标注，不用文案包装成 production-ready。
+- 不追求完整流计算语义：任意 keyed state、processing-time timer、CoProcessFunction、SQL planner、Flink savepoint、复杂 sliding/session window、late side-output、retraction 不进入近期核心。
+- 对 Flink SQL 类同步任务，只迁移其数据流语义：source、解析/展开、lookup 补维、投影转换、sink。不要为了兼容 SQL 语法而引入通用 SQL planner。
 
-OpenETL 的目标不是把“聚合宽表”单列成一个产品功能，而是让 pipeline 编排本身能够组合 source、transform、state 和 sink，稳定表达更复杂的实时处理场景。现有能力已经足够拼出 Kafka facts -> lookup/join -> window aggregate -> ClickHouse 落地这类高级链路；roadmap 的重点应围绕编排语义、状态恢复、失败路径和可观测性收敛，而不是继续拆出一个独立的宽表功能线。
+## 竞品边界
 
-当前能力判断：OpenETL 已经具备把 Kafka -> lookup/join -> window aggregate -> ClickHouse 这类 pipeline 编排出来的基础能力，也已经有预览、向导、示例和 Podman happy-path e2e 的雏形；但还不能把“任意 Kafka 流 + 任意外部数据 join + 任意聚合”直接声明为 production-ready。生产化的关键差距不在于 connector 是否存在，而在于状态恢复、offset/checkpoint/sink commit 边界、join/window 语义、失败路径 DLQ、schema/preflight 和运维指标是否能被自动化测试证明。
+Roadmap 按以下差异化推进：
 
-目标场景：
+| 参照项目 | 它们更强的地方 | OpenETL-Go 应坚持的差异 |
+| --- | --- | --- |
+| Airbyte / Meltano / dlt | SaaS/数据库到数仓的 ELT 连接器目录 | 更轻，偏 CDC/实时同步、DLQ replay、幂等写入、自托管小闭环 |
+| Airflow / Dagster / Prefect | 通用工作流调度 | 内置数据读写、checkpoint、DLQ、preflight；也可被这些调度器调用 |
+| SeaTunnel / ChunJun | 更重的批流一体和大规模分布式执行 | 单二进制/小集群优先，部署和运维成本低 |
+| Kafka Connect / Debezium | CDC connector runtime 和 Kafka 标准生态 | 一体化 transform、sink、UI/API、DLQ；不夸大 CDC 协议成熟度 |
+| DataX | 稳定离线批同步 | 更实时，包含 CDC、checkpoint、DLQ、UI/API 和轻量汇聚 |
+| Flink / Spark Streaming | 复杂有状态流计算 | 不替代，只覆盖轻量清洗、补维、去重和 tumbling window 聚合 |
 
-- Kafka 事实流作为主输入，支持 JSON、Debezium envelope，并逐步支持 Avro/Protobuf + Schema Registry。
-- 事实流可与 MySQL/PostgreSQL 维表、Kafka 维表 topic、HTTP/Redis 等外部数据 join，形成带维度信息的中间结果。
-- 中间结果可继续按时间窗口、业务维度做实时聚合，输出到 ClickHouse/MySQL/PostgreSQL/Doris/S3 等 sink。
-- UI 通过 DAG 设计器和通用编排流程完成连接、sample 预览、字段映射、join 规则、聚合指标、目标表 DDL、preflight、发布和回放。
+## 当前主要缺口
 
-必须补齐的核心能力：
+### 1. 可靠性仍需证明
 
-| 能力域 | 当前基础 | Production-ready 缺口 | 优先交付 |
-|--------|----------|------------------------|----------|
-| 事实输入 | `kafka` source 已可消费，已有 Redpanda e2e。 | topic 多分区顺序、consumer group rebalance、offset 与 sink checkpoint 关系、重复消息处理边界需要固化；缺 Debezium/Schema Registry 一等解析。 | Kafka crash + rebalance + duplicate e2e；增加 envelope/parser 层，支持 event time、op、key、source metadata 标准化。 |
-| 维表 join | `lookup`、`enricher`、Lua 内存状态、`join` transform 已有基础；`lookup` 已支持刷新持久化、状态恢复、缓存上限、miss 显式 null/DLQ/error 策略、刷新失败 error 策略和 hit/miss/刷新/恢复指标；相关 e2e 已覆盖维表 miss 进入 DLQ、补维表后按稳定 DLQ ID replay 写入 sink，以及维表刷新失败进入 DLQ。 | CDC 维表更新、crash e2e 和 backpressure 仍未闭环。 | 先做 stream-table join production path：MySQL/PostgreSQL 维表 snapshot + 定时刷新 + miss DLQ/left join；再做 CDC 维表增量更新。 |
-| 流流 join | `join` 支持 keyed interval join，已可选接入 SQLite `StateStore` 恢复基础缓冲状态；runner/DAG executor 已可自动注入 pipeline/node 状态命名空间；linear runner 与 DAG executor checkpoint envelope 已记录 state snapshot version；已支持 `max_buffered_keys`/`max_buffered_records` 状态上限。 | 仍缺 Kafka rebalance/crash e2e、event-time interval、watermark、late data 和恢复边界证明。 | 保持 beta；补 interval join e2e 和 Kafka crash/rebalance 认证后再作为生产路径。 |
-| 窗口聚合 | `window` 主要支持 tumbling，已有基础聚合函数，并可选接入 SQLite `StateStore` 恢复未关闭窗口的聚合缓冲。 | sliding/session 未实现；watermark、allowed lateness、late side-output、retraction/update/delete CDC 聚合语义和输出事务边界不完整。 | 先生产化 tumbling + event-time + allowed lateness + 状态恢复；再补 sliding/session。 |
-| 下游落地 | ClickHouse/MySQL/PostgreSQL/S3/Kafka 等 sink 已实现；ClickHouse 已使用 ReplacingMergeTree/version 策略，相关 e2e 已覆盖重复 Kafka 消息在 `FINAL` 视图下按业务主键去重、窗口聚合通过 `deduplicate(id,_version)` 避免重复累计、schema drift 写入失败进入 DLQ，以及容器下线时写入失败进入 DLQ 并在恢复后按稳定 DLQ ID replay 写回。 | delete/update CDC、distributed 表、真实超时注入、自动恢复边界和更完整 schema drift 回滚测试仍未闭环。 | ClickHouse 作为第一生产目标；继续补 ClickHouse timeout injection、update/delete/final consistency、distributed table 和 schema evolution 测试。 |
-| 状态与一致性 | checkpoint、DLQ、run history 已有基础；`StateStore` v1 已起步，deduplicate/lookup/join/window 可选接入 SQLite 状态；linear runner 与 DAG executor 会为启用 `state_backend` 的 transform 注入状态命名空间；linear runner 与 DAG executor checkpoint envelope 已保存 source position + state snapshot versions。 | Kafka offset、状态快照、sink commit 之间仍缺一致性协议和恢复测试；sink commit metadata 仍未接入。 | 补 sink commit metadata、Kafka crash/rebalance 和 state replay e2e。 |
-| 可观测与修复 | pipeline metrics、DLQ、audit 已有基础；状态化 transform 已通过 `/api/v2/metrics` 和 `/metrics` 暴露 node-level state keys/bytes/updated_at；`lookup` 已暴露 processed/hit/miss/missing_key/miss_null/miss_dlq/miss_error/refresh_success/refresh_error/refresh_error_dlq/restore_success/scan_error/cache_limit_exceeded；`join` 已暴露 hit/miss/miss_dropped/miss_dlq/miss_error；`window` 已暴露 accumulated/late_dropped/emitted_records/emitted_windows/flushed_records；linear lookup miss 已有按稳定 DLQ ID replay 修复 e2e。 | 仍缺 node-level lag/watermark lag、late side-output/DLQ 指标；DLQ replay 对 DAG/状态型任务不完整。 | 增加高级聚合场景专用指标、node-level DLQ、按时间/offset 重放和从 checkpoint 重建 pipeline 的 runbook。 |
-| 编排与开发体验 | DAG editor、schema API、插件 schema 已有基础。 | 用户仍需要写 YAML；缺 topic sample、join 预览、聚合预览、目标 DDL 预览、影响分析和字段血缘。 | 增强通用 DAG 编排流程：source sample -> dimension join -> metrics -> sink DDL -> preflight -> deploy。 |
-| 测试认证 | 已有多条 Podman e2e；相关脚本已覆盖 Redpanda + MySQL 维表 + ClickHouse 的 happy path、重复消息幂等、schema drift 写入失败进入 DLQ、lookup miss 进入 DLQ、补维表后按稳定 DLQ ID replay 写入 sink、lookup 维表刷新失败进入 DLQ。 | 仍缺 crash、rebalance、late data、stream-stream join miss、ClickHouse 真实超时注入、DAG/stateful replay 等异常路径认证。 | 扩展编排 Podman e2e：Redpanda + MySQL 维表 + ClickHouse，覆盖 crash、rebalance、late data、stream-stream join miss、ClickHouse timeout injection、DAG/stateful DLQ replay。 |
+已有 checkpoint、DLQ、幂等建议和部分 e2e，但还需要把“不会静默丢数”变成端到端证据：
 
-首个生产候选 pipeline 建议定义为：
+- Kafka crash/rebalance/offset replay 认证不足。
+- Stateful transform 的 e2e 恢复边界还不够系统，尤其是 `Kafka offset + state snapshot + sink commit` 的关系。
+- DAG DLQ replay 当前不支持，必须持续显式暴露，不让用户误以为可用。
+- Elasticsearch partial bulk 已能按失败条目进入 DLQ；S3/File 重放幂等、跨 sink fanout 非原子等边界仍需要更清楚的测试和文档。
+- Connector maturity 需要由测试证据驱动，而不是手写字符串。
+
+### 2. 上手路径仍偏工程化
+
+用户仍需要理解较多 YAML 和运行时细节：
+
+- 常见任务缺少固定向导：数据库同步、Kafka 实时明细/聚合、文件/HTTP 落地。
+- 启动前 schema/sample/DDL/幂等策略预览还不完整。
+- preflight 错误需要更明确地指向 pipeline、node、字段、风险、修复动作和是否可 replay。
+- UI 应降低“必须手写 YAML”的比例，但 YAML 仍保留为高级和可审计入口。
+- UI 配置页需要复用更多上下文，而不是只暴露静态表单：
+  - connector descriptor、字段 schema、secret 标记、默认值、示例值和 maturity。
+  - Connection Catalog 中已保存的连接、最近健康状态和权限测试结果。
+  - source sample、schema introspection、topic/table/partition 列表、目标表 DDL preview。
+  - transform dry-run、preflight 结果、幂等风险、DLQ/replay 策略和推荐修复动作。
+  - 现有 pipeline/DAG spec、模板、Quickstart 示例和核心组件文档。
+- AI/LLM 生成 DAG 只能作为辅助入口；它需要结构化上下文包，否则容易生成不可执行或越界的 DAG。
+
+### 3. 扩展生态还没有认证闭环
+
+项目已有 registry、WASM runtime、TypeScript SDK、插件安装和 descriptor API，但扩展生态还缺少硬约束：
+
+- 内置 connector 和插件需要共享 descriptor、schema、preflight、metrics、DLQ 合约。
+- 缺少 connector/plugin certification test kit。
+- Plugin ABI v1 需要版本协商、兼容矩阵、deprecation policy 和最小运行时版本说明。
+- maturity metadata 应由实现、测试和文档边界共同校验。
+
+### 4. 插件化报文解析和一进多出 transform 需要产品化
+
+Kafka 设备协议、行业报文、日志 envelope 等任务常见形态是：
 
 ```text
-Kafka(JSON/Debezium order events)
-  -> normalize envelope/event_time
-  -> lookup MySQL/PostgreSQL dimension tables
-  -> build detail pipeline
-  -> tumbling window aggregate by business keys
-  -> ClickHouse ReplacingMergeTree tables
+Kafka raw message
+  -> parse protocol payload
+  -> flat_map / UDTF 展开为 0..N 条业务记录
+  -> lookup 维表补全
+  -> project/type_convert
+  -> Kafka/OLAP/warehouse sink
 ```
 
-该 pipeline 进入 production-ready 的最低门槛：
+这属于 OpenETL-Go 的同步、清洗、汇聚主线，不属于完整流计算。具体协议解析不应硬编码进核心；GB32960 这类行业协议应作为 Lua/JS/TS/WASM 插件或外部 parser 插件承载。`flat_map` / `udtf` 已有 Lua-backed 第一版核心 ABI，可返回 0..N 条记录，核心 transform dry-run 已能预览多输出；Kafka raw protocol -> Lua `flat_map` parser -> MySQL `lookup` -> `project` / `type_convert` -> Kafka ODS 已补第一条 Docker e2e，覆盖解析失败 DLQ、维表 miss DLQ、一进多出写入和 offset replay 后 Kafka append 重复边界；Kafka sink 已补 producer 失败注入单测，runner 层已有失败进入 DLQ 且不静默推进 checkpoint 的覆盖。JS/TS transform 已支持返回 record/data 对象数组，并通过 dry-run 预览多输出；WASM/plugin transform 已补空输出、单条和数组输出 ABI，`/api/v2/plugins/dry-run` 已返回 `records` / `output_count`；后续仍需补真实 WASM e2e 验证。
 
-- 至少一条明细 pipeline 和一条窗口聚合 pipeline 的 Podman e2e，依赖 Redpanda + MySQL/PostgreSQL + ClickHouse。
-- 覆盖 Kafka consumer crash、worker restart、consumer group rebalance、重复消息、join miss、维表刷新失败、ClickHouse 写入失败。
-- 所有记录级失败进入 DLQ 或明确计数审计，不允许静默跳过。
-- checkpoint 能说明并验证 Kafka offset、join/window 状态、sink 写入之间的恢复边界。
-- 文档明确交付语义：默认 at-least-once，exactly-once 不承诺；推荐使用业务主键、版本列和 sink 幂等策略消除重复影响。
+需要补齐：
 
-因此，短期产品口径应是：支持 Kafka 驱动的编排式实时聚合场景；只有当上面的状态恢复、失败路径和指标认证通过后，才把这条 pipeline 升级为 production-ready。
+- `flat_map` / `udtf` transform：Lua-backed 第一版核心 ABI 已支持单条或一批输入输出 0..N 条记录、记录级 DLQ、metrics 和继承式 record lineage；JS/TS transform 已补数组返回 ABI 与 dry-run；WASM/plugin transform 已补数组返回 ABI 和 dry-run 多输出响应，后续补真实 WASM e2e。
+- 脚本级输出数组约定：Lua/JS/TS/WASM plugin 已可返回多条 record，而不是只能修改当前 record；真实插件链路 e2e 仍待补齐。
+- 插件化协议解析样板：Lua parser fixture、GB32960 实时上报测试夹具和 Kafka raw -> ODS Kafka e2e 已证明核心能承载一进多出报文解析、补维、投影和 replay 边界；后续仍需提供 JS/TS/WASM 示例 parser 插件和真实 WASM e2e。
+- `project` / `select_fields` transform 已进入核心：对解析后宽字段做显式投影、重命名、常量填充和时间转换；后续需在 Kafka ODS / MaxCompute 链路中补 e2e 验证。
 
-## 关键设计不足
+### 5. ODPS/MaxCompute 生态需要按连接器规划
 
-### 1. 可靠同步：必须优先保证“没有静默丢数”
+阿里云 ODPS/MaxCompute 常见于维表和数仓落地。它可以进入连接器规划，但定位是 source/lookup/sink connector，不是 Flink SQL 兼容层：
 
-已发现的高优先级风险：
+- `odps_lookup` 或 `lookup` 的 ODPS/MaxCompute driver：支持按 key 维表查询或周期性快照缓存。
+- `odps` / `maxcompute` sink：experimental 第一版已注册 connector descriptor、鉴权/endpoint/project/table/partition 配置、schema validator、动态分区字段校验和 writer-disabled preflight；真实批量写入、权限探测、失败重试、DLQ 和集成测试仍待 SDK client 接入。
+- 首个 sink 目标链路：Kafka ODS JSON -> `project` / `type_convert` / schema validate -> MaxCompute 分区表，支持从记录字段（如 `dt`）生成目标分区。
+- 若 ODPS 维表查询成本或延迟不适合流式逐条 lookup，优先推荐把 ODPS 维表镜像到 MySQL/PostgreSQL/Redis，再用现有 `lookup` 补维。
 
-- Elasticsearch sink 在 bulk 构造时，action/doc marshal 失败会打印 warning 后 `continue`，该记录不会进入 DLQ，也不会让 pipeline 失败。这和数据同步工具的默认可靠性预期冲突。
-- DLQ replay 已支持 linear pipeline 按稳定 ID 精确操作，但 DAG pipeline replay 和状态型 replay 语义仍未支持。
-- 幂等性文档仍列出未保证项：跨 sink 原子 fanout、Kafka transactions、S3/file deterministic manifests、ES partial bulk item-level DLQ。
-- 部分 SPEC 中的旧问题已经修复，需要重新校准状态，避免团队继续基于过期风险列表决策。
+### 6. Debezium Kafka CDC 迁移需要产品化
 
-设计方向：
+很多团队已经在使用 Debezium 把 MySQL binlog 写入 Kafka，再用自研 FastAPI/Java/Go consumer 做 ODS 同步。这类链路是 OpenETL-Go 应优先覆盖的替代场景：
 
-- 所有 sink 的单条记录失败必须三选一：写入 DLQ、返回错误触发 retry、或有显式配置允许丢弃并计数审计。
-- DLQ 记录需要稳定 ID、原始 pipeline/version/node、record hash、错误分类、首次失败时间、最近失败时间、重放次数。
-- DAG 与 linear pipeline 使用统一失败语义，node-level DLQ 可追踪来源和目标 sink。
-- 发布前必须有“异常路径 e2e”，不仅验证 happy path。
+```text
+MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/ODS
+```
 
-### 2. 易用性：从“会写 YAML 才能用”升级到“可引导完成任务”
+它不需要完整流计算语义，核心是 Debezium envelope 解析、规则过滤、表名映射、幂等 upsert、成功后提交 offset、失败可见和可重放。当前 `kafka` source、`normalize_envelope`、`debezium_cdc`、`cdc_policy` / `ddl_guard`、模板化表名、Lua/TS/WASM、MySQL upsert 和 checkpoint 已覆盖主链路的配置级骨架；Debezium Kafka CDC -> MySQL ODS upsert 已补首个 fixture/e2e 入口，控制面已支持按 Kafka partition/offset 设置 replay checkpoint，e2e 脚本已覆盖 offset replay 后 upsert 吸收重复、Redpanda broker restart 后继续消费写入、同组消费者 join/leave rebalance 后继续消费、MySQL lock wait 临时错误 retry 后写入成功且不进 DLQ、MySQL 值范围写入失败进入 data-class DLQ 并在修复后 replay 补写，以及危险 DDL reject 进入 schema-class DLQ 且不落到 sink。后续还需要更多临时故障类型注入。
 
-当前 UI 已能监控和编辑，但用户完成常见任务仍需要理解 connector 配置字段、YAML 结构、运行时错误和部署方式。
+- `debezium_cdc` preset transform 已落地第一版：解析 Debezium `c/u/d/r`、`source.db`、`source.table`、`ts_ms`、tombstone、schema-change/DDL 事件，输出标准 `operation`、`metadata.table`、`metadata.database` 和保留原始元数据的可选字段。
+- 模板化 `table_mapping` 已在 `debezium_cdc` 配置中支持 `{source_db}`、`{source_table}`、`{YYYYMMDD}`、`{YYYY-MM-DD}` 等变量，覆盖 `dl_vls_dev.vehicle_charge -> ods_dl_vls_dev__vehicle_charge` 这类 ODS 命名规则；pipeline 顶层 table_mapping 的更深整合后续继续。
+- `cdc_policy` / `ddl_guard` transform 已支持配置化表达源库/表 `include_*` / `exclude_*`、`skip_delete`、`skip_snapshot`、`skip_tombstone`、`dangerous_ddl=reject|drop|pass`、`ddl_allowlist`、`ddl_denylist`，并暴露跳过/拦截计数。
+- `/pipelines/{name}/checkpoint/set` 已支持 Kafka `partition` / `offset` 和 `replay_from_offsets` 请求，内部转换为 Kafka source 使用的 committed-offset checkpoint；旧 `position` 原始形态保持兼容。
 
-主要缺口：
+这些能力必须保持在 ETL 配置层，不引入 Kafka Connect runtime 或 Debezium connector 管理系统。推荐替代路径是先保留 Debezium 和 Kafka，只替换自研 consumer；若用户希望减少组件，再评估改用内置 `mysql_cdc` 直连 binlog。
 
-- 缺少 Connection Catalog：用户不能先创建、测试、复用 MySQL/Postgres/Kafka/S3/ES 等连接。
-- 缺少 Pipeline Wizard：没有从 source 选择、字段预览、目标映射、同步模式、幂等策略、调度/CDC 策略到提交的一条路径。
-- 缺少 schema preview 与 sample preview：用户难以在启动前知道会同步哪些列、类型是否兼容、目标表会怎样创建。
-- `SchedulesPage.tsx` 存在，但主路由/导航没有把 schedule 作为一等页面暴露。
-- 错误文案偏底层，缺少错误分类、修复建议、配置字段定位和文档链接。
+### 7. 轻量运行需要产品化
 
-设计方向：
+- 默认二进制包含很多内置能力，长期需要更清楚的裁剪策略。
+- API-only、master-only、worker-only、headless 模式需要文档和 smoke test。
+- SQLite/MySQL/PostgreSQL storage 已存在，但升级、回滚、retention、备份恢复、worker 扩缩容 runbook 还不够系统。
 
-- UI 以“连接 -> 数据集 -> 同步任务 -> 运行/恢复”为主流程，而不是只以 pipeline YAML 为中心。
-- 所有 connector 暴露统一的 typed descriptor，UI 表单、文档、校验、OpenAPI 都从同一份元数据生成。
-- preflight 不仅返回 pass/fail，还返回风险等级、影响范围、建议修复动作。
+## Roadmap 主线
 
-### 3. 可扩展性：插件能力需要 ABI、元数据和测试套件
+近期只保留四条主线：
 
-项目已有 WASM/TypeScript SDK、插件安装 API 和 connector registry，但平台化程度还不够。
+1. 可靠同步底线。
+2. 首次任务闭环。
+3. 扩展合约与认证。
+4. 轻量运行与生产运维。
 
-主要缺口：
+新增连接器不是主线。只有当它服务上述主线，且能带测试、preflight、schema、DLQ、metrics 和成熟度说明时，才应进入核心。
 
-- 插件 ABI/SDK 兼容策略不明确，缺少版本协商和 deprecation policy。
-- 插件编译路径仍可依赖请求时 `npx --yes -p @extism/js-pdk@...`，这对生产环境的可用性、供应链安全和可复现构建都不理想。
-- connector metadata 部分仍是手写聚合，容易和真实配置、能力、成熟度漂移。
-- 缺少 connector certification：新 source/sink/transform 没有统一合约测试、失败注入、幂等性验证和性能基准。
-- `SchemaDescriptor` / `SchemaValidator` 已预留，但内置 connector 未实现，导致 schema 校验链路实际无效。
+## Phase 0：定位和事实源收束，0-2 周
 
-设计方向：
-
-- 插件体系要从“可以运行自定义代码”升级为“可发布、可测试、可认证、可升级的扩展生态”。
-- 内置 connector 与插件 connector 使用同一套 descriptor、schema、preflight、metrics、DLQ 合约。
-- 默认生产镜像不应在请求路径拉取 npm 包；编译器应预安装、离线缓存，或把编译移到 CLI/CI。
-
-### 4. 数据处理：流处理语义还不完整
-
-OpenETL 的 transform 种类丰富，但有些高级处理能力尚未达到可预期的生产语义。
-
-主要缺口：
-
-- window transform 接受 `window_type`，但 sliding/session 仍未实现，当前主要是 tumbling。
-- watermark、allowed lateness、late record 处理需要明确输出语义和 DLQ/side-output 策略。
-- join/lookup/window 的状态存储、过期、恢复、内存上限与 checkpoint 关系需要产品化。
-- 缺少 schema registry、Avro/Protobuf、Debezium envelope、字段血缘和类型演进策略。
-- JavaScript/TypeScript/Lua 脚本 transform 已有预算控制，但仍需要更系统的沙箱、依赖、日志和调试体验。
-
-设计方向：
-
-- 把 batch sync、CDC sync、stream processing 分层定义清楚，避免所有能力都塞进同一个 pipeline 语义。
-- 高级 transform 必须定义状态模型、时间模型、失败模型和资源模型。
-- 对处理类能力提供本地 dry-run、样例输入输出、单元测试模板和可视化调试。
-
-### 5. 开放生态：需要从“代码开源”走向“协作开放”
-
-主要缺口：
-
-- 缺少公开 roadmap 与 connector 成熟度矩阵，外部用户难以判断哪些能力可生产使用。
-- README 能力矩阵和实现成熟度需要自动化校验，避免宣传超过代码现实。
-- 贡献者缺少 issue 模板、插件开发教程、connector 合约测试说明、版本兼容策略和发布流程说明。
-- API/OpenAPI、配置 schema、UI 表单、插件 schema 还需要更强的一致性。
-
-设计方向：
-
-- 每个 connector 明确 maturity：experimental、beta、production。
-- 每个能力有 owner、测试门槛、兼容性说明和文档入口。
-- 文档默认提供 Podman 调试路径，与现有 e2e 脚本保持一致。
-
-## Connector 与插件 Production-ready 检视
-
-当前 `pluginMetadata()` 中大量 source/sink 被标记为 `stable`，但 SPEC 已明确：能力成熟度不能只看 metadata 字符串，必须同时满足代码实现、真实测试、文档与运行时行为一致。下面的矩阵用于重新校准生产可用性，后续应把它转成自动生成的 connector maturity matrix。
-
-### 分级标准
-
-- **Production-ready**：有真实依赖的 Podman e2e；覆盖 happy path、重启/checkpoint、DLQ/错误路径、幂等或重复处理语义；有 preflight、metrics、配置文档；不会静默丢数。
-- **Beta**：核心路径可用，有单测或部分 e2e，但生产语义仍有缺口，例如 schema 校验、异常路径、重放、资源上限、兼容性或文档不足。
-- **Experimental**：已注册或已有原型，但缺少真实 e2e、生产安全边界、兼容性承诺或关键语义。
-- **Dev-only**：仅用于示例、测试或开发演示，不应进入生产能力矩阵。
-
-### Source 成熟度
-
-| Source | 当前判断 | 证据与主要缺口 | Roadmap 跟进 |
-|--------|----------|----------------|--------------|
-| `mysql_batch` | Beta / 准生产 | 已有 MySQL batch -> file/MySQL e2e；但未实现 `SchemaDescriptor`，schema preview/preflight 无法基于真实列信息闭环。 | 实现 schema 描述、增量 cursor 边界测试、重复运行幂等测试，补 descriptor 驱动的 UI 表单。 |
-| `mysql_cdc` | Beta / 准生产 | 已有 CDC -> MySQL、CDC -> ClickHouse、CDC crash recovery e2e；仍需更严格的 DDL、删除、断点、GTID/binlog purge 场景验证。 | 增加 binlog 位点异常、DDL drift、delete/update、长时间断线恢复 e2e，并和 sink idempotency matrix 绑定。 |
-| `mysql_snapshot_cdc` | Beta / 准生产 | 已有 snapshot+CDC 和 crash recovery e2e；快照与增量衔接是高风险语义。 | 固化 low/high watermark 语义、重复快照重放测试、schema drift during snapshot 测试。 |
-| `postgres_cdc` | Beta | 有实现与单测；SPEC 仍记录 TRUNCATE/DDL 语义不完整，缺少 PostgreSQL CDC -> sink 的真实 e2e。 | 增加 PostgreSQL logical replication e2e，明确 TRUNCATE/DDL 同步策略，补 slot restart 与 publication 配置检查。 |
-| `kafka` | Beta / 准生产 | 有 Redpanda e2e 覆盖 source/sink；但 Kafka transactions、consumer group 重平衡、offset commit 与 sink checkpoint 关系仍需强化。 | 增加 crash + rebalance + duplicate message e2e，明确 exactly-once 不承诺边界和推荐 key 策略。 |
-| `http` | Beta / 准生产 | 有分页/auth/checkpoint e2e；HTTP API 类型差异大，错误重试、限流、游标语义需更多模板。 | 增加 429/5xx Retry-After、cursor 过期、schema inference、sample preview。 |
-| `file` | Beta | 有 file -> file e2e 和 CSV/JSON 单测；文件重扫、移动/截断、glob、多文件 checkpoint 语义需明确。 | 增加多文件、文件轮转、崩溃重扫、CSV 类型推断测试。 |
-| `redis` | Experimental | 有配置/单测，但未见 Redis source 真实 e2e；SCAN/stream/list/hash 语义、checkpoint 和重复处理策略需要澄清。 | 补 Redis source/sink e2e，区分 SCAN 快照与 Stream 消费模式，定义 checkpoint 与幂等建议。 |
-| `demo` | Dev-only | 注册为 source，但用于演示/测试。 | 从公开生产矩阵隐藏，或明确标为 dev-only。 |
-
-### Sink 成熟度
-
-| Sink | 当前判断 | 证据与主要缺口 | Roadmap 跟进 |
-|------|----------|----------------|--------------|
-| `mysql` | Beta / 准生产 | 有 batch -> MySQL、CDC -> MySQL、snapshot+CDC -> MySQL e2e；但未实现 `SchemaValidator`，upsert/delete/DDL drift 组合需矩阵化。 | 实现 schema validation，补 delete/update/upsert/insert mode 异常路径测试。 |
-| `clickhouse` | Beta / 准生产 | 有 CDC -> ClickHouse、auto-create、schema drift e2e；编排式聚合 e2e 已验证 ReplacingMergeTree 明细表重复消息在 `FINAL` 视图下按业务主键去重、窗口聚合重复消息不重复累计、schema drift 写入失败进入 DLQ，以及 ClickHouse 容器下线时写入失败进入 DLQ 并在恢复后按稳定 DLQ ID replay 写回。ClickHouse DELETE/UPDATE、真实超时注入和 distributed 表语义仍复杂。 | 增加 update/delete/final consistency、distributed、optimize、schema drift 回滚和 ClickHouse timeout injection 测试。 |
-| `s3` / `file_sink` | Beta | 有 MinIO JSONL/CSV/Parquet e2e；现有幂等性文档仍指出 deterministic object manifest 未保证。 | 增加 deterministic object naming/manifest、崩溃后 multipart 清理、重复写入去重策略。 |
-| `kafka` | Beta | 有 Redpanda e2e；Kafka transactions 未保证，exactly-once 只能依赖 key/idempotent producer 和下游去重。 | 明确 transaction 不承诺；补 partition key、producer retry、broker restart e2e。 |
-| `postgres` / `postgresql` | Beta | 有代码和存储后端 e2e，但缺直接 pipeline -> PostgreSQL sink 的真实 e2e 覆盖。 | 增加 MySQL batch/CDC -> PostgreSQL sink e2e，补 schema validation 和 truncate/delete 语义文档。 |
-| `elasticsearch` / `es` | Beta，Phase 0 阻塞 | 有 OpenSearch bulk e2e；但 bulk 构造 marshal 错误会 warning 后跳过，ES partial bulk item-level DLQ 仍未完成。 | 先修 silent skip，再做 item-level DLQ、429 Retry-After、mapping conflict、bulk partial retry e2e。 |
-| `redis` | Experimental | 有实现与配置文档，但缺真实 Redis sink e2e；HASH/STRING/LIST 的幂等与 delete/update 语义需要明确。 | 补 Redis sink e2e，定义 key strategy、TTL、delete/update 行为和重放语义。 |
-| `doris` | Experimental / Beta | 有实现与单测；未见 Podman e2e，Stream Load、事务标签、delete/upsert、schema drift 需要真实集群验证。 | 增加 Doris e2e 或文档标为 experimental；补 label 幂等、partial failure、schema drift 测试。 |
-| `jdbc` | Experimental | 通用 JDBC 能力面太宽，当前缺少按数据库的 e2e 和兼容矩阵。 | 拆分认证矩阵：MySQL/PostgreSQL 可通过原生 sink 覆盖，JDBC 先针对 1-2 个数据库做 certification。 |
-
-### Transform 与脚本插件成熟度
-
-| Transform / Plugin | 当前判断 | 证据与主要缺口 | Roadmap 跟进 |
-|--------------------|----------|----------------|--------------|
-| `identity`、`rename`、`drop_field`、`add_field`、`type_convert`、`filter` | Production candidate | 基础无状态算子，单测覆盖较好；仍需和 schema descriptor 联动。 | 作为第一批 production transform，补配置 schema 与错误定位。 |
-| `lua` | Beta | 默认构建可用，已有超时和沙箱；但无强内存上限，脚本依赖、调试和资源审计还不完整。 | 增加资源指标、脚本 dry-run、错误定位；生产文档说明内存边界。 |
-| `javascript` / `typescript` / `ts` | Experimental / Beta | 依赖 CGO + QuickJS，非默认构建；已有 timeout/memory limit，但部署复杂度高。 | 明确构建矩阵，补 CGO 镜像、脚本兼容测试、资源耗尽 e2e。 |
-| `deduplicate` | Beta / 准生产 | LRU 去重可用，已可选接入 SQLite `StateStore`，覆盖重启后识别重复 key 和 TTL 过期测试；runner/DAG executor 已可注入状态命名空间；linear runner 与 DAG executor checkpoint envelope 已记录 state snapshot version；基础 state keys/bytes/updated_at 与 processed/passed/duplicate_dropped/memory_duplicate_dropped/state_duplicate_dropped/evicted_keys 指标已接入。 | 下一步补 crash e2e。 |
-| `validate` | Beta | 数据质量规则可用；失败策略、规则报告和 DLQ 分类需要产品化。 | 增加 `on_fail: dlq|drop|error`、质量报告、样例导出。 |
-| `router` / `fanout` | Beta | 已修复 provenance 方向问题；但多 sink fanout 原子性仍未保证。 | 明确 fanout delivery contract，补 partial sink failure 与回滚/补偿策略。 |
-| `tap` / `rate_limiter` | Beta | 运维辅助算子；需要指标、全局/分片限流语义。 | 补 Prometheus 指标、分布式限流说明和 e2e。 |
-| `enricher` / `lookup` | Beta / 准生产 | HTTP/SQL enrichment 可用；`lookup` 已可选接入 SQLite `StateStore`，刷新成功后持久化维表缓存，维表查询失败时可恢复最近未过期快照；已支持 `max_cache_entries` 上限、`on_miss: pass|null|dlq|error`、`on_refresh_error: pass|error`，并暴露 processed/hit/miss/missing_key/miss_null/miss_dlq/miss_error/refresh_success/refresh_error/refresh_error_dlq/restore_success/scan_error/cache_limit_exceeded 指标；`hack/e2e-wide-table.sh` 已验证 lookup miss 入 DLQ、补维表后按稳定 DLQ ID replay 写入 sink，以及坏维表 query 进入 DLQ。 | 补 CDC 维表增量更新和 crash e2e。 |
-| `join` | Beta | `on_miss` 已出现，且可选 SQLite `StateStore` 已能按 join key 持久化/恢复基础 interval join 缓冲；runner/DAG executor 已可注入状态命名空间；linear runner 与 DAG executor checkpoint envelope 已记录 state snapshot version；基础 state keys/bytes/updated_at 与 join hit/miss/miss policy 指标已接入；`max_buffered_keys`/`max_buffered_records` 可限制内存状态，上限触发时进入现有错误/DLQ 路径并暴露 `state_limit_exceeded`；但缺 Kafka crash/rebalance 验证。 | 补 interval join e2e。 |
-| `window` | Beta（tumbling）/ Experimental（复杂窗口） | 当前主要是 tumbling；可选 SQLite `StateStore` 已能恢复未关闭窗口的聚合缓冲；runner/DAG executor 已可注入状态命名空间；linear runner 与 DAG executor checkpoint envelope 已记录 state snapshot version；基础 state keys/bytes/updated_at 与 accumulated/late_dropped/emitted_records/emitted_windows/flushed_records 指标已接入；`window_type` 生产 schema 只暴露 tumbling。sliding/session、late side-output、retraction/update/delete CDC 聚合语义仍不完整。 | 补 watermark lag、late side-output/DLQ 和 window crash e2e；实现 sliding/session 后再提升复杂窗口成熟度。 |
-| WASM `plugin_*` source/sink/transform | Experimental | 需要 `-tags=extism`，默认构建为 no-op；source checkpoint 目前是通用时间戳，sink 无 schema/idempotency 合约，服务端 TS 编译仍可能走请求时 `npx` fallback。 | 定义 Plugin ABI v1、manifest、schema/preflight、checkpoint/idempotency contract、离线构建和 certification test kit。 |
-
-### 需要立即修正的 maturity 偏差
-
-- `pluginMetadata()` 不应把所有 source/sink 默认标为 `stable`；应改为 `production|beta|experimental|dev-only`，并由测试证据驱动。
-- README 能力一览应增加 maturity 列或链接到本矩阵，避免用户把“已注册”理解为“生产承诺”。
-- `GET /api/v2/plugins/schema`、UI 插件能力矩阵、配置文档和 README 必须使用同一事实源。
-- 每个 connector 进入 Production-ready 前必须绑定至少一条 Podman e2e、一个异常路径测试和一段幂等/重放语义文档。
-
-## 分阶段 Roadmap
-
-### Phase 0：编排语义与可靠性底线，0-2 周
-
-目标：先把 Kafka 编排式聚合场景的生产语义定义清楚，同时消除会破坏结果可信度的静默丢数和状态恢复风险。
+目标：公开口径、配置文档、UI metadata、测试证据和代码能力一致。
 
 交付项：
 
-- 编写编排式聚合 ADR：明确支持的第一条链路、默认 at-least-once 语义、Kafka offset/checkpoint/sink commit 边界、重复数据消除建议。
-- 定义宽表 pipeline spec 模板：`kafka -> envelope normalize -> lookup -> detail wide table -> window aggregate -> clickhouse`。
-- 明确 transform maturity：`lookup` 可作为第一批生产候选，`join` stream-stream 与复杂 `window` 暂不承诺 production-ready。
-- 将 `window_type` 中未实现的 sliding/session 从 UI/schema 的生产路径降级，避免用户误以为已经可用。
-- 设计 `StateStore` v1 接口：至少覆盖 join/window/deduplicate 状态 key、TTL、snapshot、restore、metrics。
-- 修复 Elasticsearch sink marshal/action 错误静默跳过问题，改为 DLQ 或显式失败，并补 item-level bulk error DLQ。
-- 为 DLQ 增加稳定 ID、record hash、pipeline version、DAG node 信息；API 支持按 ID replay/delete。当前 SQL 存储与 UI/API 精确单条操作已完成，后续补 DAG node 传播覆盖更多 transform/source 失败点。
-- 明确 DAG DLQ replay 策略：要么实现 node-level replay，要么 UI/API 明确禁用并提供替代恢复路径。
-- 禁用生产默认请求时 `npx` 编译 fallback；提供离线预装镜像、CLI 编译或 CI 编译路径。
-- 重新审计 `docs/SPEC-v2-reaudit-2026-06*.md`，把已修复项标记完成，把仍存在项转成 issue/里程碑。
-- 把 `pluginMetadata()`、README、UI 插件矩阵中的 maturity 从笼统 `stable` 改为 production/beta/experimental/dev-only，并以测试证据为准。
-- 增加错误路径 e2e 设计：ES marshal/bulk partial failure、DLQ ID replay、Kafka crash/rebalance、join miss、DAG 失败恢复、插件编译离线环境。
+- 完成产品定位文档，并在 README、Quickstart、配置参考、AGENTS 中引用。
+- 建立统一 maturity 规则：`production`、`beta`、`experimental`、`dev-only`，README、UI、descriptor、配置文档使用同一事实源。
+- 明确 production candidate 链路：
+  - MySQL snapshot/CDC -> ClickHouse。
+  - MySQL batch/CDC -> MySQL/PostgreSQL。
+  - Debezium Kafka CDC -> `debezium_cdc` / `cdc_policy` / `table_mapping` -> MySQL ODS upsert。
+  - Kafka JSON/Debezium -> lookup -> deduplicate -> tumbling window -> ClickHouse。
+  - Kafka raw message -> parser plugin/flat_map -> lookup -> project -> Kafka ODS。
+  - Kafka ODS JSON -> project/type_convert -> MaxCompute partitioned table。
+  - file/HTTP -> file/S3。
+- 把 DAG DLQ replay 当前不支持的行为保持在 API/UI/文档中显式可见。
+- 建立“失败记录必须可见”规则：失败只能进入 DLQ、返回错误触发 retry，或由显式 allow-drop 配置并计数审计。
 
 验收指标：
 
-- 编排式聚合第一条 production candidate pipeline 有明确 spec、语义文档、失败模型和测试清单。
-- 所有 sink 的跳过记录路径都有 DLQ/失败/显式 allow-drop 配置。
-- `make test-quick` 与关键 Podman e2e 通过。
-- README、SPEC、OpenAPI、配置文档、UI 插件矩阵中的能力状态一致。
-- 每个 connector 都有明确 maturity、owner、缺口和进入下一等级的测试门槛。
+- README、Quickstart、配置参考、Roadmap 和 `GET /api/v2/connectors/descriptors` 的定位和成熟度口径不冲突。
+- 文档不再暗示 OpenETL-Go 是 Flink/Airbyte/Airflow/Debezium 的全量替代。
+- `make test-quick` 和相关 server/schema/DLQ 单测通过。
 
-### Phase 1：编排示例与验证，2-6 周
+## Phase 1：可信同步与轻量汇聚 MVP，2-6 周
 
-目标：交付一条可演示、可测试、可恢复的 Kafka 实时编排流水线，以 ClickHouse 作为第一生产 sink。
-
-当前实现进展：
-
-- Kafka envelope normalize 已支持普通 JSON 和 Debezium-like envelope，并纳入配置 schema。
-- Kafka -> normalize_envelope -> lookup -> tumbling window -> ClickHouse 的链路通过普通 pipeline spec 和 DAG 编排表达，不再保留独立宽表 API 或专用前端模块。
-- Connection Catalog 已有后端持久化、健康测试、密钥脱敏和前端页面入口，可复用 Connector Descriptor v1 生成 connector 类型提示。
-- Schedule 页面已接入主导航，并已通过专用 schedule API 支持 cron/periodic/streaming/once 的保存、禁用、立即运行和运行历史查看。
-- Redpanda + MySQL 维表 + ClickHouse 的编排 e2e 已加入 `hack/e2e-wide-table.sh` 和 `hack/e2e-all.sh`，覆盖明细 pipeline、tumbling 聚合、ClickHouse 明细重复消息幂等、窗口聚合重复消息不重复累计、ClickHouse schema drift 写入失败进入 DLQ、ClickHouse 容器下线时明细写入失败进入 DLQ 并在恢复后 replay、lookup miss 进入 DLQ、补维表后按稳定 DLQ ID replay 写入 sink，以及 lookup 维表刷新失败进入 DLQ。
-- DLQ 记录已具备稳定数据库 ID、`record_hash`、`pipeline_version`、`dag_node` 字段，API/UI 支持按 ID 精确单条 replay/delete，避免时间窗口误删/误重放。
+目标：把最核心的同步、清洗、汇聚链路做成可推荐的 production candidate。
 
 交付项：
 
-- Kafka envelope normalize：支持普通 JSON 和 Debezium-like envelope，标准化 `op`、`event_time`、`source_table`、业务 key。
-- Stream-table lookup：支持 MySQL/PostgreSQL 维表 snapshot 加载、定时刷新、字段前缀、left join、join miss 进入 DLQ 或显式置空。
-- 明细 pipeline 构建：字段映射、字段重命名、类型转换、目标主键、版本列、delete/update CDC 处理策略。
-- Tumbling 窗口聚合：按 event-time、固定窗口、业务维度输出 count/sum/avg/min/max/first/last，支持 allowed lateness，并通过 `deduplicate(id,_version)` 避免同一业务事件重复累计。
-- ClickHouse 落地：自动建表/DDL 预览、ReplacingMergeTree/version 策略、schema drift add-column、明细重复写入幂等验证、聚合重复消息去重验证、schema drift 写入失败 DLQ 验证、ClickHouse 容器下线写入失败 DLQ 验证和恢复后 replay 验证。
-- 新增 Podman e2e：Redpanda + MySQL/PostgreSQL 维表 + ClickHouse，已覆盖正常链路、ClickHouse 明细重复消息幂等、窗口聚合重复消息不重复累计、ClickHouse schema drift 写入失败进入 DLQ、ClickHouse 容器下线时明细写入失败进入 DLQ 并在恢复后 replay、lookup miss 进入 DLQ、补维表后按稳定 DLQ ID replay 写入 sink 和维表刷新失败进入 DLQ；后续继续补 stream-stream join miss、ClickHouse 真实超时注入、DAG/stateful replay。
-- Connection Catalog：连接创建、测试、复用、密钥脱敏、连接健康状态。
-- 通用 DAG 编排流程：Kafka topic sample -> envelope 解析 -> 维表 join -> 明细字段 -> 聚合指标 -> ClickHouse DDL -> preflight -> deploy。
-- Schema/sample preview：启动前展示字段、类型、样例数据、目标表 DDL/自动建表计划。
-- 将 Schedule 页面接入主导航，并补齐 create/edit/enable/disable/run now/history。
-- 错误分类体系：配置错误、连接错误、权限错误、schema 错误、运行时错误、下游限流、数据质量错误。
-- UI 中展示 preflight 风险、DLQ 修复建议、checkpoint 恢复点和 replay 影响范围。
+- 为三条主路径补齐 e2e：
+  - MySQL snapshot/CDC -> ClickHouse，覆盖 schema drift、重启恢复、重复吸收、DLQ/replay。
+  - MySQL batch/CDC -> MySQL/PostgreSQL，覆盖 upsert/delete、事务批写、checkpoint 恢复。
+  - Kafka JSON/Debezium -> lookup -> deduplicate -> tumbling window -> ClickHouse，覆盖重复消息、lookup miss、状态恢复、ClickHouse 下线和 replay。
+- 增加 Kafka 报文解析到 ODS Kafka 的生产候选链路：
+  - Kafka raw message -> parser plugin + `flat_map` / `udtf` -> lookup 维表 -> `project` / `type_convert` -> Kafka JSON sink（Lua parser fixture 和 Docker e2e 已覆盖第一版链路）。
+  - 第一版维表优先使用 MySQL/PostgreSQL 缓存；ODPS/MaxCompute 作为后续 connector 增强。
+  - 覆盖解析失败进入 DLQ、维表 miss 策略、解析一进多出、Kafka sink 写入失败、offset replay 后幂等/重复边界（当前 e2e 已覆盖解析失败、lookup miss、一进多出和 Kafka append 重复边界；Kafka sink producer 失败注入已由单测覆盖，runner 层已有 DLQ/checkpoint 语义覆盖）。
+- 增加 Debezium Kafka CDC 到 ODS MySQL 的生产候选链路：
+  - Kafka Debezium topic -> `debezium_cdc` -> `cdc_policy` -> 模板化 `table_mapping` -> MySQL `batch_mode=upsert`（核心 transform、fixture 和 e2e 脚本已补，且覆盖 MySQL schema 写入失败进入 DLQ、修复后 replay）。
+  - 覆盖 include/exclude、跳过 DELETE、跳过 snapshot `op=r`、跳过 tombstone、危险 DDL drop/reject policy、目标表自动建表或 schema drift、offset replay、broker restart、consumer group rebalance、MySQL lock wait retry（checkpoint set 已支持 Kafka partition/offset，Debezium MySQL e2e 脚本已覆盖 replay 后 upsert 去重、Redpanda 重启后继续消费、同组消费者 join/leave 后继续消费和锁等待重试后写入成功）；更多临时故障类型仍待扩展。
+  - 控制面覆盖 start/stop/pause/resume、checkpoint set/reset、按 Kafka partition/offset 回放和 DLQ replay（checkpoint set + start/stop + offset replay 已进入 e2e；DLQ replay 已通过 MySQL schema 失败注入进入 Debezium e2e）。
+  - 明确迁移边界：不管理 Debezium connector，不承诺 Kafka transaction exactly-once，不自动执行危险 DDL。
+- 增加 Kafka ODS 到 MaxCompute 的生产候选链路：
+  - Kafka ODS JSON -> `project` / `select_fields` -> `type_convert` -> `odps` / `maxcompute` sink（experimental sink 合约已落地；当前 build 明确拦截未启用 writer 的 pipeline）。
+  - 支持 MaxCompute 表字段映射、`STRING` / `BIGINT` / `DOUBLE` / `TIMESTAMP` 等基础类型转换、按 `dt` 等字段写分区（配置 schema 和 validator 已覆盖；真实写入待接 SDK）。
+  - preflight 校验目标 project/table/partition 权限、字段缺失、类型兼容和分区字段存在性（当前已覆盖本地字段/分区合约和 writer-disabled error；远端权限/表探测待集成环境）。
+  - 明确 at-least-once 重放边界：默认 append 可能重复；推荐事件唯一键、分区 staging + merge/overwrite 或 sink 侧可证明的幂等提交策略。
+- Kafka 链路增加 consumer crash、broker restart、consumer group rebalance、offset replay 测试。
+- StateStore 恢复扩展到 e2e，明确 lookup、deduplicate、window 的恢复边界。
+- Elasticsearch item-level bulk DLQ 已接入 runner/sink；后续补 mapping conflict e2e。
+- S3/File 只补回填所需 deterministic prefix/manifest，不承诺通用 exactly-once 文件输出。
+- Preflight 输出风险等级、字段级错误、幂等建议和目标 DDL 预览。
+- `flat_map` / `udtf` transform 已进入核心 transform 集合，Lua 第一版 ABI 支持返回多条记录，并暴露 `input_records`、`output_records`、`dropped_records`、`parse_errors` 等 metrics；JS/TS transform 已支持返回 record/data 数组并可通过 dry-run 预览；WASM/plugin transform 已支持通用数组返回 ABI，插件 dry-run API 已返回多输出；GB32960 fixture 已覆盖 Lua parser 样板，真实 WASM e2e 后续补齐。
+- `project` / `select_fields` transform 已进入核心 transform 集合，用于宽字段投影、常量字段、字段别名和基础时间转换；后续补 Kafka ODS / MaxCompute e2e。
 
 验收指标：
 
-- 用户可在 UI 中完成 Kafka -> 维表 lookup -> ClickHouse 明细 pipeline -> ClickHouse 窗口聚合 pipeline。
-- 高级聚合编排有 Podman e2e 和 Playwright UI e2e。
-- crash/restart 后可以按文档边界恢复，不产生不可解释的丢数；重复写入由业务 key/version 策略吸收。
+- 主路径 e2e 覆盖 happy path、重复、失败、DLQ/replay、重启恢复。
+- 失败路径不会静默推进 checkpoint。
+- 文档清楚说明 at-least-once、重复吸收策略和不承诺边界。
 
-### Phase 2：状态化 join/window 与扩展平台化，6-10 周
+## Phase 2：首次任务闭环，6-10 周
 
-目标：把 MVP 中的内存状态和单一窗口语义推进到可恢复、可扩展、可认证的状态化处理能力。
-
-当前实现进展：
-
-- `StateStore` v1 已有 `MemoryStore` 与 SQLite-backed `SQLiteStore`，覆盖 TTL、snapshot/restore、状态大小统计和过期 key 清理。
-- checkpoint v1 envelope 已定义，可在同一 payload 中携带 source position、node state snapshot version、sink commit metadata 和 `at_least_once` 交付模式。
-- Connector Descriptor v1 API 已提供：`GET /api/v2/connectors/descriptors`，聚合 registry、配置 schema、secret 标记、capabilities 和 maturity metadata。
-- Plugin ABI v1 manifest 校验已提供，固定 ABI 为 `openetl.plugin.abi/v1`，并约束 source/read、sink/write、transform/transform 最低 entrypoint。
-- `deduplicate` 已支持可选 SQLite `StateStore`，可通过 `state_backend/state_path/state_pipeline/state_node/state_ttl_seconds` 持久化去重 key，并已补重启恢复与 TTL 单测。
-- `lookup` 已支持可选 SQLite `StateStore`，可通过同一组 `state_backend/state_path/state_pipeline/state_node/state_ttl_seconds` 配置持久化维表缓存，并已补缓存恢复与 TTL 单测；同时支持 `max_cache_entries` 控制维表缓存 key 上限，超限会拒绝刷新/恢复并递增指标；`on_miss: pass|null|dlq|error` 可把维表 miss 显式置空或送入 DLQ，`on_refresh_error: pass|error` 可把无可用缓存的刷新失败送入 DLQ。
-- `join` 已支持可选 SQLite `StateStore`，可通过同一组 `state_backend/state_path/state_pipeline/state_node/state_ttl_seconds` 配置按 join key 持久化 interval join 缓冲，并已补重启恢复与 TTL 单测。
-- `window` 已支持可选 SQLite `StateStore`，可通过同一组 `state_backend/state_path/state_pipeline/state_node/state_ttl_seconds` 配置持久化 tumbling window 聚合缓冲，并已补重启恢复与 TTL 单测。
-- Linear runner 与 DAG executor 已能在 transform 启用 `state_backend` 且未显式配置命名空间时，自动注入 `state_pipeline=<pipeline name>` 与 `state_node=<transform/node id>`，减少状态命名冲突和 YAML 样板。
-- Linear runner 与 DAG executor 已在 checkpoint 保存前采集实现 `StateSnapshotter` 的 transform state snapshot version，并用 checkpoint envelope 保存 `source position + state versions + at_least_once`；恢复 source 时会自动解出 legacy source position；状态快照采集失败时不会推进 source checkpoint。
-- `deduplicate`、`lookup`、`join`、`window` 已实现 `StateMetricsProvider`，linear/parallel/DAG runner 会汇总基础 state keys/bytes/updated_at，并通过 `/api/v2/metrics` JSON 与 Prometheus `/metrics` 暴露。
-- `deduplicate` 已实现 `TransformMetricsProvider`，linear/parallel/DAG runner 会汇总 processed/passed/duplicate_dropped/memory_duplicate_dropped/state_duplicate_dropped/evicted_keys 计数，并通过 `/api/v2/metrics` JSON 与 Prometheus `etl_transform_metric_total` 暴露。
-- `lookup` 已实现 `TransformMetricsProvider`，linear/parallel/DAG runner 会汇总 processed/hit/miss/missing_key/miss_null/miss_dlq/miss_error/refresh_success/refresh_error/refresh_error_dlq/restore_success/scan_error/cache_limit_exceeded 计数，并通过 `/api/v2/metrics` JSON 与 Prometheus `etl_transform_metric_total` 暴露。
-- `join` 已实现 `TransformMetricsProvider`，linear/parallel/DAG runner 会汇总 hit/miss/miss_dropped/miss_dlq/miss_error 计数，并通过 `/api/v2/metrics` JSON 与 Prometheus `etl_transform_metric_total` 暴露。
-- `window` 已实现 `TransformMetricsProvider`，linear/parallel/DAG runner 会汇总 accumulated/late_dropped/emitted_records/emitted_windows/flushed_records 计数，并通过 `/api/v2/metrics` JSON 与 Prometheus `etl_transform_metric_total` 暴露。
-- SQL 存储后端当前已有 SQLite/MySQL/PostgreSQL 实现，但仍存在较多重复 CRUD、migration 和方言分支，后续应收敛为统一 SQL storage engine。
-
-SQL 抽象选型原则：
-
-- 推荐路线：以 Go 标准库 `database/sql` 为连接与事务底座，叠加 `sqlx` 或轻量 SQL builder（如 Squirrel/goqu）减少 scan、placeholder 和动态查询样板；项目内部保留一个很薄的 `Dialect` 层处理 SQLite/MySQL/PostgreSQL 的真实差异。
-- 不建议把存储层整体交给重 ORM：GORM/Bun/ent 可以减少 CRUD 样板，但会引入模型生命周期、migration、hook、方言行为和性能调优复杂度；OpenETL 的存储表偏平台元数据，手写可控 SQL + builder 更容易证明可靠性。
-- `sqlc` 适合强类型固定 SQL，但跨 SQLite/MySQL/PostgreSQL 时通常仍要维护多份 query 或方言条件；可以作为局部候选，不作为统一存储抽象的默认路线。
-- 配置目标是 `driver + dsn`：用户通过更换 DSN 切换 SQLite/MySQL/PostgreSQL 存储后端，但这不是“任意 SQL 数据库完全透明”。每个受支持数据库仍要通过 conformance test、migration smoke test 和方言兼容认证。
+目标：让新用户不用先读完整 YAML schema，也能完成常见任务。
 
 交付项：
 
-- `StateStore` v1 落地：本地/SQL 后端、snapshot/restore、TTL、状态大小指标、状态清理。
-- 统一 SQL storage engine：基于 `database/sql` + `sqlx`/SQL builder 收敛 SQLite/MySQL/PostgreSQL 存储实现，保留极薄 `Dialect` 层处理 placeholder、DDL、upsert、JSON/time 类型、锁语义和 `RETURNING` 差异。
-- 存储配置收敛为 `driver + dsn`：用户通过更换数据库 driver/DSN 切换 SQLite/MySQL/PostgreSQL 后端；文档明确这不是“所有 SQL 方言完全透明”，而是由内部 dialect 适配可支持的存储语义，并由 conformance test 定义生产承诺。
-- Stateful lookup/join：维表 CDC 增量更新、join/window 状态 backpressure 和 crash e2e。
-- Window 语义升级：event-time watermark、allowed lateness、late side-output/DLQ、窗口状态 checkpoint。当前已完成 tumbling window 基础状态恢复、运行时状态命名空间注入，以及 linear/DAG checkpoint state version，后续补输出事务边界。
-- Kafka 恢复强化：consumer group rebalance、broker restart、offset replay、重复消息与 sink 幂等组合测试。
-- Connector Descriptor v1：字段 schema、必填项、默认值、secret 标记、能力、限制、成熟度、示例。
-- 内置 source/sink 实现 `SchemaDescriptor` / `SchemaValidator`，UI 和 preflight 复用同一套 schema。
-- Plugin ABI v1：版本协商、兼容矩阵、deprecation policy、最小运行时版本。
-- Plugin/connector test kit：open/close、preflight、schema、read/write、retry、DLQ、idempotency、metrics 合约测试。
-- Connector certification：MySQL、ClickHouse、Kafka、S3 先进入 production candidate；PostgreSQL、Redis、Doris、JDBC、ES 按缺口补齐后再晋级。
-- 插件 registry manifest：签名、checksum、license、作者、版本、兼容性、下载源。
-- 将插件编译从服务请求路径移出，提供 `openetl plugin build/test/package` 或等价脚本。
+- UI 配置体验先解决“上下文不足”和“表单不可解释”：
+  - 每个 source/sink/transform 表单由 connector descriptor、schema、secret 标记、默认值、示例、maturity 和文档链接驱动。
+  - 选择连接后自动带出已保存连接、最近健康状态、可见 database/table/topic/partition、权限检查结果和推荐 batch/checkpoint 参数。
+  - 配置时提供 sample preview、schema preview、目标 DDL preview、transform dry-run、preflight 风险和幂等建议。
+  - 对危险选项给出明确后果：如 CDC + append-only sink、跳过 DELETE、自动 apply DDL、MaxCompute append 重放重复。
+  - YAML/DAG 编辑器保留，但要和表单双向同步；高级字段可折叠，不隐藏最终 spec。
+- UI 只做少量高频任务向导：
+  - 数据库同步：source -> table/schema preview -> sink -> idempotency -> preflight -> start。
+  - Kafka 实时明细/聚合：topic sample -> envelope -> lookup -> deduplicate/window -> ClickHouse DDL -> start。
+  - Debezium CDC 同步：topic sample -> Debezium envelope -> cdc policy -> table mapping -> MySQL/ClickHouse/Doris sink -> preflight -> start。
+  - Kafka 报文解析：topic sample -> parser/flat_map dry-run（核心 API 已支持多输出 records）-> lookup -> field projection -> Kafka/OLAP sink -> start。
+  - 文件/HTTP 落地：input sample -> transform dry-run -> file/S3 output -> manifest/idempotency 提示。
+- 向导生成普通 pipeline/DAG spec，不引入专用执行路径。
+- Schema/sample/DDL preview 使用真实 connector descriptor、source introspection 和 preflight，不依赖静态表单猜测。
+- 错误体验标准化：什么失败、在哪个 pipeline/node/字段失败、原因、修复动作、是否可 replay。
+- Quickstart 保持 5 分钟内可跑通，并覆盖 UI 创建任务路径。
+- AI/LLM DAG 辅助入口只生成普通 DAG spec，必须使用同一套 validate/preflight：
+  - 构建 `AI context pack`：核心组件 Markdown、connector descriptor、transform 使用方法、DAG 节点/边语义、示例 pipeline、常见错误、产品边界和 maturity。
+  - 为每个内置 source/sink/transform 补一页简洁组件文档：用途、配置字段、输入输出 record 形态、幂等/重放边界、示例 YAML、适用/不适用场景。
+  - AI 生成结果必须展示 diff、风险解释、缺失字段、需要用户确认的 secret/权限/危险 DDL，不允许直接绕过 preflight 启动。
+  - AI 上下文从文档和 descriptor 自动生成或校验，避免代码能力、UI 表单和 LLM 知识漂移。
 
 验收指标：
 
-- Kafka 编排式聚合链路的状态可以在进程重启后恢复，恢复边界有自动化测试证明。
-- 同一套 storage conformance 测试可以在 SQLite/MySQL/PostgreSQL 上通过；新增存储表或字段时只需改通用 SQL store 和少量 dialect/migration。
-- 新增一个第三方 sink 不需要修改 UI 表单代码即可生成配置界面。
-- 每个 production connector 都有合约测试和成熟度声明。
-- 插件 SDK 升级有兼容性测试，破坏性变更可被 CI 阻断。
+- 新用户可在 UI 完成三条任务之一，且无需手写 YAML。
+- Playwright e2e 覆盖向导创建、preflight 失败、修复后启动、DLQ 查看与 replay。
+- 同一 pipeline 可在 UI 与 YAML 间往返，不产生隐藏配置。
+- AI 生成的 DAG 在无 secret 的前提下能通过 spec validate；失败时能指出具体 node/字段/修复动作。
 
-### Phase 3：生产运维与分布式，10-16 周
+## Phase 3：扩展合约与认证，10-14 周
 
-目标：把单机可用能力推进到可运维、可恢复、可扩容的生产平台。
+目标：把“开放”和“可扩展”做成可维护机制。
 
 交付项：
 
-- 多进程/多容器 master-worker e2e：任务分配、worker crash、slot 恢复、任务重试、重复调度防护。
-- Worker history 与 task history：状态转换、失败原因、重试次数、分片归属、运行耗时。
-- 存储 retention/janitor：audit、run history、DLQ、task、pipeline versions 的保留策略。
-- SQL storage 运维闭环：统一迁移工具、schema version、备份/恢复 runbook、跨 SQLite/MySQL/PostgreSQL 的 upgrade/downgrade smoke test。
-- HA/DR 文档：数据库备份恢复、checkpoint 恢复、worker 扩缩容、版本升级、回滚。
-- 资源治理：pipeline 级并发、batch、内存、水位、下游限流、backpressure 策略。
-- 可观测性升级：结构化 JSON log、trace id、pipeline/node/record 关联、Prometheus dashboard 模板。
+- Connector/plugin certification test kit：
+  - open/close。
+  - schema descriptor/validator。
+  - preflight。
+  - read/write。
+  - retry/backoff。
+  - DLQ。
+  - idempotency。
+  - metrics。
+  - resource limit。
+- Plugin ABI v1 文档和兼容性测试：manifest、entrypoint、host function、版本协商、deprecation policy。
+- 插件构建移出服务请求主路径，提供 CLI/CI/离线镜像；服务端 compile 只保留受控开发模式。
+- Descriptor 由代码、schema 和测试证据共同生成或校验，阻止 metadata 与实现漂移。
+- 第三方 connector 能在不改 UI 代码的情况下提供表单、preflight、metrics 和 DLQ 行为。
+- 核心组件文档进入扩展合约：
+  - 每个 connector/transform 的 Markdown 文档必须能被 UI、AI context pack 和静态文档复用。
+  - 文档字段、descriptor 字段、schema validator 和 dry-run 示例需要一致性校验。
+  - 新增组件如果缺少配置说明、输入输出 record 约定、错误分类和幂等边界，不能标注为 production。
+- ODPS/MaxCompute connector 进入评估和设计：
+  - connector descriptor、鉴权、endpoint/project/table/partition 配置、schema/partition validator 和 writer-disabled preflight 已定义；批写 client 和远端错误分类待实现。
+  - 优先实现 `odps` / `maxcompute` sink，满足 Kafka ODS 落 MaxCompute 分区表；随后实现 `odps_lookup` 或 lookup driver，满足维表补全。
+  - sink 必须接入 DLQ、retry/backoff、schema validation、partition preflight、metrics 和重放语义文档。
+  - 需要专门的集成测试策略；没有真实环境时只能标注为 `experimental`。
 
 验收指标：
 
-- Podman 环境可稳定跑 master + 2 worker + MySQL + ClickHouse 的 crash recovery e2e。
-- worker 异常退出后任务可自动重新分配，且不会突破幂等性约束。
-- 生产部署文档覆盖单机、standalone+SQL、master-worker 三种拓扑。
-- SQLite/MySQL/PostgreSQL 三种 storage 后端的迁移、retention、备份恢复和版本升级均有 Podman smoke test。
+- production connector 必须通过 certification test kit。
+- 插件 ABI 有兼容性测试和最小运行时版本说明。
+- 新 connector 的 maturity 由测试证据驱动。
 
-### Phase 4：高级处理与生态，持续推进
+## Phase 4：轻量运行与生产运维，14-18 周
 
-目标：在编排式聚合 production path 稳定后，扩展到更复杂的实时处理、质量治理和生态集成。
+目标：降低部署、升级、回滚和日常运维成本。
 
 交付项：
 
-- 完整 window 语义：sliding、session、复杂 trigger、watermark、late data side output。
-- Stateful stream-stream join：event-time interval join、多流 join、状态 TTL、miss policy、缓存后端、checkpoint 恢复。
-- Schema registry：Avro/Protobuf/JSON Schema、兼容性检查、schema evolution。
-- CDC envelope 标准化：Debezium-compatible envelope、before/after/op/ts/source 元数据。
-- Lineage 与影响分析：pipeline、node、field-level lineage，变更影响预览。
-- Data quality：规则模板、失败策略、质量报告、异常样本导出。
-- Connector marketplace：成熟度、下载量、版本、认证状态、示例 pipeline。
+- 文档化 API-only/headless、standalone、master-only、worker-only 运行形态，并补 smoke test。
+- 评估 source/sink build tags，优先裁剪重依赖或低频连接器。
+- SQL storage 收敛：保留 SQLite/MySQL/PostgreSQL，减少重复 CRUD/migration，补升级/回滚 smoke test。
+- 生产 runbook：
+  - 备份恢复。
+  - retention。
+  - DLQ 积压处理。
+  - worker 扩缩容。
+  - 版本升级和回滚。
+  - 指标面板。
+- 建立最小资源基线：镜像大小、启动耗时、空闲内存、典型吞吐和 checkpoint 延迟。
 
 验收指标：
 
-- 复杂处理能力都有语义文档、样例、失败测试和资源上限测试。
-- schema 变更可以在 preflight 阶段给出兼容/不兼容结论。
-- 外部贡献 connector 可以通过认证流程进入 marketplace。
+- 最小部署、单机部署、master-worker 部署都有明确命令和 smoke test。
+- 升级/回滚路径有文档和自动化验证。
+- 运维指标能定位 source lag、sink latency、DLQ 积压、checkpoint age、worker health。
 
-## 优先级建议
+## 明确暂缓或不做
 
-近期不要继续单纯扩 connector 数量。首要目标应是把 Kafka 编排式聚合做成一条 production candidate pipeline，并用这条 pipeline 反向校准可靠性、元数据、状态处理、UI 向导和扩展合约。
+以下内容不进入近期主线：
 
-建议排序：
-
-1. 先定义 Kafka 编排式聚合 production candidate：输入格式、join 类型、聚合类型、sink、交付语义和不承诺边界。
-2. 修所有会破坏 pipeline 结果可信度的路径：静默丢数、join miss 不可见、late data 重复聚合、checkpoint/replay 语义不清。
-3. 交付 Kafka -> lookup -> ClickHouse 明细 pipeline 和 tumbling 聚合 pipeline 的 Podman e2e。
-4. 再统一 connector descriptor/schema/preflight，让通用编排 UI、文档、API 从同一事实源生成。
-5. 接着固化 StateStore、Plugin ABI/Test Kit 和 connector certification，把能力扩展到更多 sink 与复杂 join/window。
-
-## 发布评估
-
-当前状态适合发布一个新的 **正式版**，但前提是 pipeline 编排已经能够稳定承载高级聚合场景，且验证证据覆盖恢复、失败和重放边界。
-
-本轮收束结论：发布 `v0.2.0` 正式版，定位为 **pipeline orchestration / reliability**。该版本以“前端空白页修复 + 编排式高级聚合示例 + DLQ/状态化可靠性增强 + roadmap 成熟度收敛”为主，不把复杂流处理、完整 Kafka 恢复语义或连接器认证包装成已完成能力。
-
-建议发布口径：
-
-- 可以发布：前端空白页修复、编排预览、Connection Catalog、Schedule 页面入口、DLQ 稳定 ID replay/delete、状态化 transform 指标、Kafka -> lookup -> ClickHouse 明细/聚合 pipeline 示例，以及编排 Podman e2e 的异常路径覆盖。
-- 可以在 release note 中列为已验证能力：Kafka 编排式聚合 pipeline、ClickHouse sink、lookup stream-table join、tumbling window 聚合、SQLite-backed StateStore。
-- 不应宣称 production-ready：任意 Kafka 多源 join、stream-stream join、复杂 window、DAG/stateful replay、Kafka rebalance/crash 恢复、ClickHouse 真实超时注入与自动恢复边界、delete/update CDC 聚合语义、connector marketplace/ABI 认证。
-
-本轮已完成的最小检查：
-
-- `./hack/e2e-wide-table.sh` 已通过，覆盖编排 happy path、重复消息、schema drift、lookup miss/replay、lookup refresh failure、ClickHouse 容器下线 DLQ 和恢复后 replay。
-- `./hack/e2e-ui.sh` 已通过，73 个 Playwright 断言全部成功，证明修复后的生产前端构建不会再出现已知空白页回归。
-- Podman 内 `go test -timeout 120s ./internal/etl/...` 已通过。
-- `docs/ROADMAP.zh.md`、README 链接和 release note 已对新增能力与正式版边界保持一致。
-- release note 已明确默认交付语义是 at-least-once，exactly-once 不承诺；推荐业务主键、版本列、deduplicate 和 sink 幂等策略吸收重复。
-
-发布结论：可以发 `v0.2.0` 正式版，版本名称和文案使用 **pipeline orchestration / reliability**，不使用 beta 表述。下一版本再以 Kafka crash/rebalance、ClickHouse 真实超时注入、DAG/stateful replay 和 connector certification 作为继续推进的门槛。
+- 为了数量新增大量数据库、消息队列或 SaaS connector。
+- Kafka exactly-once transactions。
+- 跨 sink 原子 fanout。
+- 完整流处理引擎：任意 keyed state、timer、CoProcessFunction、多流状态计算。
+- Flink/Spark 兼容 savepoint。
+- 通用 SQL planner 或 Flink SQL 迁移层。
+- 但支持把 Flink SQL 中的数据流拆成 pipeline：Kafka source、UDTF/flat_map、lookup、project、sink。
+- sliding/session window、复杂 trigger、late side-output、retraction/update/delete 聚合语义。
+- Connector marketplace、插件商店、下载量和评分系统。
+- Kubernetes operator、etcd/Zookeeper 等新的基础设施依赖。
+- AI 自动生成 pipeline 作为核心路径。它可以作为辅助入口，但生成结果必须走同一套 validate/preflight。
 
 ## 推荐跟踪指标
 
-- 编排式聚合：端到端延迟、Kafka lag、watermark lag、join hit/miss rate、late record count、aggregate emit count、重复写入消除率。
-- 可靠性：异常路径 DLQ 覆盖率、replay 成功率、crash recovery e2e 通过率、每个 sink 的 silent-skip 路径数量。
-- 易用性：首次成功任务耗时、wizard 完成率、preflight 拦截率、错误修复后成功率。
-- 可扩展性：descriptor 覆盖率、connector 合约测试覆盖率、插件 ABI 兼容测试覆盖率。
-- 生态开放：production connector 数量、外部插件数量、文档示例可运行率、issue 到 release 的闭环比例。
-- 性能运维：吞吐、端到端延迟、CDC lag、worker crash 后恢复时间、DLQ 积压时间。
+- 可靠性：失败记录可见率、DLQ 写入失败次数、DLQ replay 成功率、crash/rebalance e2e 通过率、checkpoint 恢复耗时。
+- 易用性：首次成功任务耗时、向导完成率、preflight 拦截率、错误修复后成功率。
+- 数据处理：Kafka lag、CDC lag、lookup hit/miss、late record count、window emit count、重复吸收率。
+- 扩展性：descriptor 覆盖率、schema validator 覆盖率、connector certification 通过率、插件 ABI 兼容测试通过率。
+- 轻量性：默认镜像大小、最小二进制大小、启动耗时、空闲内存、外部依赖数量。
 
-## 下一步可执行清单
+## 下一步清单
 
-- 建立 `orchestration-mvp`、`reliability`、`stateful-processing`、`usability`、`plugin-sdk` 五个 GitHub milestone。
-- 为 Kafka 编排式聚合写 ADR：明确第一生产候选 pipeline、默认 at-least-once、重复处理、状态恢复、DLQ/replay 边界。
-- 新增 `testdata/pipes-wide-table/` 示例：Kafka 订单事件、MySQL/PostgreSQL 维表、ClickHouse 明细 pipeline、ClickHouse 窗口聚合 pipeline。
-- 新增 `hack/e2e-wide-table.sh`，默认使用 Podman 编排 Redpanda + MySQL/PostgreSQL + ClickHouse，覆盖正常链路和关键失败路径。
-- 把 Phase 0 每个交付项拆成 issue，并绑定测试要求。
-- 把 README connector 矩阵改为从 connector descriptor 生成，至少先手动增加 maturity 列。
-- 以 Kafka -> lookup -> ClickHouse 编排式聚合为样板，打通编排预览、schema preview、preflight、运行、DLQ、replay、指标的完整闭环。
-- 设计 `internal/etl/storage/sqlstore`：把 checkpoint、DLQ、pipeline spec、audit、run history、plugins、connection catalog 等通用 SQL CRUD 合并到统一实现，只保留 SQLite/MySQL/PostgreSQL dialect 与 migration 差异。
-- 做一轮 SQL 抽象 spike：对比 `sqlx`、Squirrel/goqu、Bun/GORM/ent、`sqlc` 在现有 storage 表上的样板量、方言逃逸点、migration 策略和 conformance test 成本，默认优先验证 `database/sql + sqlx/SQL builder + thin Dialect`。
-- 所有新增验证默认使用 Podman，本地命令与现有 `hack/e2e-*.sh` 保持一致。
+1. 为四条主线建立 milestone：`reliability-baseline`、`first-task-flow`、`extension-contract`、`lightweight-ops`。
+2. 为 production candidate 链路补 e2e 和失败注入测试。
+3. 统一 connector maturity 事实源，并让 UI、descriptor、README、配置文档使用同一数据。
+4. 扩展 `SchemaDescriptor` / `SchemaValidator` 覆盖面，用它驱动 preflight、DDL preview 和 UI 表单。
+5. 扩展 `flat_map` / `udtf`：在已落地的 Lua 第一版 ABI、JS/TS 数组返回 ABI、WASM/plugin 数组返回 ABI、核心多输出 dry-run 和插件 dry-run 多输出响应基础上，补真实 WASM/plugin e2e。
+6. 扩展插件化报文解析链路：第一条 Kafka raw -> Lua `flat_map` -> lookup -> Kafka ODS e2e 已覆盖解析失败、维表 miss、一进多出和 Kafka replay append 重复边界；Kafka sink producer 失败注入、JS/TS transform 数组返回和 dry-run、WASM/plugin 数组返回 ABI、GB32960 Lua parser fixture 已补；下一步补真实 WASM/plugin e2e 和更贴近生产的协议插件样板。
+7. 继续实现 `odps` / `maxcompute` sink：experimental descriptor/schema/partition 合约和 writer-disabled preflight 已落地；下一步接入 SDK-backed batch writer、远端权限/表/分区 preflight、DLQ/retry 和 Kafka ODS e2e。
+8. 为已落地的 Debezium Kafka CDC 迁移 preset 继续补更多临时故障类型注入；ODS MySQL upsert、offset replay、broker restart、consumer group rebalance、MySQL lock wait retry、MySQL 值范围失败 data-class DLQ replay、危险 DDL reject 已有 e2e 覆盖。
+9. 改造 UI 配置上下文：descriptor/schema/sample/preflight/dry-run/docs 统一驱动表单、向导和 YAML/DAG 编辑器。
+10. 建立 AI DAG context pack：核心组件 Markdown、使用方法、示例、边界和 maturity 进入可校验事实源。
+11. 为 connector certification test kit 写第一版，先认证 MySQL、ClickHouse、Kafka、S3/File。

@@ -3,7 +3,7 @@ source:
   type: kafka
   config:
     brokers:
-      - "host.containers.internal:19092"
+      - "host.docker.internal:19092"
     topic: "etl-source-topic"
     group_id: "etl-source-e2e"
     format: "json"

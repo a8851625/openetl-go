@@ -20,6 +20,7 @@ const (
 
 type Metadata struct {
 	Source     string    `json:"source"`
+	Database   string    `json:"database,omitempty"`
 	Table      string    `json:"table"`
 	Key        string    `json:"key,omitempty"`
 	Timestamp  time.Time `json:"timestamp"`
@@ -111,14 +112,14 @@ type ColumnInfo struct {
 }
 
 // SchemaDescriptor is an optional interface that sources may implement to describe
-// their output schema. When a source implements this, the runner will call Describe
-// after Open to obtain column metadata. If the sink also implements SchemaValidator,
-// the schema is validated before the pipeline starts reading records.
+// their output schema. When a source implements this, the runner calls Describe
+// during startup to obtain column metadata. If the sink also implements
+// SchemaValidator, the schema is validated before the pipeline starts reading records.
 //
-// NOTE: No built-in source currently implements SchemaDescriptor. This interface
-// exists for custom sources built with the Source SDK. See the pipeline runner
-// (pipeline.go:382) for the wiring — it is a no-op when the source doesn't
-// implement the interface.
+// Built-in coverage starts with mysql_batch and single-table MySQL CDC sources;
+// custom sources can implement the same interface through the Source SDK. The
+// runner treats sources that do not implement this interface as schema-unknown
+// and skips startup validation.
 type SchemaDescriptor interface {
 	Describe(ctx context.Context) (SchemaInfo, error)
 }
@@ -133,10 +134,8 @@ type SchemaDescriptor interface {
 // schema cannot be accepted (e.g., missing required columns, type mismatches
 // that the sink cannot coerce). Returning nil means the sink accepts the schema.
 //
-// NOTE: No built-in sink currently implements SchemaValidator. This interface
-// exists for custom sinks built with the Sink SDK. See the pipeline runner
-// (pipeline.go:383) for the wiring — it is a no-op when the sink doesn't
-// implement the interface.
+// Built-in coverage starts with MySQL, PostgreSQL, and ClickHouse sinks. Custom
+// sinks can implement the same interface through the Sink SDK.
 type SchemaValidator interface {
 	ValidateSchema(ctx context.Context, schema SchemaInfo) error
 }
@@ -235,15 +234,20 @@ func cloneDataMap(m map[string]any) map[string]any {
 // BatchTransform, the batch is routed through ApplyBatch; otherwise each
 // record is processed individually via Apply.
 func (tc TransformChain) ApplyBatch(ctx context.Context, recs []Record) ([]Record, error) {
+	var failures []TransformRecordFailure
 	for _, t := range tc {
 		if bt, ok := t.(BatchTransform); ok {
 			out, err := bt.ApplyBatch(ctx, recs)
 			if err != nil {
-				return recs, err
+				var partial PartialTransformError
+				if !errors.As(err, &partial) {
+					return recs, err
+				}
+				failures = append(failures, partial.FailedRecords()...)
 			}
 			recs = out
 			if len(recs) == 0 {
-				return recs, nil
+				break
 			}
 		} else {
 			out := make([]Record, 0, len(recs))
@@ -253,12 +257,16 @@ func (tc TransformChain) ApplyBatch(ctx context.Context, recs []Record) ([]Recor
 					if errors.Is(err, ErrRecordFiltered) {
 						continue
 					}
-					return recs, err
+					failures = append(failures, TransformRecordFailure{Record: rec, Err: err})
+					continue
 				}
 				out = append(out, processed)
 			}
 			recs = out
 		}
+	}
+	if len(failures) > 0 {
+		return recs, NewPartialTransformError("partial transform failed", failures)
 	}
 	return recs, nil
 }

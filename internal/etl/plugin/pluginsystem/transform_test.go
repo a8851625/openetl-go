@@ -11,6 +11,8 @@ import (
 	"github.com/a8851625/openetl-go/internal/etl/registry"
 )
 
+var _ core.BatchTransform = (*pluginTransform)(nil)
+
 // fakeStorage implements storage.Storage for tests (only plugins needed).
 type fakeStorage struct {
 	mu      sync.Mutex
@@ -83,8 +85,66 @@ func fakeRecord() core.Record {
 	return core.Record{
 		Operation: core.OpInsert,
 		Data:      map[string]any{"x": 1},
+		Metadata:  core.Metadata{Source: "kafka", Table: "raw", Offset: 7},
 	}
 }
 
-var _ = fakeRecord
+func TestPluginTransformOutputToRecordsSupportsArrayABI(t *testing.T) {
+	base := fakeRecord()
+	out, err := pluginTransformOutputToRecords([]byte(`[
+  {"data":{"x":2,"idx":1},"metadata":{"table":"parsed"}},
+  {"x":3,"idx":2}
+]`), base)
+	if err != nil {
+		t.Fatalf("pluginTransformOutputToRecords: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("outputs = %d, want 2: %#v", len(out), out)
+	}
+	if out[0].Operation != core.OpInsert || out[0].Metadata.Source != "kafka" || out[0].Metadata.Table != "parsed" || out[0].Metadata.Offset != 7 {
+		t.Fatalf("first output envelope = %#v", out[0])
+	}
+	if out[0].Data["x"] != float64(2) || out[0].Data["idx"] != float64(1) {
+		t.Fatalf("first output data = %#v", out[0].Data)
+	}
+	if out[1].Operation != core.OpInsert || out[1].Metadata.Table != "raw" || out[1].Metadata.Offset != 7 {
+		t.Fatalf("second output envelope = %#v", out[1])
+	}
+	if out[1].Data["x"] != float64(3) || out[1].Data["idx"] != float64(2) {
+		t.Fatalf("second output data = %#v", out[1].Data)
+	}
+}
+
+func TestPluginTransformOutputToRecordsDropsEmptyNullAndFalse(t *testing.T) {
+	for _, raw := range [][]byte{nil, []byte(""), []byte(" null "), []byte("false")} {
+		out, err := pluginTransformOutputToRecords(raw, fakeRecord())
+		if err != nil {
+			t.Fatalf("pluginTransformOutputToRecords(%q): %v", string(raw), err)
+		}
+		if len(out) != 0 {
+			t.Fatalf("pluginTransformOutputToRecords(%q) = %#v, want no records", string(raw), out)
+		}
+	}
+}
+
+func TestPluginTransformOutputToRecordsDoesNotShareDataMaps(t *testing.T) {
+	base := fakeRecord()
+	out, err := pluginTransformOutputToRecords([]byte(`[
+  {"data":{"x":2}},
+  {"data":{"x":3}}
+]`), base)
+	if err != nil {
+		t.Fatalf("pluginTransformOutputToRecords: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("outputs = %#v, want 2 records", out)
+	}
+	if out[0].Data["x"] != float64(2) || out[1].Data["x"] != float64(3) {
+		t.Fatalf("outputs share or merge data unexpectedly: %#v", out)
+	}
+	if base.Data["x"] != 1 {
+		t.Fatalf("base record mutated: %#v", base)
+	}
+}
+
 var _ = context.Background

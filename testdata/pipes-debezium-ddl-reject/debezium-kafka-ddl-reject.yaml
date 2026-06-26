@@ -1,0 +1,53 @@
+name: "debezium-kafka-ddl-reject"
+source:
+  type: kafka
+  config:
+    brokers:
+      - "host.docker.internal:19092"
+    topic: "debezium.dl_vls_dev.vehicle_charge_ddl_reject"
+    group_id: "${DEBEZIUM_DDL_REJECT_GROUP_ID:-debezium-ddl-reject-e2e}"
+    format: "json"
+    initial_offset: "oldest"
+
+transforms:
+  - type: debezium_cdc
+    config:
+      keep_metadata: true
+      skip_tombstone: true
+      table_mapping:
+        template: "ods_{source_db}__{source_table}"
+  - type: cdc_policy
+    config:
+      include_databases:
+        - "dl_vls_dev"
+      include_tables:
+        - "dl_vls_dev.vehicle_charge"
+      skip_tombstone: true
+      dangerous_ddl: reject
+
+sink:
+  type: mysql
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_target"
+    pk_columns:
+      - "id"
+    batch_mode: "upsert"
+    auto_create: true
+    schema_drift: "add_columns"
+    ddl_policy: apply
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 1
+  initial_interval_ms: 100
+  max_interval_ms: 100
+
+dlq:
+  enable: true

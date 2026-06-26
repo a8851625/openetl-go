@@ -7,7 +7,7 @@
  *
  * Quick start:
  *   npm install @etl/sdk
- *   npx extism-js compile src/transform.ts -o dist/transform.wasm
+ *   extism-js compile src/transform.ts -o dist/transform.wasm
  *
  * Two modes:
  *   1. EXTISM MODE (for WASM compilation):
@@ -17,6 +17,8 @@
  *      Use `createTransformPlugin()` which returns a plain function that accepts
  *      and returns Uint8Array, suitable for testing without WASM.
  */
+
+declare const require: any;
 
 // ── Core Types ────────────────────────────────────────────────────────
 
@@ -48,7 +50,7 @@ export interface Context {
 export interface TransformPlugin {
   name: string;
   version: string;
-  apply(record: Record, ctx: Context): Record | null;
+  apply(record: Record, ctx: Context): Record | Record[] | { [key: string]: any } | Array<{ [key: string]: any }> | null | false | undefined;
 }
 
 export interface SourcePlugin {
@@ -84,7 +86,7 @@ try {
   _hasExtismPdk = false;
 }
 
-function _bridgeContext(config: Record<string, any>): Context {
+function _bridgeContext(config: { [key: string]: any }): Context {
   if (_hasExtismPdk) {
     // In extism mode, use Host for logging/config.
     const { Host } = require('@extism/js-pdk');
@@ -140,7 +142,7 @@ export function createExtismTransformPlugin(plugin: TransformPlugin): () => void
     const config = JSON.parse(Host.config() || '{}');
     const ctx = _bridgeContext(config);
     const result = plugin.apply(record, ctx);
-    if (result === null) {
+    if (result === null || result === undefined || result === false) {
       Host.outputString('');
       return;
     }
@@ -159,9 +161,9 @@ export function createExtismTransformPlugin(plugin: TransformPlugin): () => void
  * const plugin = createExtismSourcePlugin({
  *   name: 'custom-api',
  *   version: '1.0.0',
- *   open(ctx) { /* init */ },
- *   read(ctx) { return null; /* return a Record or null */ },
- *   close(ctx) { /* cleanup */ },
+ *   open(ctx) { },
+ *   read(ctx) { return null; },
+ *   close(ctx) { },
  * });
  *
  * export const read = plugin;
@@ -192,13 +194,13 @@ export function createExtismSourcePlugin(plugin: SourcePlugin): () => void {
  * const plugin = createExtismSinkPlugin({
  *   name: 'custom-http',
  *   version: '1.0.0',
- *   open(ctx) { /* init */ },
+ *   open(ctx) { },
  *   write(records, ctx) {
  *     for (const rec of records) {
  *       ctx.log(`Writing ${rec.operation} record`);
  *     }
  *   },
- *   close(ctx) { /* cleanup */ },
+ *   close(ctx) { },
  * });
  *
  * export const write = plugin;
@@ -224,7 +226,8 @@ export function createExtismSinkPlugin(plugin: SinkPlugin): () => void {
 /**
  * Creates a transform function suitable for test mode or direct WASM I/O.
  * - Input: JSON-encoded Record as Uint8Array
- * - Output: JSON-encoded Record as Uint8Array (empty = filtered)
+ * - Output: empty, one JSON-encoded Record/data object, or an array of
+ *   Record/data objects as Uint8Array
  */
 export function createTransformPlugin(plugin: TransformPlugin): (input: Uint8Array) => Uint8Array {
   return (input: Uint8Array): Uint8Array => {
@@ -239,7 +242,7 @@ export function createTransformPlugin(plugin: TransformPlugin): (input: Uint8Arr
       },
     };
     const result = plugin.apply(record, ctx);
-    if (result === null) {
+    if (result === null || result === undefined || result === false) {
       return new Uint8Array(0);
     }
     const output = JSON.stringify(result);

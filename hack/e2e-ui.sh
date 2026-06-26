@@ -10,23 +10,26 @@ BASE_URL="http://127.0.0.1:8076"
 PASS=0
 FAIL=0
 
-if ! command -v podman >/dev/null 2>&1; then echo "podman is required" >&2; exit 1; fi
+if ! command -v docker >/dev/null 2>&1; then echo "docker is required" >&2; exit 1; fi
 if ! command -v playwright-cli >/dev/null 2>&1; then echo "playwright-cli is required" >&2; exit 1; fi
 
-cleanup() { podman rm -f "$APP" >/dev/null 2>&1 || true; rm -rf "$DATA_DIR"; playwright-cli close >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f "$APP" >/dev/null 2>&1 || true; rm -rf "$DATA_DIR"; playwright-cli close >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 mkdir -p "$DATA_DIR/output" "$DATA_DIR/checkpoint" "$DATA_DIR/dlq" "$LOG_DIR"
+chmod -R a+rwX "$DATA_DIR"
+chmod a+rwX "$LOG_DIR"
 
 if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
   echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
 else
   echo "==> Build image"
-  podman build -t "$IMAGE" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR" 2>&1 | tail -1
+  docker build -t "$IMAGE" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR" 2>&1 | tail -1
 fi
-podman rm -f "$APP" >/dev/null 2>&1 || true
+docker rm -f "$APP" >/dev/null 2>&1 || true
 echo "==> Start app container"
-podman run -d --name "$APP" \
+docker run -d --name "$APP" \
+  --add-host host.docker.internal:host-gateway \
   -p 8076:8000 -p 8077:8001 \
   -v "$ROOT_DIR/testdata/pipes-auth:/app/pipes:ro" \
   -v "$ROOT_DIR/testdata:/app/testdata:ro" \

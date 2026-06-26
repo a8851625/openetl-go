@@ -238,6 +238,36 @@ func (s *ClickHouseSink) SinkMetrics() core.SinkMetrics {
 	}
 }
 
+func (s *ClickHouseSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) error {
+	if len(schema.Columns) == 0 || s.table == "" {
+		return nil
+	}
+	columns, err := s.columns(ctx, s.table)
+	if err != nil {
+		return fmt.Errorf("validate clickhouse schema: read columns for %s.%s: %w", s.database, s.table, err)
+	}
+	if len(columns) == 0 {
+		if s.autoCreate {
+			return nil
+		}
+		return fmt.Errorf("schema validation failed for clickhouse %s.%s: target table does not exist; enable auto_create or create the table first", s.database, s.table)
+	}
+	target := make([]core.ColumnInfo, 0, len(columns))
+	for _, col := range columns {
+		if col.IsMaterialized {
+			continue
+		}
+		target = append(target, core.ColumnInfo{Name: col.Name, DataType: col.Type})
+	}
+	return validateSchemaCompatibility(schema, target, schemaValidationOptions{
+		targetName:     fmt.Sprintf("clickhouse %s.%s", s.database, s.table),
+		allowMissing:   s.schemaDrift == "add_columns" || s.schemaDrift == "sync",
+		missingRemedy:  "enable schema_drift=add_columns or add the columns manually",
+		allowTypeSync:  s.schemaDrift == "sync",
+		typeSyncRemedy: "enable schema_drift=sync, change the target column type, or add a transform/type_convert before the sink",
+	})
+}
+
 func (s *ClickHouseSink) Open(ctx context.Context) error {
 	if s.protocol == "http" {
 		return s.openHTTP(ctx)

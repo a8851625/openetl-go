@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,10 @@ func TestLookupOnMissDLQReturnsError(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "no dimension match") {
 		t.Fatalf("Apply err = %v, want dimension miss error", err)
+	}
+	var classified core.ClassifiedError
+	if !errors.As(err, &classified) || classified.Class != core.ErrorClassData {
+		t.Fatalf("Apply err = %T %v, want data-classified error", err, err)
 	}
 
 	metrics := tr.TransformMetrics()

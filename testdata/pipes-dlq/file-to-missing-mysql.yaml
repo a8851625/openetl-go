@@ -12,7 +12,7 @@ transforms:
 sink:
   type: mysql
   config:
-    host: "host.containers.internal"
+    host: "host.docker.internal"
     port: 13306
     user: "sync_user"
     password: "sync_password_123"

@@ -10,6 +10,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gogf/gf/v2/frame/g"
 
+	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
 )
@@ -33,6 +34,7 @@ type PreflightResult struct {
 // before starting. It checks:
 //   - MySQL binlog format and permissions
 //   - ClickHouse / target reachability
+//   - Source/sink schema compatibility when both connectors support it
 //   - Source table existence (best-effort)
 //   - Common misconfiguration patterns
 //
@@ -45,7 +47,10 @@ func (s *Server) RunPreflight(ctx context.Context, spec *pipeline.Spec) *Preflig
 	s.checkMySQLCDC(ctx, spec, result)
 
 	// Sink checks
-	s.checkSinkReachable(ctx, spec, result)
+	if sink, ok := s.checkSinkReachable(ctx, spec, result); ok {
+		defer func() { _ = sink.Close() }()
+		s.checkSchemaCompatibility(ctx, spec, sink, result)
+	}
 
 	if !result.Passed {
 		result.Summary = fmt.Sprintf("%d issue(s) found", len(result.Issues))
@@ -175,7 +180,7 @@ func (s *Server) checkMySQLCDC(ctx context.Context, spec *pipeline.Spec, result 
 
 // ── Sink: reachability check ─────────────────────────────────────────
 
-func (s *Server) checkSinkReachable(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
+func (s *Server) checkSinkReachable(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) (core.Sink, bool) {
 	// Build the sink to validate config parseability.
 	sink, err := registry.BuildSink(spec.Sink.Type, spec.Sink.Config)
 	if err != nil {
@@ -186,7 +191,7 @@ func (s *Server) checkSinkReachable(ctx context.Context, spec *pipeline.Spec, re
 			Remediation: "fix the sink config in the pipeline spec",
 		})
 		result.Passed = false
-		return
+		return nil, false
 	}
 
 	// Test actual sink reachability with a short timeout so preflight
@@ -197,19 +202,82 @@ func (s *Server) checkSinkReachable(ctx context.Context, spec *pipeline.Spec, re
 	defer cancel()
 
 	if err := sink.Open(probeCtx); err != nil {
-		result.Issues = append(result.Issues, PreflightIssue{
-			Level:       "warning",
-			Check:       "sink-reachable",
-			Message:     fmt.Sprintf("sink %q is not reachable: %v", spec.Sink.Type, err),
-			Remediation: "verify the sink target is running and network is accessible from the ETL process",
-		})
-		// Reachability failure is a warning, not an error — the pipeline may
-		// still start when the sink becomes available.
-	} else {
-		// Best-effort cleanup: if the sink is a closer, close it now.
-		if closer, ok := sink.(interface{ Close() error }); ok {
-			_ = closer.Close()
+		level := "warning"
+		check := "sink-reachable"
+		remediation := "verify the sink target is running and network is accessible from the ETL process"
+		if isMaxComputeSinkType(spec.Sink.Type) {
+			level = "error"
+			check = "maxcompute-writer"
+			remediation = "MaxCompute/ODPS sink is currently an experimental descriptor/schema contract; enable a build with a real MaxCompute writer before starting this pipeline"
+			result.Passed = false
 		}
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       level,
+			Check:       check,
+			Message:     fmt.Sprintf("sink %q is not reachable: %v", spec.Sink.Type, err),
+			Remediation: remediation,
+		})
+		// Generic reachability failure is a warning because the target may
+		// become available later; build-disabled experimental sinks are errors.
+		return nil, false
+	}
+	return sink, true
+}
+
+func isMaxComputeSinkType(t string) bool {
+	return t == "maxcompute" || t == "odps"
+}
+
+// ── Source/Sink schema compatibility ────────────────────────────────
+
+func (s *Server) checkSchemaCompatibility(ctx context.Context, spec *pipeline.Spec, sink core.Sink, result *PreflightResult) {
+	validator, ok := sink.(core.SchemaValidator)
+	if !ok {
+		return
+	}
+
+	source, err := registry.BuildSource(spec.Source.Type, spec.Source.Config)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "source-config",
+			Message:     fmt.Sprintf("source %q configuration error: %v", spec.Source.Type, err),
+			Remediation: "fix the source config in the pipeline spec",
+		})
+		result.Passed = false
+		return
+	}
+	descriptor, ok := source.(core.SchemaDescriptor)
+	if !ok {
+		return
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	schema, err := descriptor.Describe(probeCtx)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "schema-describe",
+			Message:     fmt.Sprintf("source %q schema description failed: %v", spec.Source.Type, err),
+			Remediation: "verify the source table/query is reachable and the source credentials can read schema metadata",
+		})
+		result.Passed = false
+		return
+	}
+	if len(schema.Columns) == 0 {
+		return
+	}
+
+	if err := validator.ValidateSchema(probeCtx, schema); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "schema-compatibility",
+			Message:     fmt.Sprintf("source %q is not compatible with sink %q: %v", spec.Source.Type, spec.Sink.Type, err),
+			Remediation: "update the target schema, enable auto_create/schema_drift when supported, or add a transform/type_convert step",
+		})
+		result.Passed = false
 	}
 }
 

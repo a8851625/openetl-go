@@ -12,7 +12,7 @@ transforms:
 sink:
   type: s3
   config:
-    endpoint: "http://host.containers.internal:9001"
+    endpoint: "http://host.docker.internal:9001"
     region: "us-east-1"
     bucket: "etl-bucket"
     access_key: "minio"

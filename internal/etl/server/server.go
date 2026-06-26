@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,6 +62,8 @@ type Server struct {
 	dlqMaxCount    int
 	schemaRegistry *SchemaRegistry
 }
+
+var errDAGDLQReplayUnsupported = errors.New("dag dlq replay unsupported")
 
 // SetDistributed enables master-role distributed dispatch (A11-redo): parallel
 // pipelines delegate shard execution to worker processes via the master
@@ -845,17 +848,74 @@ func (s *Server) handleTransformDryRun(w http.ResponseWriter, r *http.Request) {
 		}
 		chain = append(chain, transform)
 	}
+	defer chain.CloseChain()
+	if transformChainHasBatch(chain) {
+		records, err := chain.ApplyBatch(r.Context(), []core.Record{req.Record})
+		if err != nil {
+			var partial core.PartialTransformError
+			if !errors.As(err, &partial) {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
+			response := transformDryRunResponse(req.Record, records)
+			response["partial_error"] = true
+			response["errors"] = transformDryRunErrors(partial.FailedRecords())
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		json.NewEncoder(w).Encode(transformDryRunResponse(req.Record, records))
+		return
+	}
 	out, err := chain.Apply(r.Context(), req.Record)
 	if err != nil {
 		if err == core.ErrRecordFiltered {
-			json.NewEncoder(w).Encode(map[string]any{"filtered": true, "record": out})
+			json.NewEncoder(w).Encode(map[string]any{"filtered": true, "record": out, "records": []core.Record{}, "output_count": 0})
 			return
 		}
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]any{"filtered": false, "record": out})
+	json.NewEncoder(w).Encode(map[string]any{"filtered": false, "record": out, "records": []core.Record{out}, "output_count": 1})
+}
+
+func transformChainHasBatch(chain core.TransformChain) bool {
+	for _, transform := range chain {
+		if _, ok := transform.(core.BatchTransform); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func transformDryRunResponse(input core.Record, records []core.Record) map[string]any {
+	record := input
+	if len(records) > 0 {
+		record = records[0]
+	}
+	return map[string]any{
+		"filtered":     len(records) == 0,
+		"record":       record,
+		"records":      records,
+		"output_count": len(records),
+	}
+}
+
+func transformDryRunErrors(failures []core.TransformRecordFailure) []map[string]any {
+	out := make([]map[string]any, 0, len(failures))
+	for _, failure := range failures {
+		message := ""
+		if failure.Err != nil {
+			message = failure.Err.Error()
+		}
+		out = append(out, map[string]any{
+			"record":      failure.Record,
+			"error":       message,
+			"error_class": string(core.ClassifyError(failure.Err)),
+		})
+	}
+	return out
 }
 
 func (s *Server) handleSpecReload(w http.ResponseWriter, r *http.Request) {
@@ -2084,6 +2144,7 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.RLock()
 	runner, ok := s.pipelines[name]
+	spec := s.specs[name]
 	s.mu.RUnlock()
 
 	// Actions that don't require a running pipeline
@@ -2175,18 +2236,17 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 
 	case "checkpoint/set":
 		if r.Method == http.MethodPost || r.Method == http.MethodPut {
-			var body struct {
-				Position json.RawMessage `json:"position"`
-			}
+			var body checkpointSetRequest
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]any{"error": "invalid body: " + err.Error()})
 				return
 			}
-			cp := core.Checkpoint{
-				JobName:   name,
-				Position:  body.Position,
-				Timestamp: time.Now(),
+			cp, details, err := buildCheckpointForSet(name, spec, body)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
 			}
 			if err := s.cpAdapter.Save(r.Context(), cp); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -2194,7 +2254,11 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.audit(r, "checkpoint.set", name)
-			json.NewEncoder(w).Encode(map[string]any{"status": "set", "position": body.Position})
+			resp := map[string]any{"status": "set", "source": cp.Source, "position": cp.Position}
+			for k, v := range details {
+				resp[k] = v
+			}
+			json.NewEncoder(w).Encode(resp)
 		}
 
 	case "history":
@@ -2293,6 +2357,179 @@ func (s *Server) handleCheckpoints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]any{"checkpoints": cps})
+}
+
+type checkpointSetRequest struct {
+	Position          json.RawMessage  `json:"position"`
+	Source            string           `json:"source"`
+	SourceType        string           `json:"source_type"`
+	Topic             string           `json:"topic"`
+	Offsets           map[string]int64 `json:"offsets"`
+	ReplayFromOffsets map[string]int64 `json:"replay_from_offsets"`
+	Partition         *int             `json:"partition"`
+	Offset            *int64           `json:"offset"`
+	Mode              string           `json:"mode"`
+}
+
+type kafkaCheckpointPosition struct {
+	Topic   string          `json:"topic"`
+	Offsets map[int32]int64 `json:"offsets"`
+}
+
+func buildCheckpointForSet(name string, spec *pipeline.Spec, req checkpointSetRequest) (core.Checkpoint, map[string]any, error) {
+	source := checkpointSource(req, spec)
+	hasKafkaFields := req.Topic != "" ||
+		len(req.Offsets) > 0 ||
+		len(req.ReplayFromOffsets) > 0 ||
+		req.Partition != nil ||
+		req.Offset != nil
+
+	if len(req.Position) > 0 && !hasKafkaFields {
+		if !json.Valid(req.Position) {
+			return core.Checkpoint{}, nil, fmt.Errorf("checkpoint position must be valid JSON")
+		}
+		pos := append(json.RawMessage(nil), req.Position...)
+		return core.Checkpoint{
+			JobName:   name,
+			Source:    source,
+			Position:  pos,
+			Timestamp: time.Now(),
+		}, nil, nil
+	}
+
+	if source == "kafka" || hasKafkaFields {
+		position, details, err := buildKafkaCheckpointPosition(spec, req)
+		if err != nil {
+			return core.Checkpoint{}, nil, err
+		}
+		return core.Checkpoint{
+			JobName:   name,
+			Source:    "kafka",
+			Position:  position,
+			Timestamp: time.Now(),
+		}, details, nil
+	}
+
+	if len(req.Position) == 0 {
+		return core.Checkpoint{}, nil, fmt.Errorf("checkpoint position is required")
+	}
+	return core.Checkpoint{}, nil, fmt.Errorf("unsupported checkpoint request")
+}
+
+func checkpointSource(req checkpointSetRequest, spec *pipeline.Spec) string {
+	source := strings.TrimSpace(req.SourceType)
+	if source == "" {
+		source = strings.TrimSpace(req.Source)
+	}
+	if source == "" && spec != nil {
+		source = spec.Source.Type
+	}
+	return source
+}
+
+func buildKafkaCheckpointPosition(spec *pipeline.Spec, req checkpointSetRequest) (json.RawMessage, map[string]any, error) {
+	topic := strings.TrimSpace(req.Topic)
+	if topic == "" && spec != nil && spec.Source.Type == "kafka" {
+		topic, _ = spec.Source.Config["topic"].(string)
+	}
+	if topic == "" {
+		return nil, nil, fmt.Errorf("kafka checkpoint requires topic or a saved kafka spec with source.config.topic")
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	modeFromRequest := mode != ""
+	if mode == "" {
+		if req.Partition != nil || req.Offset != nil || len(req.ReplayFromOffsets) > 0 {
+			mode = "replay_from"
+		} else {
+			mode = "last_committed"
+		}
+	}
+	switch mode {
+	case "replay", "replay_from":
+		mode = "replay_from"
+	case "committed", "last_committed":
+		mode = "last_committed"
+	default:
+		return nil, nil, fmt.Errorf("kafka checkpoint mode must be replay_from or last_committed")
+	}
+
+	sources := 0
+	if len(req.Offsets) > 0 {
+		sources++
+	}
+	if len(req.ReplayFromOffsets) > 0 {
+		sources++
+	}
+	if req.Partition != nil || req.Offset != nil {
+		sources++
+		if req.Partition == nil || req.Offset == nil {
+			return nil, nil, fmt.Errorf("kafka checkpoint requires both partition and offset")
+		}
+	}
+	if sources != 1 {
+		return nil, nil, fmt.Errorf("kafka checkpoint requires exactly one of offsets, replay_from_offsets, or partition+offset")
+	}
+	if len(req.ReplayFromOffsets) > 0 && modeFromRequest && mode != "replay_from" {
+		return nil, nil, fmt.Errorf("replay_from_offsets requires mode replay_from")
+	}
+
+	offsets := make(map[int32]int64)
+	switch {
+	case len(req.ReplayFromOffsets) > 0:
+		for k, v := range req.ReplayFromOffsets {
+			partition, stored, err := kafkaStoredOffset(k, v, "replay_from")
+			if err != nil {
+				return nil, nil, err
+			}
+			offsets[partition] = stored
+		}
+	case len(req.Offsets) > 0:
+		for k, v := range req.Offsets {
+			partition, stored, err := kafkaStoredOffset(k, v, mode)
+			if err != nil {
+				return nil, nil, err
+			}
+			offsets[partition] = stored
+		}
+	default:
+		if *req.Partition < 0 {
+			return nil, nil, fmt.Errorf("kafka partition must be >= 0")
+		}
+		_, stored, err := kafkaStoredOffset(strconv.Itoa(*req.Partition), *req.Offset, mode)
+		if err != nil {
+			return nil, nil, err
+		}
+		offsets[int32(*req.Partition)] = stored
+	}
+	if len(offsets) == 0 {
+		return nil, nil, fmt.Errorf("kafka checkpoint offsets cannot be empty")
+	}
+
+	raw, err := json.Marshal(kafkaCheckpointPosition{Topic: topic, Offsets: offsets})
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal kafka checkpoint: %w", err)
+	}
+	return raw, map[string]any{"mode": mode, "topic": topic}, nil
+}
+
+func kafkaStoredOffset(partitionText string, offset int64, mode string) (int32, int64, error) {
+	partition64, err := strconv.ParseInt(strings.TrimSpace(partitionText), 10, 32)
+	if err != nil || partition64 < 0 {
+		return 0, 0, fmt.Errorf("kafka partition %q must be a non-negative integer", partitionText)
+	}
+	switch mode {
+	case "replay_from":
+		if offset < 0 {
+			return 0, 0, fmt.Errorf("kafka replay offset for partition %d must be >= 0", partition64)
+		}
+		return int32(partition64), offset - 1, nil
+	default:
+		if offset < -1 {
+			return 0, 0, fmt.Errorf("kafka committed offset for partition %d must be >= -1", partition64)
+		}
+		return int32(partition64), offset, nil
+	}
 }
 
 func (s *Server) handleCheckpointAction(w http.ResponseWriter, r *http.Request) {
@@ -2540,7 +2777,7 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 		"kind":           kind,
 		"compiled":       false,
 		"source":         source,
-		"compile_hint":   "Install extism-js: npm install -g @extism/js-pdk && extism-js compile plugin.ts -o plugin.wasm",
+		"compile_hint":   "Pre-install the extism-js compiler or compile plugins offline in CI/CLI, then upload the .wasm with /api/v2/plugins/install",
 		"compile_output": compileOutput,
 	})
 }
@@ -2596,7 +2833,7 @@ func compileWithExtismJS(tmpDir, srcFile, name string) ([]byte, error) {
 		}
 		extismPkg := os.Getenv("OPENETL_EXTISM_JS_PKG")
 		if extismPkg == "" {
-			extismPkg = "@extism/js-pdk@1.1.0"
+			return nil, fmt.Errorf("extism-js not found and npx fallback has no package configured; set OPENETL_EXTISM_JS_PKG to a trusted package that provides the extism-js binary")
 		}
 		// Development-only fallback. Production images should pre-install
 		// extism-js or compile plugins in CI/CLI so request handling never
@@ -2662,19 +2899,26 @@ func (s *Server) handlePluginDryRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := s.pluginMgr.ExecTransformWithConfig(r.Context(), req.Name, req.Record, req.Config)
+	records, err := s.pluginMgr.ExecTransformRecordsWithConfig(r.Context(), req.Name, req.Record, req.Config)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "name": req.Name})
 		return
 	}
+	record := req.Record
+	if len(records) > 0 {
+		record = records[0]
+	}
 	json.NewEncoder(w).Encode(map[string]any{
-		"name":     req.Name,
-		"kind":     meta.Kind,
-		"version":  meta.Version,
-		"input":    req.Record,
-		"output":   out,
-		"filtered": out.Operation == "",
+		"name":         req.Name,
+		"kind":         meta.Kind,
+		"version":      meta.Version,
+		"input":        req.Record,
+		"output":       record,
+		"record":       record,
+		"records":      records,
+		"output_count": len(records),
+		"filtered":     len(records) == 0,
 	})
 }
 
@@ -2719,9 +2963,9 @@ func pluginMetadata() map[string]any {
 		"sources": map[string]any{
 			"file":               pluginInfo([]string{"path", "format"}, []string{"batch", "checkpoint"}, "beta"),
 			"http":               pluginInfo([]string{"url"}, []string{"pagination", "auth_headers", "checkpoint"}, "beta"),
-			"mysql_batch":        pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "checkpoint"}, "beta"),
-			"mysql_cdc":          pluginInfo([]string{"host", "user", "database", "tables"}, []string{"cdc", "checkpoint"}, "beta"),
-			"mysql_snapshot_cdc": pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "cdc", "checkpoint"}, "beta"),
+			"mysql_batch":        pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "checkpoint", "schema_descriptor"}, "beta"),
+			"mysql_cdc":          pluginInfo([]string{"host", "user", "database", "tables"}, []string{"cdc", "checkpoint", "schema_descriptor_single_table"}, "beta"),
+			"mysql_snapshot_cdc": pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "cdc", "checkpoint", "schema_descriptor_single_table"}, "beta"),
 			"kafka":              pluginInfo([]string{"brokers", "topic"}, []string{"stream", "checkpoint"}, "beta"),
 			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot", "checkpoint"}, "beta"),
 			"redis":              pluginInfo([]string{"addr"}, []string{"stream", "checkpoint"}, "experimental"),
@@ -2729,29 +2973,40 @@ func pluginMetadata() map[string]any {
 		"sinks": map[string]any{
 			"file_sink":     pluginInfo([]string{"output_dir", "format"}, []string{"batch", "local_file"}, "beta"),
 			"s3":            pluginInfo([]string{"bucket", "format"}, []string{"batch", "minio_compatible"}, "beta"),
-			"mysql":         pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift"}, "beta"),
-			"clickhouse":    pluginInfo([]string{"host", "database", "table"}, []string{"batch", "auto_create", "schema_drift", "sync", "distributed", "update", "delete", "optimize"}, "beta"),
-			"postgres":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift"}, "beta"),
-			"postgresql":    pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert"}, "beta"),
+			"mysql":         pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator"}, "beta"),
+			"clickhouse":    pluginInfo([]string{"host", "database", "table"}, []string{"batch", "auto_create", "schema_drift", "schema_validator", "sync", "distributed", "update", "delete", "optimize"}, "beta"),
+			"postgres":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator"}, "beta"),
+			"postgresql":    pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "schema_validator"}, "beta"),
 			"kafka":         pluginInfo([]string{"brokers", "topic"}, []string{"stream"}, "beta"),
 			"elasticsearch": pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "beta"),
 			"es":            pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "beta"),
 			"redis":         pluginInfo([]string{"addr"}, []string{"stream"}, "experimental"),
 
-			"doris": pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "stream_load", "upsert", "auto_create", "schema_drift"}, "experimental"),
-			"jdbc":  pluginInfo([]string{"dsn", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "generic"}, "experimental"),
+			"doris":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "stream_load", "upsert", "auto_create", "schema_drift"}, "experimental"),
+			"jdbc":       pluginInfo([]string{"dsn", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "generic"}, "experimental"),
+			"maxcompute": pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "partitioned_table", "schema_validator", "partition_preflight", "experimental_contract"}, "experimental"),
+			"odps":       pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "partitioned_table", "schema_validator", "partition_preflight", "experimental_contract"}, "experimental"),
 		},
 		"transforms": map[string]any{
 			"identity":           pluginInfo(nil, []string{"pass_through"}, "production"),
 			"rename":             pluginInfo([]string{"mappings"}, []string{"schema_mapping"}, "production"),
 			"drop_field":         pluginInfo([]string{"fields"}, []string{"projection"}, "production"),
 			"add_field":          pluginInfo([]string{"field", "value"}, []string{"enrichment"}, "production"),
+			"project":            pluginInfo(nil, []string{"projection", "schema_mapping", "constant_fields", "time_format"}, "beta"),
+			"select_fields":      pluginInfo(nil, []string{"projection", "schema_mapping", "constant_fields", "time_format"}, "beta"),
 			"type_convert":       pluginInfo([]string{"conversions"}, []string{"type_mapping"}, "production"),
 			"filter":             pluginInfo([]string{"expression"}, []string{"record_filter"}, "production"),
+			"flat_map":           pluginInfo([]string{"script"}, []string{"one_to_many", "projection", "record_lineage", "transform_metrics"}, "beta"),
+			"udtf":               pluginInfo([]string{"script"}, []string{"one_to_many", "projection", "record_lineage", "transform_metrics"}, "beta"),
 			"normalize_envelope": pluginInfo(nil, []string{"debezium_envelope", "event_time", "cdc_metadata"}, "beta"),
 			"debezium_envelope":  pluginInfo(nil, []string{"debezium_envelope", "event_time", "cdc_metadata"}, "beta"),
+			"debezium_cdc":       pluginInfo(nil, []string{"debezium_envelope", "cdc_metadata", "table_mapping", "event_time"}, "beta"),
+			"cdc_policy":         pluginInfo(nil, []string{"cdc_policy", "ddl_guard", "source_filter", "record_filter", "transform_metrics"}, "beta"),
+			"ddl_guard":          pluginInfo(nil, []string{"ddl_guard", "schema_change_policy", "source_filter", "transform_metrics"}, "beta"),
 			"lua":                pluginInfo([]string{"script"}, []string{"script", "inline"}, "beta"),
-			"ts":                 pluginInfo([]string{"script"}, []string{"script", "inline", "typescript"}, "experimental"),
+			"ts":                 pluginInfo([]string{"script"}, []string{"script", "inline", "typescript", "one_to_many"}, "experimental"),
+			"javascript":         pluginInfo([]string{"script"}, []string{"script", "inline", "javascript", "one_to_many"}, "experimental"),
+			"js":                 pluginInfo([]string{"script"}, []string{"script", "inline", "javascript", "one_to_many"}, "experimental"),
 			"router":             pluginInfo(nil, []string{"conditional_routing", "flow_control"}, "beta"),
 			"fanout":             pluginInfo(nil, []string{"broadcast", "flow_control"}, "beta"),
 			"tap":                pluginInfo([]string{"log_every"}, []string{"observe", "metrics", "alerts"}, "beta"),
@@ -2845,8 +3100,7 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && action == "replay":
 		count, err := s.replayDLQ(r.Context(), name, filter)
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "replayed": count})
+			writeDLQReplayError(w, err, count)
 			return
 		}
 		s.audit(r, "dlq.replay", name)
@@ -2866,8 +3120,7 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 		}
 		count, err := s.replayDLQByID(r.Context(), name, id)
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "replayed": count})
+			writeDLQReplayError(w, err, count)
 			return
 		}
 		s.audit(r, "dlq.replay", fmt.Sprintf("%s:%d", name, id))
@@ -2882,6 +3135,19 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]any{"error": "dlq action not found"})
 	}
+}
+
+func writeDLQReplayError(w http.ResponseWriter, err error, replayed int) {
+	status := http.StatusBadRequest
+	body := map[string]any{"error": err.Error(), "replayed": replayed}
+	if errors.Is(err, errDAGDLQReplayUnsupported) {
+		status = http.StatusNotImplemented
+		body["code"] = "dag_dlq_replay_unsupported"
+		body["supported"] = false
+		body["remediation"] = "DAG DLQ entries include node context but node-level replay is not implemented yet; recover the target manually or rebuild the pipeline as a linear spec before replay."
+	}
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(body)
 }
 
 func parseDLQIDAction(action string) (int64, bool) {
@@ -2985,9 +3251,10 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 	dagSpec := s.dagSpecs[name]
 	s.mu.RUnlock()
 
-	// DAG-format DLQ replay is not yet supported
+	// DAG-format replay needs node-level routing/state context to avoid
+	// writing recovered records to the wrong downstream sink.
 	if dagSpec != nil {
-		return 0, fmt.Errorf("DLQ replay is not yet supported for DAG pipelines; use linear pipeline format")
+		return 0, fmt.Errorf("%w: node-level replay is not implemented for pipeline %s", errDAGDLQReplayUnsupported, name)
 	}
 
 	if spec == nil {
@@ -3487,11 +3754,14 @@ Given a user's data integration requirement, generate a YAML pipeline spec.
 ## Available Connectors
 
 Sources: file, http, mysql_batch, mysql_cdc, mysql_snapshot_cdc, kafka, postgres_cdc, redis, demo
-Transforms: identity, rename, drop_field, add_field, type_convert, filter, lua, ts, router, fanout, tap, rate_limiter, enricher, lookup, window, deduplicate
+Transforms: identity, rename, drop_field, add_field, project, select_fields, type_convert, filter, flat_map, udtf, debezium_cdc, cdc_policy, ddl_guard, lua, ts, router, fanout, tap, rate_limiter, enricher, lookup, window, deduplicate
 Sinks: file_sink, s3, mysql, clickhouse, postgres, postgresql, kafka, elasticsearch, es, redis
 
 ## Transform Highlights
 - lua/ts: inline script transforms. Lua: "return record" pattern. TS: "transform(record) { ... return record; }"
+- flat_map/udtf: Lua one-to-many transform returning nil, one record, or an array of records
+- project/select_fields: explicit projection, aliases, constants, and time formatting
+- debezium_cdc/cdc_policy: normalize Debezium Kafka CDC, map target tables, and reject/drop risky CDC events
 - filter: boolean expression like "amount > 100" or "status == 'active'"
 - tap: pass-through observer for latency monitoring (log_every, alert_on_lag_ms)
 - rate_limiter: token-bucket throttle (rate: records/sec, burst)

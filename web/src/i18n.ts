@@ -170,6 +170,7 @@ const dict: Dict = {
   'dlq.data': { en: 'Data', zh: '数据' },
   'dlq.replayRecord': { en: 'Replay this record', zh: '重放此记录' },
   'dlq.deleteRecord': { en: 'Delete', zh: '删除' },
+  'dlq.dagReplayUnsupported': { en: 'DAG DLQ replay is not supported yet; recover records manually or use a linear pipeline for replay.', zh: 'DAG 死信重放暂不支持；请手动恢复记录，或改用线性管道重放。' },
 
   // ── Plugins ──
   'plugin.matrix': { en: 'Plugin Capability Matrix', zh: '插件能力矩阵' },

@@ -19,24 +19,27 @@ wait_http() {
 }
 
 echo "==> Build image"
-podman build -t "$IMAGE" -f Dockerfile .
+docker build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start MinIO"
-podman-compose -f docker-compose.dev.yml up -d minio
+docker compose -f docker-compose.dev.yml up -d minio
 
 echo "==> Wait MinIO"
 wait_http "http://127.0.0.1:9001/minio/health/live"
 
 echo "==> Reset MinIO bucket"
-podman run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc rb --force local/etl-bucket >/dev/null 2>&1 || true"
+docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc rb --force local/etl-bucket >/dev/null 2>&1 || true"
 
 echo "==> Reset ETL data"
 rm -rf data-s3
 mkdir -p data-s3/output data-s3/checkpoint data-s3/dlq logs
+chmod -R a+rwX data-s3
+chmod a+rwX logs
 
 echo "==> Run S3 pipeline"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8007:8001 \
   -v "$ROOT_DIR/testdata/pipes-s3:/app/pipes:ro" \
@@ -59,7 +62,7 @@ echo "$body"
 echo "$body" | grep '"records_written":3'
 
 echo "==> Verify S3 object"
-podman run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && object=\$(mc find local/etl-bucket/s3-e2e --name '*.jsonl' | head -n 1) && test -n \"\$object\" && mc cat \"\$object\"" > data-s3/object.jsonl
+docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && object=\$(mc find local/etl-bucket/s3-e2e --name '*.jsonl' | head -n 1) && test -n \"\$object\" && mc cat \"\$object\"" > data-s3/object.jsonl
 grep 'Ada' data-s3/object.jsonl
 grep 'Grace' data-s3/object.jsonl
 grep 'Hopper' data-s3/object.jsonl

@@ -12,6 +12,9 @@ import (
 )
 
 func init() {
+	registerProjectTransform("project")
+	registerProjectTransform("select_fields")
+
 	registry.RegisterTransform("rename", func(config map[string]any) (core.Transform, error) {
 		mappings := make(map[string]string)
 		if v, ok := config["mappings"]; ok {
@@ -80,6 +83,250 @@ func init() {
 	registry.RegisterTransform("identity", func(config map[string]any) (core.Transform, error) {
 		return &IdentityTransform{}, nil
 	})
+}
+
+func registerProjectTransform(name string) {
+	registry.RegisterTransform(name, func(config map[string]any) (core.Transform, error) {
+		fields, err := stringSliceConfig(config, "fields")
+		if err != nil {
+			return nil, err
+		}
+		mappings, err := stringMapConfig(config, "mappings")
+		if err != nil {
+			return nil, err
+		}
+		constants, err := anyMapConfig(config, "constants")
+		if err != nil {
+			return nil, err
+		}
+		timeFormats, err := stringMapConfig(config, "time_formats")
+		if err != nil {
+			return nil, err
+		}
+		keepUnmapped, err := boolConfig(config, "keep_unmapped")
+		if err != nil {
+			return nil, err
+		}
+		return &ProjectTransform{
+			name:         name,
+			fields:       fields,
+			mappings:     mappings,
+			constants:    constants,
+			timeFormats:  timeFormats,
+			keepUnmapped: keepUnmapped,
+		}, nil
+	})
+}
+
+func stringSliceConfig(config map[string]any, key string) ([]string, error) {
+	v, ok := config[key]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	switch arr := v.(type) {
+	case []string:
+		return append([]string(nil), arr...), nil
+	case []interface{}:
+		out := make([]string, 0, len(arr))
+		for i, item := range arr {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d] must be a string", key, i)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s must be an array of strings", key)
+	}
+}
+
+func stringMapConfig(config map[string]any, key string) (map[string]string, error) {
+	v, ok := config[key]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	switch m := v.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(m))
+		for k, val := range m {
+			out[k] = val
+		}
+		return out, nil
+	case map[string]interface{}:
+		out := make(map[string]string, len(m))
+		for k, val := range m {
+			s, ok := val.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s[%q] must be a string", key, k)
+			}
+			out[k] = s
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s must be a string map", key)
+	}
+}
+
+func anyMapConfig(config map[string]any, key string) (map[string]any, error) {
+	v, ok := config[key]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	switch m := v.(type) {
+	case map[string]string:
+		out := make(map[string]any, len(m))
+		for k, val := range m {
+			out[k] = val
+		}
+		return out, nil
+	case map[string]interface{}:
+		out := make(map[string]any, len(m))
+		for k, val := range m {
+			out[k] = val
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s must be a map", key)
+	}
+}
+
+func boolConfig(config map[string]any, key string) (bool, error) {
+	v, ok := config[key]
+	if !ok || v == nil {
+		return false, nil
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return b, nil
+}
+
+type ProjectTransform struct {
+	name         string
+	fields       []string
+	mappings     map[string]string
+	constants    map[string]any
+	timeFormats  map[string]string
+	keepUnmapped bool
+}
+
+func (t *ProjectTransform) Name() string {
+	if t.name != "" {
+		return t.name
+	}
+	return "project"
+}
+
+func (t *ProjectTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
+	projected := make(map[string]any)
+	if t.keepUnmapped {
+		for k, v := range rec.Data {
+			projected[k] = v
+		}
+	}
+	for _, field := range t.fields {
+		if v, ok := rec.Data[field]; ok {
+			projected[field] = v
+		}
+	}
+	for source, target := range t.mappings {
+		if v, ok := rec.Data[source]; ok {
+			if t.keepUnmapped && source != target {
+				delete(projected, source)
+			}
+			projected[target] = v
+		}
+	}
+	for field, value := range t.constants {
+		projected[field] = value
+	}
+	for field, layout := range t.timeFormats {
+		value, ok := projected[field]
+		if !ok || value == nil {
+			continue
+		}
+		formatted, err := formatProjectTime(value, layout)
+		if err != nil {
+			return rec, fmt.Errorf("project: format time field %q: %w", field, err)
+		}
+		projected[field] = formatted
+	}
+	rec.Data = projected
+	return rec, nil
+}
+
+func formatProjectTime(value any, layout string) (any, error) {
+	ts, err := projectTimeValue(value)
+	if err != nil {
+		return value, err
+	}
+	switch strings.ToLower(layout) {
+	case "unix":
+		return ts.Unix(), nil
+	case "unix_ms":
+		return ts.UnixMilli(), nil
+	case "rfc3339", "":
+		return ts.Format(time.RFC3339), nil
+	default:
+		return ts.Format(layout), nil
+	}
+}
+
+func projectTimeValue(value any) (time.Time, error) {
+	switch v := value.(type) {
+	case time.Time:
+		return v, nil
+	case string:
+		return parseProjectTimeString(v)
+	case []byte:
+		return parseProjectTimeString(string(v))
+	case int:
+		return unixProjectTime(int64(v)), nil
+	case int64:
+		return unixProjectTime(v), nil
+	case int32:
+		return unixProjectTime(int64(v)), nil
+	case float64:
+		return unixProjectTime(int64(v)), nil
+	case float32:
+		return unixProjectTime(int64(v)), nil
+	default:
+		return time.Time{}, fmt.Errorf("unsupported time value type %T", value)
+	}
+}
+
+func parseProjectTimeString(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, fmt.Errorf("empty time value")
+	}
+	if i, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return unixProjectTime(i), nil
+	}
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	}
+	var lastErr error
+	for _, layout := range layouts {
+		ts, err := time.Parse(layout, value)
+		if err == nil {
+			return ts, nil
+		}
+		lastErr = err
+	}
+	return time.Time{}, fmt.Errorf("cannot parse %q as time: %w", value, lastErr)
+}
+
+func unixProjectTime(value int64) time.Time {
+	if value > 1_000_000_000_000 || value < -1_000_000_000_000 {
+		return time.UnixMilli(value)
+	}
+	return time.Unix(value, 0)
 }
 
 type RenameTransform struct {

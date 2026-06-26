@@ -19,15 +19,18 @@ wait_http() {
 }
 
 echo "==> Build image"
-podman build -t "$IMAGE" -f Dockerfile .
+docker build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Reset ETL data"
 rm -rf data-duplicate
 mkdir -p data-duplicate/output data-duplicate/checkpoint data-duplicate/dlq logs
+chmod -R a+rwX data-duplicate
+chmod a+rwX logs
 
 echo "==> Run duplicate spec pipeline"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8013:8001 \
   -v "$ROOT_DIR/testdata/pipes-duplicate:/app/pipes:ro" \
@@ -48,7 +51,7 @@ body="$(curl -fsS http://127.0.0.1:8013/api/v2/pipelines)"
 echo "$body"
 count="$(echo "$body" | grep -o '"name":"duplicate-pipeline"' | wc -l | tr -d '[:space:]')"
 test "$count" = "1"
-podman logs "$APP_CONTAINER" 2>&1 | grep 'Skip duplicate pipeline duplicate-pipeline'
+docker logs "$APP_CONTAINER" 2>&1 | grep 'Skip duplicate pipeline duplicate-pipeline'
 test -n "$(ls data-duplicate/output/duplicate/first_*.jsonl 2>/dev/null)"
 test -z "$(ls data-duplicate/output/duplicate/second_*.jsonl 2>/dev/null || true)"
 

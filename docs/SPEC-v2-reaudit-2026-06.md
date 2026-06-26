@@ -100,7 +100,7 @@ openetl-go is production-ready when, for **both** operating modes:
 | `make test` | Unit tests with `-race` across `internal/etl/...`, `internal/logic/...`, `internal/controller/...` |
 | `make test-quick` | Same without `-race` (fast dev loop) |
 | `make test-pkg PKG=pipeline` | One package, verbose |
-| `make test-integration` | Integration tests with podman-compose services (MySQL + ClickHouse) |
+| `make test-integration` | Integration tests with docker compose services (MySQL + ClickHouse) |
 
 Integration tests use the **`integration` build tag** and require live databases:
 
@@ -110,7 +110,7 @@ CLICKHOUSE_HOST=... MYSQL_HOST=... go test -tags=integration ./internal/etl/sink
 
 ### 2.3 Dev environment
 
-- **podman** is the supported dev/container runtime (`podman compose -f docker-compose.dev.yml`).
+- **docker** is the supported dev/container runtime (`docker compose -f docker-compose.dev.yml`).
 - `go-dev` container (golang:1.24-alpine) mounts the workspace and is where builds/tests run.
 - Required dev services: `mysql-source` (binlog enabled), `clickhouse`, plus `minio`/`redpanda` as needed.
 
@@ -226,8 +226,8 @@ Prefer typed optional interfaces (`SchemaDescriptor`, `SinkMetricsProvider`) ove
 | Layer | Scope | Tooling | Required for PR |
 |-------|-------|---------|-----------------|
 | **Unit** | Pure functions, interfaces, type mappers, DDL translation, DAG routing, retry/backoff, circuit breaker | `go test -race` in-package `_test.go` | ✅ All |
-| **Integration** | Sink writes against live DBs (type inference, idempotency, auto-create), source checkpoint resume | `_test.go` with `//go:build integration`, podman services | ✅ For changed plugin |
-| **E2E** | Full pipeline MySQL CDC → ClickHouse, crash recovery, DLQ replay | `hack/e2e-*.sh` over podman-compose | ✅ For pipeline/core changes |
+| **Integration** | Sink writes against live DBs (type inference, idempotency, auto-create), source checkpoint resume | `_test.go` with `//go:build integration`, docker services | ✅ For changed plugin |
+| **E2E** | Full pipeline MySQL CDC → ClickHouse, crash recovery, DLQ replay | `hack/e2e-*.sh` over docker compose | ✅ For pipeline/core changes |
 
 ### 5.2 Test matrix for dual-mode
 

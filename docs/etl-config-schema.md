@@ -1,6 +1,8 @@
 # ETL YAML Config Reference
 
-Pipeline specs are YAML files under `pipes/` or the configured `etl.specsDir`. Environment variables are expanded before parsing with `${VAR}` or `${VAR:-default}`.
+Pipeline specs are YAML files under `pipes/` or the configured `etl.specsDir`. They express OpenETL-Go's core model: lightweight self-hosted `Source -> Transform -> Sink` pipelines for data synchronization, cleansing, and aggregation. Environment variables are expanded before parsing with `${VAR}` or `${VAR:-default}`.
+
+The config surface should serve common CDC/ETL paths, checkpoints, DLQ, idempotent writes, and lightweight aggregation. Full stream-processing semantics such as arbitrary keyed state, timers, SQL planners, and savepoints are outside the current production target. See [product positioning](./positioning.md).
 
 ## Top-Level Spec
 
@@ -361,6 +363,44 @@ sink:
 | `auto_create` | no | `false` | Auto-create table if missing. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
 
+### `maxcompute` / `odps`
+
+Experimental connector contract for Kafka ODS JSON -> MaxCompute partitioned table. The current build registers the sink and validates config/schema/partition fields, but the actual MaxCompute batch writer is intentionally not enabled until an SDK client and integration environment are added.
+
+```yaml
+sink:
+  type: maxcompute
+  config:
+    endpoint: https://service.cn-hangzhou.maxcompute.aliyun.com/api
+    project: warehouse
+    table: ods_events
+    access_key_id: ${ALIYUN_ACCESS_KEY_ID}
+    access_key_secret: ${ALIYUN_ACCESS_KEY_SECRET}
+    columns:
+      id: BIGINT
+      event_time: TIMESTAMP
+      payload: STRING
+    partition_fields: [dt]
+    write_mode: append
+```
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `endpoint` | yes | | MaxCompute endpoint URL. |
+| `project` | yes | | MaxCompute project name. |
+| `table` | yes | | Target table name. |
+| `access_key_id` | yes | | Alibaba Cloud access key ID (**secret**). |
+| `access_key_secret` | yes | | Alibaba Cloud access key secret (**secret**). |
+| `columns` | no | | Target column type map. Supported first-pass types: `STRING`, `BIGINT`, `DOUBLE`, `DECIMAL`, `BOOLEAN`, `DATETIME`, `TIMESTAMP`. |
+| `partition` | no | | Static partition values, for example `{dt: "2026-06-26"}`. |
+| `partition_fields` | no | | Record fields used as dynamic partition values, for example `[dt]`. |
+| `write_mode` | no | `append` | `append` or `partition_overwrite`. Append is at-least-once and can duplicate on replay. |
+| `batch_size` | no | `500` | Rows per batch. |
+| `max_retries` | no | `3` | Retry attempts for transient writes. |
+| `retry_base_ms` | no | `500` | Base retry delay in milliseconds. |
+
+Use `project` / `type_convert` before this sink so the record schema matches the declared MaxCompute `columns` and contains every dynamic `partition_fields` value. Until the writer is implemented, `Open()` returns an explicit experimental error and preflight should treat this connector as design-time only.
+
 ### `kafka`
 
 ```yaml
@@ -450,6 +490,32 @@ transforms:
 | `field` | yes | Field name to add. |
 | `value` | yes | Field value. Supports `{{now}}` (RFC3339), `{{ts}}` (unix timestamp). |
 
+### `project` / `select_fields`
+
+Projects a record into an explicit output shape. `select_fields` is an alias for the same transform.
+
+```yaml
+transforms:
+  - type: project
+    config:
+      fields: [id, amount]
+      mappings:
+        user_name: customer_name
+        created_at: dt
+      constants:
+        source_system: crm
+      time_formats:
+        dt: "2006-01-02"
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `fields` | no | Source fields to keep with the same output names. Missing fields are ignored. |
+| `mappings` | no | Map of source field → output field alias. Missing source fields are ignored. |
+| `constants` | no | Constant output fields added after fields and mappings. |
+| `time_formats` | no | Map of output field → time format. Supports `unix`, `unix_ms`, `rfc3339`, or any Go time layout such as `2006-01-02`. |
+| `keep_unmapped` | no | Preserve input fields not listed in `fields` or `mappings` (default `false`). Mapped source fields are renamed to their target names. |
+
 ### `type_convert`
 
 ```yaml
@@ -481,6 +547,43 @@ transforms:
 
 Filtered records are not DLQ errors and can advance checkpoint.
 
+### `flat_map` / `udtf`
+
+Expands one input record into zero, one, or many output records. `udtf` is an alias for the same transform. The first core ABI is Lua-backed: the script receives a full `record` table (`record.data`, `record.metadata`, `record.before`, `record.operation`) and returns `nil`/`false`, one record or data map, or an array of records/data maps. Output records inherit the input operation and metadata unless the returned record overrides them.
+
+```yaml
+transforms:
+  - type: flat_map
+    config:
+      language: lua
+      on_error: dlq
+      script: |
+        local out = {}
+        for i, item in ipairs(record.data.items) do
+          out[i] = {
+            data = {
+              order_id = record.data.id,
+              sku = item.sku,
+              qty = item.qty,
+            },
+            metadata = {
+              table = "order_items",
+            },
+          }
+        end
+        return out
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `language` | no | Script language. Only `lua` is implemented in the first core ABI. |
+| `script` | yes | Lua script returning `nil`, one output record/data map, or an array of output records/data maps. |
+| `code` | no | Alias for `script`. |
+| `on_error` | no | Parse/script error policy: `dlq` (default, record-level DLQ), `drop`, or `error` (batch-level failure). |
+| `timeout_ms` | no | Per-input-record script timeout in milliseconds (default `5000`). |
+
+Metrics exposed through `transform_metrics`: `input_records`, `output_records`, `dropped_records`, and `parse_errors`.
+
 ### `normalize_envelope` / `debezium_envelope`
 
 Normalizes plain JSON or Debezium-like Kafka envelopes before `lookup` / `window` processing. Plain JSON passes through. Debezium payloads are flattened from `after` / `before` and mapped to `operation`, `metadata.table`, and `metadata.timestamp`.
@@ -495,6 +598,55 @@ transforms:
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `keep_metadata` | no | `true` | Keep `_op`, `_source_table`, and `_event_time` fields in the record. |
+
+### `debezium_cdc`
+
+Normalizes Debezium Kafka CDC messages for ODS-style replication. It parses `c/u/d/r`, `source.db`, `source.table`, `ts_ms`, tombstones, and DDL-like schema-change events into `operation`, `metadata.database`, `metadata.table`, `metadata.timestamp`, and optional metadata fields.
+
+```yaml
+transforms:
+  - type: debezium_cdc
+    config:
+      keep_metadata: true
+      skip_tombstone: true
+      table_mapping:
+        template: "ods_{source_db}__{source_table}"
+  - type: cdc_policy
+    config:
+      include_databases:
+        - dl_vls_dev
+      include_tables:
+        - dl_vls_dev.vehicle_charge
+      skip_delete: false
+      skip_snapshot: true
+      dangerous_ddl: reject
+```
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `keep_metadata` | no | `true` | Keep `_debezium_op`, `_debezium_snapshot`, `_source_database`, `_source_table`, `_op`, and `_event_time` fields. |
+| `skip_tombstone` | no | `true` | Filter Debezium tombstone messages. |
+| `target_table_template` | no | | Target table template. Supports `{source_db}`, `{source_table}`, `{YYYYMMDD}`, and `{YYYY-MM-DD}`. |
+| `table_mapping` | no | | String template, rules map, or `{template, rules}` map for source db/table to target table mapping. |
+
+### `cdc_policy` / `ddl_guard`
+
+Applies explicit CDC migration policy after `debezium_cdc`. `ddl_guard` is an alias focused on schema-change events.
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `include_databases` | no | | Source database exact/glob allowlist. |
+| `exclude_databases` | no | | Source database exact/glob denylist. |
+| `include_tables` | no | | Source table or `db.table` exact/glob allowlist. Matches the Debezium source table, not the mapped target table. |
+| `exclude_tables` | no | | Source table or `db.table` exact/glob denylist. |
+| `skip_delete` | no | `false` | Filter DELETE events. Use only when losing deletes is an explicit migration choice. |
+| `skip_snapshot` | no | `false` | Filter Debezium snapshot events (`op=r` or snapshot marker). |
+| `skip_tombstone` | no | `true` | Filter Debezium tombstone markers. |
+| `dangerous_ddl` | no | `reject` | Action for dangerous DDL: `reject`, `drop`, or `pass`. Rejected DDL goes through normal transform error/DLQ handling. |
+| `ddl_allowlist` | no | | DDL patterns allowed to pass. |
+| `ddl_denylist` | no | | DDL patterns always treated as dangerous. |
+
+Metrics exposed through `transform_metrics`: `processed`, `skipped_filter`, `skipped_delete`, `skipped_snapshot`, `skipped_tombstone`, `ddl_rejected`, `ddl_dropped`, and `ddl_passed`.
 
 ### `lookup`
 
@@ -685,13 +837,47 @@ transforms:
 | --- | --- | --- |
 | `script` | yes | Lua script code. Receives `record` table and `metadata` table. |
 
+### `ts` / `javascript` / `js`
+
+Requires a CGO build with QuickJS enabled. The function receives a full
+`core.Record` JSON object and may return `null` / `undefined` / `false` to drop
+the input, one full record object, one plain data object, or an array of record
+objects / data objects for one-to-many parser flows.
+
+```yaml
+transforms:
+  - type: javascript
+    config:
+      script: |
+        function transform(record) {
+          return record.data.items.map(function(item) {
+            return {
+              data: {
+                order_id: record.data.id,
+                sku: item.sku,
+                qty: item.qty
+              },
+              metadata: {
+                table: "order_items"
+              }
+            }
+          })
+        }
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `script` | yes | TypeScript/JavaScript function body or function declaration. |
+| `code` | no | Alias for `script`. |
+| `timeout_ms` | no | Per-input-record script timeout in milliseconds. QuickJS timeout granularity is seconds, with sub-second values rounded up. |
+
 ## Runtime APIs For Config Workflows
 
 - Validate spec: `POST /api/v2/specs/validate` — returns idempotency warnings for dangerous source/sink combos
 - Connection catalog: `GET/POST /api/v2/connections`, `GET/PUT/DELETE /api/v2/connections/{name}`, `POST /api/v2/connections/{name}/test` — stores reusable source/sink/transform configs, masks secret fields in responses, and records last health status
 - Test ad-hoc connection: `POST /api/v2/connections/test`
 - Connector descriptors: `GET /api/v2/connectors/descriptors` — returns Connector Descriptor v1 records merged from registry, config schema, secret markers, capabilities, and maturity metadata
-- Transform dry-run: `POST /api/v2/transforms/dry-run`
+- Transform dry-run: `POST /api/v2/transforms/dry-run` — returns `records`/`output_count` for multi-output transforms such as `flat_map` / `udtf` / `javascript`
 - Reload specs: `POST /api/v2/specs/reload`
 - Plugin schema: `GET /api/v2/plugins/schema` — returns typed field schemas with secret markers
 
@@ -761,13 +947,14 @@ and Prometheus counter family.
 - typed config `fields`
 - `required` and `secret_fields`
 - `capabilities`
-- evidence-driven `maturity`
+- evidence-driven `maturity`: `production`, `beta`, `experimental`, or `dev-only`
 
 WASM plugins use Plugin ABI v1 metadata in `internal/etl/plugin/pluginsystem`:
 
 - ABI string: `openetl.plugin.abi/v1`
 - Minimum runtime contract: `openetl-runtime/v1`
 - Required entrypoints: source plugins export `read`, sink plugins export `write`, transform plugins export `transform`
+- Transform output contract: empty output, `null`, or `false` drops the input; a JSON record object or plain data object emits one record; an array of record/data objects emits multiple records through the batch transform path
 - Config field types: `string`, `int`, `bool`, `float`, `string_array`, `map`
 
 ## Idempotency Warnings

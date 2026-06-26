@@ -290,11 +290,49 @@ paths:
   /pipelines/{name}/checkpoint/set:
     post:
       tags: [Pipelines, Checkpoints]
-      summary: Set checkpoint position (for exact replay)
+      summary: Set checkpoint position or Kafka replay offset
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                position:
+                  type: object
+                  description: Raw source checkpoint position for backward compatibility.
+                source:
+                  type: string
+                  description: Source type. Use kafka for structured Kafka offset replay.
+                source_type:
+                  type: string
+                  description: Alias for source.
+                topic:
+                  type: string
+                  description: Kafka topic. Optional when the saved pipeline spec is a Kafka source with source.config.topic.
+                partition:
+                  type: integer
+                  description: Kafka partition for single-partition replay.
+                offset:
+                  type: integer
+                  format: int64
+                  description: Kafka offset. With default mode=replay_from, replay resumes from this offset.
+                offsets:
+                  type: object
+                  additionalProperties: { type: integer, format: int64 }
+                  description: Kafka partition -> offset map. Defaults to last_committed mode unless mode=replay_from is specified.
+                replay_from_offsets:
+                  type: object
+                  additionalProperties: { type: integer, format: int64 }
+                  description: Kafka partition -> first offset to replay.
+                mode:
+                  type: string
+                  enum: [replay_from, last_committed]
+                  description: replay_from stores offset-1 so the next start reads the requested offset; last_committed stores offsets as-is.
       responses:
         '200': { description: Checkpoint saved }
+        '400': { description: Invalid checkpoint request }
 
   /pipelines/{name}/checkpoint/reset:
     post:
@@ -352,6 +390,7 @@ paths:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Replayed }
+        '501': { description: DAG pipeline DLQ replay is not implemented; response code is dag_dlq_replay_unsupported }
 
   /dlq/{name}/{id}:
     delete:
@@ -372,6 +411,7 @@ paths:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
       responses:
         '200': { description: Replayed }
+        '501': { description: DAG pipeline DLQ replay is not implemented; response code is dag_dlq_replay_unsupported }
 
   /connections:
     get:
@@ -455,6 +495,7 @@ paths:
     get:
       tags: [Connectors]
       summary: List Connector Descriptor v1 records merged from registry, config schema, and maturity metadata
+      description: Maturity levels are production, beta, experimental, and dev-only.
       responses:
         '200': { description: Connector descriptors for UI forms, preflight, and connector test kits }
 
@@ -462,8 +503,9 @@ paths:
     post:
       tags: [Transforms]
       summary: Dry-run transforms against a sample record
+      description: Returns `record` for backward-compatible single-output callers and `records`/`output_count` for BatchTransform outputs such as flat_map/udtf. Record-level transform failures may be returned in `errors` with `partial_error=true`.
       responses:
-        '200': { description: Transformed record }
+        '200': { description: Transformed record or records }
 
   /specs/validate:
     post:
@@ -499,6 +541,22 @@ paths:
       summary: Install a WASM plugin (multipart upload)
       responses:
         '200': { description: Installed }
+
+  /plugins/compile:
+    post:
+      tags: [Plugins]
+      summary: Compile and optionally install a transform/source/sink plugin from TypeScript source
+      description: Uses a pre-installed extism-js compiler when available. Server-side npx fallback is disabled unless explicitly enabled and configured for a trusted package.
+      responses:
+        '200': { description: Compiled and installed, or source returned with offline compile guidance }
+
+  /plugins/dry-run:
+    post:
+      tags: [Plugins]
+      summary: Dry-run an installed transform plugin against a sample record
+      description: Returns `records` and `output_count` for multi-output WASM/plugin transforms. `record` and `output` contain the first output for backward-compatible clients.
+      responses:
+        '200': { description: Plugin transform dry-run result }
 
   /schemas:
     get:

@@ -42,7 +42,7 @@ type PostgresSink struct {
 	schemaDrift     string
 	ddLPolicy       DDLPolicy
 	schemaCache     *core.SchemaCache
-	sinkCounters // P4-20: per-sink write metrics (SK-4)
+	sinkCounters    // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
@@ -141,6 +141,33 @@ func (s *PostgresSink) Name() string { return s.name }
 // SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
 func (s *PostgresSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
 
+func (s *PostgresSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) error {
+	if len(schema.Columns) == 0 || s.table == "" {
+		return nil
+	}
+	exists, err := s.pgTableExists(ctx, s.table)
+	if err != nil {
+		return fmt.Errorf("validate postgres schema: check table %s.%s: %w", s.schema, s.table, err)
+	}
+	if !exists {
+		if s.autoCreate {
+			return nil
+		}
+		return fmt.Errorf("schema validation failed for postgres %s.%s: target table does not exist; enable auto_create or create the table first", s.schema, s.table)
+	}
+	target, err := s.pgGetColumnInfo(ctx, s.table)
+	if err != nil {
+		return fmt.Errorf("validate postgres schema: read columns for %s.%s: %w", s.schema, s.table, err)
+	}
+	return validateSchemaCompatibility(schema, target, schemaValidationOptions{
+		targetName:     fmt.Sprintf("postgres %s.%s", s.schema, s.table),
+		allowMissing:   s.schemaDrift == string(core.DriftAddCols),
+		missingRemedy:  "enable schema_drift=add_columns or add the columns manually",
+		allowTypeSync:  false,
+		typeSyncRemedy: "change the target column type or add a transform/type_convert before the sink",
+	})
+}
+
 func (s *PostgresSink) Open(ctx context.Context) error {
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		s.user, s.password, s.host, s.port, s.database, s.sslmode)
@@ -164,7 +191,11 @@ func (s *PostgresSink) Open(ctx context.Context) error {
 }
 
 func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err error) {
-	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
+	defer func() {
+		if err != nil {
+			s.recordError()
+		}
+	}() // P5-12: count write failures
 	if len(records) == 0 {
 		return nil
 	}
@@ -556,6 +587,29 @@ func (s *PostgresSink) pgGetColumns(ctx context.Context, table string) (map[stri
 			return nil, err
 		}
 		cols[col] = true
+	}
+	return cols, nil
+}
+
+func (s *PostgresSink) pgGetColumnInfo(ctx context.Context, table string) ([]core.ColumnInfo, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
+		s.schema, table,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cols []core.ColumnInfo
+	for rows.Next() {
+		var name, dataType, nullable string
+		if err := rows.Scan(&name, &dataType, &nullable); err != nil {
+			return nil, err
+		}
+		cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES")})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return cols, nil
 }

@@ -29,9 +29,45 @@ type pluginTransform struct {
 func (t *pluginTransform) Name() string { return t.name }
 
 func (t *pluginTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
-	out, err := t.manager.ExecTransformWithConfig(ctx, t.name, rec, t.config)
+	out, err := t.applyOne(ctx, rec)
 	if err != nil {
+		if err == core.ErrRecordFiltered {
+			return rec, err
+		}
 		return rec, fmt.Errorf("plugin transform %s: %w", t.name, err)
+	}
+	switch len(out) {
+	case 0:
+		return rec, core.ErrRecordFiltered
+	case 1:
+		return out[0], nil
+	default:
+		return rec, fmt.Errorf("plugin transform %s produced %d records; use batch execution for multi-output plugin results", t.name, len(out))
+	}
+}
+
+func (t *pluginTransform) ApplyBatch(ctx context.Context, recs []core.Record) ([]core.Record, error) {
+	out := make([]core.Record, 0, len(recs))
+	var failures []core.TransformRecordFailure
+
+	for _, rec := range recs {
+		produced, err := t.applyOne(ctx, rec)
+		if err != nil {
+			failures = append(failures, core.TransformRecordFailure{Record: rec, Err: err})
+			continue
+		}
+		out = append(out, produced...)
+	}
+	if len(failures) > 0 {
+		return out, core.NewPartialTransformError("plugin transform "+t.name+" partial transform failed", failures)
+	}
+	return out, nil
+}
+
+func (t *pluginTransform) applyOne(ctx context.Context, rec core.Record) ([]core.Record, error) {
+	out, err := t.manager.ExecTransformRecordsWithConfig(ctx, t.name, rec, t.config)
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

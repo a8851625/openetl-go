@@ -20,11 +20,12 @@ wait_http() {
 }
 
 echo "==> Build image"
-podman build -t "$IMAGE" -f Dockerfile .
+docker build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start HTTP fixture"
-podman rm -f "$FIXTURE_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$FIXTURE_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$FIXTURE_CONTAINER" \
   -p 18080:8080 \
   -v "$ROOT_DIR/testdata/http-fixture:/fixture:ro" \
@@ -36,10 +37,13 @@ wait_http "http://127.0.0.1:18080/health"
 echo "==> Reset ETL data"
 rm -rf data-http
 mkdir -p data-http/output data-http/checkpoint data-http/dlq logs
+chmod -R a+rwX data-http
+chmod a+rwX logs
 
 echo "==> Run HTTP pipeline"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8008:8001 \
   -v "$ROOT_DIR/testdata/pipes-http:/app/pipes:ro" \

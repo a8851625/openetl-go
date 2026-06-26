@@ -28,6 +28,7 @@ func (f *fakeConsumerGroupClaim) IsEmpty() bool                            { ret
 type fakeSession struct {
 	mu         sync.Mutex
 	marked     map[int32]int64
+	reset      map[int32]int64
 	committed  bool
 	ctx        context.Context
 	cancelOnce sync.Once
@@ -39,6 +40,7 @@ func newFakeSession() *fakeSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &fakeSession{
 		marked: make(map[int32]int64),
+		reset:  make(map[int32]int64),
 		ctx:    ctx,
 		cancel: cancel,
 		claims: map[string][]int32{"test": {0}},
@@ -58,7 +60,11 @@ func (s *fakeSession) Commit() {
 	defer s.mu.Unlock()
 	s.committed = true
 }
-func (s *fakeSession) ResetOffset(topic string, partition int32, offset int64, metadata string) {}
+func (s *fakeSession) ResetOffset(topic string, partition int32, offset int64, metadata string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reset[partition] = offset
+}
 func (s *fakeSession) MarkMessage(msg *sarama.ConsumerMessage, metadata string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,6 +161,32 @@ func TestKafkaCheckpointForRecordMarksOffset(t *testing.T) {
 	}
 	if !sess.committed {
 		t.Error("Commit not called after CheckpointForRecord")
+	}
+}
+
+func TestKafkaSetupResetsStartOffsetsFromCheckpoint(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "test"}
+	reader := &kafkaReader{
+		source:       src,
+		startOffsets: map[int32]int64{0: 40, 1: 99},
+		sessions:     make(map[int32]sarama.ConsumerGroupSession),
+	}
+	sess := newFakeSession()
+	defer sess.cancel()
+	sess.claims = map[string][]int32{"test": {0, 1}}
+
+	handler := &kafkaHandler{reader: reader}
+	if err := handler.Setup(sess); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.reset[0] != 41 || sess.reset[1] != 100 {
+		t.Fatalf("reset offsets = %#v, want partition 0->41 and 1->100", sess.reset)
+	}
+	if sess.marked[0] != 41 || sess.marked[1] != 100 {
+		t.Fatalf("marked offsets = %#v, want partition 0->41 and 1->100", sess.marked)
 	}
 }
 

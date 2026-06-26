@@ -157,6 +157,18 @@ func NewMySQLBatchSource(config map[string]any) (*MySQLBatchSource, error) {
 
 func (s *MySQLBatchSource) Name() string { return s.name }
 
+func (s *MySQLBatchSource) Describe(ctx context.Context) (core.SchemaInfo, error) {
+	db, err := openMySQLSchemaDB(ctx, s.user, s.password, s.host, s.port, s.database)
+	if err != nil {
+		return core.SchemaInfo{}, err
+	}
+	defer db.Close()
+	if s.customQuery != "" {
+		return describeMySQLQuerySchema(ctx, db, s.customQuery)
+	}
+	return describeMySQLTableSchema(ctx, db, s.database, s.table, s.columns)
+}
+
 func (s *MySQLBatchSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&loc=Local&timeout=10s&readTimeout=300s",
 		s.user, s.password, s.host, s.port, s.database)

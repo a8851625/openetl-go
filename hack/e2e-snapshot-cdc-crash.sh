@@ -20,26 +20,26 @@ wait_http() {
 }
 
 target_count() {
-  podman exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash;" 2>/dev/null | tr -d '[:space:]'
+  docker exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash;" 2>/dev/null | tr -d '[:space:]'
 }
 
 echo "==> Build image"
-podman build -t "$IMAGE" -f Dockerfile .
+docker build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start MySQL source"
-podman-compose -f docker-compose.dev.yml up -d mysql-source
+docker compose -f docker-compose.dev.yml up -d mysql-source
 
 echo "==> Wait MySQL healthy"
 i=0
 while [ "$i" -lt 60 ]; do
-  status="$(podman inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
+  status="$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
   if [ "$status" = "healthy" ]; then break; fi
   i=$((i + 1)); sleep 2
 done
-[ "$(podman inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
+[ "$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
 
 echo "==> Prepare snapshot+CDC crash tables"
-podman exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
+docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
 CREATE DATABASE IF NOT EXISTS dzh3136_target;
 DROP TABLE IF EXISTS dzh3136_go.snap_cdc_crash;
 CREATE TABLE dzh3136_go.snap_cdc_crash (id INT PRIMARY KEY, name VARCHAR(255), status VARCHAR(50), amount DECIMAL(10,2));
@@ -54,6 +54,8 @@ INSERT INTO dzh3136_go.snap_cdc_crash (id, name, status, amount) WITH RECURSIVE 
 echo "==> Reset ETL data"
 rm -rf data-snap-cdc-crash
 mkdir -p data-snap-cdc-crash/checkpoint data-snap-cdc-crash/dlq logs
+chmod -R a+rwX data-snap-cdc-crash
+chmod a+rwX logs
 
 echo "==> Write snapshot+CDC crash spec"
 mkdir -p testdata/pipes-snap-cdc-crash
@@ -62,7 +64,7 @@ name: "snap-cdc-crash-recovery"
 source:
   type: mysql_snapshot_cdc
   config:
-    host: "host.containers.internal"
+    host: "host.docker.internal"
     port: 13306
     user: "sync_user"
     password: "sync_password_123"
@@ -79,7 +81,7 @@ transforms:
 sink:
   type: mysql
   config:
-    host: "host.containers.internal"
+    host: "host.docker.internal"
     port: 13306
     user: "sync_user"
     password: "sync_password_123"
@@ -103,8 +105,9 @@ dlq:
 SPEC
 
 echo "==> Phase 1: Run and KILL during snapshot"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8016:8001 \
   -v "$ROOT_DIR/testdata/pipes-snap-cdc-crash:/app/pipes:ro" \
@@ -128,14 +131,15 @@ test "$partial" -gt 5
 test "$partial" -lt "$TOTAL"
 
 echo "==> KILLING during snapshot (target count=$partial)"
-podman kill "$APP_CONTAINER" >/dev/null
+docker kill "$APP_CONTAINER" >/dev/null
 
 test -f data-snap-cdc-crash/etl.db
 echo "==> Checkpoint persisted to SQLite storage"
 
 echo "==> Phase 2: Restart - should resume snapshot from checkpoint"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8016:8001 \
   -v "$ROOT_DIR/testdata/pipes-snap-cdc-crash:/app/pipes:ro" \
@@ -158,21 +162,22 @@ echo "==> After restart snapshot: $final / $TOTAL"
 test "$final" -ge "$TOTAL"
 
 echo "==> Phase 3: Emit CDC changes and KILL during CDC"
-podman exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO snap_cdc_crash (id, name, status, amount) VALUES (9001, 'CDC Crash Alice', 'active', 500.00);"
+docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO snap_cdc_crash (id, name, status, amount) VALUES (9001, 'CDC Crash Alice', 'active', 500.00);"
 
 i=0
 while [ "$i" -lt 60 ]; do
-  cdc1="$(podman exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash WHERE id=9001;" 2>/dev/null | tr -d '[:space:]')"
+  cdc1="$(docker exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash WHERE id=9001;" 2>/dev/null | tr -d '[:space:]')"
   if [ "$cdc1" = "1" ]; then break; fi
   i=$((i + 1)); sleep 1
 done
 test "$cdc1" = "1"
 echo "==> CDC event replicated, killing during CDC phase"
-podman kill "$APP_CONTAINER" >/dev/null
+docker kill "$APP_CONTAINER" >/dev/null
 
 echo "==> Phase 4: Restart CDC with checkpoint"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8016:8001 \
   -v "$ROOT_DIR/testdata/pipes-snap-cdc-crash:/app/pipes:ro" \
@@ -185,11 +190,11 @@ wait_http "http://127.0.0.1:8016/api/v2/health"
 sleep 2
 
 echo "==> Emit second CDC event after restart"
-podman exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO snap_cdc_crash (id, name, status, amount) VALUES (9002, 'CDC Crash Bob', 'active', 600.00); UPDATE snap_cdc_crash SET amount=999.00 WHERE id=9002;"
+docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO snap_cdc_crash (id, name, status, amount) VALUES (9002, 'CDC Crash Bob', 'active', 600.00); UPDATE snap_cdc_crash SET amount=999.00 WHERE id=9002;"
 
 i=0
 while [ "$i" -lt 60 ]; do
-  cdc2="$(podman exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash WHERE id=9002 AND amount=999.00;" 2>/dev/null | tr -d '[:space:]')"
+  cdc2="$(docker exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash WHERE id=9002 AND amount=999.00;" 2>/dev/null | tr -d '[:space:]')"
   if [ "$cdc2" = "1" ]; then break; fi
   i=$((i + 1)); sleep 1
 done
@@ -203,6 +208,6 @@ body="$(curl -fsS http://127.0.0.1:8016/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep '"name":"snap-cdc-crash-recovery"'
 
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
 
 echo "Snapshot+CDC crash recovery E2E passed"

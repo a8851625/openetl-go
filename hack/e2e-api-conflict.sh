@@ -19,15 +19,18 @@ wait_http() {
 }
 
 echo "==> Build image"
-podman build -t "$IMAGE" -f Dockerfile .
+docker build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Reset ETL data"
 rm -rf data-api-conflict
 mkdir -p data-api-conflict/output data-api-conflict/checkpoint data-api-conflict/dlq logs
+chmod -R a+rwX data-api-conflict
+chmod a+rwX logs
 
 echo "==> Run API conflict fixture"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8015:8001 \
   -v "$ROOT_DIR/testdata/pipes-auth:/app/pipes:ro" \

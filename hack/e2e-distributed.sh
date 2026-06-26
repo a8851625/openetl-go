@@ -18,16 +18,17 @@ ROOT_PASS="root123456"
 IMAGE="openetl-go-e2e:dev"
 
 cleanup() {
-  podman rm -f "$CONTAINER" >/dev/null 2>&1 || true
-  podman rm -f etl-e2e-instance1 >/dev/null 2>&1 || true
-  podman rm -f etl-e2e-instance2 >/dev/null 2>&1 || true
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f etl-e2e-instance1 >/dev/null 2>&1 || true
+  docker rm -f etl-e2e-instance2 >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
 # ── 1. Spin up a throwaway MySQL container ───────────────────────────
 echo "==> Start MySQL container (port $HOST_PORT)"
 cleanup
-podman run -d --name "$CONTAINER" \
+docker run -d --name "$CONTAINER" \
+  --add-host host.docker.internal:host-gateway \
   -e MYSQL_ROOT_PASSWORD="$ROOT_PASS" \
   -e MYSQL_DATABASE="$DB" \
   -p "$HOST_PORT:3306" \
@@ -36,7 +37,7 @@ podman run -d --name "$CONTAINER" \
 echo "==> Wait for MySQL"
 i=0
 while [ "$i" -lt 60 ]; do
-  if podman exec "$CONTAINER" mysqladmin ping -h localhost -u root -p"$ROOT_PASS" >/dev/null 2>&1; then
+  if docker exec "$CONTAINER" mysql -h localhost -u root -p"$ROOT_PASS" -e "SELECT 1" >/dev/null 2>&1; then
     break
   fi
   i=$((i + 1)); sleep 2
@@ -44,12 +45,12 @@ done
 if [ "$i" -ge 60 ]; then echo "!! MySQL did not become ready"; exit 1; fi
 
 # Ensure DB exists.
-podman exec "$CONTAINER" mysql -u root -p"$ROOT_PASS" \
+docker exec "$CONTAINER" mysql -u root -p"$ROOT_PASS" \
   -e "CREATE DATABASE IF NOT EXISTS $DB;" >/dev/null 2>&1 || true
 
 # ── 2. Build the binary ──────────────────────────────────────────────
 echo "==> Build binary"
-podman build -t "$IMAGE" -f Dockerfile . >/dev/null 2>&1 || {
+docker build -t "$IMAGE" -f Dockerfile . >/dev/null 2>&1 || {
   echo "   Image already exists or build failed — reusing."
 }
 
@@ -62,11 +63,11 @@ podman build -t "$IMAGE" -f Dockerfile . >/dev/null 2>&1 || {
 #     in-flight shards are re-queued by ReassignStaleTasks and completed by a
 #     surviving worker — no shard lost.
 echo "==> Run Go integration tests: distributed dispatch (real workers + reassignment)"
-MYSQL_DSN="root:${ROOT_PASS}@tcp(host.containers.internal:${HOST_PORT})/${DB}?parseTime=true&multiStatements=true"
+MYSQL_DSN="root:${ROOT_PASS}@tcp(host.docker.internal:${HOST_PORT})/${DB}?parseTime=true&multiStatements=true"
 
 # Use the go-dev container if available; otherwise fall back to host go.
-if podman ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
-  podman exec -e MYSQL_DSN="$MYSQL_DSN" -w /workspace etl-go-dev \
+if docker ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
+  docker exec -e MYSQL_DSN="$MYSQL_DSN" -w /workspace etl-go-dev \
     go test -race -count=1 -v -tags=integration -run 'TestDistributed' ./internal/etl/master/
 else
   MYSQL_DSN="$MYSQL_DSN" go test -race -count=1 -v -tags=integration \

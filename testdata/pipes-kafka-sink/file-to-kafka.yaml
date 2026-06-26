@@ -13,7 +13,7 @@ sink:
   type: kafka
   config:
     brokers:
-      - "host.containers.internal:19092"
+      - "host.docker.internal:19092"
     topic: "etl-sink-topic"
     key_column: "id"
 

@@ -1,6 +1,8 @@
 # ETL/CDC Quick Start
 
-> Lightweight declarative ETL/CDC data sync platform. Define pipelines in YAML. 20+ connectors including MySQL CDC, Kafka, ClickHouse, PostgreSQL, Doris, Elasticsearch, S3.
+> A lightweight, self-hosted, open-source CDC/ETL runtime for data synchronization, cleansing, and aggregation. Define `Source -> Transform -> Sink` pipelines with YAML, API, or Web UI, using connectors such as MySQL CDC, Kafka, ClickHouse, PostgreSQL, Doris, Elasticsearch, and S3.
+
+OpenETL-Go fits common sync, cleansing, enrichment, deduplication, and tumbling-window aggregation jobs. It is not positioned as a Flink/Spark-grade stream processor, an Airflow-grade workflow orchestrator, or an Airbyte-grade SaaS ELT catalog. See [product positioning](./positioning.md).
 
 ---
 
@@ -14,7 +16,7 @@ git clone <repo-url> openetl-go
 cd openetl-go
 
 # Start all dependencies (MySQL, ClickHouse, MinIO, Redpanda) + ETL service
-podman compose -f docker-compose.quickstart.yml up -d
+docker compose -f docker-compose.quickstart.yml up -d
 
 # Verify
 curl http://localhost:8000/api/v2/health
@@ -31,7 +33,7 @@ export ETL_API_TOKEN=$(openssl rand -hex 16)
 export ETL_SPEC_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
 # Restart the service
-podman compose -f docker-compose.quickstart.yml restart etl
+docker compose -f docker-compose.quickstart.yml restart etl
 ```
 
 ---
@@ -138,10 +140,10 @@ curl http://localhost:8000/metrics
 | | `s3` | S3/MinIO (Parquet/JSON, multipart upload) |
 | | `jdbc` | Any JDBC database |
 | | `file_sink` | Local file output |
-| **Transform** | `filter`, `rename`, `add_field`, `drop_field`, `type_convert` | Basic transforms |
+| **Transform** | `filter`, `project`, `select_fields`, `flat_map`, `udtf`, `rename`, `add_field`, `drop_field`, `type_convert` | Basic transforms |
 | | `deduplicate`, `validate` | Data cleansing |
 | | `lua` | Lua scripting (inline, gopher-lua pure Go) |
-| | `normalize_envelope`, `lookup`, `window` | Kafka envelope normalization / dimension JOIN / tumbling window aggregation |
+| | `normalize_envelope`, `debezium_cdc`, `cdc_policy`, `ddl_guard`, `lookup`, `window` | Kafka envelope/CDC policy / dimension JOIN / tumbling window aggregation |
 | | `join` | Stream-stream interval JOIN with optional SQLite state recovery; production crash/rebalance certification remains on the roadmap |
 | | `router`, `fanout`, `tap` | Conditional routing / fan-out / tap |
 | | `enricher`, `lookup` | Data enrichment / dimension lookup |

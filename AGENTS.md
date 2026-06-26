@@ -1,12 +1,21 @@
 # AGENTS.md
 
+## Product Positioning
+- OpenETL-Go is a lightweight, self-hosted, open-source CDC/ETL runtime for data synchronization, cleansing, and aggregation. Keep new product and engineering work aligned with that purpose.
+- The primary product surface is `Source -> Transform -> Sink` pipelines, with YAML/API/UI as equivalent ways to operate the same spec. DAG, schedules, parallel shards, and master-worker mode should extend this model rather than become a separate product line.
+- Optimize for the common operational data paths: databases, Kafka, files, HTTP/object storage, OLAP/search sinks, checkpointed at-least-once delivery, DLQ visibility/replay, idempotent sink modes, schema/preflight safety, and small-team self-hosting.
+- Do not position the project as a full replacement for Flink/Spark stream processing, Airflow/Dagster workflow orchestration, Airbyte-style SaaS ELT catalogs, or Debezium/Kafka Connect CDC infrastructure. It can complement those systems or replace lighter hand-written sync jobs.
+- Avoid roadmap or implementation choices that turn the project into a partial stream-compute platform: generic keyed state APIs, arbitrary processing-time timers, full SQL planners, Flink-compatible savepoints, cross-sink exactly-once transactions, and complex sliding/session window semantics are out of the near-term core.
+- Prefer improving reliability, first-run usability, connector certification, plugin contracts, and lightweight operations over adding many unverified connectors.
+- Public claims must match tested maturity. Default semantics are at-least-once; production guidance should rely on business keys, versions, upserts, ReplacingMergeTree-style sinks, or explicit deduplication to absorb replay.
+
 ## Commands
 - `make build` is the safest build path: it installs the GoFrame CLI if missing, then runs `gf build -ew` using `hack/config.yaml`.
 - `main.go` imports generated `github.com/a8851625/openetl-go/internal/packed`, and `hack/config.yaml` packs `resource/` into `internal/packed/packed.go` during GoFrame builds. Plain `go build ./...` works if `internal/packed/packed.go` exists (it is committed as a 15-byte stub).
 - Go module is `github.com/a8851625/openetl-go`, with `go 1.24.0` and `toolchain go1.24.13` in `go.mod`.
-- Local Go may be unavailable; use `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c "go test ./..."` for tests.
+- Local Go may be unavailable; use `docker run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c "go test ./..."` for tests.
 - `make test` runs unit tests with `-race`; `make test-quick` runs only `./internal/etl/...`; `make test-integration` requires MySQL + ClickHouse containers.
-- `hack/e2e.sh` builds the app image and validates file→file, MySQL batch→file, and MySQL batch→MySQL via Podman.
+- `hack/e2e.sh` builds the app image and validates file→file, MySQL batch→file, and MySQL batch→MySQL via Docker.
 - `hack/e2e-cdc-mysql.sh` validates MySQL CDC→MySQL.
 - `hack/e2e-clickhouse.sh` validates MySQL CDC→ClickHouse; it requires `docker.io/clickhouse/clickhouse-server:24.3-alpine` locally.
 - `hack/e2e-dlq.sh` validates DLQ list/replay against MySQL.
@@ -20,6 +29,8 @@
 - `hack/e2e-duplicate-spec.sh` validates duplicate pipeline spec detection.
 - `hack/e2e-api-conflict.sh` validates duplicate runtime pipeline create conflicts.
 - `hack/e2e-kafka.sh` validates Kafka source/sink via Redpanda (file→Kafka, Kafka→file).
+- `hack/e2e-kafka-raw-ods.sh` validates Kafka raw protocol messages -> Lua `flat_map` parser -> MySQL `lookup` -> `project`/`type_convert` -> Kafka ODS, including parser DLQ, lookup-miss DLQ, and offset replay append-duplicate boundary.
+- `hack/e2e-debezium-mysql.sh` validates Debezium Kafka CDC→MySQL ODS upsert with source include/exclude, snapshot/delete skips, DDL drop/reject policy, Kafka offset replay, Redpanda broker restart recovery, consumer group rebalance recovery, MySQL lock-wait retry, and DLQ replay after a MySQL value-range write failure.
 - `hack/e2e-ui.sh` validates the built React UI served by the app container using Playwright CLI.
 - `hack/e2e-elasticsearch.sh` validates Elasticsearch/OpenSearch bulk indexing (mysql_batch→ES).
 - `hack/e2e-snapshot-cdc-crash.sh` validates snapshot+CDC crash recovery during both snapshot and CDC phases.
@@ -60,7 +71,8 @@
 - Plugin install/uninstall API: `POST /api/v2/plugins/install` (multipart form: wasm, name, kind, version), `DELETE /api/v2/plugins/{name}`, `GET /api/v2/plugins/{name}`.
 - Implemented ETL sources: `mysql_cdc`, `mysql_batch` (supports custom `query` for JOIN), `mysql_snapshot_cdc`, `postgres_cdc` (pgoutput parsing), `kafka`, `file`, `http`, `redis`.
 - Implemented ETL sinks: `clickhouse` (native + HTTP, auto-create, DDL translation), `mysql` (batch INSERT/upsert, auto-create), `postgres`/`postgresql` (insert/upsert via pgx, auto-create), `doris` (Stream Load + MySQL DELETE, auto-create), `elasticsearch`/`es` (bulk API, round-robin, 429 Retry-After), `kafka` (sync producer, idempotent), `redis` (HASH/STRING/LIST), `s3`/`file_sink` (MinIO-compatible, multipart, Parquet support), `jdbc` (any JDBC database).
-- Implemented transforms: `filter` (expression engine), `deduplicate`, `validate`, `type_convert`, `rename`, `drop_field`, `add_field`, `enricher`, `lookup`, `join`, `window`, `router`, `fanout`, `tap`, `rate_limiter`, `lua` (gopher-lua), `javascript`/`typescript` (QuickJS, CGO), WASM plugins (extism).
+- Experimental sink contract: `maxcompute`/`odps` is registered for descriptor/config/schema/partition validation and preflight blocks writer-disabled pipelines; the SDK-backed batch writer, remote permission/table checks, DLQ/retry e2e, and production maturity are not implemented yet.
+- Implemented transforms: `filter` (expression engine), `deduplicate`, `validate`, `type_convert`, `project`/`select_fields`, `flat_map`/`udtf` (Lua-backed first ABI), `debezium_cdc`, `cdc_policy`/`ddl_guard`, `rename`, `drop_field`, `add_field`, `enricher`, `lookup`, `join`, `window`, `router`, `fanout`, `tap`, `rate_limiter`, `lua` (gopher-lua), `javascript`/`typescript` (QuickJS, CGO), WASM plugins (extism).
 - `internal/logic/logic.go` blank-imports logic packages so their `init()` functions register service implementations.
 
 ## Build Tags

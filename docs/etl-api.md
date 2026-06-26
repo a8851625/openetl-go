@@ -37,6 +37,8 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
 
 Replay uses the same query parameters as list. Replayed records are transformed again and written to the configured sink. Successfully replayed records are deleted from the DLQ file.
 
+Linear pipeline DLQ replay is supported. DAG pipeline DLQ replay is explicitly not supported yet because node-level replay has not been implemented. DAG replay attempts return HTTP `501` with `code: "dag_dlq_replay_unsupported"` and do not delete DLQ records.
+
 Examples:
 ```sh
 curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
@@ -60,6 +62,28 @@ curl -X DELETE -H "X-API-Token: $ETL_API_TOKEN" \
   'http://127.0.0.1:8001/api/v2/dlq/orders'
 ```
 
+## Checkpoint APIs
+
+### Set Kafka Replay Offset
+`POST /api/v2/pipelines/{pipeline}/checkpoint/set`
+
+For Kafka sources, use structured checkpoint requests instead of hand-writing the internal checkpoint JSON. `offset` and `replay_from_offsets` mean "start reading from this offset on the next start"; OpenETL-Go stores `offset-1` internally because Kafka commits the next offset after a successful sink write.
+
+Examples:
+```sh
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"kafka","topic":"debezium.orders","partition":0,"offset":42}' \
+  'http://127.0.0.1:8001/api/v2/pipelines/orders/checkpoint/set'
+
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"kafka","topic":"debezium.orders","replay_from_offsets":{"0":42,"1":1000}}' \
+  'http://127.0.0.1:8001/api/v2/pipelines/orders/checkpoint/set'
+```
+
+Use `{"mode":"last_committed","offsets":{"0":41}}` when setting the stored committed offsets directly. Legacy raw checkpoints remain supported with `{"position":{...}}`.
+
 ## Plugin Metadata
 
 Discover registered plugins and their basic capabilities.
@@ -79,12 +103,38 @@ Response includes legacy lists plus `metadata`:
   "metadata": {
     "sources": {
       "mysql_cdc": {
-        "required": ["host", "database", "table", "server_id"],
-        "capabilities": ["cdc", "checkpoint"],
-        "maturity": "stable"
+        "required": ["host", "user", "database", "tables"],
+        "capabilities": ["cdc", "checkpoint", "schema_descriptor_single_table"],
+        "maturity": "beta"
       }
     }
   }
+}
+```
+
+## Plugin Dry Run
+
+Run an installed transform plugin against one sample record. Multi-output
+plugins return every output in `records` and the count in `output_count`; `record`
+and `output` keep the first output for older clients.
+
+```sh
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"raw-parser","record":{"operation":"INSERT","data":{"id":1},"metadata":{"source":"ui","table":"sample"}}}' \
+  'http://127.0.0.1:8001/api/v2/plugins/dry-run'
+```
+
+```json
+{
+  "name": "raw-parser",
+  "kind": "transform",
+  "filtered": false,
+  "output_count": 2,
+  "records": [
+    {"operation": "INSERT", "data": {"id": 1, "idx": 1}, "metadata": {"source": "ui", "table": "sample"}},
+    {"operation": "INSERT", "data": {"id": 1, "idx": 2}, "metadata": {"source": "ui", "table": "sample"}}
+  ]
 }
 ```
 
@@ -152,12 +202,21 @@ Response:
 ```json
 {
   "filtered": false,
+  "output_count": 1,
   "record": {
     "operation": "INSERT",
     "data": {"id": 1}
-  }
+  },
+  "records": [
+    {
+      "operation": "INSERT",
+      "data": {"id": 1}
+    }
+  ]
 }
 ```
+
+For `BatchTransform` implementations such as `flat_map` / `udtf`, `records` contains every output record and `record` is the first output for backward compatibility. Record-level parser errors are returned as `errors` with `partial_error: true` instead of hiding successful outputs.
 
 ## Specs Reload
 

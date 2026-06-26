@@ -5,11 +5,11 @@ version: '3.8'
 #
 # One-command demo: MySQL CDC → ClickHouse
 #
-#   podman compose -f docker-compose.quickstart.yml up -d
+#   docker compose -f docker-compose.quickstart.yml up -d
 #
 # Then open: http://localhost:8000
 #
-# Cleanup: podman compose -f docker-compose.quickstart.yml down -v
+# Cleanup: docker compose -f docker-compose.quickstart.yml down -v
 # ════════════════════════════════════════════════════════════════════
 
 services:
@@ -30,7 +30,7 @@ services:
       - mysql-data:/var/lib/mysql
       - ./testdata/mysql/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysql", "-h", "localhost", "-u", "root", "-proot123", "-e", "SELECT 1"]
       interval: 5s
       timeout: 5s
       retries: 30

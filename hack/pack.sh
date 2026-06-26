@@ -26,13 +26,12 @@ if [[ "${SKIP_UI:-0}" != "1" ]]; then
   if [[ -d web && -f web/package.json ]]; then
     echo "Building frontend (web/ → resource/public)..."
     # Prefer local npm; fall back to the node:20-alpine container so this
-    # works on CI runners that have neither node nor podman/docker.
+    # works on CI runners that have neither node nor Docker.
     if command -v npm >/dev/null 2>&1; then
       (cd web && npm install --no-audit --no-fund && npm run build)
-    elif command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1; then
-      RTE="$(command -v podman || command -v docker)"
-      echo "npm not found locally; building via $RTE node:20-alpine"
-      "$RTE" run --rm -v "$PWD:/workspace" -w /workspace/web docker.io/library/node:20-alpine \
+    elif command -v docker >/dev/null 2>&1; then
+      echo "npm not found locally; building via docker node:20-alpine"
+      docker run --rm -v "$PWD:/workspace" -w /workspace/web docker.io/library/node:20-alpine \
         sh -c 'npm install --no-audit --no-fund && npm run build'
     else
       echo "WARNING: neither npm nor a container runtime is available;" \

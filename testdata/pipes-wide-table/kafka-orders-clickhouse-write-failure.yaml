@@ -4,7 +4,7 @@ source:
   type: kafka
   config:
     brokers:
-      - host.containers.internal:19092
+      - host.docker.internal:19092
     topic: orders.clickhouse_failure
     group_id: openetl-wide-table-clickhouse-write-failure
     initial_offset: oldest
@@ -17,7 +17,7 @@ transforms:
 sink:
   type: clickhouse
   config:
-    host: host.containers.internal
+    host: host.docker.internal
     port: 9000
     user: default
     password: dzh123456

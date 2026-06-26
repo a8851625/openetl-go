@@ -197,12 +197,24 @@ func anyToLuaValue(L *lua.LState, v any) lua.LValue {
 		return lua.LBool(x)
 	case int:
 		return lua.LNumber(x)
+	case int32:
+		return lua.LNumber(x)
 	case int64:
+		return lua.LNumber(x)
+	case float32:
 		return lua.LNumber(x)
 	case float64:
 		return lua.LNumber(x)
 	case string:
 		return lua.LString(x)
+	case map[string]any:
+		return mapToLuaTable(L, x)
+	case []any:
+		tbl := L.NewTable()
+		for i, item := range x {
+			tbl.RawSetInt(i+1, anyToLuaValue(L, item))
+		}
+		return tbl
 	default:
 		return lua.LString(fmt.Sprintf("%v", x))
 	}
@@ -215,16 +227,58 @@ func luaTableToMap(v lua.LValue) map[string]any {
 	}
 	out := map[string]any{}
 	tbl.ForEach(func(key, value lua.LValue) {
-		switch value.Type() {
-		case lua.LTNil:
-			out[key.String()] = nil
-		case lua.LTBool:
-			out[key.String()] = bool(value.(lua.LBool))
-		case lua.LTNumber:
-			out[key.String()] = float64(value.(lua.LNumber))
-		default:
-			out[key.String()] = value.String()
-		}
+		out[key.String()] = luaValueToAny(value)
 	})
 	return out
+}
+
+func luaValueToAny(value lua.LValue) any {
+	switch value.Type() {
+	case lua.LTNil:
+		return nil
+	case lua.LTBool:
+		return bool(value.(lua.LBool))
+	case lua.LTNumber:
+		return float64(value.(lua.LNumber))
+	case lua.LTString:
+		return value.String()
+	case lua.LTTable:
+		tbl := value.(*lua.LTable)
+		if luaTableIsArray(tbl) {
+			out := make([]any, 0, tbl.Len())
+			for i := 1; i <= tbl.Len(); i++ {
+				out = append(out, luaValueToAny(tbl.RawGetInt(i)))
+			}
+			return out
+		}
+		return luaTableToMap(tbl)
+	default:
+		return value.String()
+	}
+}
+
+func luaTableIsArray(tbl *lua.LTable) bool {
+	count := 0
+	maxIndex := 0
+	array := true
+	tbl.ForEach(func(key, _ lua.LValue) {
+		if !array {
+			return
+		}
+		num, ok := key.(lua.LNumber)
+		if !ok {
+			array = false
+			return
+		}
+		idx := int(num)
+		if idx <= 0 || lua.LNumber(idx) != num {
+			array = false
+			return
+		}
+		count++
+		if idx > maxIndex {
+			maxIndex = idx
+		}
+	})
+	return array && count > 0 && count == maxIndex
 }

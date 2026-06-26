@@ -286,6 +286,20 @@ func sinkConfigSchemas() map[string][]ConfigField {
 			{Name: "tls_ca_cert", Type: FieldString, Required: false, Description: "CA certificate path or PEM for TLS verification"},
 			{Name: "allow_unsupported_driver", Type: FieldBool, Required: false, Default: false, Description: "Allow DSNs whose driver cannot be auto-detected"},
 		},
+		"maxcompute": {
+			{Name: "endpoint", Type: FieldString, Required: true, Description: "MaxCompute endpoint URL", Example: "https://service.cn-hangzhou.maxcompute.aliyun.com/api"},
+			{Name: "project", Type: FieldString, Required: true, Description: "MaxCompute project name"},
+			{Name: "table", Type: FieldString, Required: true, Description: "Target table name"},
+			{Name: "access_key_id", Type: FieldString, Required: true, Description: "Alibaba Cloud access key ID", Secret: true},
+			{Name: "access_key_secret", Type: FieldString, Required: true, Description: "Alibaba Cloud access key secret", Secret: true},
+			{Name: "columns", Type: FieldMap, Required: false, Description: "Target column types, e.g. {id: BIGINT, event_time: TIMESTAMP, payload: STRING}"},
+			{Name: "partition", Type: FieldMap, Required: false, Description: "Static partition spec, e.g. {dt: '2026-06-26'}"},
+			{Name: "partition_fields", Type: FieldStringArray, Required: false, Description: "Record fields used as dynamic partition values, e.g. [dt]"},
+			{Name: "write_mode", Type: FieldString, Required: false, Default: "append", Description: "Write mode. append is at-least-once and can duplicate on replay; partition_overwrite requires an explicit replay plan", Enum: []string{"append", "partition_overwrite"}},
+			{Name: "batch_size", Type: FieldInt, Required: false, Default: 500, Description: "Rows per MaxCompute batch"},
+			{Name: "max_retries", Type: FieldInt, Required: false, Default: 3, Description: "Retry attempts for transient MaxCompute writes"},
+			{Name: "retry_base_ms", Type: FieldInt, Required: false, Default: 500, Description: "Base retry delay in milliseconds"},
+		},
 		"redis": {
 			{Name: "host", Type: FieldString, Required: false, Default: "localhost", Description: "Redis host"},
 			{Name: "port", Type: FieldInt, Required: false, Default: 6379, Description: "Redis port"},
@@ -305,6 +319,7 @@ func sinkConfigSchemas() map[string][]ConfigField {
 	}
 	schemas["postgresql"] = schemas["postgres"]
 	schemas["es"] = schemas["elasticsearch"]
+	schemas["odps"] = schemas["maxcompute"]
 	return schemas
 }
 
@@ -321,6 +336,13 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "field", Type: FieldString, Required: true, Description: "Field name to add"},
 			{Name: "value", Type: FieldString, Required: true, Description: "Field value (supports {{now}}, {{ts}})"},
 		},
+		"project": {
+			{Name: "fields", Type: FieldStringArray, Required: false, Description: "Output fields to keep with the same names", Example: []string{"id", "amount"}},
+			{Name: "mappings", Type: FieldMap, Required: false, Description: "Map of source field → output field alias", Example: map[string]string{"user_name": "name"}},
+			{Name: "constants", Type: FieldMap, Required: false, Description: "Constant output fields", Example: map[string]any{"source_system": "crm"}},
+			{Name: "time_formats", Type: FieldMap, Required: false, Description: "Map of output field → time format: unix, unix_ms, rfc3339, or Go layout", Example: map[string]string{"event_time": "rfc3339", "dt": "2006-01-02"}},
+			{Name: "keep_unmapped", Type: FieldBool, Required: false, Default: false, Description: "Preserve input fields not listed in fields or mappings"},
+		},
 		"type_convert": {
 			{Name: "conversions", Type: FieldMap, Required: true, Description: "Map of field → target type", Example: map[string]string{"id": "int", "amount": "float"}},
 		},
@@ -328,8 +350,33 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "expression", Type: FieldString, Required: true, Description: "Filter expression"},
 			{Name: "strict_types", Type: FieldBool, Required: false, Default: false, Description: "Use strict type comparisons"},
 		},
+		"flat_map": {
+			{Name: "language", Type: FieldString, Required: false, Default: "lua", Description: "Script language for the flat_map ABI", Enum: []string{"lua"}},
+			{Name: "script", Type: FieldString, Required: true, Description: "Lua script returning nil, one record/data map, or an array of record/data maps"},
+			{Name: "code", Type: FieldString, Required: false, Description: "Alias for script"},
+			{Name: "on_error", Type: FieldString, Required: false, Default: "dlq", Description: "Action when one input record fails to parse", Enum: []string{"dlq", "drop", "error"}},
+			{Name: "timeout_ms", Type: FieldInt, Required: false, Default: 5000, Description: "Per-record script timeout in milliseconds"},
+		},
 		"normalize_envelope": {
 			{Name: "keep_metadata", Type: FieldBool, Required: false, Default: true, Description: "Add _op, _source_table, and _event_time fields after normalizing Debezium-like payloads"},
+		},
+		"debezium_cdc": {
+			{Name: "keep_metadata", Type: FieldBool, Required: false, Default: true, Description: "Add _op, _source_database, _source_table, _event_time, and Debezium op/snapshot metadata fields"},
+			{Name: "skip_tombstone", Type: FieldBool, Required: false, Default: true, Description: "Filter Debezium tombstone messages during envelope normalization"},
+			{Name: "target_table_template", Type: FieldString, Required: false, Description: "Target table template using {source_db}, {source_table}, {YYYYMMDD}, or {YYYY-MM-DD}", Example: "ods_{source_db}__{source_table}"},
+			{Name: "table_mapping", Type: FieldMap, Required: false, Description: "Template or rules map for source db/table to target table mapping", Example: map[string]any{"template": "ods_{source_db}__{source_table}"}},
+		},
+		"cdc_policy": {
+			{Name: "include_databases", Type: FieldStringArray, Required: false, Description: "Source database exact/glob allowlist"},
+			{Name: "exclude_databases", Type: FieldStringArray, Required: false, Description: "Source database exact/glob denylist"},
+			{Name: "include_tables", Type: FieldStringArray, Required: false, Description: "Source table or db.table exact/glob allowlist"},
+			{Name: "exclude_tables", Type: FieldStringArray, Required: false, Description: "Source table or db.table exact/glob denylist"},
+			{Name: "skip_delete", Type: FieldBool, Required: false, Default: false, Description: "Filter DELETE events instead of forwarding them to the sink"},
+			{Name: "skip_snapshot", Type: FieldBool, Required: false, Default: false, Description: "Filter Debezium snapshot events (op=r or snapshot=true)"},
+			{Name: "skip_tombstone", Type: FieldBool, Required: false, Default: true, Description: "Filter Debezium tombstone markers"},
+			{Name: "dangerous_ddl", Type: FieldString, Required: false, Default: "reject", Description: "Action for dangerous DDL events", Enum: []string{"reject", "drop", "pass"}},
+			{Name: "ddl_allowlist", Type: FieldStringArray, Required: false, Description: "DDL patterns allowed to pass"},
+			{Name: "ddl_denylist", Type: FieldStringArray, Required: false, Description: "DDL patterns always treated as dangerous"},
 		},
 		"lua": {
 			{Name: "script", Type: FieldString, Required: true, Description: "Lua script code"},
@@ -337,7 +384,7 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "timeout_ms", Type: FieldInt, Required: false, Default: 1000, Description: "Script timeout in milliseconds"},
 		},
 		"ts": {
-			{Name: "script", Type: FieldString, Required: true, Description: "TypeScript/JavaScript function, e.g: transform(record) { record.data.x = 1; return record; }"},
+			{Name: "script", Type: FieldString, Required: true, Description: "TypeScript/JavaScript function returning null/undefined/false, one record/data object, or an array of record/data objects"},
 			{Name: "code", Type: FieldString, Required: false, Description: "Alias for script"},
 			{Name: "timeout_ms", Type: FieldInt, Required: false, Default: 1000, Description: "Script timeout in milliseconds"},
 		},
@@ -436,5 +483,8 @@ func transformConfigSchemas() map[string][]ConfigField {
 	schemas["javascript"] = schemas["ts"]
 	schemas["js"] = schemas["ts"]
 	schemas["debezium_envelope"] = schemas["normalize_envelope"]
+	schemas["select_fields"] = schemas["project"]
+	schemas["udtf"] = schemas["flat_map"]
+	schemas["ddl_guard"] = schemas["cdc_policy"]
 	return schemas
 }

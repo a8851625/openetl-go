@@ -23,33 +23,36 @@ wait_http() {
 }
 
 echo "==> Build image"
-podman build -t "$IMAGE" -f Dockerfile .
+docker build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start MySQL source"
-podman-compose -f docker-compose.dev.yml up -d mysql-source
+docker compose -f docker-compose.dev.yml up -d mysql-source
 
 echo "==> Wait MySQL healthy"
 i=0
 while [ "$i" -lt 60 ]; do
-  status="$(podman inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
+  status="$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
   if [ "$status" = "healthy" ]; then
     break
   fi
   i=$((i + 1))
   sleep 2
 done
-[ "$(podman inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
+[ "$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
 
 echo "==> Prepare CDC target"
-podman exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "CREATE DATABASE IF NOT EXISTS dzh3136_target; CREATE TABLE IF NOT EXISTS dzh3136_target.customers LIKE dzh3136_go.customers; DELETE FROM dzh3136_target.customers WHERE id >= 9000; GRANT ALL PRIVILEGES ON dzh3136_target.* TO 'sync_user'@'%'; FLUSH PRIVILEGES;"
+docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "CREATE DATABASE IF NOT EXISTS dzh3136_target; CREATE TABLE IF NOT EXISTS dzh3136_target.customers LIKE dzh3136_go.customers; DELETE FROM dzh3136_target.customers WHERE id >= 9000; GRANT ALL PRIVILEGES ON dzh3136_target.* TO 'sync_user'@'%'; FLUSH PRIVILEGES;"
 
 echo "==> Reset ETL data"
 rm -rf data-cdc
 mkdir -p data-cdc/output data-cdc/checkpoint data-cdc/dlq logs
+chmod -R a+rwX data-cdc
+chmod a+rwX logs
 
 echo "==> Run CDC pipeline"
-podman rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8002:8001 \
   -v "$ROOT_DIR/testdata/pipes-cdc:/app/pipes:ro" \
@@ -70,12 +73,12 @@ while [ "$i" -lt 60 ]; do
 done
 
 echo "==> Emit CDC insert/update/delete"
-podman exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "DELETE FROM customers WHERE id=9001; INSERT INTO customers (id, name, email, phone, status, amount) VALUES (9001, 'CDC Alice', 'cdc-alice@example.com', '13900009001', 'active', 123.45); UPDATE customers SET amount=678.90 WHERE id=9001;"
+docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "DELETE FROM customers WHERE id=9001; INSERT INTO customers (id, name, email, phone, status, amount) VALUES (9001, 'CDC Alice', 'cdc-alice@example.com', '13900009001', 'active', 123.45); UPDATE customers SET amount=678.90 WHERE id=9001;"
 
 echo "==> Verify CDC target row"
 i=0
 while [ "$i" -lt 60 ]; do
-  copied="$(podman exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.customers WHERE id=9001 AND amount=678.90;" 2>/dev/null | tr -d '[:space:]')"
+  copied="$(docker exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.customers WHERE id=9001 AND amount=678.90;" 2>/dev/null | tr -d '[:space:]')"
   if [ "$copied" = "1" ]; then
     break
   fi

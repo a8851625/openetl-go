@@ -43,8 +43,13 @@ type KafkaSink struct {
 	tlsSkipVerify   bool
 	autoCreateTopic bool
 	retryBackoff    time.Duration
-	producer        sarama.SyncProducer
-	sinkCounters // P4-20: per-sink write metrics (SK-4)
+	producer        kafkaSyncProducer
+	sinkCounters    // P4-20: per-sink write metrics (SK-4)
+}
+
+type kafkaSyncProducer interface {
+	SendMessages(msgs []*sarama.ProducerMessage) error
+	Close() error
 }
 
 // kafkaEnvelope wraps CDC records with operation metadata so downstream
@@ -240,7 +245,11 @@ func (s *KafkaSink) Open(ctx context.Context) error {
 }
 
 func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error) {
-	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
+	defer func() {
+		if err != nil {
+			s.recordError()
+		}
+	}() // P5-12: count write failures
 	start := time.Now()
 	messages := make([]*sarama.ProducerMessage, 0, len(records))
 	for _, rec := range records {

@@ -16,7 +16,7 @@ The runtime provides at-least-once delivery. A checkpoint is committed only afte
 | MySQL/TiDB | `batch_mode: upsert` with `pk_columns` | Replayed rows overwrite the same primary key | Required for CDC and crash recovery when using mutable tables. Plain insert is only safe for append-only unique events. |
 | ClickHouse | ReplacingMergeTree-compatible table with `_version`, or ETL `auto_create: true` | Later versions collapse with `FINAL`; raw duplicate rows may exist before merge | Queries that require exact current state should use `FINAL` or downstream materialization. Deletes rely on table design/tombstone strategy. |
 | Kafka sink | Producer writes are at-least-once | Duplicate messages can appear | Use deterministic message keys and consumer-side idempotency. Kafka exactly-once transactions are not implemented yet. |
-| Elasticsearch | Stable document `_id` derived from primary key | Replayed documents replace the same ID | Partial bulk failure splitting is still pending, so failed bulk batches can DLQ multiple records. |
+| Elasticsearch | Stable document `_id` derived from primary key | Replayed documents replace the same ID | Partial bulk item errors expose failed record indexes, so the runner writes only failed records to DLQ and does not re-write accepted records. |
 | S3/OSS/file sink | New object/file per batch | Replayed batches can create additional objects | Use manifests or deterministic output prefixes for backfill jobs. Object manifest support is pending. |
 | Local file sink | New file per flushed batch | Replayed batches can create additional files | Suitable for extract/debug flows; consumers must deduplicate if exactly-once output is required. |
 
@@ -43,4 +43,3 @@ The runtime provides at-least-once delivery. A checkpoint is committed only afte
 - Cross-sink atomic fanout is not implemented.
 - Kafka transactional exactly-once is not implemented.
 - S3/file deterministic object manifests are not implemented.
-- Elasticsearch partial bulk item-level DLQ is not implemented.

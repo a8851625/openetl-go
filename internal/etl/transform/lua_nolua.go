@@ -17,4 +17,10 @@ func init() {
 	registry.RegisterTransform("lua", func(config map[string]any) (core.Transform, error) {
 		return nil, fmt.Errorf("lua transform not compiled in: rebuild without the -tags=nolua constraint to use type:lua transforms")
 	})
+	registry.RegisterTransform("flat_map", func(config map[string]any) (core.Transform, error) {
+		return nil, fmt.Errorf("flat_map transform not compiled in: rebuild without the -tags=nolua constraint to use type:flat_map transforms")
+	})
+	registry.RegisterTransform("udtf", func(config map[string]any) (core.Transform, error) {
+		return nil, fmt.Errorf("udtf transform not compiled in: rebuild without the -tags=nolua constraint to use type:udtf transforms")
+	})
 }

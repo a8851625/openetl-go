@@ -12,7 +12,7 @@ transforms:
 sink:
   type: clickhouse
   config:
-    host: "host.containers.internal"
+    host: "host.docker.internal"
     port: 9000
     user: "default"
     password: "dzh123456"

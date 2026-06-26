@@ -24,7 +24,7 @@
 - 收束 connector/source/sink/transform/storage/plugin 成熟度口径，按 beta / production-candidate / production-ready 边界表达能力，避免把“已注册”误读为“生产承诺”。
 
 ### 编排验证
-- 新增 `hack/e2e-wide-table.sh`，基于 Podman 编排 Redpanda + MySQL + ClickHouse。
+- 新增 `hack/e2e-wide-table.sh`，基于 Docker 编排 Redpanda + MySQL + ClickHouse。
 - 覆盖 Kafka -> lookup -> ClickHouse 明细 pipeline、Kafka -> deduplicate -> lookup -> tumbling aggregate -> ClickHouse 聚合 pipeline、重复 Kafka 消息吸收、schema drift 入 DLQ、lookup miss 入 DLQ 并修复后 replay、lookup refresh failure 入 DLQ、ClickHouse 下线入 DLQ 并恢复后 replay。
 
 ### 发布边界
@@ -34,13 +34,13 @@
 ### 验证
 - `./hack/e2e-wide-table.sh`
 - `./hack/e2e-ui.sh` — 73 passed, 0 failed
-- Podman：`go test -timeout 120s ./internal/etl/...`
+- Docker：`go test -timeout 120s ./internal/etl/...`
 
 ## [v0.1.0-beta2] — Phase 5 可靠性与易用性发布
 
 ### 亮点
 - 关闭 beta2 的 P0/P1 可靠性门槛：standalone runner 创建、文件源恢复、零幸存批次 checkpoint 安全、Postgres CDC pgoutput 解析、worker slot 限流、sink error metrics，以及 pipeline 硬性 preflight 错误拦截。
-- 重整公开 quickstart 体验：规范 MySQL CDC -> ClickHouse 示例、对齐 Podman compose 配置、补全 `/api/v2/plugins/schema` 元数据，并更新 README / quickstart / 部署文档。
+- 重整公开 quickstart 体验：规范 MySQL CDC -> ClickHouse 示例、对齐 Docker compose 配置、补全 `/api/v2/plugins/schema` 元数据，并更新 README / quickstart / 部署文档。
 - 改善轻量发布形态：运行时镜像不再携带测试夹具，新增 `-tags=nolua` Lua-free 构建选项，同时保持默认 Lua 兼容。
 
 ### 验证

@@ -1,18 +1,26 @@
 # OpenETL-Go
 
-Single-binary ETL/CDC orchestration for moving, shaping, and operating data
-pipelines.
+A lightweight, self-hosted, open-source CDC/ETL runtime for data
+synchronization, cleansing, and aggregation.
 
 [中文 README](./README.zh.md)
 
-OpenETL-Go runs `Source -> Transform -> Sink` pipelines from one binary. It can
-stay simple for file or database sync jobs, then grow into DAG orchestration,
-parallel execution, and master-worker distributed processing when a pipeline
-needs multiple sources, branches, joins, windows, or sinks.
+OpenETL-Go runs `Source -> Transform -> Sink` pipelines from one binary, with
+YAML, API, and Web UI operating the same spec. It can stay simple for file or
+database sync jobs, then grow into DAG orchestration, parallel execution, and
+master-worker distributed processing when a pipeline needs multiple sources,
+branches, lookup/join, tumbling windows, or sinks.
 
 The project does not keep a separate wide-table product area. Denormalized
 detail tables and real-time aggregate tables are expressed as normal pipeline or
 DAG specs using sources, transforms, state, and sinks.
+
+OpenETL-Go is not trying to replace Flink/Spark for complex stateful stream
+processing, Airflow/Dagster for general workflow orchestration, Airbyte for
+SaaS-first ELT catalogs, or Debezium/Kafka Connect for CDC infrastructure. It is
+better suited for replacing hand-written sync jobs, lightweight
+DataX/Canal/Kafka consumer programs, and self-hosted CDC/ETL pipelines where a
+heavier platform would be unnecessary. See [product positioning](./docs/positioning.md).
 
 ## What It Does
 
@@ -20,7 +28,7 @@ DAG specs using sources, transforms, state, and sinks.
 | --- | --- |
 | Pipeline orchestration | Linear pipelines, DAG nodes/edges, conditional routing, fanout, parallel shards, scheduled/streaming execution |
 | Data movement | CDC, batch, stream, file, HTTP, Redis, object storage, warehouse and search/index sinks |
-| Data shaping | Filter, validate, type conversion, rename/drop/add fields, envelope normalization, lookup/enrichment, join, tumbling windows, deduplicate, Lua/JS/TS/WASM extension points |
+| Data shaping | Filter, validate, type conversion, projection/field selection, one-to-many `flat_map`/`udtf`, Debezium CDC policy, rename/drop/add fields, envelope normalization, lookup/enrichment, join, tumbling windows, deduplicate, Lua/JS/TS/WASM extension points |
 | Operations | Web UI, REST API, saved connection catalog, pipeline validation, connection test, transform dry-run, Prometheus metrics, audit log |
 | Reliability | At-least-once delivery by default, checkpoints, retry/backoff, DLQ list/replay/delete, idempotent sink modes where supported |
 | Runtime | SQLite standalone mode, MySQL/PostgreSQL shared storage, master-worker distributed dispatch |
@@ -31,12 +39,33 @@ business keys, versions, upserts, or sink-specific idempotency to remove
 duplicate effects. See [idempotency](./docs/etl-idempotency.md) and the
 [roadmap](./docs/ROADMAP.zh.md) for current production-readiness notes.
 
+## When To Use It
+
+Good fits:
+
+- Database/Kafka/file/HTTP/object-storage pipelines into OLAP, search,
+  databases, Kafka, or object storage.
+- MySQL/PostgreSQL batch, CDC, and snapshot+CDC into ClickHouse, MySQL,
+  PostgreSQL, Doris, Elasticsearch, S3, or Kafka.
+- Kafka JSON/Debezium enrichment, deduplication, and tumbling-window aggregation
+  into detail or aggregate tables.
+- Self-hosted pipelines that need checkpoints, visible DLQ replay, idempotency
+  guidance, preflight checks, and a lightweight UI/API.
+
+Poor fits:
+
+- Flink-style realtime business computation with arbitrary keyed state,
+  processing-time timers, multi-stream state machines, or alert lifecycles.
+- Stream processing that requires exactly-once savepoints, SQL planners,
+  sliding/session windows, late side outputs, or retractions.
+- ELT platforms whose primary value is a very large SaaS connector catalog.
+
 ## Quick Start
 
 Run the bundled MySQL CDC to ClickHouse demo:
 
 ```bash
-podman compose -f docker-compose.quickstart.yml up -d
+docker compose -f docker-compose.quickstart.yml up -d
 ```
 
 Then open:
@@ -123,7 +152,7 @@ tracked in the roadmap rather than in a separate module.
 | Stage | Built-in surface |
 | --- | --- |
 | Sources | `mysql_cdc`, `mysql_snapshot_cdc`, `postgres_cdc`, `mysql_batch`, `kafka`, `file`, `http`, `redis` |
-| Transforms | `normalize_envelope`, `filter`, `validate`, `type_convert`, `rename`, `drop_field`, `add_field`, `deduplicate`, `lookup`, `enricher`, `join`, `window`, `router`, `fanout`, `tap`, `rate_limiter`, `lua`, `javascript`, `typescript`, WASM plugins |
+| Transforms | `normalize_envelope`, `debezium_cdc`, `cdc_policy`, `ddl_guard`, `filter`, `validate`, `project`, `select_fields`, `flat_map`, `udtf`, `type_convert`, `rename`, `drop_field`, `add_field`, `deduplicate`, `lookup`, `enricher`, `join`, `window`, `router`, `fanout`, `tap`, `rate_limiter`, `lua`, `javascript`, `typescript`, WASM plugins |
 | Sinks | `clickhouse`, `mysql`, `postgres`/`postgresql`, `doris`, `elasticsearch`/`es`, `kafka`, `redis`, `s3`, `file_sink`, `jdbc` |
 
 For exact fields, defaults, secret markers, and examples, use the plugin schema
@@ -182,6 +211,7 @@ Optional runtime builds:
 ## Documentation
 
 - [Quick start](./docs/quickstart.md) / [中文](./docs/quickstart.zh.md)
+- [Product positioning](./docs/positioning.md) / [中文](./docs/positioning.zh.md)
 - [REST API](./docs/etl-api.md) / [中文](./docs/etl-api.zh.md)
 - [YAML config reference](./docs/etl-config-schema.md) / [中文](./docs/etl-config-schema.zh.md)
 - [Idempotency and delivery semantics](./docs/etl-idempotency.md) / [中文](./docs/etl-idempotency.zh.md)

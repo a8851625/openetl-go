@@ -46,7 +46,7 @@ type MySQLSink struct {
 	tlsEnabled    bool
 	tlsSkipVerify bool
 	// schemaCache avoids repeated information_schema queries.
-	schemaCache *core.SchemaCache
+	schemaCache  *core.SchemaCache
 	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
@@ -146,6 +146,33 @@ func (s *MySQLSink) Name() string { return s.name }
 // SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
 func (s *MySQLSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
 
+func (s *MySQLSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) error {
+	if len(schema.Columns) == 0 || s.table == "" {
+		return nil
+	}
+	exists, err := s.tableExists(ctx, s.table)
+	if err != nil {
+		return fmt.Errorf("validate mysql schema: check table %s.%s: %w", s.database, s.table, err)
+	}
+	if !exists {
+		if s.autoCreate {
+			return nil
+		}
+		return fmt.Errorf("schema validation failed for mysql %s.%s: target table does not exist; enable auto_create or create the table first", s.database, s.table)
+	}
+	target, err := s.getExistingColumnInfo(ctx, s.table)
+	if err != nil {
+		return fmt.Errorf("validate mysql schema: read columns for %s.%s: %w", s.database, s.table, err)
+	}
+	return validateSchemaCompatibility(schema, target, schemaValidationOptions{
+		targetName:     fmt.Sprintf("mysql %s.%s", s.database, s.table),
+		allowMissing:   s.schemaDrift == string(core.DriftAddCols),
+		missingRemedy:  "enable schema_drift=add_columns or add the columns manually",
+		allowTypeSync:  false,
+		typeSyncRemedy: "change the target column type or add a transform/type_convert before the sink",
+	})
+}
+
 func (s *MySQLSink) Open(ctx context.Context) error {
 	tlsParam := ""
 	if s.tlsEnabled {
@@ -172,7 +199,11 @@ func (s *MySQLSink) Open(ctx context.Context) error {
 }
 
 func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error) {
-	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
+	defer func() {
+		if err != nil {
+			s.recordError()
+		}
+	}() // P5-12: count write failures
 	if len(records) == 0 {
 		return nil
 	}
@@ -270,7 +301,7 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 		} else {
 			row := make([]any, len(cols))
 			for i, c := range cols {
-				row[i] = rec.Data[c]
+				row[i] = normalizeMySQLValue(rec.Data[c])
 			}
 			g.rows = append(g.rows, row)
 			g.ops = append(g.ops, rec.Operation)
@@ -327,6 +358,38 @@ func (s *MySQLSink) batchInsert(ctx context.Context, tx *sql.Tx, table string, c
 		}
 	}
 	return nil
+}
+
+func normalizeMySQLValue(v any) any {
+	s, ok := v.(string)
+	if !ok {
+		return v
+	}
+	if ts, ok := parseMySQLTimeString(s); ok {
+		return ts
+	}
+	return v
+}
+
+func parseMySQLTimeString(s string) (time.Time, bool) {
+	if len(s) < len("2006-01-02") || s[4] != '-' || s[7] != '-' {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		ts, err := time.Parse(layout, s)
+		if err == nil {
+			return ts, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // buildBatchInsertStatement builds a single multi-row INSERT (or INSERT
@@ -530,6 +593,29 @@ func (s *MySQLSink) getExistingColumns(ctx context.Context, table string) (map[s
 			return nil, err
 		}
 		cols[col] = true
+	}
+	return cols, nil
+}
+
+func (s *MySQLSink) getExistingColumnInfo(ctx context.Context, table string) ([]core.ColumnInfo, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT column_name, column_type, is_nullable FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position`,
+		s.database, table,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cols []core.ColumnInfo
+	for rows.Next() {
+		var name, dataType, nullable string
+		if err := rows.Scan(&name, &dataType, &nullable); err != nil {
+			return nil, err
+		}
+		cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES")})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return cols, nil
 }

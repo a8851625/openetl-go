@@ -37,6 +37,8 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
 
 重放使用与列表相同的查询参数。重放的记录会重新经过 Transform 链并写入配置的 Sink。成功重放的记录会从 DLQ 文件中删除。
 
+线性 pipeline 支持 DLQ 重放。DAG pipeline 的 DLQ 重放目前明确不支持，因为 node-level replay 尚未实现。DAG 重放请求会返回 HTTP `501`，响应包含 `code: "dag_dlq_replay_unsupported"`，且不会删除 DLQ 记录。
+
 示例：
 ```sh
 curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
@@ -60,6 +62,28 @@ curl -X DELETE -H "X-API-Token: $ETL_API_TOKEN" \
   'http://127.0.0.1:8001/api/v2/dlq/orders'
 ```
 
+## Checkpoint API
+
+### 设置 Kafka 重放 Offset
+`POST /api/v2/pipelines/{pipeline}/checkpoint/set`
+
+Kafka source 推荐使用结构化 checkpoint 请求，而不是手写内部 checkpoint JSON。`offset` 和 `replay_from_offsets` 表示“下次启动从这个 offset 开始读取”；OpenETL-Go 内部会保存 `offset-1`，因为 Kafka 在 sink 写入成功后提交的是下一条 offset。
+
+示例：
+```sh
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"kafka","topic":"debezium.orders","partition":0,"offset":42}' \
+  'http://127.0.0.1:8001/api/v2/pipelines/orders/checkpoint/set'
+
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"kafka","topic":"debezium.orders","replay_from_offsets":{"0":42,"1":1000}}' \
+  'http://127.0.0.1:8001/api/v2/pipelines/orders/checkpoint/set'
+```
+
+如果要直接设置已提交 offset，可使用 `{"mode":"last_committed","offsets":{"0":41}}`。旧的原始 checkpoint 形态 `{"position":{...}}` 仍然兼容。
+
 ## 插件元数据
 
 发现已注册的插件及其基本能力。
@@ -79,12 +103,38 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
   "metadata": {
     "sources": {
       "mysql_cdc": {
-        "required": ["host", "database", "table", "server_id"],
-        "capabilities": ["cdc", "checkpoint"],
-        "maturity": "stable"
+        "required": ["host", "user", "database", "tables"],
+        "capabilities": ["cdc", "checkpoint", "schema_descriptor_single_table"],
+        "maturity": "beta"
       }
     }
   }
+}
+```
+
+## 插件试运行
+
+对已安装的 transform 插件运行一条样例记录。多输出插件会在 `records`
+中返回全部输出，并在 `output_count` 中返回数量；`record` 和 `output`
+为兼容旧客户端保留第一条输出。
+
+```sh
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"raw-parser","record":{"operation":"INSERT","data":{"id":1},"metadata":{"source":"ui","table":"sample"}}}' \
+  'http://127.0.0.1:8001/api/v2/plugins/dry-run'
+```
+
+```json
+{
+  "name": "raw-parser",
+  "kind": "transform",
+  "filtered": false,
+  "output_count": 2,
+  "records": [
+    {"operation": "INSERT", "data": {"id": 1, "idx": 1}, "metadata": {"source": "ui", "table": "sample"}},
+    {"operation": "INSERT", "data": {"id": 1, "idx": 2}, "metadata": {"source": "ui", "table": "sample"}}
+  ]
 }
 ```
 
@@ -152,12 +202,21 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 ```json
 {
   "filtered": false,
+  "output_count": 1,
   "record": {
     "operation": "INSERT",
     "data": {"id": 1}
-  }
+  },
+  "records": [
+    {
+      "operation": "INSERT",
+      "data": {"id": 1}
+    }
+  ]
 }
 ```
+
+对于 `flat_map` / `udtf` 这类 `BatchTransform`，`records` 包含全部输出记录；`record` 为兼容旧调用保留第一条输出。记录级解析错误会以 `partial_error: true` 和 `errors` 返回，不会隐藏已经成功生成的输出。
 
 ## Spec 重载
 

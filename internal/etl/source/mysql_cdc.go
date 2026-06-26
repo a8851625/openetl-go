@@ -193,6 +193,19 @@ func NewMySQLCDCSource(config map[string]any) (*MySQLCDCSource, error) {
 
 func (s *MySQLCDCSource) Name() string { return s.name }
 
+func (s *MySQLCDCSource) Describe(ctx context.Context) (core.SchemaInfo, error) {
+	table, ok := singleDescribableMySQLTable(s.tables)
+	if !ok {
+		return core.SchemaInfo{}, nil
+	}
+	db, err := openMySQLSchemaDB(ctx, s.user, s.password, s.host, s.port, s.database)
+	if err != nil {
+		return core.SchemaInfo{}, err
+	}
+	defer db.Close()
+	return describeMySQLTableSchema(ctx, db, s.database, table, nil)
+}
+
 func (s *MySQLCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
 	reader := &mysqlCDCRecordReader{
 		source:  s,

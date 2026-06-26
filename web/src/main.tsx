@@ -23,7 +23,7 @@ type MetricsPipeline = PipelineStats & {
   last_batch_size: number; avg_batch_size: number; batch_count: number; cdc_lag_ms: number;
   dlq_file_count: number;
 };
-type Pipeline = { name: string; status: string; stats: PipelineStats; parallelism?: number; shard_strategy?: string; shard_count?: number; shards?: { index: number; status: string; stats: PipelineStats }[]; tags?: string[] };
+type Pipeline = { name: string; status: string; stats: PipelineStats; dag?: boolean; parallelism?: number; shard_strategy?: string; shard_count?: number; shards?: { index: number; status: string; stats: PipelineStats }[]; tags?: string[] };
 type ShardInfo = { index: number; status: string; stats: PipelineStats; logs?: PipelineLogEntry[]; logs_last_seq?: number };
 type PluginResponse = { sources: string[]; sinks: string[]; transforms: string[]; metadata?: Record<string, Record<string, PluginInfo>> };
 type PluginInfo = { required?: string[]; capabilities?: string[]; maturity?: string };
@@ -1350,7 +1350,7 @@ function PipelineLogDrawer({ t, name }: { t: (k: string) => string; name: string
   );
 }
 // DLQRow displays a single dead-letter queue entry with expandable record data.
-function DLQRow({ item, onDelete, onReplay, t }: { item: DLQItem; onDelete: () => void; onReplay: () => void; t: TFunc }) {
+function DLQRow({ item, onDelete, onReplay, replayDisabled, t }: { item: DLQItem; onDelete: () => void; onReplay: () => void; replayDisabled?: boolean; t: TFunc }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="rounded-lg border border-slate-200 p-3 hover:border-slate-300 transition">
@@ -1364,7 +1364,7 @@ function DLQRow({ item, onDelete, onReplay, t }: { item: DLQItem; onDelete: () =
           <div className="truncate text-xs font-mono text-rose-600">{item.error}</div>
         </div>
         <button className="btn btn-ghost btn-sm text-xs" onClick={() => setExpanded(!expanded)}>{expanded ? '▲' : '▼'} {t('dlq.data')}</button>
-        <button className="btn btn-secondary btn-sm text-xs" onClick={onReplay} title={t('dlq.replayRecord')}>↻</button>
+        <button className="btn btn-secondary btn-sm text-xs" disabled={replayDisabled} onClick={onReplay} title={replayDisabled ? t('dlq.dagReplayUnsupported') : t('dlq.replayRecord')}>↻</button>
         <button className="btn btn-danger btn-sm text-xs" onClick={onDelete} title={t('dlq.deleteRecord')}>🗑</button>
       </div>
       {expanded && (
@@ -1389,6 +1389,7 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
   const [refreshKey, setRefreshKey] = useState(0);
   const query = filter ? `limit=50&contains=${encodeURIComponent(filter)}` : 'limit=50';
   const dlq = useApi<{ items: DLQItem[] }>(selected ? `/api/v2/dlq/${selected.name}?${query}` : '/api/v2/dlq/_missing', selected ? refreshKey : -1);
+  const replayUnsupported = Boolean(selected?.dag);
 
   const deleteOne = async (item: DLQItem) => {
     try {
@@ -1421,11 +1422,16 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
           <div className="flex items-center gap-2">
             <input className="input w-56" placeholder={t('dlq.filter')} value={filter} onChange={(e) => { setFilter(e.target.value); setRefreshKey(n => n + 1); }} />
             <button className="btn btn-secondary btn-sm" onClick={() => { setRefreshKey(n => n + 1); }}>{t('dlq.refresh')}</button>
-            <button className="btn btn-secondary btn-sm" disabled={!selected} onClick={() => onAction(`${t('toast.replayDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selected.name}/replay${q}`, { method: 'POST' }).then(() => setRefreshKey(n => n + 1)); })}>{t('dlq.replay')}</button>
+            <button className="btn btn-secondary btn-sm" disabled={!selected || replayUnsupported} title={replayUnsupported ? t('dlq.dagReplayUnsupported') : t('dlq.replay')} onClick={() => onAction(`${t('toast.replayDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selected.name}/replay${q}`, { method: 'POST' }).then(() => setRefreshKey(n => n + 1)); })}>{t('dlq.replay')}</button>
             <button className="btn btn-danger btn-sm" disabled={!selected} onClick={() => { if (confirm(t('dlq.confirmDeleteAll'))) { onAction(`${t('toast.deleteDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selected.name}${q}`, { method: 'DELETE' }).then(() => setRefreshKey(n => n + 1)); }); } }}>{t('dlq.deleteAll')}</button>
           </div>
         </div>
         <div className="card-body">
+          {replayUnsupported && (
+            <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {t('dlq.dagReplayUnsupported')}
+            </div>
+          )}
           {dlq.error ? <ErrorBox message={dlq.error} /> :
             dlq.data?.items?.length ? (
               <div className="space-y-2">
@@ -1433,7 +1439,7 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
                   <DLQRow key={item.id || i} t={t} item={item} onDelete={() => deleteOne(item)} onReplay={() => onAction(`Replay: ${selected.name}`, () => {
                     const url = item.id ? `/api/v2/dlq/${selected.name}/${item.id}/replay` : `/api/v2/dlq/${selected.name}/replay?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`;
                     return api(url, { method: 'POST' }).then(() => setRefreshKey(n => n + 1));
-                  })} />
+                  })} replayDisabled={replayUnsupported} />
                 ))}
               </div>
             ) : <Empty text={t('dlq.noRecords')} />

@@ -3,7 +3,7 @@ source:
   type: http
   config:
     name: "http_customers"
-    url: "http://host.containers.internal:18080/customers"
+    url: "http://host.docker.internal:18080/customers"
     method: "GET"
     headers:
       X-API-Key: "secret-token"

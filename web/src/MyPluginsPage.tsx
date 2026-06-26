@@ -495,8 +495,8 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
               <div className="mt-3 rounded-lg bg-slate-900 p-4 text-sm text-slate-300">
                 <div className="text-xs text-slate-500"># Install the SDK &amp; Extism JS PDK</div>
                 <div className="font-mono">npm install @etl/sdk @extism/js-pdk</div>
-                <div className="mt-3 text-xs text-slate-500"># Install the extism-js compiler</div>
-                <div className="font-mono">npm install -g @extism/js-pdk</div>
+                <div className="mt-3 text-xs text-slate-500"># Install the extism-js compiler from Extism releases or your CI image</div>
+                <div className="font-mono">extism-js --version</div>
                 <div className="mt-3 text-xs text-slate-500"># Write your plugin (src/transform.ts)</div>
                 <pre className="font-mono text-xs overflow-auto">{`import { createExtismTransformPlugin } from '@etl/sdk';
 

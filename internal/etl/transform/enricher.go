@@ -662,9 +662,15 @@ func (t *LookupTransform) handleLookupMiss(rec core.Record, key any, missingKey 
 	case "dlq":
 		atomic.AddInt64(&t.missDLQ, 1)
 		if missingKey {
-			return rec, fmt.Errorf("lookup: missing join key %q (on_miss=%s)", t.joinKey, t.onMiss)
+			return rec, core.ClassifiedError{
+				Class: core.ErrorClassData,
+				Err:   fmt.Errorf("lookup: missing join key %q (on_miss=%s)", t.joinKey, t.onMiss),
+			}
 		}
-		return rec, fmt.Errorf("lookup: no dimension match for key=%v (on_miss=%s)", key, t.onMiss)
+		return rec, core.ClassifiedError{
+			Class: core.ErrorClassData,
+			Err:   fmt.Errorf("lookup: no dimension match for key=%v (on_miss=%s)", key, t.onMiss),
+		}
 	case "error":
 		atomic.AddInt64(&t.missError, 1)
 		if missingKey {

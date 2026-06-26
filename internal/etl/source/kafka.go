@@ -234,6 +234,7 @@ func (h *kafkaHandler) Setup(sess sarama.ConsumerGroupSession) error {
 	}
 	if h.reader.startOffsets != nil {
 		for partition, off := range h.reader.startOffsets {
+			sess.ResetOffset(h.reader.source.topic, partition, off+1, "")
 			sess.MarkOffset(h.reader.source.topic, partition, off+1, "")
 		}
 	}

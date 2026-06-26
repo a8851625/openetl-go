@@ -3,7 +3,7 @@
 ## Environment
 
 - Go 1.24+, pure Go default build (no CGO, no external runtimes)
-- Optional dev container: `podman exec -it etl-go-dev bash` (Go 1.24 + integration test containers pre-configured)
+- Optional dev container: `docker exec -it etl-go-dev bash` (Go 1.24 + integration test containers pre-configured)
 
 ## Build & Test
 

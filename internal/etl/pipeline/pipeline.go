@@ -397,14 +397,18 @@ func (r *Runner) Start(ctx context.Context) error {
 	// Optional schema validation: if source describes its schema and sink
 	// accepts schema validation, check compatibility before reading.
 	if descriptor, ok := r.source.(core.SchemaDescriptor); ok {
-		if validator, ok := r.sink.(core.SchemaValidator); ok {
+		if validator, ok := schemaValidatorForSink(r.sink); ok {
 			schema, err := descriptor.Describe(ctx)
 			if err != nil {
-				g.Log().Warningf(ctx, "[%s] Source schema description failed: %v", r.spec.Name, err)
+				r.setStatus(StatusFailed)
+				r.logError(fmt.Sprintf("Source schema description failed: %v", err))
+				_ = r.sink.Close()
+				return fmt.Errorf("describe source schema: %w", err)
 			} else if len(schema.Columns) > 0 {
 				if err := validator.ValidateSchema(ctx, schema); err != nil {
 					r.setStatus(StatusFailed)
 					r.logError(fmt.Sprintf("Schema validation failed: %v", err))
+					_ = r.sink.Close()
 					return fmt.Errorf("schema validation: %w", err)
 				}
 				r.logInfo(fmt.Sprintf("Schema validated: %d columns", len(schema.Columns)))
@@ -426,6 +430,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err != nil {
 		r.setStatus(StatusFailed)
 		r.logError(fmt.Sprintf("Failed to open source: %v", err))
+		_ = r.sink.Close()
 		return fmt.Errorf("open source: %w", err)
 	}
 
@@ -452,6 +457,17 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.logInfo(fmt.Sprintf("Pipeline started (%s → %s)", r.spec.Source.Type, r.spec.Sink.Type))
 	go r.runLoop(ctx)
 	return nil
+}
+
+func schemaValidatorForSink(sink core.Sink) (core.SchemaValidator, bool) {
+	if validator, ok := sink.(core.SchemaValidator); ok {
+		return validator, true
+	}
+	if hook, ok := sink.(*SinkWriteHook); ok {
+		validator, ok := hook.Sink.(core.SchemaValidator)
+		return validator, ok
+	}
+	return nil, false
 }
 
 func (r *Runner) Stop() error {
@@ -778,10 +794,18 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 		// Batch path: process the entire batch through the chain.
 		out, err := r.transforms.ApplyBatch(ctx, batch)
 		if err != nil {
-			for _, rec := range batch {
-				r.handleFailedRecord(ctx, rec, err)
+			var partial core.PartialTransformError
+			if !errors.As(err, &partial) {
+				for _, rec := range batch {
+					r.handleFailedRecord(ctx, rec, err)
+				}
+				return
 			}
-			return
+			failures := partial.FailedRecords()
+			transformFailureCount = len(failures)
+			for _, failure := range failures {
+				r.handleFailedRecord(ctx, failure.Record, failure.Err)
+			}
 		}
 		transformed = out
 		batchTransformZeroOutput = len(transformed) == 0
@@ -855,13 +879,24 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 
 		r.logError(fmt.Sprintf("Write error (batch=%d): %v", len(transformed), err))
 
-		// Single-row error isolation: retry each record individually so
-		// only the genuinely failing records go to DLQ. Good records
-		// in the same batch are still written successfully.
-		goodCount, failures := r.writeRecordsIndividually(ctx, transformed)
+		// Prefer sink-provided partial batch details when available. For
+		// example, Elasticsearch bulk responses identify failed item indexes,
+		// so successful records do not need to be written again during
+		// isolation.
+		goodCount, failures, usedPartialBatch := r.partialBatchFailures(err, transformed)
+		if !usedPartialBatch {
+			// Single-row error isolation: retry each record individually so
+			// only the genuinely failing records go to DLQ. Good records
+			// in the same batch are still written successfully.
+			goodCount, failures = r.writeRecordsIndividually(ctx, transformed)
+		}
 		if goodCount > 0 {
 			r.addRecordsWritten(int64(goodCount))
-			r.logInfo(fmt.Sprintf("Single-row isolation recovered %d/%d records", goodCount, len(transformed)))
+			if usedPartialBatch {
+				r.logInfo(fmt.Sprintf("Partial batch error accepted %d/%d records", goodCount, len(transformed)))
+			} else {
+				r.logInfo(fmt.Sprintf("Single-row isolation recovered %d/%d records", goodCount, len(transformed)))
+			}
 		}
 
 		for _, f := range failures {
@@ -922,6 +957,35 @@ func (r *Runner) writeRecordsIndividually(ctx context.Context, records []core.Re
 		}
 	}
 	return good, failures
+}
+
+func (r *Runner) partialBatchFailures(err error, records []core.Record) (int, []failedIndexErr, bool) {
+	var partial core.PartialBatchError
+	if !errors.As(err, &partial) {
+		return 0, nil, false
+	}
+	indices := partial.FailedRecordIndices()
+	if len(indices) == 0 {
+		return 0, nil, false
+	}
+
+	seen := make(map[int]bool, len(indices))
+	failures := make([]failedIndexErr, 0, len(indices))
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(records) {
+			return 0, nil, false
+		}
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		recordErr := partial.ErrorForRecord(idx)
+		if recordErr == nil {
+			recordErr = err
+		}
+		failures = append(failures, failedIndexErr{idx: idx, err: recordErr})
+	}
+	return len(records) - len(failures), failures, true
 }
 
 // failedIndexErr pairs a record index with its per-record write error,

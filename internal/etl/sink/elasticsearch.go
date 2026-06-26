@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -239,6 +240,10 @@ func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (e
 
 		if buf.Len() > 0 {
 			if err := s.bulkWithRetry(ctx, buf.Bytes()); err != nil {
+				var itemErr *elasticsearchBulkItemError
+				if errors.As(err, &itemErr) {
+					return itemErr.withOffset(offset)
+				}
 				return err
 			}
 		}
@@ -315,11 +320,16 @@ func (s *ElasticsearchSink) bulkWithRetry(ctx context.Context, body []byte) erro
 		}
 		if errs, ok := result["errors"]; ok {
 			if hasErrors, ok := errs.(bool); ok && hasErrors {
-				summary := summarizeBulkErrors(result)
-				if summary == "" {
-					summary = responseSnippet(respBody)
+				failures := collectBulkItemFailures(result)
+				if len(failures) > 0 {
+					lastErr = &elasticsearchBulkItemError{failures: failures}
+				} else {
+					summary := summarizeBulkErrors(result)
+					if summary == "" {
+						summary = responseSnippet(respBody)
+					}
+					lastErr = fmt.Errorf("elasticsearch bulk has errors: %s", summary)
 				}
-				lastErr = fmt.Errorf("elasticsearch bulk has errors: %s", summary)
 				continue
 			}
 		}
@@ -329,26 +339,82 @@ func (s *ElasticsearchSink) bulkWithRetry(ctx context.Context, body []byte) erro
 	return fmt.Errorf("elasticsearch bulk failed after %d retries: %w", s.maxRetries+1, lastErr)
 }
 
-// summarizeBulkErrors walks the ES bulk response "items" array and collects
-// per-document error details (_id, type, reason). Returns "" if no per-item
-// details could be extracted.
-func summarizeBulkErrors(result map[string]any) string {
+type elasticsearchBulkItemFailure struct {
+	Index   int
+	Action  string
+	Status  int
+	DocID   string
+	ErrType string
+	Reason  string
+}
+
+type elasticsearchBulkItemError struct {
+	failures []elasticsearchBulkItemFailure
+}
+
+func (e *elasticsearchBulkItemError) Error() string {
+	if e == nil || len(e.failures) == 0 {
+		return "elasticsearch bulk has item errors"
+	}
+	return "elasticsearch bulk has item errors: " + summarizeBulkItemFailures(e.failures)
+}
+
+func (e *elasticsearchBulkItemError) FailedRecordIndices() []int {
+	if e == nil {
+		return nil
+	}
+	indices := make([]int, len(e.failures))
+	for i, failure := range e.failures {
+		indices[i] = failure.Index
+	}
+	return indices
+}
+
+func (e *elasticsearchBulkItemError) ErrorForRecord(index int) error {
+	if e == nil {
+		return nil
+	}
+	for _, failure := range e.failures {
+		if failure.Index != index {
+			continue
+		}
+		return core.ClassifiedError{
+			Class: classifyESBulkItemFailure(failure),
+			Err:   fmt.Errorf("elasticsearch bulk item failed: %s", formatBulkItemFailure(failure)),
+		}
+	}
+	return nil
+}
+
+func (e *elasticsearchBulkItemError) withOffset(offset int) *elasticsearchBulkItemError {
+	if e == nil || offset == 0 {
+		return e
+	}
+	failures := make([]elasticsearchBulkItemFailure, len(e.failures))
+	copy(failures, e.failures)
+	for i := range failures {
+		failures[i].Index += offset
+	}
+	return &elasticsearchBulkItemError{failures: failures}
+}
+
+func collectBulkItemFailures(result map[string]any) []elasticsearchBulkItemFailure {
 	itemsRaw, ok := result["items"]
 	if !ok {
-		return ""
+		return nil
 	}
 	items, ok := itemsRaw.([]any)
 	if !ok {
-		return ""
+		return nil
 	}
-	var details []string
-	for _, itRaw := range items {
+	var failures []elasticsearchBulkItemFailure
+	for idx, itRaw := range items {
 		it, ok := itRaw.(map[string]any)
 		if !ok {
 			continue
 		}
 		// Each item is keyed by the action name: "index", "delete", "create", "update".
-		for _, entry := range it {
+		for action, entry := range it {
 			entryMap, ok := entry.(map[string]any)
 			if !ok {
 				continue
@@ -363,21 +429,77 @@ func summarizeBulkErrors(result map[string]any) string {
 			}
 			docID, _ := entryMap["_id"].(string)
 			errType, reason := decodeBulkError(errObj)
-			if docID != "" {
-				details = append(details, fmt.Sprintf("id=%s status=%d type=%s reason=%s", docID, int(status), errType, reason))
-			} else {
-				details = append(details, fmt.Sprintf("status=%d type=%s reason=%s", int(status), errType, reason))
-			}
+			failures = append(failures, elasticsearchBulkItemFailure{
+				Index:   idx,
+				Action:  action,
+				Status:  int(status),
+				DocID:   docID,
+				ErrType: errType,
+				Reason:  reason,
+			})
 		}
 	}
-	if len(details) == 0 {
+	return failures
+}
+
+// summarizeBulkErrors walks the ES bulk response "items" array and collects
+// per-document error details (_id, type, reason). Returns "" if no per-item
+// details could be extracted.
+func summarizeBulkErrors(result map[string]any) string {
+	return summarizeBulkItemFailures(collectBulkItemFailures(result))
+}
+
+func summarizeBulkItemFailures(failures []elasticsearchBulkItemFailure) string {
+	if len(failures) == 0 {
 		return ""
+	}
+	details := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		details = append(details, formatBulkItemFailure(failure))
 	}
 	summary := strings.Join(details, "; ")
 	if len(details) > 20 {
 		summary = strings.Join(details[:20], "; ") + fmt.Sprintf("; ...and %d more", len(details)-20)
 	}
 	return summary
+}
+
+func formatBulkItemFailure(failure elasticsearchBulkItemFailure) string {
+	parts := []string{fmt.Sprintf("item=%d", failure.Index)}
+	if failure.Action != "" {
+		parts = append(parts, "action="+failure.Action)
+	}
+	if failure.DocID != "" {
+		parts = append(parts, "id="+failure.DocID)
+	}
+	if failure.Status != 0 {
+		parts = append(parts, fmt.Sprintf("status=%d", failure.Status))
+	}
+	if failure.ErrType != "" {
+		parts = append(parts, "type="+failure.ErrType)
+	}
+	if failure.Reason != "" {
+		parts = append(parts, "reason="+failure.Reason)
+	}
+	return strings.Join(parts, " ")
+}
+
+func classifyESBulkItemFailure(failure elasticsearchBulkItemFailure) core.ErrorClass {
+	if failure.Status == http.StatusUnauthorized || failure.Status == http.StatusForbidden {
+		return core.ErrorClassAuth
+	}
+	if failure.Status == http.StatusTooManyRequests || failure.Status >= 500 {
+		return core.ErrorClassTransient
+	}
+	msg := strings.ToLower(failure.ErrType + " " + failure.Reason)
+	switch {
+	case strings.Contains(msg, "mapper") || strings.Contains(msg, "mapping") || strings.Contains(msg, "schema") || strings.Contains(msg, "type"):
+		return core.ErrorClassSchema
+	case failure.Status >= 400 && failure.Status < 500:
+		return core.ErrorClassData
+	default:
+		return core.ErrorClassUnknown
+	}
 }
 
 // decodeBulkError extracts (type, reason) from an ES bulk item error object.

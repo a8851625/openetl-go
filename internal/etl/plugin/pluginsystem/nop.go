@@ -48,6 +48,14 @@ func (m *Manager) ExecTransformWithConfig(ctx context.Context, pluginName string
 	return rec, fmt.Errorf("WASM plugins are not available in this build (rebuild with -tags=extism)")
 }
 
+func (m *Manager) ExecTransformRecords(ctx context.Context, pluginName string, rec core.Record) ([]core.Record, error) {
+	return nil, fmt.Errorf("WASM plugins are not available in this build (rebuild with -tags=extism)")
+}
+
+func (m *Manager) ExecTransformRecordsWithConfig(ctx context.Context, pluginName string, rec core.Record, config map[string]any) ([]core.Record, error) {
+	return nil, fmt.Errorf("WASM plugins are not available in this build (rebuild with -tags=extism)")
+}
+
 func (m *Manager) Close(ctx context.Context) {}
 
 func (m *Manager) RegisterTransforms() {}

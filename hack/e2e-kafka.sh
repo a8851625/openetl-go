@@ -21,30 +21,33 @@ wait_http() {
 }
 
 echo "==> Build image"
-podman build -t "$IMAGE" -f Dockerfile .
+docker build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start Redpanda"
-podman-compose -f docker-compose.dev.yml up -d redpanda
+docker compose -f docker-compose.dev.yml up -d redpanda
 
 echo "==> Wait Redpanda"
 i=0
 while [ "$i" -lt 90 ]; do
-  if podman exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null 2>&1; then break; fi
+  if docker exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null 2>&1; then break; fi
   i=$((i + 1)); sleep 2
 done
-podman exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
+docker exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
 
 echo "==> Prepare topics"
-podman exec "$REDPANDA_CONTAINER" rpk topic delete etl-sink-topic etl-source-topic >/dev/null 2>&1 || true
-podman exec "$REDPANDA_CONTAINER" rpk topic create etl-sink-topic etl-source-topic --brokers localhost:9092 >/dev/null
+docker exec "$REDPANDA_CONTAINER" rpk topic delete etl-sink-topic etl-source-topic >/dev/null 2>&1 || true
+docker exec "$REDPANDA_CONTAINER" rpk topic create etl-sink-topic etl-source-topic --brokers localhost:9092 >/dev/null
 
 echo "==> Reset Kafka sink data"
 rm -rf data-kafka-sink data-kafka-source
 mkdir -p data-kafka-sink/output data-kafka-sink/checkpoint data-kafka-sink/dlq data-kafka-source/output data-kafka-source/checkpoint data-kafka-source/dlq logs
+chmod -R a+rwX data-kafka-sink data-kafka-source
+chmod a+rwX logs
 
 echo "==> Run file->Kafka pipeline"
-podman rm -f "$KAFKA_SINK_APP" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$KAFKA_SINK_APP" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$KAFKA_SINK_APP" \
   -p 8009:8001 \
   -v "$ROOT_DIR/testdata/pipes-kafka-sink:/app/pipes:ro" \
@@ -65,14 +68,15 @@ echo "$body"
 echo "$body" | grep '"records_written":3'
 
 echo "==> Verify Kafka sink topic"
-podman exec "$REDPANDA_CONTAINER" rpk topic consume etl-sink-topic -n 3 --brokers localhost:9092 > data-kafka-sink/messages.jsonl
+docker exec "$REDPANDA_CONTAINER" rpk topic consume etl-sink-topic -n 3 --brokers localhost:9092 > data-kafka-sink/messages.jsonl
 grep 'Ada' data-kafka-sink/messages.jsonl
 grep 'Alan' data-kafka-sink/messages.jsonl
 grep 'Grace' data-kafka-sink/messages.jsonl
 
 echo "==> Run Kafka->file pipeline"
-podman rm -f "$KAFKA_SOURCE_APP" >/dev/null 2>&1 || true
-podman run -d \
+docker rm -f "$KAFKA_SOURCE_APP" >/dev/null 2>&1 || true
+docker run -d \
+  --add-host host.docker.internal:host-gateway \
   --name "$KAFKA_SOURCE_APP" \
   -p 8010:8001 \
   -v "$ROOT_DIR/testdata/pipes-kafka-source:/app/pipes:ro" \
@@ -83,7 +87,7 @@ podman run -d \
 
 wait_http "http://127.0.0.1:8010/api/v2/health"
 sleep 3
-printf '%s\n%s\n' '{"id":101,"name":"Kafka Alice"}' '{"id":102,"name":"Kafka Bob"}' | podman exec -i "$REDPANDA_CONTAINER" rpk topic produce etl-source-topic --brokers localhost:9092 >/dev/null
+printf '%s\n%s\n' '{"id":101,"name":"Kafka Alice"}' '{"id":102,"name":"Kafka Bob"}' | docker exec -i "$REDPANDA_CONTAINER" rpk topic produce etl-source-topic --brokers localhost:9092 >/dev/null
 
 i=0
 while [ "$i" -lt 60 ]; do
