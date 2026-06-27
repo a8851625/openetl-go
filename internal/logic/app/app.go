@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,9 +23,9 @@ import (
 	"github.com/gogf/gf/v2/os/gres"
 
 	"github.com/a8851625/openetl-go/internal/etl/alert"
-	etlfactory "github.com/a8851625/openetl-go/internal/etl/storage/factory"
 	etlserver "github.com/a8851625/openetl-go/internal/etl/server"
 	"github.com/a8851625/openetl-go/internal/etl/storage"
+	etlfactory "github.com/a8851625/openetl-go/internal/etl/storage/factory"
 	"github.com/a8851625/openetl-go/internal/etl/worker"
 	"github.com/a8851625/openetl-go/internal/service"
 
@@ -269,7 +270,11 @@ func (a *sApp) startWorkerRole(ctx context.Context, store storage.Storage) {
 		workerID = fmt.Sprintf("worker-%d", os.Getpid())
 	}
 	slots := 4
-	if n := g.Cfg().MustGet(ctx, "etl.workerSlots", 4).Int(); n > 0 {
+	if v := strings.TrimSpace(os.Getenv("ETL_WORKER_SLOTS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			slots = n
+		}
+	} else if n := g.Cfg().MustGet(ctx, "etl.workerSlots", 4).Int(); n > 0 {
 		slots = n
 	}
 

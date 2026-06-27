@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 APP_CONTAINER="etl-openetl-go-duplicate"
 
@@ -19,7 +22,7 @@ wait_http() {
 }
 
 echo "==> Build image"
-docker build -t "$IMAGE" -f Dockerfile .
+"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Reset ETL data"
 rm -rf data-duplicate
@@ -28,8 +31,8 @@ chmod -R a+rwX data-duplicate
 chmod a+rwX logs
 
 echo "==> Run duplicate spec pipeline"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8013:8001 \
@@ -51,7 +54,7 @@ body="$(curl -fsS http://127.0.0.1:8013/api/v2/pipelines)"
 echo "$body"
 count="$(echo "$body" | grep -o '"name":"duplicate-pipeline"' | wc -l | tr -d '[:space:]')"
 test "$count" = "1"
-docker logs "$APP_CONTAINER" 2>&1 | grep 'Skip duplicate pipeline duplicate-pipeline'
+"$CONTAINER_CLI" logs "$APP_CONTAINER" 2>&1 | grep 'Skip duplicate pipeline duplicate-pipeline'
 test -n "$(ls data-duplicate/output/duplicate/first_*.jsonl 2>/dev/null)"
 test -z "$(ls data-duplicate/output/duplicate/second_*.jsonl 2>/dev/null || true)"
 

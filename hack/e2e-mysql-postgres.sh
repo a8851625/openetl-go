@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 MYSQL_CONTAINER="etl-mysql-source"
 PG_CONTAINER="etl-postgres-target"
@@ -14,7 +17,7 @@ APP_PORT="8021"
 PIPELINE="mysql-batch-join-to-postgres"
 
 cleanup() {
-  docker rm -f "$APP_CONTAINER" "$PG_CONTAINER" >/dev/null 2>&1 || true
+  "$CONTAINER_CLI" rm -f "$APP_CONTAINER" "$PG_CONTAINER" >/dev/null 2>&1 || true
 }
 
 wait_http() {
@@ -33,7 +36,7 @@ wait_http() {
 wait_pg() {
   i=0
   while [ "$i" -lt 60 ]; do
-    if docker exec "$PG_CONTAINER" pg_isready -U etl -d analytics >/dev/null 2>&1; then
+    if "$CONTAINER_CLI" exec "$PG_CONTAINER" pg_isready -U etl -d analytics >/dev/null 2>&1; then
       return 0
     fi
     i=$((i + 1))
@@ -46,27 +49,27 @@ if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
   echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
 else
   echo "==> Build image"
-  docker build -t "$IMAGE" -f Dockerfile .
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 fi
 
 echo "==> Start MySQL source"
-docker compose -f docker-compose.dev.yml up -d mysql-source
+compose -f docker-compose.dev.yml up -d mysql-source
 
 echo "==> Wait MySQL healthy"
 i=0
 while [ "$i" -lt 60 ]; do
-  status="$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
+  status="$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
   if [ "$status" = "healthy" ]; then
     break
   fi
   i=$((i + 1))
   sleep 2
 done
-[ "$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
+[ "$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
 
 echo "==> Start PostgreSQL target"
 cleanup
-docker run -d --name "$PG_CONTAINER" \
+"$CONTAINER_CLI" run -d --name "$PG_CONTAINER" \
   --add-host host.docker.internal:host-gateway \
   -e POSTGRES_DB=analytics \
   -e POSTGRES_USER=etl \
@@ -76,7 +79,7 @@ docker run -d --name "$PG_CONTAINER" \
 wait_pg
 
 echo "==> Prepare MySQL source tables"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
 CREATE DATABASE IF NOT EXISTS dzh3136_go;
 DROP TABLE IF EXISTS dzh3136_go.pg_e2e_orders;
 DROP TABLE IF EXISTS dzh3136_go.pg_e2e_users;
@@ -117,7 +120,7 @@ FLUSH PRIVILEGES;
 "
 
 echo "==> Prepare PostgreSQL target table"
-docker exec "$PG_CONTAINER" psql -U etl -d analytics -v ON_ERROR_STOP=1 -c "
+"$CONTAINER_CLI" exec "$PG_CONTAINER" psql -U etl -d analytics -v ON_ERROR_STOP=1 -c "
 DROP TABLE IF EXISTS user_order;
 CREATE TABLE user_order (
   order_id INT PRIMARY KEY,
@@ -139,7 +142,7 @@ chmod -R a+rwX data-mysql-postgres
 chmod a+rwX logs
 
 echo "==> Run MySQL batch JOIN -> PostgreSQL pipeline"
-docker run -d \
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p "$APP_PORT:8001" \
@@ -165,11 +168,11 @@ echo "$body" | grep "\"name\":\"$PIPELINE\"" | grep '"status":"completed"'
 echo "$body" | grep "\"name\":\"$PIPELINE\"" | grep '"records_written":9'
 
 echo "==> Verify PostgreSQL rows"
-rows="$(docker exec "$PG_CONTAINER" psql -U etl -d analytics -At -c "SELECT COUNT(*) FROM user_order;" | tr -d '[:space:]')"
+rows="$("$CONTAINER_CLI" exec "$PG_CONTAINER" psql -U etl -d analytics -At -c "SELECT COUNT(*) FROM user_order;" | tr -d '[:space:]')"
 test "$rows" = "9"
-summary="$(docker exec "$PG_CONTAINER" psql -U etl -d analytics -At -c "SELECT COUNT(DISTINCT user_id) || '|' || SUM(amount)::text FROM user_order;" | tr -d '[:space:]')"
+summary="$("$CONTAINER_CLI" exec "$PG_CONTAINER" psql -U etl -d analytics -At -c "SELECT COUNT(DISTINCT user_id) || '|' || SUM(amount)::text FROM user_order;" | tr -d '[:space:]')"
 test "$summary" = "5|45791.00"
-alice="$(docker exec "$PG_CONTAINER" psql -U etl -d analytics -At -c "SELECT user_name || '|' || product || '|' || amount::text FROM user_order WHERE order_id = 1;" | tr -d '[:space:]')"
+alice="$("$CONTAINER_CLI" exec "$PG_CONTAINER" psql -U etl -d analytics -At -c "SELECT user_name || '|' || product || '|' || amount::text FROM user_order WHERE order_id = 1;" | tr -d '[:space:]')"
 test "$alice" = "AliceChen|MacBookPro|18999.00"
 
 echo "==> Verify schema preflight blocks incompatible PostgreSQL target"
@@ -230,7 +233,7 @@ body="$(curl -fsS "http://127.0.0.1:$APP_PORT/api/v2/pipelines")"
 echo "$body"
 echo "$body" | grep "\"name\":\"$PIPELINE\"" | grep '"status":"completed"'
 echo "$body" | grep "\"name\":\"$PIPELINE\"" | grep '"records_written":9'
-rows_after_replay="$(docker exec "$PG_CONTAINER" psql -U etl -d analytics -At -c "SELECT COUNT(*) FROM user_order;" | tr -d '[:space:]')"
+rows_after_replay="$("$CONTAINER_CLI" exec "$PG_CONTAINER" psql -U etl -d analytics -At -c "SELECT COUNT(*) FROM user_order;" | tr -d '[:space:]')"
 test "$rows_after_replay" = "9"
 
 echo "MySQL batch JOIN -> PostgreSQL E2E passed"

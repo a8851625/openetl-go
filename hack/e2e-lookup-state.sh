@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 REDPANDA_CONTAINER="etl-redpanda"
 MYSQL_CONTAINER="etl-mysql-source"
@@ -39,7 +42,7 @@ wait_pipeline_running() {
 }
 
 run_lookup_app() {
-  docker run -d \
+  "$CONTAINER_CLI" run -d \
     --add-host host.docker.internal:host-gateway \
     --name "$APP_CONTAINER" \
     -p "$APP_PORT:8001" \
@@ -57,44 +60,44 @@ if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
   echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
 else
   echo "==> Build image"
-  docker build -t "$IMAGE" -f Dockerfile .
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 fi
 
 echo "==> Start Redpanda, MySQL, and ClickHouse"
-docker compose -f docker-compose.dev.yml up -d redpanda mysql-source clickhouse
+compose -f docker-compose.dev.yml up -d redpanda mysql-source clickhouse
 
 echo "==> Wait Redpanda"
 i=0
 while [ "$i" -lt 90 ]; do
-  if docker exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null 2>&1; then
+  if "$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null 2>&1; then
     break
   fi
   i=$((i + 1))
   sleep 2
 done
-docker exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
 
 echo "==> Wait MySQL healthy"
 i=0
 while [ "$i" -lt 90 ]; do
-  status="$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
+  status="$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
   if [ "$status" = "healthy" ]; then
     break
   fi
   i=$((i + 1))
   sleep 2
 done
-[ "$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
+[ "$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
 
 echo "==> Wait ClickHouse HTTP"
 wait_http "http://127.0.0.1:8123/ping"
 
 echo "==> Prepare Kafka topic"
-docker exec "$REDPANDA_CONTAINER" rpk topic delete orders.lookup_state >/dev/null 2>&1 || true
-docker exec "$REDPANDA_CONTAINER" rpk topic create orders.lookup_state --brokers localhost:9092 >/dev/null
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic delete orders.lookup_state >/dev/null 2>&1 || true
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic create orders.lookup_state --brokers localhost:9092 >/dev/null
 
 echo "==> Prepare MySQL dimension table"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
 DROP TABLE IF EXISTS dim_users_lookup_state_unavailable;
 DROP TABLE IF EXISTS dim_users_lookup_state;
 CREATE TABLE dim_users_lookup_state (
@@ -109,7 +112,7 @@ INSERT INTO dim_users_lookup_state (id, name, tier, region) VALUES
 "
 
 echo "==> Prepare ClickHouse target"
-docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --multiquery "
+"$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --multiquery "
 CREATE DATABASE IF NOT EXISTS wide;
 DROP TABLE IF EXISTS wide.lookup_state_recovery;
 "
@@ -121,17 +124,17 @@ chmod -R a+rwX data-lookup-state
 chmod a+rwX logs
 
 echo "==> Run lookup-state pipeline"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
 run_lookup_app
 
 echo "==> Produce event that loads lookup cache and persists state"
-cat <<'JSON' | docker exec -i "$REDPANDA_CONTAINER" rpk topic produce orders.lookup_state --brokers localhost:9092 >/dev/null
+cat <<'JSON' | "$CONTAINER_CLI" exec -i "$REDPANDA_CONTAINER" rpk topic produce orders.lookup_state --brokers localhost:9092 >/dev/null
 {"payload":{"op":"c","ts_ms":1710000010000,"source":{"table":"orders"},"after":{"id":41001,"user_id":1001,"amount":11.11,"_version":1}}}
 JSON
 
 i=0
 while [ "$i" -lt 90 ]; do
-  first_count="$(docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.lookup_state_recovery FINAL WHERE id = 41001 AND user_tier = 'cached' AND user_region = 'east'" 2>/dev/null | tr -d '[:space:]' || true)"
+  first_count="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.lookup_state_recovery FINAL WHERE id = 41001 AND user_tier = 'cached' AND user_region = 'east'" 2>/dev/null | tr -d '[:space:]' || true)"
   if [ "$first_count" = "1" ]; then
     break
   fi
@@ -152,22 +155,22 @@ done
 test "${lookup_state_keys:-0}" -ge 2
 
 echo "==> Kill app and make dimension query fail"
-docker kill "$APP_CONTAINER" >/dev/null
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
+"$CONTAINER_CLI" kill "$APP_CONTAINER" >/dev/null
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
 RENAME TABLE dim_users_lookup_state TO dim_users_lookup_state_unavailable;
 "
 
 echo "==> Restart app and verify lookup restores cache from StateStore"
 run_lookup_app
 
-cat <<'JSON' | docker exec -i "$REDPANDA_CONTAINER" rpk topic produce orders.lookup_state --brokers localhost:9092 >/dev/null
+cat <<'JSON' | "$CONTAINER_CLI" exec -i "$REDPANDA_CONTAINER" rpk topic produce orders.lookup_state --brokers localhost:9092 >/dev/null
 {"payload":{"op":"c","ts_ms":1710000011000,"source":{"table":"orders"},"after":{"id":41002,"user_id":1001,"amount":22.22,"_version":1}}}
 JSON
 
 i=0
 while [ "$i" -lt 90 ]; do
-  restored_count="$(docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.lookup_state_recovery FINAL WHERE id = 41002 AND user_name = 'Lookup Cached Alice' AND user_tier = 'cached' AND user_region = 'east'" 2>/dev/null | tr -d '[:space:]' || true)"
+  restored_count="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.lookup_state_recovery FINAL WHERE id = 41002 AND user_name = 'Lookup Cached Alice' AND user_tier = 'cached' AND user_region = 'east'" 2>/dev/null | tr -d '[:space:]' || true)"
   if [ "$restored_count" = "1" ]; then
     break
   fi

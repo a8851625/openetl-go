@@ -4,7 +4,7 @@
 #
 #  用法:  bash hack/demo-mysql-to-postgres.sh
 #
-#  前提:  docker 已安装，镜像 openetl-go-etl:ui-e2e 已构建
+#  前提:  docker 或 podman 已安装，镜像 openetl-go-etl:ui-e2e 已构建
 #
 #  本脚本会:
 #    1. 启动 MySQL 8（源库）+ PostgreSQL 16（目标库）
@@ -15,12 +15,15 @@
 #    6. 验证结果并打印对比表
 #    7. 浏览器打开 http://localhost:7000 供你操作
 #
-#  清理:  docker rm -f etl-mysql-src etl-pg-dst etl-demo
+#  清理:  脚本会自动检测容器运行时；也可通过 CONTAINER_CLI 覆盖后手动 rm 容器
 # ============================================================
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
 
 MYSQL_C="etl-mysql-src"
 PG_C="etl-pg-dst"
@@ -35,14 +38,14 @@ warn()  { echo -e "${Y}⚠ $1${N}"; }
 
 # ── 0. 清理旧容器 ──
 info "清理旧容器..."
-docker rm -f $MYSQL_C $PG_C $APP_C 2>/dev/null || true
+"$CONTAINER_CLI" rm -f $MYSQL_C $PG_C $APP_C 2>/dev/null || true
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"/{output,checkpoint,dlq}
 chmod -R a+rwX "$DATA_DIR"
 
 # ── 1. 启动 MySQL ──
 info "启动 MySQL 8 源库 (端口 3316)..."
-docker run -d --name $MYSQL_C \
+"$CONTAINER_CLI" run -d --name $MYSQL_C \
   --add-host host.docker.internal:host-gateway \
   -e MYSQL_ROOT_PASSWORD=root123 \
   -e MYSQL_DATABASE=shop \
@@ -53,14 +56,14 @@ docker run -d --name $MYSQL_C \
 
 info "等待 MySQL 就绪..."
 for i in $(seq 1 60); do
-  docker exec $MYSQL_C mysql -uetl -petl123 -e "SELECT 1" shop >/dev/null 2>&1 && break
+  "$CONTAINER_CLI" exec $MYSQL_C mysql -uetl -petl123 -e "SELECT 1" shop >/dev/null 2>&1 && break
   sleep 2
 done
 ok "MySQL 就绪"
 
 # ── 2. 启动 PostgreSQL ──
 info "启动 PostgreSQL 16 目标库 (端口 5433)..."
-docker run -d --name $PG_C \
+"$CONTAINER_CLI" run -d --name $PG_C \
   --add-host host.docker.internal:host-gateway \
   -e POSTGRES_PASSWORD=pg123 \
   -e POSTGRES_DB=analytics \
@@ -70,14 +73,14 @@ docker run -d --name $PG_C \
 
 info "等待 PostgreSQL 就绪..."
 for i in $(seq 1 40); do
-  docker exec $PG_C psql -U etl -d analytics -c "SELECT 1" >/dev/null 2>&1 && break
+  "$CONTAINER_CLI" exec $PG_C psql -U etl -d analytics -c "SELECT 1" >/dev/null 2>&1 && break
   sleep 2
 done
 ok "PostgreSQL 就绪"
 
 # ── 3. 建表 + 插入数据 ──
 info "创建 MySQL 表结构..."
-docker exec $MYSQL_C mysql -uetl -petl123 shop -e "
+"$CONTAINER_CLI" exec $MYSQL_C mysql -uetl -petl123 shop -e "
 CREATE TABLE users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -96,7 +99,7 @@ CREATE TABLE orders (
 " 2>/dev/null
 
 info "插入测试数据..."
-docker exec $MYSQL_C mysql -uetl -petl123 shop -e "
+"$CONTAINER_CLI" exec $MYSQL_C mysql -uetl -petl123 shop -e "
 INSERT INTO users (name,email,city) VALUES
 ('Alice Chen','alice@example.com','Shanghai'),
 ('Bob Wang','bob@example.com','Beijing'),
@@ -119,7 +122,7 @@ echo ""
 echo "┌─────────────────────────────────┐"
 echo "│  MySQL 源数据                    │"
 echo "├─────────────────────────────────┤"
-docker exec $MYSQL_C mysql -uetl -petl123 shop -e "
+"$CONTAINER_CLI" exec $MYSQL_C mysql -uetl -petl123 shop -e "
 SELECT CONCAT('users: ', COUNT(*), ' 行') AS info FROM users
 UNION ALL
 SELECT CONCAT('orders: ', COUNT(*), ' 行') FROM orders;
@@ -128,7 +131,7 @@ echo "└───────────────────────�
 
 # ── 4. 创建 PG 目标表 ──
 info "创建 PostgreSQL 目标表 user_order..."
-docker exec $PG_C psql -U etl -d analytics -c "
+"$CONTAINER_CLI" exec $PG_C psql -U etl -d analytics -c "
 CREATE TABLE IF NOT EXISTS user_order (
     order_id INT PRIMARY KEY,
     user_id INT NOT NULL,
@@ -146,7 +149,7 @@ ok "目标表就绪"
 
 # ── 5. 启动 ETL 服务 ──
 info "启动 ETL 平台..."
-docker run -d --name $APP_C \
+"$CONTAINER_CLI" run -d --name $APP_C \
   --add-host host.docker.internal:host-gateway \
   -p 7000:8000 -p 7001:8001 \
   -v "$DATA_DIR:/app/data" \
@@ -226,7 +229,7 @@ echo ""
 echo "============================================"
 echo "  PostgreSQL user_order 表数据"
 echo "============================================"
-docker exec $PG_C psql -U etl -d analytics -c "
+"$CONTAINER_CLI" exec $PG_C psql -U etl -d analytics -c "
 SELECT order_id, user_name, user_city, product, amount, status
 FROM user_order ORDER BY order_id;
 " 2>/dev/null
@@ -234,7 +237,7 @@ FROM user_order ORDER BY order_id;
 echo "============================================"
 echo "  汇总统计"
 echo "============================================"
-docker exec $PG_C psql -U etl -d analytics -c "
+"$CONTAINER_CLI" exec $PG_C psql -U etl -d analytics -c "
 SELECT COUNT(*) AS total_rows,
        COUNT(DISTINCT user_id) AS unique_users,
        SUM(amount) AS total_amount
@@ -246,5 +249,5 @@ echo "════════════════════════�
 ok "ETL 完成! 9 条 JOIN 记录已从 MySQL 同步到 PostgreSQL"
 echo ""
 echo "  浏览器体验:  http://localhost:7000"
-echo "  清理环境:    docker rm -f $MYSQL_C $PG_C $APP_C"
+echo "  清理环境:    $CONTAINER_CLI rm -f $MYSQL_C $PG_C $APP_C"
 echo "═══════════════════════════════════════════════"

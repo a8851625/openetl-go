@@ -5,11 +5,12 @@ version: '3.8'
 #
 # One-command demo: MySQL CDC → ClickHouse
 #
-#   docker compose -f docker-compose.quickstart.yml up -d
+#   CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+#   "$CONTAINER_CLI" compose -f docker-compose.quickstart.yml up -d
 #
 # Then open: http://localhost:8000
 #
-# Cleanup: docker compose -f docker-compose.quickstart.yml down -v
+# Cleanup: "$CONTAINER_CLI" compose -f docker-compose.quickstart.yml down -v
 # ════════════════════════════════════════════════════════════════════
 
 services:

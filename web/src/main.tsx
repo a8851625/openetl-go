@@ -8,6 +8,7 @@ import { WorkersPage } from './WorkersPage';
 import { MyPluginsPage } from './MyPluginsPage';
 import { SchedulesPage } from './SchedulesPage';
 import { ConnectionsPage } from './ConnectionsPage';
+import { ConfigForm, buildDefaultConfig, missingRequiredFields, type PluginSchemaField } from './configFields';
 
 // ════════════════════════════════════════════════
 // Types
@@ -372,7 +373,7 @@ function App() {
 
         <div className="p-8">
           {page === 'dashboard' && <DashboardPage t={t} lang={lang} totals={totals} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} />}
-          {page === 'pipelines' && <PipelinesPage t={t} lang={lang} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} onAction={runAction} checkpoints={checkpoints} onResetCheckpoint={(name: string) => runAction(`${t('toast.resetCheckpoint')}: ${name}`, () => api(`/api/v2/pipelines/${name}/checkpoint/reset`, { method: 'POST' }))} onEdit={editPipeline} refreshKey={refreshKey} onShowToast={toast} />}
+          {page === 'pipelines' && <PipelinesPage t={t} lang={lang} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} onAction={runAction} checkpoints={checkpoints} onResetCheckpoint={(name: string) => runAction(`${t('toast.resetCheckpoint')}: ${name}`, () => api(`/api/v2/pipelines/${name}/checkpoint/reset`, { method: 'POST' }))} onEdit={editPipeline} refreshKey={refreshKey} onShowToast={toast} plugins={plugins} pluginSchema={pluginSchema} />}
           {page === 'connections' && <ConnectionsPage t={t} lang={lang} />}
           {page === 'designer' && <DagEditorPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} onAction={runAction} editTarget={editTarget} />}
           {page === 'dlq' && <DLQPage t={t} lang={lang} pipelines={pipelines} selected={selected} onSelect={setSelectedPipeline} onAction={runAction} />}
@@ -885,6 +886,427 @@ function SpecImportModal({ t, onClose, onImported }: { t: (k: string) => string;
 }
 
 // ════════════════════════════════════════════════
+// First Task Wizard
+// ════════════════════════════════════════════════
+type WizardTemplate = {
+  id: string;
+  title: string;
+  sourceTypes: string[];
+  sinkTypes: string[];
+  transforms: { type: string; config: Record<string, unknown> }[];
+  sample: Record<string, unknown>;
+};
+
+type ValidateResult = {
+  valid?: boolean;
+  warnings?: string[];
+  preflight?: {
+    passed?: boolean;
+    summary?: string;
+    issues?: { level: string; check: string; message: string; remediation?: string }[];
+    field_issues?: { level: string; field: string; check: string; message: string; remediation?: string }[];
+    ddl_preview?: { dialect: string; table: string; statements?: string[]; warnings?: string[] };
+  };
+  errors?: string[];
+};
+
+const WIZARD_TEMPLATES: WizardTemplate[] = [
+  { id: 'database-sync', title: 'Database sync', sourceTypes: ['mysql_batch', 'mysql_cdc', 'mysql_snapshot_cdc'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'Alice', updated_at: '2026-06-27T10:00:00Z' }, metadata: { source: 'wizard', table: 'customers' } } },
+  { id: 'kafka-detail', title: 'Kafka detail / aggregate', sourceTypes: ['kafka'], sinkTypes: ['clickhouse', 'mysql', 'postgresql'], transforms: [{ type: 'project', config: { fields: ['id', 'user_id', 'amount', 'dt'] } }, { type: 'deduplicate', config: { key_fields: ['id'] } }], sample: { operation: 'INSERT', data: { id: 1001, user_id: 42, amount: 19.5, dt: '20260627' }, metadata: { source: 'kafka', table: 'orders' } } },
+  { id: 'debezium-cdc', title: 'Debezium CDC', sourceTypes: ['kafka'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'debezium_cdc', config: { skip_snapshot: true } }, { type: 'cdc_policy', config: { skip_delete: false, dangerous_ddl: 'reject' } }], sample: { operation: 'INSERT', data: { payload: { op: 'c', source: { db: 'app', table: 'orders' }, after: { id: 1, amount: 29.9 } } }, metadata: { source: 'debezium', table: 'orders' } } },
+  { id: 'kafka-parser', title: 'Kafka parser', sourceTypes: ['kafka'], sinkTypes: ['kafka', 'clickhouse', 'file_sink'], transforms: [{ type: 'flat_map', config: { script: 'return { { data = { id = record.data.id, value = record.data.value } } }' } }, { type: 'project', config: { fields: ['id', 'value'] } }], sample: { operation: 'INSERT', data: { id: 'raw-1', value: 7, payload: '010203' }, metadata: { source: 'kafka', table: 'raw' } } },
+  { id: 'file-http-landing', title: 'File / HTTP landing', sourceTypes: ['file', 'http'], sinkTypes: ['file_sink', 's3', 'maxcompute'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'UI Wizard', dt: '20260627' }, metadata: { source: 'wizard', table: 'landing' } } },
+];
+
+function defaultSourceConfig(type: string): Record<string, unknown> {
+  switch (type) {
+    case 'mysql_batch':
+    case 'mysql_cdc':
+    case 'mysql_snapshot_cdc':
+      return { host: 'host.docker.internal', port: 13306, user: 'sync_user', password: 'sync_password_123', database: 'dzh3136_go', table: 'customers', tables: ['customers'], pk_column: 'id', server_id: 12001 };
+    case 'kafka':
+      return { brokers: ['host.docker.internal:19092'], topic: 'orders', group_id: 'openetl-ui-wizard', format: 'json' };
+    case 'http':
+      return { url: 'http://host.docker.internal:18080/customers', method: 'GET', format: 'json' };
+    case 'file':
+    default:
+      return { path: '/app/testdata/files/customers.jsonl', format: 'json' };
+  }
+}
+
+function defaultSinkConfig(type: string): Record<string, unknown> {
+  switch (type) {
+    case 'mysql':
+    case 'postgresql':
+      return { host: 'host.docker.internal', port: type === 'mysql' ? 13306 : 15432, user: 'sync_user', password: 'sync_password_123', database: 'dzh3136_go', table: 'wizard_output', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
+    case 'clickhouse':
+      return { host: 'host.docker.internal', port: 9000, database: 'default', table: 'wizard_output', username: 'default', password: 'dzh123456', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
+    case 'doris':
+      return { host: 'host.docker.internal', port: 9030, http_port: 8030, user: 'root', database: 'dzh3136_go', table: 'wizard_output', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
+    case 'kafka':
+      return { brokers: ['host.docker.internal:19092'], topic: 'ods.orders', format: 'json' };
+    case 's3':
+      return { endpoint: 'http://host.docker.internal:9001', bucket: 'openetl', prefix: 'wizard/', access_key: 'minioadmin', secret_key: 'minioadmin', format: 'jsonl' };
+    case 'maxcompute':
+      return { endpoint: 'https://service.cn.maxcompute.aliyun.com/api', project: 'demo_project', table: 'wizard_output', access_key_id: 'replace-me', access_key_secret: 'replace-me', columns: { id: 'BIGINT', name: 'STRING', dt: 'STRING' }, partition_fields: ['dt'] };
+    case 'file_sink':
+    default:
+      return { output_dir: '/app/data/output/ui-wizard', format: 'jsonl', prefix: 'wizard_' };
+  }
+}
+
+function parseJSONText(text: string, fallback: unknown) {
+  try { return JSON.parse(text); } catch { return fallback; }
+}
+
+function parseJSONObject(text: string): Record<string, unknown> {
+  const parsed = parseJSONText(text, {});
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
+function parseTransformList(text: string): { type: string; config: Record<string, unknown> }[] {
+  const parsed = parseJSONText(text, []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter((item) => item && typeof item === 'object' && typeof (item as any).type === 'string')
+    .map((item) => ({ type: (item as any).type, config: parseJSONObject(prettyJSON((item as any).config || {})) }));
+}
+
+function prettyJSON(value: unknown) {
+  return JSON.stringify(value, null, 2);
+}
+
+function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc; plugins: any; schema: any; onClose: () => void; onCreated: (name: string) => void }) {
+  const [templateId, setTemplateId] = useState('file-http-landing');
+  const template = WIZARD_TEMPLATES.find((tpl) => tpl.id === templateId) || WIZARD_TEMPLATES[0];
+  const [name, setName] = useState('ui-wizard-file');
+  const [sourceType, setSourceType] = useState(template.sourceTypes[0]);
+  const [sinkType, setSinkType] = useState(template.sinkTypes[0]);
+  const [sourceConfigText, setSourceConfigText] = useState(prettyJSON(defaultSourceConfig(sourceType)));
+  const [sinkConfigText, setSinkConfigText] = useState(prettyJSON(defaultSinkConfig(sinkType)));
+  const [transformsText, setTransformsText] = useState(prettyJSON(template.transforms));
+  const [sampleText, setSampleText] = useState(prettyJSON(template.sample));
+  const [yamlText, setYamlText] = useState('');
+  const [sourceJsonOpen, setSourceJsonOpen] = useState(false);
+  const [sinkJsonOpen, setSinkJsonOpen] = useState(false);
+  const [result, setResult] = useState<ValidateResult | null>(null);
+  const [dryRunResult, setDryRunResult] = useState<unknown>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+
+  const sourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
+  const sinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
+  const sourceConfig = parseJSONObject(sourceConfigText);
+  const sinkConfig = parseJSONObject(sinkConfigText);
+  const transformConfigs = parseTransformList(transformsText);
+  const sourceMissing = missingRequiredFields(sourceFields, sourceConfig);
+  const sinkMissing = missingRequiredFields(sinkFields, sinkConfig);
+  const metadata = plugins?.data?.metadata || {};
+  const sourceMaturity = metadata.sources?.[sourceType]?.maturity || 'unknown';
+  const sinkMaturity = metadata.sinks?.[sinkType]?.maturity || 'unknown';
+  const sourceCapabilities = metadata.sources?.[sourceType]?.capabilities || [];
+  const sinkCapabilities = metadata.sinks?.[sinkType]?.capabilities || [];
+
+  const seedSourceConfig = useCallback((type: string) => {
+    const fields = (schema?.data?.sources?.[type] || []) as PluginSchemaField[];
+    return { ...buildDefaultConfig(fields), ...defaultSourceConfig(type) };
+  }, [schema?.data]);
+
+  const seedSinkConfig = useCallback((type: string) => {
+    const fields = (schema?.data?.sinks?.[type] || []) as PluginSchemaField[];
+    return { ...buildDefaultConfig(fields), ...defaultSinkConfig(type) };
+  }, [schema?.data]);
+
+  const buildSpec = useCallback(() => ({
+    name: name.trim(),
+    source: { type: sourceType, config: parseJSONText(sourceConfigText, {}) },
+    transforms: parseJSONText(transformsText, []),
+    sink: { type: sinkType, config: parseJSONText(sinkConfigText, {}) },
+    batch_size: 100,
+    checkpoint_interval_sec: 1,
+    backpressure_buffer: 100,
+    retry: { max_attempts: 3, initial_interval_ms: 100, max_interval_ms: 1000 },
+    dlq: { enable: true },
+    tags: ['ui-wizard', template.id],
+  }), [name, sourceType, sourceConfigText, transformsText, sinkType, sinkConfigText, template.id]);
+
+  useEffect(() => {
+    const nextTemplate = WIZARD_TEMPLATES.find((tpl) => tpl.id === templateId) || WIZARD_TEMPLATES[0];
+    const nextSource = nextTemplate.sourceTypes[0];
+    const nextSink = nextTemplate.sinkTypes[0];
+    setSourceType(nextSource);
+    setSinkType(nextSink);
+    setSourceConfigText(prettyJSON(seedSourceConfig(nextSource)));
+    setSinkConfigText(prettyJSON(seedSinkConfig(nextSink)));
+    setTransformsText(prettyJSON(nextTemplate.transforms));
+    setSampleText(prettyJSON(nextTemplate.sample));
+    setSourceJsonOpen(false);
+    setSinkJsonOpen(false);
+    setResult(null);
+    setDryRunResult(null);
+  }, [templateId, seedSourceConfig, seedSinkConfig]);
+
+  useEffect(() => {
+    setYamlText(YAML.stringify(buildSpec()));
+  }, [buildSpec]);
+
+  const validate = async (throwOnInvalid = false) => {
+    setBusy('validate'); setError(''); setResult(null);
+    try {
+      const spec = YAML.parse(yamlText);
+      const res = await fetch('/api/v2/specs/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(getToken() ? { 'X-API-Token': getToken() } : {}) },
+        body: JSON.stringify({ spec }),
+      });
+      const data = await res.json();
+      setResult(data);
+      if (!res.ok) throw new Error((data.errors || data.warnings || ['validation failed']).join('\n'));
+      if (data.valid === false) {
+        const message = (data.errors || data.warnings || ['preflight failed']).join('\n');
+        setError(message);
+        if (throwOnInvalid) throw new Error(message);
+      }
+      return data as ValidateResult;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      throw e;
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const dryRun = async () => {
+    setBusy('dry-run'); setError(''); setDryRunResult(null);
+    try {
+      const data = await api('/api/v2/transforms/dry-run', {
+        method: 'POST',
+        body: JSON.stringify({ transforms: parseJSONText(transformsText, []), record: parseJSONText(sampleText, template.sample) }),
+      });
+      setDryRunResult(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const createAndStart = async () => {
+    setBusy('create'); setError('');
+    try {
+      const checked = await validate(true);
+      if (checked.valid === false) throw new Error((checked.errors || checked.warnings || ['preflight failed']).join('\n'));
+      const spec = YAML.parse(yamlText);
+      const created = await api<{ name: string }>('/api/v2/pipelines', { method: 'POST', body: JSON.stringify({ spec }) });
+      await api(`/api/v2/pipelines/${encodeURIComponent(created.name || spec.name)}/start`, { method: 'POST' });
+      onCreated(created.name || spec.name);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const syncFromYaml = () => {
+    try {
+      const spec = YAML.parse(yamlText);
+      setName(spec.name || name);
+      if (spec.source?.type) {
+        setSourceType(spec.source.type);
+        setSourceConfigText(prettyJSON(spec.source.config || {}));
+      }
+      if (spec.sink?.type) {
+        setSinkType(spec.sink.type);
+        setSinkConfigText(prettyJSON(spec.sink.config || {}));
+      }
+      setTransformsText(prettyJSON(spec.transforms || []));
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const renderSchemaSummary = (title: string, fields: PluginSchemaField[], maturity: string, capabilities: string[], missing: string[]) => (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-xs font-semibold text-slate-600">{title}</div>
+        <span className="badge badge-slate">{maturity}</span>
+      </div>
+      <div className="mb-2 flex flex-wrap gap-1">
+        {capabilities.slice(0, 5).map((cap: string) => <span key={cap} className="badge badge-blue text-[10px]">{cap}</span>)}
+        {missing.map((field) => <span key={field} className="badge badge-rose text-[10px]">missing {field}</span>)}
+      </div>
+      <div className="grid gap-1">
+        {fields.slice(0, 8).map((field) => (
+          <div key={field.name} className="flex items-center gap-2 text-xs text-slate-500">
+            <span className="font-mono text-slate-700">{field.name}</span>
+            <span>{field.type}</span>
+            {field.required && <span className="text-rose-500">required</span>}
+            {field.secret && <span className="text-amber-600">secret</span>}
+          </div>
+        ))}
+        {!fields.length && <div className="text-xs text-slate-400">No schema fields returned.</div>}
+      </div>
+    </div>
+  );
+
+  const renderConfigEditor = (
+    title: string,
+    fields: PluginSchemaField[],
+    config: Record<string, unknown>,
+    configText: string,
+    setConfigText: (text: string) => void,
+    jsonOpen: boolean,
+    setJsonOpen: (open: boolean) => void,
+    testId: string,
+  ) => (
+    <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid={testId}>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="text-xs font-semibold text-slate-600">{title}</div>
+        <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => setJsonOpen(!jsonOpen)}>{jsonOpen ? 'Hide JSON' : 'Advanced JSON'}</button>
+      </div>
+      <ConfigForm fields={fields} config={config} onChange={(next) => setConfigText(prettyJSON(next))} t={t} />
+      {jsonOpen && (
+        <textarea className="input mt-3 min-h-36 w-full font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
+      )}
+    </div>
+  );
+
+  const updateTransformConfig = (index: number, nextConfig: Record<string, unknown>) => {
+    const next = transformConfigs.map((item, i) => i === index ? { ...item, config: nextConfig } : item);
+    setTransformsText(prettyJSON(next));
+  };
+
+  return (
+    <Modal title="Create Pipeline Wizard" onClose={onClose} width="max-w-6xl">
+      <div className="grid gap-5 xl:grid-cols-[280px_1fr]">
+        <div className="space-y-3">
+          {WIZARD_TEMPLATES.map((tpl) => (
+            <button key={tpl.id} className={`w-full rounded-lg border p-3 text-left text-sm transition ${templateId === tpl.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'}`} onClick={() => setTemplateId(tpl.id)}>
+              <div className="font-semibold">{tpl.title}</div>
+              <div className="mt-1 text-xs text-slate-400">{tpl.sourceTypes.join(' / ')} → {tpl.sinkTypes.join(' / ')}</div>
+            </button>
+          ))}
+        </div>
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Pipeline name</label>
+              <input data-testid="wizard-pipeline-name" className="input w-full" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Source</label>
+              <select data-testid="wizard-source-type" className="input w-full" value={sourceType} onChange={(e) => { setSourceType(e.target.value); setSourceConfigText(prettyJSON(seedSourceConfig(e.target.value))); }}>
+                {template.sourceTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Sink</label>
+              <select data-testid="wizard-sink-type" className="input w-full" value={sinkType} onChange={(e) => { setSinkType(e.target.value); setSinkConfigText(prettyJSON(seedSinkConfig(e.target.value))); }}>
+                {template.sinkTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+              </select>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {template.sinkTypes.includes('maxcompute') && (
+                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('maxcompute'); setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute'))); setResult(null); }}>
+                    Failure demo
+                  </button>
+                )}
+                {template.sinkTypes.includes('file_sink') && (
+                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('file_sink'); setSinkConfigText(prettyJSON(seedSinkConfig('file_sink'))); setResult(null); }}>
+                    Repair to file_sink
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {renderSchemaSummary(`Descriptor schema: ${sourceType}`, sourceFields, sourceMaturity, sourceCapabilities, sourceMissing)}
+            {renderSchemaSummary(`Descriptor schema: ${sinkType}`, sinkFields, sinkMaturity, sinkCapabilities, sinkMissing)}
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {renderConfigEditor('Source config', sourceFields, sourceConfig, sourceConfigText, setSourceConfigText, sourceJsonOpen, setSourceJsonOpen, 'wizard-source-config-form')}
+            {renderConfigEditor('Sink config', sinkFields, sinkConfig, sinkConfigText, setSinkConfigText, sinkJsonOpen, setSinkJsonOpen, 'wizard-sink-config-form')}
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">Transform chain</label>
+              <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3" data-testid="wizard-transform-config-form">
+                {transformConfigs.length ? (
+                  <div className="space-y-4">
+                    {transformConfigs.map((item, index) => {
+                      const fields = (schema?.data?.transforms?.[item.type] || []) as PluginSchemaField[];
+                      return (
+                        <div key={`${item.type}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-xs font-semibold text-slate-600">{index + 1}. {item.type}</span>
+                            <span className="badge badge-slate text-[10px]">{metadata.transforms?.[item.type]?.maturity || 'unknown'}</span>
+                          </div>
+                          <ConfigForm fields={fields} config={item.config || {}} onChange={(next) => updateTransformConfig(index, next)} t={t} emptyText="No config fields for this transform." />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : <div className="text-xs text-slate-400">Invalid transform JSON.</div>}
+              </div>
+              <textarea className="input min-h-32 w-full font-mono text-xs" value={transformsText} onChange={(e) => setTransformsText(e.target.value)} />
+            </div>
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <label className="block text-xs font-medium text-slate-500">Sample record</label>
+                <a className="text-xs text-indigo-600 hover:underline" href="/api/v2/docs" target="_blank" rel="noreferrer">API docs</a>
+              </div>
+              <textarea className="input min-h-32 w-full font-mono text-xs" value={sampleText} onChange={(e) => setSampleText(e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <label className="block text-xs font-medium text-slate-500">Generated YAML</label>
+              <button className="btn btn-secondary btn-sm" onClick={syncFromYaml}>Sync YAML to form</button>
+            </div>
+            <textarea data-testid="wizard-yaml" className="input min-h-56 w-full font-mono text-xs" value={yamlText} onChange={(e) => setYamlText(e.target.value)} />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button data-testid="wizard-dry-run" className="btn btn-secondary" disabled={busy === 'dry-run'} onClick={dryRun}>Transform dry-run</button>
+            <button data-testid="wizard-validate" className="btn btn-secondary" disabled={busy === 'validate'} onClick={() => validate().catch(() => {})}>Validate + preflight</button>
+            <button data-testid="wizard-create-start" className="btn btn-primary" disabled={busy === 'create'} onClick={createAndStart}>Create and start</button>
+          </div>
+          {error && <ErrorBox message={error} />}
+          {dryRunResult !== null && (
+            <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3">
+              <div className="mb-2 text-xs font-semibold text-cyan-700">Dry-run output</div>
+              <pre className="max-h-56 overflow-auto text-xs text-cyan-950">{prettyJSON(dryRunResult)}</pre>
+            </div>
+          )}
+          {result && (
+            <div data-testid="wizard-preflight-result" className={`rounded-lg border p-3 ${result.valid === false ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
+              <div className="mb-2 text-sm font-semibold">{result.valid === false ? 'Preflight failed' : 'Preflight passed'} · {result.preflight?.summary || 'validation complete'}</div>
+              {(result.warnings || result.errors || []).map((msg, i) => <div key={i} className="text-xs text-slate-700">{msg}</div>)}
+              {(result.preflight?.issues || []).map((issue, i) => (
+                <div key={`issue-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
+                  <div className="font-semibold">{issue.level} · {issue.check}</div>
+                  <div>{issue.message}</div>
+                  {issue.remediation && <div className="mt-1 text-slate-500">Fix: {issue.remediation}</div>}
+                </div>
+              ))}
+              {(result.preflight?.field_issues || []).map((issue, i) => (
+                <div key={`field-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
+                  <div className="font-semibold">{issue.field} · {issue.check}</div>
+                  <div>{issue.message}</div>
+                  {issue.remediation && <div className="mt-1 text-slate-500">Fix: {issue.remediation}</div>}
+                </div>
+              ))}
+              {result.preflight?.ddl_preview?.statements?.length ? (
+                <pre className="mt-2 max-h-40 overflow-auto rounded bg-white/80 p-2 text-xs">{result.preflight.ddl_preview.statements.join('\n')}</pre>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ════════════════════════════════════════════════
 // Pipeline Action Dropdown Menu
 // ════════════════════════════════════════════════
 function PipelineActionMenu({ p: _p, t, onLogs, onDAG, onEdit, onDelete, onExport }: {
@@ -1018,11 +1440,12 @@ const PipelineRow = React.memo(function PipelineRow({ p, m, compact, selected, t
   return true; // skip re-render — data is equivalent
 });
 
-function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSelect, onAction, checkpoints, onResetCheckpoint, onEdit, refreshKey, onShowToast }: any) {
+function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSelect, onAction, checkpoints, onResetCheckpoint, onEdit, refreshKey, onShowToast, plugins, pluginSchema }: any) {
   const [showLogs, setShowLogs] = useState(false);
   const [showDAG, setShowDAG] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
   const [tagFilter, setTagFilter] = useState('');
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState('name');
@@ -1103,6 +1526,7 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
     {showDAG && selected?.name && <PipelineDAGModal t={t} name={selected.name} onClose={() => setShowDAG(false)} />}
     {showVersions && selected?.name && <PipelineVersionsModal t={t} name={selected.name} onClose={() => setShowVersions(false)} onAction={onAction} />}
     {showImport && <SpecImportModal t={t} onClose={() => setShowImport(false)} onImported={(name: string) => onShowToast?.('success', t('pipe.importSuccess').replace('{name}', name))} />}
+    {showWizard && <FirstTaskWizard t={t} plugins={plugins} schema={pluginSchema} onClose={() => setShowWizard(false)} onCreated={(name: string) => { onShowToast?.('success', `Pipeline created: ${name}`); setShowWizard(false); }} />}
 
     {loading && !pipelines.data && (
       <div className="grid gap-6 xl:grid-cols-[1fr_400px]">
@@ -1141,6 +1565,7 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
             <button className={`btn btn-ghost btn-sm text-xs ${compact ? 'text-indigo-600' : ''}`} onClick={() => setCompact(!compact)} title={t(compact ? 'pipe.expandedMode' : 'pipe.compactMode')}>
               {compact ? '⛶' : '⊞'}
             </button>
+            <button data-testid="open-first-task-wizard" className="btn btn-primary btn-sm" onClick={() => setShowWizard(true)}>Create from wizard</button>
             <button className="btn btn-secondary btn-sm" onClick={() => setShowImport(true)}>📥 {t('pipe.import')}</button>
           </div>
         </div>

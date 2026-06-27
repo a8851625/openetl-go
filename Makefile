@@ -13,16 +13,16 @@ include ./hack/hack.mk
 test:
 	go test -race -count=1 ./internal/etl/... ./internal/logic/... ./internal/controller/...
 
-# Run integration/E2E tests (requires docker with docker-compose.dev.yml).
+# Run integration/E2E tests (requires docker or podman with docker-compose.dev.yml).
 .PHONY: test-integration
 test-integration:
 	@echo "Starting dev services..."
-	docker compose -f docker-compose.dev.yml up -d mysql-source clickhouse
+	@. ./hack/container-cli.sh; compose -f docker-compose.dev.yml up -d mysql-source clickhouse
 	@sleep 10
 	@echo "Running E2E tests..."
 	go test -race -count=1 -tags=integration ./internal/etl/...
 	@echo "Stopping dev services..."
-	docker compose -f docker-compose.dev.yml down
+	@. ./hack/container-cli.sh; compose -f docker-compose.dev.yml down
 	@echo "Done."
 
 # Run all tests.

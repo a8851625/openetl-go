@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 FIXTURE_CONTAINER="etl-http-fixture"
 APP_CONTAINER="etl-openetl-go-http"
@@ -20,11 +23,11 @@ wait_http() {
 }
 
 echo "==> Build image"
-docker build -t "$IMAGE" -f Dockerfile .
+"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start HTTP fixture"
-docker rm -f "$FIXTURE_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$FIXTURE_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$FIXTURE_CONTAINER" \
   -p 18080:8080 \
@@ -41,8 +44,8 @@ chmod -R a+rwX data-http
 chmod a+rwX logs
 
 echo "==> Run HTTP pipeline"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8008:8001 \

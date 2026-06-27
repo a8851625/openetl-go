@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [v0.2.3-beta-1] — 2026-06-27 — First-task UI and runtime flags
+
+### Highlights
+- Added a first-task wizard in the React UI for database sync, Kafka detail/aggregation, Debezium CDC sync, Kafka protocol parsing, and file/HTTP landing tasks. The wizard emits ordinary pipeline specs and keeps YAML as the auditable source of truth.
+- Added schema-driven source/sink/transform configuration forms, generated YAML editing, YAML-to-form sync, transform dry-run, validate + preflight, and create-and-start flow in the wizard.
+- Extended the DAG editor with YAML-to-canvas/form roundtrip, validate + preflight actions, and structured rendering for errors, warnings, preflight issues, field issues, remediation, and DDL preview.
+- Added runtime CLI flags for config path, local data/log/plugin/schema/spec directories, HTTP and ETL API bind addresses, storage, TLS, API token, audit, logger format, and standalone/master/worker role settings. Runtime precedence is now CLI flags > environment variables > config file > built-in defaults.
+- Added shared Podman/Docker detection for hack scripts via `hack/container-cli.sh`, and updated e2e scripts and docs around the new container runtime selection.
+
+### Validation
+- `go test ./internal/cmd ./internal/etl/server ./internal/etl/sink`
+- `go run . --help`
+- Invalid `--role` startup check
+- `E2E_SKIP_BUILD=1 ./hack/e2e-ui.sh` — 88 passed, 0 failed
+
 ## [v0.2.3-beta] — Doris validation and schedule constraints
 
 ### Highlights
@@ -14,9 +29,9 @@
 - Updated the DAG editor to load connector descriptors, filter schedule types by the selected source set, support dependency schedules, and reset unsupported schedule selections when sources change.
 
 ### Validation
-- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace localhost/etl-go-dev:latest sh -c 'go test ./internal/etl/...'`
+- `CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"; "$CONTAINER_CLI" run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace localhost/etl-go-dev:latest sh -c 'go test ./internal/etl/...'`
 - `npm run build` in `web/`
-- `CONTAINER_CLI=podman E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh`
+- `E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh`
 
 ## [v0.2.1] — Pipeline orchestration cleanup and connection reuse
 

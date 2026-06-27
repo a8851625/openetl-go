@@ -9,13 +9,22 @@
 - Prefer improving reliability, first-run usability, connector certification, plugin contracts, and lightweight operations over adding many unverified connectors.
 - Public claims must match tested maturity. Default semantics are at-least-once; production guidance should rely on business keys, versions, upserts, ReplacingMergeTree-style sinks, or explicit deduplication to absorb replay.
 
+## Roadmap Execution Discipline
+- Treat `docs/ROADMAP.zh.md` as the execution backlog, not as an open brainstorming document. For implementation work, pick an existing roadmap item and drive it to its stated acceptance criteria before expanding scope.
+- Do not broaden the roadmap while implementing a task. New ideas, adjacent connector work, extra UI flows, or larger architectural changes should be captured only when the user explicitly asks for roadmap planning, or when the current task is blocked by a concrete missing prerequisite.
+- Keep work-in-progress narrow: one primary roadmap item at a time. Finish it, verify it, or mark the precise blocker before starting another roadmap item.
+- Roadmap changes must preserve priority. Adding a new item must not silently displace the current top task, current phase goals, or existing acceptance criteria. If priority should change, call that out explicitly and get user direction.
+- When a request touches an area outside the current roadmap, default to the smallest change that satisfies the request. Do not convert it into a new product line, connector family, or broad refactor unless the user explicitly asks.
+- For each completed roadmap item, update evidence rather than only adding new plans: tests run, e2e coverage, docs updated, maturity metadata changed, or known residual gaps.
+- If a task reveals more work than expected, split follow-ups into a bounded backlog section and continue finishing the original deliverable. Avoid repeatedly rewriting acceptance criteria midstream.
+
 ## Commands
 - `make build` is the safest build path: it installs the GoFrame CLI if missing, then runs `gf build -ew` using `hack/config.yaml`.
 - `main.go` imports generated `github.com/a8851625/openetl-go/internal/packed`, and `hack/config.yaml` packs `resource/` into `internal/packed/packed.go` during GoFrame builds. Plain `go build ./...` works if `internal/packed/packed.go` exists (it is committed as a 15-byte stub).
 - Go module is `github.com/a8851625/openetl-go`, with `go 1.24.0` and `toolchain go1.24.13` in `go.mod`.
-- Local Go may be unavailable; use `docker run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c "go test ./..."` for tests.
+- Local Go may be unavailable; use `CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"; "$CONTAINER_CLI" run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c "go test ./..."` for tests.
 - `make test` runs unit tests with `-race`; `make test-quick` runs only `./internal/etl/...`; `make test-integration` requires MySQL + ClickHouse containers.
-- `hack/e2e.sh` builds the app image and validates file→file, MySQL batch→file, and MySQL batch→MySQL via Docker.
+- `hack/e2e.sh` builds the app image and validates file→file, MySQL batch→file, and MySQL batch→MySQL via the detected container runtime (`docker` or `podman`; override with `CONTAINER_CLI`).
 - `hack/e2e-mysql-postgres.sh` validates MySQL batch custom-query/JOIN→PostgreSQL upsert, schema preflight rejection, and checkpoint reset replay absorption.
 - `hack/e2e-cdc-mysql.sh` validates MySQL CDC→MySQL.
 - `hack/e2e-cdc-postgres.sh` validates MySQL CDC→PostgreSQL insert/update/delete and checkpoint stop/restart recovery.
@@ -41,14 +50,15 @@
 - `hack/e2e-snapshot-cdc-crash.sh` validates snapshot+CDC crash recovery during both snapshot and CDC phases.
 - `hack/e2e-storage-mysql.sh` / `hack/e2e-storage-postgres.sh` validate MySQL/PostgreSQL storage backends.
 - `hack/e2e-distributed.sh` validates master-worker distributed dispatch with 2 workers.
-- `make image TAG=<tag>` builds a Docker image through `gf docker`; without `TAG`, it uses the short git SHA and appends `.dirty` when the worktree is dirty. `make image.push` pushes the image.
+- `make image TAG=<tag>` builds a container image through the detected runtime (`docker` or `podman`; override with `CONTAINER_CLI`); without `TAG`, it uses the short git SHA and appends `.dirty` when the worktree is dirty. `make image.push` pushes the image.
 - Frontend source lives in `web/`; run `npm install` and `npm run build` there to regenerate `resource/public`.
 
 ## Runtime Config
-- Main config lives at `manifest/config/config.yaml`; Docker Compose instead mounts `./config.yaml` to `/app/manifest/config/config.yaml`.
+- Main config lives at `manifest/config/config.yaml`; container Compose deployments instead mount `./config.yaml` to `/app/manifest/config/config.yaml`.
+- Runtime config priority is CLI flags > environment variables > config file > built-in defaults. `./openetl-go --help` documents `--config`, directory flags, HTTP/ETL API bind flags, storage, TLS/auth/audit, and master/worker role flags.
 - Pipeline specs are YAML files under `pipes/` or `testdata/pipes-*`; they are loaded into the storage backend on startup. Hot-reload via `fsnotify` watches the `specsDir` for new YAML files.
 - Sources/sinks/transforms register by blank imports in `internal/logic/app/app.go`; extism WASM plugins are loaded from the `plugins` table in the storage backend at startup.
-- ETL API auth is enabled by `ETL_API_TOKEN`; clients may use `X-API-Token` or `Authorization: Bearer <token>`. Audit logs default to `data/audit.log` or `ETL_AUDIT_LOG`.
+- ETL API auth is enabled by `ETL_API_TOKEN`, `etl.apiToken`, or `--api-token`; clients may use `X-API-Token` or `Authorization: Bearer <token>`. Audit logs are persisted in the configured SQL storage backend and can be disabled with `ETL_AUDIT_ENABLED=false`, `etl.audit.enabled: false`, or `--audit-enabled=false`.
 - Runtime operations API includes spec validation (`POST /api/v2/specs/validate`), connection test (`POST /api/v2/connections/test`), transform dry-run (`POST /api/v2/transforms/dry-run`), spec reload (`POST /api/v2/specs/reload`), audit listing (`GET /api/v2/audit?limit=N`), and plugin schema (`GET /api/v2/plugins/schema`).
 - ETL API server uses a long-lived server context (`s.ctx`) for pipeline lifecycle; HTTP request context is NOT passed to `runner.Start()` because it gets cancelled when the HTTP response returns.
 - At-least-once delivery and sink idempotency expectations are documented in `docs/etl-idempotency.md`.
@@ -63,7 +73,7 @@
 ## Architecture Notes
 - Startup path is `main.go` → `internal/cmd/cmd.go`; `cmd.Main` sets up structured logging, starts the ETL server asynchronously, then runs the GoFrame HTTP server.
 - GoFrame server (`:8000`) proxies `/api/v2/*` and `/metrics` to the ETL API server (`:8001`) via `httputil.ReverseProxy` so the production UI works without Vite dev proxy.
-- MySQL sink and PostgreSQL sink use transaction-bounded batch writes (`BEGIN`/`COMMIT`) for atomicity; DLQ writer and audit logger use persistent file handles.
+- MySQL sink and PostgreSQL sink use transaction-bounded batch writes (`BEGIN`/`COMMIT`) for atomicity; DLQ and audit records are persisted through the configured storage backend.
 - Pipeline goroutines have panic recovery; readLoop has exponential backoff on persistent errors (1s→30s cap).
 - HTTP server has body size limit (10MB), panic recovery middleware, constant-time token comparison, ReadTimeout/WriteTimeout/IdleTimeout.
 - Dockerfile runs as non-root user `etl` (uid 1001), has HEALTHCHECK, and `.dockerignore` excludes build artifacts.

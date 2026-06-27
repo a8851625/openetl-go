@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 REDPANDA_CONTAINER="etl-redpanda"
 MYSQL_CONTAINER="etl-mysql-source"
@@ -27,37 +30,37 @@ if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
   echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
 else
   echo "==> Build image"
-  docker build -t "$IMAGE" -f Dockerfile .
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 fi
 
 echo "==> Start Redpanda and MySQL"
-docker compose -f docker-compose.dev.yml up -d redpanda mysql-source
+compose -f docker-compose.dev.yml up -d redpanda mysql-source
 
 echo "==> Wait Redpanda"
 i=0
 while [ "$i" -lt 90 ]; do
-  if docker exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null 2>&1; then break; fi
+  if "$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null 2>&1; then break; fi
   i=$((i + 1)); sleep 2
 done
-docker exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
 
 echo "==> Wait MySQL healthy"
 i=0
 while [ "$i" -lt 60 ]; do
-  status="$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
+  status="$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
   if [ "$status" = "healthy" ]; then break; fi
   i=$((i + 1)); sleep 2
 done
-[ "$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
+[ "$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
 
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
 
 echo "==> Prepare Kafka topics"
-docker exec "$REDPANDA_CONTAINER" rpk topic delete "$RAW_TOPIC" "$ODS_TOPIC" --brokers localhost:9092 >/dev/null 2>&1 || true
-docker exec "$REDPANDA_CONTAINER" rpk topic create "$RAW_TOPIC" "$ODS_TOPIC" --brokers localhost:9092 >/dev/null
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic delete "$RAW_TOPIC" "$ODS_TOPIC" --brokers localhost:9092 >/dev/null 2>&1 || true
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic create "$RAW_TOPIC" "$ODS_TOPIC" --brokers localhost:9092 >/dev/null
 
 echo "==> Prepare MySQL dimension table"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
 CREATE TABLE IF NOT EXISTS dim_devices (
   device_id VARCHAR(64) PRIMARY KEY,
   model VARCHAR(64),
@@ -76,7 +79,7 @@ chmod -R a+rwX data-kafka-raw-ods
 chmod a+rwX logs
 
 echo "==> Run Kafka raw -> ODS Kafka pipeline"
-docker run -d \
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8020:8001 \
@@ -98,7 +101,7 @@ while [ "$i" -lt 60 ]; do
 done
 
 echo "==> Produce raw protocol messages"
-cat <<'EOF' | docker exec -i "$REDPANDA_CONTAINER" rpk topic produce "$RAW_TOPIC" --brokers localhost:9092 >/dev/null
+cat <<'EOF' | "$CONTAINER_CLI" exec -i "$REDPANDA_CONTAINER" rpk topic produce "$RAW_TOPIC" --brokers localhost:9092 >/dev/null
 device=dev-1;ts=2026-06-26T10:00:00Z;events=speed:12|soc:80
 device=dev-missing;ts=2026-06-26T10:01:00Z;events=speed:7
 bad-payload-without-required-fields
@@ -115,7 +118,7 @@ body="$(curl -fsS http://127.0.0.1:8020/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep '"name":"kafka-raw-to-ods-kafka"' | grep '"records_written":2'
 
-docker exec "$REDPANDA_CONTAINER" rpk topic consume "$ODS_TOPIC" -n 2 --brokers localhost:9092 > data-kafka-raw-ods/ods-first.jsonl
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic consume "$ODS_TOPIC" -n 2 --brokers localhost:9092 > data-kafka-raw-ods/ods-first.jsonl
 grep 'metric_type.*speed' data-kafka-raw-ods/ods-first.jsonl
 grep 'metric_type.*soc' data-kafka-raw-ods/ods-first.jsonl
 grep 'device_region.*east' data-kafka-raw-ods/ods-first.jsonl
@@ -164,7 +167,7 @@ body="$(curl -fsS http://127.0.0.1:8020/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep '"name":"kafka-raw-to-ods-kafka"' | grep '"records_written":2'
 
-docker exec "$REDPANDA_CONTAINER" rpk topic consume "$ODS_TOPIC" -n 4 --brokers localhost:9092 > data-kafka-raw-ods/ods-replayed.jsonl
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic consume "$ODS_TOPIC" -n 4 --brokers localhost:9092 > data-kafka-raw-ods/ods-replayed.jsonl
 speed_count="$(grep -c '"key": "dev-1:2026-06-26T10:00:00Z:speed"' data-kafka-raw-ods/ods-replayed.jsonl | tr -d '[:space:]')"
 soc_count="$(grep -c '"key": "dev-1:2026-06-26T10:00:00Z:soc"' data-kafka-raw-ods/ods-replayed.jsonl | tr -d '[:space:]')"
 test "$speed_count" = "2"

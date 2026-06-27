@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 APP_CONTAINER="etl-openetl-go-s3"
 PIPELINE="file-to-s3"
@@ -20,24 +23,24 @@ wait_http() {
 }
 
 finished_count() {
-  docker logs "$APP_CONTAINER" 2>&1 | grep -c "\[$PIPELINE\] Pipeline finished. written=3 read=3 failed=0" || true
+  "$CONTAINER_CLI" logs "$APP_CONTAINER" 2>&1 | grep -c "\[$PIPELINE\] Pipeline finished. written=3 read=3 failed=0" || true
 }
 
 if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
   echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
 else
   echo "==> Build image"
-  docker build -t "$IMAGE" -f Dockerfile .
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 fi
 
 echo "==> Start MinIO"
-docker compose -f docker-compose.dev.yml up -d minio
+compose -f docker-compose.dev.yml up -d minio
 
 echo "==> Wait MinIO"
 wait_http "http://127.0.0.1:9001/minio/health/live"
 
 echo "==> Reset MinIO bucket"
-docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc rb --force local/etl-bucket >/dev/null 2>&1 || true"
+"$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc rb --force local/etl-bucket >/dev/null 2>&1 || true"
 
 echo "==> Reset ETL data"
 rm -rf data-s3
@@ -46,8 +49,8 @@ chmod -R a+rwX data-s3
 chmod a+rwX logs
 
 echo "==> Run S3 pipeline"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8007:8001 \
@@ -71,11 +74,11 @@ echo "$body"
 echo "$body" | grep '"records_written":3'
 
 echo "==> Verify S3 object"
-first_object="$(docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | sort | head -n 1")"
+first_object="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | sort | head -n 1")"
 test "$first_object" != ""
-object_count="$(docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | wc -l" | tr -d '[:space:]')"
+object_count="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | wc -l" | tr -d '[:space:]')"
 test "$object_count" = "1"
-docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc cat \"$first_object\"" > data-s3/object.jsonl
+"$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc cat \"$first_object\"" > data-s3/object.jsonl
 grep 'Ada' data-s3/object.jsonl
 grep 'Grace' data-s3/object.jsonl
 grep 'Hopper' data-s3/object.jsonl
@@ -98,9 +101,9 @@ body="$(curl -fsS http://127.0.0.1:8007/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep "\"name\":\"$PIPELINE\""
 
-second_object="$(docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | sort | head -n 1")"
+second_object="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | sort | head -n 1")"
 test "$second_object" = "$first_object"
-object_count="$(docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | wc -l" | tr -d '[:space:]')"
+object_count="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | wc -l" | tr -d '[:space:]')"
 test "$object_count" = "1"
 
 echo "S3 MinIO E2E passed"

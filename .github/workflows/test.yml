@@ -73,11 +73,13 @@ jobs:
             sleep 1
           done
 
-          docker ps -a
-          cid="$(docker ps -aq --filter ancestor=clickhouse/clickhouse-server:24.3-alpine | head -n 1)"
+          . ./hack/container-cli.sh
+          detect_container_cli
+          "$CONTAINER_CLI" ps -a
+          cid="$("$CONTAINER_CLI" ps -aq --filter ancestor=clickhouse/clickhouse-server:24.3-alpine | head -n 1)"
           if [ -n "$cid" ]; then
-            docker logs "$cid" || true
-            docker exec "$cid" sh -c 'tail -200 /var/log/clickhouse-server/clickhouse-server.err.log 2>/dev/null || true'
+            "$CONTAINER_CLI" logs "$cid" || true
+            "$CONTAINER_CLI" exec "$cid" sh -c 'tail -200 /var/log/clickhouse-server/clickhouse-server.err.log 2>/dev/null || true'
           fi
           exit 1
       - name: Run integration tests

@@ -4,6 +4,8 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+
 IMAGE="openetl-go-etl:dev"
 DORIS_FE_CONTAINER="etl-doris-fe"
 DORIS_BE_CONTAINER="etl-doris-be"
@@ -16,34 +18,45 @@ DORIS_BE_IMAGE="${DORIS_BE_IMAGE:-docker.io/apache/doris:be-$DORIS_VERSION}"
 PIPE_DIR="$ROOT_DIR/data-doris/pipes"
 API_PORT=8021
 MYSQL_DB="dzh3136_go"
-CONTAINER_CLI="${CONTAINER_CLI:-}"
 
-detect_container_cli() {
-  if [ -n "$CONTAINER_CLI" ]; then
-    if ! command -v "$CONTAINER_CLI" >/dev/null 2>&1; then
-      echo "$CONTAINER_CLI is not available" >&2
-      exit 2
-    fi
+start_mysql_source() {
+  if has_compose; then
+    compose -f docker-compose.dev.yml up -d mysql-source
     return
   fi
-  if command -v docker >/dev/null 2>&1; then
-    CONTAINER_CLI=docker
+  echo "==> $CONTAINER_CLI compose unavailable; starting MySQL source directly"
+  if "$CONTAINER_CLI" container inspect "$MYSQL_CONTAINER" >/dev/null 2>&1; then
+    "$CONTAINER_CLI" start "$MYSQL_CONTAINER" >/dev/null
     return
   fi
-  if command -v podman >/dev/null 2>&1; then
-    CONTAINER_CLI=podman
-    return
+  if ! "$CONTAINER_CLI" image inspect docker.io/library/mysql:8.0 >/dev/null 2>&1; then
+    "$CONTAINER_CLI" pull docker.io/library/mysql:8.0
   fi
-  echo "docker or podman is required for Doris e2e" >&2
-  exit 2
-}
-
-compose() {
-  if ! "$CONTAINER_CLI" compose version >/dev/null 2>&1; then
-    echo "$CONTAINER_CLI compose is required for Doris e2e" >&2
-    exit 2
-  fi
-  "$CONTAINER_CLI" compose "$@"
+  "$CONTAINER_CLI" run -d \
+    --add-host host.docker.internal:host-gateway \
+    --name "$MYSQL_CONTAINER" \
+    -e MYSQL_ROOT_PASSWORD=root123456 \
+    -e MYSQL_DATABASE="$MYSQL_DB" \
+    -e MYSQL_USER=sync_user \
+    -e MYSQL_PASSWORD=sync_password_123 \
+    -e TZ=Asia/Shanghai \
+    -p 13306:3306 \
+    -v "$ROOT_DIR/testdata/mysql/init:/docker-entrypoint-initdb.d:ro" \
+    -v "$ROOT_DIR/testdata/mysql/conf.d:/etc/mysql/conf.d:ro" \
+    --health-cmd='mysql -h localhost -u root -proot123456 -e "SELECT 1"' \
+    --health-interval=5s \
+    --health-timeout=5s \
+    --health-retries=30 \
+    --health-start-period=30s \
+    docker.io/library/mysql:8.0 \
+    --server-id=1 \
+    --log-bin=mysql-bin \
+    --binlog-format=ROW \
+    --binlog-row-image=FULL \
+    --gtid-mode=ON \
+    --enforce-gtid-consistency=ON \
+    --binlog-expire-logs-seconds=604800 \
+    --default-authentication-plugin=mysql_native_password >/dev/null
 }
 
 wait_http() {
@@ -141,7 +154,7 @@ else
 fi
 
 echo "==> Start MySQL source"
-compose -f docker-compose.dev.yml up -d mysql-source
+start_mysql_source
 i=0
 while [ "$i" -lt 60 ]; do
   status="$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"

@@ -52,6 +52,19 @@ type ScheduleConfig = {
   depends_on?: string[];
 };
 
+type ValidateResult = {
+  valid?: boolean;
+  warnings?: string[];
+  errors?: string[];
+  preflight?: {
+    passed?: boolean;
+    summary?: string;
+    issues?: { level: string; check: string; message: string; remediation?: string }[];
+    field_issues?: { level: string; field: string; check: string; message: string; remediation?: string }[];
+    ddl_preview?: { dialect: string; table: string; statements?: string[]; warnings?: string[] };
+  };
+};
+
 // ── Visual Constants ──────────────────────────────────────────────────
 
 const KIND_STYLES: Record<string, { color: string; bg: string; border: string; icon: string }> = {
@@ -286,6 +299,8 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [workerLabels, setWorkerLabels] = useState('');
   const [schedule, setSchedule] = useState<ScheduleConfig>({ type: 'streaming' });
   const [yamlOutput, setYamlOutput] = useState('');
+  const [validateResult, setValidateResult] = useState<ValidateResult | null>(null);
+  const [validateError, setValidateError] = useState('');
   // Drawer: 'schedule' | 'hooks' | 'advanced' | 'ai' | 'yaml' | null
   const [drawerTab, setDrawerTab] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -347,30 +362,81 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       .catch(() => setDescriptors([]));
   }, []);
 
+  const loadSpecIntoCanvas = useCallback((spec: any) => {
+    if (!spec || typeof spec !== 'object') return;
+    setPipelineName(spec.name || 'my-pipeline');
+    setTags(Array.isArray(spec.tags) ? spec.tags.join(', ') : '');
+    if (spec.schedule?.type) setSchedule(spec.schedule);
+    if (spec.execution) {
+      setBatchSize(Number(spec.execution.batch_size) || batchSize);
+      setFlushIntervalMs(Number(spec.execution.flush_interval_ms) || flushIntervalMs);
+      setCheckpointIntervalSec(Number(spec.execution.checkpoint_interval_sec) || checkpointIntervalSec);
+      setBackpressureBuffer(Number(spec.execution.backpressure_buffer) || backpressureBuffer);
+    } else {
+      setBatchSize(Number(spec.batch_size) || batchSize);
+      setFlushIntervalMs(Number(spec.flush_interval_ms) || flushIntervalMs);
+      setCheckpointIntervalSec(Number(spec.checkpoint_interval_sec) || checkpointIntervalSec);
+      setBackpressureBuffer(Number(spec.backpressure_buffer) || backpressureBuffer);
+    }
+
+    if (spec.dag?.nodes) {
+      const nextNodes: Node<DAGNodeData>[] = (spec.dag.nodes || []).map((n: any, i: number) => ({
+        id: n.id || `${n.kind || 'node'}-${i + 1}`,
+        type: 'pipelineNode',
+        position: { x: Number(n.x) || 220 + i * 40, y: Number(n.y) || 80 + i * 100 },
+        data: {
+          kind: n.kind || 'transform',
+          plugin: n.plugin || n.kind || 'identity',
+          connection: n.connection || n.connection_ref || '',
+          config: n.config || {},
+          label: n.id || `${n.kind || 'node'}-${i + 1}`,
+        },
+      }));
+      const nextEdges: Edge[] = (spec.dag.edges || []).map((e: any, i: number) => ({
+        id: e.id || `e-${i}`,
+        source: e.from || e.source,
+        target: e.to || e.target,
+        animated: true,
+        markerEnd: { type: MarkerType.ArrowClosed },
+      })).filter((e: Edge) => e.source && e.target);
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      setSelectedNodeId(nextNodes[0]?.id || null);
+      setValidateResult(null);
+      setValidateError('');
+      return;
+    }
+
+    const nextNodes: Node<DAGNodeData>[] = [];
+    const nextEdges: Edge[] = [];
+    if (spec.source?.type) {
+      nextNodes.push({ id: 'source-1', type: 'pipelineNode', position: { x: 250, y: 50 }, data: { kind: 'source', plugin: spec.source.type, connection: spec.source.connection || spec.source.connection_ref || '', config: spec.source.config || {}, label: 'source-1' } });
+    }
+    const tfms = spec.transforms || [];
+    tfms.forEach((tf: any, i: number) => {
+      nextNodes.push({ id: `transform-${i + 1}`, type: 'pipelineNode', position: { x: 250, y: 150 + i * 100 }, data: { kind: 'transform', plugin: tf.type, connection: tf.connection || tf.connection_ref || '', config: tf.config || {}, label: `transform-${i + 1}` } });
+    });
+    if (spec.sink?.type) {
+      const lastY = 150 + tfms.length * 100;
+      nextNodes.push({ id: 'sink-1', type: 'pipelineNode', position: { x: 250, y: lastY }, data: { kind: 'sink', plugin: spec.sink.type, connection: spec.sink.connection || spec.sink.connection_ref || '', config: spec.sink.config || {}, label: 'sink-1' } });
+    }
+    for (let i = 0; i < nextNodes.length - 1; i++) {
+      nextEdges.push({ id: `e-${i}`, source: nextNodes[i].id, target: nextNodes[i + 1].id, animated: true, markerEnd: { type: MarkerType.ArrowClosed } });
+    }
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setSelectedNodeId(nextNodes[0]?.id || null);
+    setValidateResult(null);
+    setValidateError('');
+  }, [backpressureBuffer, batchSize, checkpointIntervalSec, flushIntervalMs, setEdges, setNodes]);
+
   // Load pipeline when editTarget changes
   useEffect(() => {
     if (!editTarget) return;
     apiGet<{ spec: any }>(`/api/v2/pipelines/${editTarget}/spec`).then((res) => {
-      if (res.spec) {
-        const spec = res.spec;
-        setPipelineName(spec.name);
-        const newNodes: Node<DAGNodeData>[] = [];
-        const newEdges: Edge[] = [];
-        newNodes.push({ id: 'source-1', type: 'pipelineNode', position: { x: 250, y: 50 }, data: { kind: 'source', plugin: spec.source.type, connection: spec.source.connection || spec.source.connection_ref || '', config: spec.source.config || {}, label: 'source-1' } });
-        const tfms = spec.transforms || [];
-        tfms.forEach((tf: any, i: number) => {
-          newNodes.push({ id: `transform-${i + 1}`, type: 'pipelineNode', position: { x: 250, y: 150 + i * 100 }, data: { kind: 'transform', plugin: tf.type, connection: tf.connection || tf.connection_ref || '', config: tf.config || {}, label: `transform-${i + 1}` } });
-        });
-        const lastY = 150 + tfms.length * 100;
-        newNodes.push({ id: 'sink-1', type: 'pipelineNode', position: { x: 250, y: lastY }, data: { kind: 'sink', plugin: spec.sink?.type || 'file_sink', connection: spec.sink?.connection || spec.sink?.connection_ref || '', config: spec.sink?.config || {}, label: 'sink-1' } });
-        for (let i = 0; i < newNodes.length - 1; i++) {
-          newEdges.push({ id: `e-${i}`, source: newNodes[i].id, target: newNodes[i + 1].id, animated: true, markerEnd: { type: MarkerType.ArrowClosed } });
-        }
-        setNodes(newNodes);
-        setEdges(newEdges);
-      }
+      if (res.spec) loadSpecIntoCanvas(res.spec);
     }).catch(() => {});
-  }, [editTarget]);
+  }, [editTarget, loadSpecIntoCanvas]);
 
   const onConnect = useCallback((params: Connection) => {
     setEdges((eds) => addEdge({
@@ -529,6 +595,33 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     return spec;
   };
 
+  const syncYamlToCanvas = () => {
+    try {
+      const parsed = YAML.parse(yamlOutput);
+      loadSpecIntoCanvas(parsed);
+      setValidateError('');
+    } catch (e) {
+      setValidateError(`YAML parse error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const validateCurrentSpec = async (spec = { ...buildSpec(), name: pipelineName.trim() || pipelineName }) => {
+    setValidateError('');
+    setValidateResult(null);
+    try {
+      const res = await apiPost('/api/v2/specs/validate', { spec });
+      setValidateResult(res as ValidateResult);
+      if ((res as ValidateResult).valid === false) {
+        throw new Error(((res as ValidateResult).errors || (res as ValidateResult).warnings || ['validation failed']).join('\n'));
+      }
+      return res as ValidateResult;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setValidateError(message);
+      throw e;
+    }
+  };
+
   // Build hooks spec from state, filtering disabled hooks
   const buildHooksSpec = (): any | undefined => {
     const result: any = {};
@@ -620,7 +713,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     } else {
       // Create mode: POST
       onAction(`${t('dag.createPipeline')}: ${pipelineName}`, () =>
-        apiPost('/api/v2/specs/validate', { spec }).then(() =>
+        validateCurrentSpec(spec).then(() =>
           apiPost('/api/v2/pipelines', { spec }, 'POST')
         )
       );
@@ -697,6 +790,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
           <button className={`btn btn-sm px-2 ${drawerTab === 'advanced' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('advanced')} title={t('drawer.advanced')}>⚙️</button>
           <button className={`btn btn-sm px-2 ${drawerTab === 'ai' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('ai')} title={t('drawer.ai')}>🤖</button>
           <button className="btn btn-secondary btn-sm px-2" onClick={() => { exportYaml(); setDrawerTab('yaml'); }} title={t('dag.exportYaml')}>📄</button>
+          <button className="btn btn-secondary btn-sm px-2" onClick={() => validateCurrentSpec().catch(() => {})} title="Validate + preflight" data-testid="dag-validate-preflight">✓</button>
           <button className="btn btn-secondary btn-sm px-2" onClick={testNodeConnection} title={t('dag.testConnection')} disabled={!selectedNode}>🔌</button>
         </div>
         {testResult && (
@@ -713,6 +807,28 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
           )}
         </div>
       </div>
+
+      {(validateResult || validateError) && (
+        <div data-testid="dag-validate-result" className={`rounded-lg border px-3 py-2 text-xs ${validateError || validateResult?.valid === false ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+          <div className="font-semibold">{validateError || validateResult?.valid === false ? 'Validation failed' : 'Validation passed'} · {validateResult?.preflight?.summary || 'spec checked'}</div>
+          {validateError && <div className="mt-1 whitespace-pre-wrap">{validateError}</div>}
+          {(validateResult?.warnings || validateResult?.errors || []).map((msg, i) => <div key={i} className="mt-1">{msg}</div>)}
+          {(validateResult?.preflight?.issues || []).map((issue, i) => (
+            <div key={`issue-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+              <div className="font-semibold">{issue.level} · {issue.check}</div>
+              <div>{issue.message}</div>
+              {issue.remediation && <div className="mt-1 text-slate-600">Fix: {issue.remediation}</div>}
+            </div>
+          ))}
+          {(validateResult?.preflight?.field_issues || []).map((issue, i) => (
+            <div key={`field-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+              <div className="font-semibold">{issue.field} · {issue.check}</div>
+              <div>{issue.message}</div>
+              {issue.remediation && <div className="mt-1 text-slate-600">Fix: {issue.remediation}</div>}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Main Area: Canvas + Drawer ──────────────────────────────── */}
       <div className="flex min-h-0 flex-1 gap-2">
@@ -976,8 +1092,11 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
               {/* YAML Output */}
               {drawerTab === 'yaml' && (
                 <div className="space-y-2">
-                  <button className="btn btn-ghost btn-sm w-full" onClick={() => navigator.clipboard.writeText(yamlOutput)}>📋 {t('design.copy')}</button>
-                  <textarea className="h-96 w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-xs" value={yamlOutput} readOnly />
+                  <div className="grid grid-cols-2 gap-2">
+                    <button className="btn btn-ghost btn-sm w-full" onClick={() => navigator.clipboard.writeText(yamlOutput)}>📋 {t('design.copy')}</button>
+                    <button data-testid="dag-sync-yaml" className="btn btn-secondary btn-sm w-full" onClick={syncYamlToCanvas}>Sync YAML to canvas</button>
+                  </div>
+                  <textarea data-testid="dag-yaml" className="h-96 w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-xs" value={yamlOutput} onChange={(e) => setYamlOutput(e.target.value)} />
                 </div>
               )}
             </div>

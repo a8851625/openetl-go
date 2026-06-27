@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 MYSQL_CONTAINER="etl-mysql-source"
 CH_CONTAINER="etl-clickhouse"
@@ -29,7 +32,7 @@ wait_http() {
 wait_mysql_healthy() {
   i=0
   while [ "$i" -lt 90 ]; do
-    status="$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
+    status="$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
     if [ "$status" = "healthy" ]; then
       return 0
     fi
@@ -64,8 +67,8 @@ wait_checkpoint_cdc() {
 }
 
 run_app() {
-  docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-  docker run -d \
+  "$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+  "$CONTAINER_CLI" run -d \
     --add-host host.docker.internal:host-gateway \
     --name "$APP_CONTAINER" \
     -p "$APP_PORT:8001" \
@@ -80,7 +83,7 @@ run_app() {
 }
 
 ch_query() {
-  docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "$1" 2>/dev/null | tr -d '[:space:]'
+  "$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "$1" 2>/dev/null | tr -d '[:space:]'
 }
 
 wait_ch_value() {
@@ -104,21 +107,21 @@ if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
   echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
 else
   echo "==> Build image"
-  docker build -t "$IMAGE" -f Dockerfile .
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 fi
 
 echo "==> Start MySQL and ClickHouse"
-docker compose -f docker-compose.dev.yml up -d mysql-source clickhouse
+compose -f docker-compose.dev.yml up -d mysql-source clickhouse
 
 echo "==> Wait MySQL healthy"
 wait_mysql_healthy
-[ "$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
+[ "$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
 
 echo "==> Wait ClickHouse HTTP"
 wait_http "http://127.0.0.1:8123/ping"
 
 echo "==> Prepare MySQL source table"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
 DROP TABLE IF EXISTS dzh3136_go.$TABLE;
 CREATE TABLE dzh3136_go.$TABLE (
   id INT PRIMARY KEY,
@@ -136,7 +139,7 @@ INSERT INTO dzh3136_go.$TABLE (id, name, status, amount) VALUES
 "
 
 echo "==> Prepare ClickHouse target"
-docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --multiquery "
+"$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --multiquery "
 CREATE DATABASE IF NOT EXISTS dzh3136_go;
 DROP TABLE IF EXISTS dzh3136_go.$TABLE;
 "
@@ -155,7 +158,7 @@ wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL" "5"
 wait_checkpoint_cdc
 
 echo "==> Verify CDC update/insert/delete"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
 UPDATE $TABLE SET amount = 222.22 WHERE id = 2;
 DELETE FROM $TABLE WHERE id = 3;
 INSERT INTO $TABLE (id, name, status, amount) VALUES (6, 'CDC CH 6', 'active', 66.66);
@@ -166,7 +169,7 @@ wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL WHERE id = 6 AND amou
 wait_checkpoint_cdc
 
 echo "==> Verify schema drift add-column"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
 ALTER TABLE $TABLE ADD COLUMN loyalty VARCHAR(32);
 INSERT INTO $TABLE (id, name, status, amount, loyalty) VALUES (7, 'CDC CH 7', 'active', 77.77, 'gold');
 "
@@ -175,9 +178,9 @@ wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL WHERE id = 7 AND loya
 wait_checkpoint_cdc
 
 echo "==> Verify restart recovery from checkpoint"
-docker kill "$APP_CONTAINER" >/dev/null
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
+"$CONTAINER_CLI" kill "$APP_CONTAINER" >/dev/null
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
 INSERT INTO $TABLE (id, name, status, amount, loyalty) VALUES (8, 'Restart CH 8', 'active', 88.88, 'silver');
 "
 run_app
@@ -205,8 +208,8 @@ wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL WHERE id = 1" "1"
 wait_checkpoint_cdc
 
 echo "==> Verify ClickHouse outage routes to DLQ and replay succeeds"
-docker compose -f docker-compose.dev.yml stop clickhouse >/dev/null
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
+compose -f docker-compose.dev.yml stop clickhouse >/dev/null
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
 INSERT INTO $TABLE (id, name, status, amount, loyalty) VALUES (9001, 'DLQ CH 9001', 'active', 900.10, 'replay');
 "
 i=0
@@ -226,7 +229,7 @@ dlq_id="$(echo "$dlq_body" | grep -o '"id":[0-9][0-9]*' | head -n1 | sed 's/[^0-
 test "$dlq_id" != ""
 
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/stop" >/dev/null || true
-docker compose -f docker-compose.dev.yml up -d clickhouse
+compose -f docker-compose.dev.yml up -d clickhouse
 wait_http "http://127.0.0.1:8123/ping"
 replay_body="$(curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/dlq/$PIPELINE/$dlq_id/replay")"
 echo "$replay_body"
@@ -243,6 +246,6 @@ body="$(curl -fsS "http://127.0.0.1:$APP_PORT/api/v2/pipelines")"
 echo "$body"
 echo "$body" | grep "\"name\":\"$PIPELINE\""
 
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
 
 echo "Snapshot+CDC ClickHouse E2E passed"

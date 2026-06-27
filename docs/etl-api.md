@@ -239,7 +239,7 @@ Response:
 
 ## Audit Events
 
-Returns recent mutation events written to `ETL_AUDIT_LOG` or the default `data/audit.log`.
+Returns recent mutation events persisted in the configured SQL storage backend. Audit logging can be disabled with `ETL_AUDIT_ENABLED=false`, `etl.audit.enabled: false`, or `--audit-enabled=false`.
 
 ```sh
 curl -H "X-API-Token: $ETL_API_TOKEN" \

@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 REDPANDA_CONTAINER="etl-redpanda"
 KAFKA_SINK_APP="etl-openetl-go-kafka-sink"
@@ -21,22 +24,22 @@ wait_http() {
 }
 
 echo "==> Build image"
-docker build -t "$IMAGE" -f Dockerfile .
+"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start Redpanda"
-docker compose -f docker-compose.dev.yml up -d redpanda
+compose -f docker-compose.dev.yml up -d redpanda
 
 echo "==> Wait Redpanda"
 i=0
 while [ "$i" -lt 90 ]; do
-  if docker exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null 2>&1; then break; fi
+  if "$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null 2>&1; then break; fi
   i=$((i + 1)); sleep 2
 done
-docker exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
 
 echo "==> Prepare topics"
-docker exec "$REDPANDA_CONTAINER" rpk topic delete etl-sink-topic etl-source-topic >/dev/null 2>&1 || true
-docker exec "$REDPANDA_CONTAINER" rpk topic create etl-sink-topic etl-source-topic --brokers localhost:9092 >/dev/null
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic delete etl-sink-topic etl-source-topic >/dev/null 2>&1 || true
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic create etl-sink-topic etl-source-topic --brokers localhost:9092 >/dev/null
 
 echo "==> Reset Kafka sink data"
 rm -rf data-kafka-sink data-kafka-source
@@ -45,8 +48,8 @@ chmod -R a+rwX data-kafka-sink data-kafka-source
 chmod a+rwX logs
 
 echo "==> Run file->Kafka pipeline"
-docker rm -f "$KAFKA_SINK_APP" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$KAFKA_SINK_APP" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$KAFKA_SINK_APP" \
   -p 8009:8001 \
@@ -68,14 +71,14 @@ echo "$body"
 echo "$body" | grep '"records_written":3'
 
 echo "==> Verify Kafka sink topic"
-docker exec "$REDPANDA_CONTAINER" rpk topic consume etl-sink-topic -n 3 --brokers localhost:9092 > data-kafka-sink/messages.jsonl
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic consume etl-sink-topic -n 3 --brokers localhost:9092 > data-kafka-sink/messages.jsonl
 grep 'Ada' data-kafka-sink/messages.jsonl
 grep 'Alan' data-kafka-sink/messages.jsonl
 grep 'Grace' data-kafka-sink/messages.jsonl
 
 echo "==> Run Kafka->file pipeline"
-docker rm -f "$KAFKA_SOURCE_APP" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$KAFKA_SOURCE_APP" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$KAFKA_SOURCE_APP" \
   -p 8010:8001 \
@@ -87,7 +90,7 @@ docker run -d \
 
 wait_http "http://127.0.0.1:8010/api/v2/health"
 sleep 3
-printf '%s\n%s\n' '{"id":101,"name":"Kafka Alice"}' '{"id":102,"name":"Kafka Bob"}' | docker exec -i "$REDPANDA_CONTAINER" rpk topic produce etl-source-topic --brokers localhost:9092 >/dev/null
+printf '%s\n%s\n' '{"id":101,"name":"Kafka Alice"}' '{"id":102,"name":"Kafka Bob"}' | "$CONTAINER_CLI" exec -i "$REDPANDA_CONTAINER" rpk topic produce etl-source-topic --brokers localhost:9092 >/dev/null
 
 i=0
 while [ "$i" -lt 60 ]; do

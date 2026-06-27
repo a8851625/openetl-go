@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 APP_CONTAINER="etl-openetl-go-auth"
 TOKEN="test-token-123"
@@ -20,8 +23,8 @@ wait_http() {
 }
 
 echo "==> Build image"
-if ! docker build -t "$IMAGE" -f Dockerfile .; then
-  docker image inspect "$IMAGE" >/dev/null
+if ! "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .; then
+  "$CONTAINER_CLI" image inspect "$IMAGE" >/dev/null
   echo "==> Build failed; reusing existing $IMAGE"
 fi
 
@@ -32,8 +35,8 @@ chmod -R a+rwX data-auth
 chmod a+rwX logs
 
 echo "==> Run auth-enabled pipeline"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8011:8001 \

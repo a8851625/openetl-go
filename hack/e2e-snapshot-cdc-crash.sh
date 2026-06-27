@@ -4,6 +4,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 MYSQL_CONTAINER="etl-mysql-source"
 APP_CONTAINER="etl-openetl-go-snap-cdc-crash"
@@ -20,26 +23,26 @@ wait_http() {
 }
 
 target_count() {
-  docker exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash;" 2>/dev/null | tr -d '[:space:]'
+  "$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash;" 2>/dev/null | tr -d '[:space:]'
 }
 
 echo "==> Build image"
-docker build -t "$IMAGE" -f Dockerfile .
+"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start MySQL source"
-docker compose -f docker-compose.dev.yml up -d mysql-source
+compose -f docker-compose.dev.yml up -d mysql-source
 
 echo "==> Wait MySQL healthy"
 i=0
 while [ "$i" -lt 60 ]; do
-  status="$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
+  status="$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
   if [ "$status" = "healthy" ]; then break; fi
   i=$((i + 1)); sleep 2
 done
-[ "$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
+[ "$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
 
 echo "==> Prepare snapshot+CDC crash tables"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
 CREATE DATABASE IF NOT EXISTS dzh3136_target;
 DROP TABLE IF EXISTS dzh3136_go.snap_cdc_crash;
 CREATE TABLE dzh3136_go.snap_cdc_crash (id INT PRIMARY KEY, name VARCHAR(255), status VARCHAR(50), amount DECIMAL(10,2));
@@ -105,8 +108,8 @@ dlq:
 SPEC
 
 echo "==> Phase 1: Run and KILL during snapshot"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8016:8001 \
@@ -131,14 +134,14 @@ test "$partial" -gt 5
 test "$partial" -lt "$TOTAL"
 
 echo "==> KILLING during snapshot (target count=$partial)"
-docker kill "$APP_CONTAINER" >/dev/null
+"$CONTAINER_CLI" kill "$APP_CONTAINER" >/dev/null
 
 test -f data-snap-cdc-crash/etl.db
 echo "==> Checkpoint persisted to SQLite storage"
 
 echo "==> Phase 2: Restart - should resume snapshot from checkpoint"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8016:8001 \
@@ -162,21 +165,21 @@ echo "==> After restart snapshot: $final / $TOTAL"
 test "$final" -ge "$TOTAL"
 
 echo "==> Phase 3: Emit CDC changes and KILL during CDC"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO snap_cdc_crash (id, name, status, amount) VALUES (9001, 'CDC Crash Alice', 'active', 500.00);"
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO snap_cdc_crash (id, name, status, amount) VALUES (9001, 'CDC Crash Alice', 'active', 500.00);"
 
 i=0
 while [ "$i" -lt 60 ]; do
-  cdc1="$(docker exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash WHERE id=9001;" 2>/dev/null | tr -d '[:space:]')"
+  cdc1="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash WHERE id=9001;" 2>/dev/null | tr -d '[:space:]')"
   if [ "$cdc1" = "1" ]; then break; fi
   i=$((i + 1)); sleep 1
 done
 test "$cdc1" = "1"
 echo "==> CDC event replicated, killing during CDC phase"
-docker kill "$APP_CONTAINER" >/dev/null
+"$CONTAINER_CLI" kill "$APP_CONTAINER" >/dev/null
 
 echo "==> Phase 4: Restart CDC with checkpoint"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8016:8001 \
@@ -190,11 +193,11 @@ wait_http "http://127.0.0.1:8016/api/v2/health"
 sleep 2
 
 echo "==> Emit second CDC event after restart"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO snap_cdc_crash (id, name, status, amount) VALUES (9002, 'CDC Crash Bob', 'active', 600.00); UPDATE snap_cdc_crash SET amount=999.00 WHERE id=9002;"
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO snap_cdc_crash (id, name, status, amount) VALUES (9002, 'CDC Crash Bob', 'active', 600.00); UPDATE snap_cdc_crash SET amount=999.00 WHERE id=9002;"
 
 i=0
 while [ "$i" -lt 60 ]; do
-  cdc2="$(docker exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash WHERE id=9002 AND amount=999.00;" 2>/dev/null | tr -d '[:space:]')"
+  cdc2="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.snap_cdc_crash WHERE id=9002 AND amount=999.00;" 2>/dev/null | tr -d '[:space:]')"
   if [ "$cdc2" = "1" ]; then break; fi
   i=$((i + 1)); sleep 1
 done
@@ -208,6 +211,6 @@ body="$(curl -fsS http://127.0.0.1:8016/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep '"name":"snap-cdc-crash-recovery"'
 
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
 
 echo "Snapshot+CDC crash recovery E2E passed"

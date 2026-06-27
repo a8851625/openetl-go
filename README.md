@@ -65,7 +65,8 @@ Poor fits:
 Run the bundled MySQL CDC to ClickHouse demo:
 
 ```bash
-docker compose -f docker-compose.quickstart.yml up -d
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" compose -f docker-compose.quickstart.yml up -d
 ```
 
 Then open:
@@ -165,7 +166,8 @@ Download a release archive from [Releases](../../releases), or run the container
 image:
 
 ```bash
-docker run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
   -v "$PWD/pipes:/app/pipes" \
   ghcr.io/a8851625/openetl-go:latest
 ```
@@ -199,11 +201,15 @@ Optional runtime builds:
 ## Runtime Model
 
 - Config: [`manifest/config/config.yaml`](./manifest/config/config.yaml).
+- Startup flags: run `./openetl-go --help` for `--config`, local directory
+  flags, bind host/port, storage, TLS/auth/audit, and master/worker role
+  options. Priority is CLI flags > environment variables > config file >
+  built-in defaults.
 - Specs: YAML files under `pipes/` or `etl.specsDir`, hot-reloaded by file watch.
 - Storage: SQLite by default; MySQL/PostgreSQL for shared state and distributed
   mode.
-- API auth: set `ETL_API_TOKEN`, then use `X-API-Token` or
-  `Authorization: Bearer <token>`.
+- API auth: set `ETL_API_TOKEN`, `etl.apiToken`, or `--api-token`, then use
+  `X-API-Token` or `Authorization: Bearer <token>`.
 - Metrics: Prometheus endpoint at `/metrics`.
 - UI/API: GoFrame serves the Web UI on `:8000` and proxies `/api/v2/*` to the
   ETL API server on `:8001`.

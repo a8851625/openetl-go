@@ -65,7 +65,8 @@ GoReleaser 配置位于 [`.goreleaser.yml`](../.goreleaser.yml)。
 
    ```sh
    gh release view v0.1.0
-   docker pull ghcr.io/a8851625/openetl-go:v0.1.0
+   CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+   "$CONTAINER_CLI" pull ghcr.io/a8851625/openetl-go:v0.1.0
    ```
 
 稳定版本建议使用语义化 tag（`vMAJOR.MINOR.PATCH`）。是否标记为 prerelease 由 GoReleaser 的规则自动决定。
@@ -147,9 +148,10 @@ export ETL_SPEC_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ### 运行发布镜像
 
 ```sh
-docker pull ghcr.io/a8851625/openetl-go:v0.1.0
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" pull ghcr.io/a8851625/openetl-go:v0.1.0
 
-docker run -d \
+"$CONTAINER_CLI" run -d \
   --name openetl-go \
   --restart unless-stopped \
   -p 8000:8000 \
@@ -176,20 +178,22 @@ curl -fsS -H "X-API-Token: $ETL_API_TOKEN" http://127.0.0.1:8000/api/v2/pipeline
 ### 升级
 
 ```sh
-docker pull ghcr.io/a8851625/openetl-go:v0.1.1
-docker stop openetl-go
-docker rm openetl-go
-# 使用同一份 docker run 命令，仅替换新 tag
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" pull ghcr.io/a8851625/openetl-go:v0.1.1
+"$CONTAINER_CLI" stop openetl-go
+"$CONTAINER_CLI" rm openetl-go
+# 使用同一份容器 run 命令，仅替换新 tag
 ```
 
-如果要自动化部署，请把 `docker run` 固化在部署脚本、Compose 或 systemd 中。不要把运行状态写在容器文件系统里；只有挂载的 `/app/data` 应持久化。
+如果要自动化部署，请把容器 `run` 命令固化在部署脚本、Compose 或 systemd 中。不要把运行状态写在容器文件系统里；只有挂载的 `/app/data` 应持久化。
 
 ### 回滚
 
 ```sh
-docker pull ghcr.io/a8851625/openetl-go:v0.1.0
-docker stop openetl-go
-docker rm openetl-go
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" pull ghcr.io/a8851625/openetl-go:v0.1.0
+"$CONTAINER_CLI" stop openetl-go
+"$CONTAINER_CLI" rm openetl-go
 # 使用相同配置和数据目录运行旧 tag
 ```
 
@@ -238,8 +242,9 @@ git diff -- go.mod go.sum
 检查日志和挂载配置：
 
 ```sh
-docker logs --tail 200 openetl-go
-docker exec openetl-go ls -la /app/manifest/config /app/pipes /app/data
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" logs --tail 200 openetl-go
+"$CONTAINER_CLI" exec openetl-go ls -la /app/manifest/config /app/pipes /app/data
 ```
 
 常见原因包括配置路径错误、SQL 凭据缺失、端口被占用，或 pipeline spec 指向了不可达的 source/sink。

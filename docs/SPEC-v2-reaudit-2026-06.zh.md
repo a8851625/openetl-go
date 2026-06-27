@@ -153,13 +153,13 @@ openetl-go/
 | --- | --- | --- |
 | A1 | LogBuffer 格式化参数丢失 | 已完成 |
 | A2 | DAG 条件操作符 Gt/Lt/Ge/Le/Regex 缺失 | 已完成 |
-| A3 | Sink auto-create 曾经 all-TEXT | 部分完成：MySQL/PG/JDBC 已修复，ClickHouse/Doris 仍绕过 typing |
+| A3 | Sink auto-create 曾经 all-TEXT | 部分完成：MySQL/PG/JDBC/Doris 已修复；其余 connector 证据独立跟踪 |
 | A4 | Redis source 使用阻塞 `KEYS` | 已完成，改为 SCAN |
 | A5 | Prometheus counter/gauge 类型错误 | 已完成 |
 | A6 | ClickHouse `_version` 并发下非单调 | 已完成 |
-| A7 | DDL apply 将源 DDL 原样下发到目标 | 部分完成：ClickHouse 已接 translator，其他 sink 仍需处理 |
-| A8 | Schema mismatch 运行时静默失败 | 未完成：接口存在但无实现者 |
-| A9 | per-sink metrics 只有 ClickHouse | 未完成 |
+| A7 | DDL apply 将源 DDL 原样下发到目标 | 部分完成：ClickHouse 已接 translator；Doris 默认 reject，apply 仅允许安全 ADD COLUMN；MySQL/PG 仍需单独复核 |
+| A8 | Schema mismatch 运行时静默失败 | 部分完成：Doris 已实现 `SchemaValidator` 和 Unique Key/model preflight；全量 connector 覆盖仍需继续 |
+| A9 | per-sink metrics 只有 ClickHouse | 已完成：内置 sink 通过 `sinkCounters` 暴露指标 |
 | A10 | MySQL/PG storage backend 未验证 | 已完成 |
 | A11 | Master-worker 分布式执行 | 已完成 A11-redo，仍建议补三进程 e2e |
 | A12 | `make test`/CI 脚手架 | 已完成 |
@@ -198,7 +198,7 @@ openetl-go/
 | --- | --- | --- |
 | B1 | 5 分钟 quickstart | 已完成 |
 | B2 | 启动前检查 | 部分完成，sink reachability 仍无效，错误被降为 warning |
-| B3 | JSON 结构化日志 | 英文复审中标记为未完成；当前仓库已有 `LOGGER_FORMAT=json` 说明与实现时需继续核对 |
+| B3 | JSON 结构化日志 | 已完成：`LOGGER_FORMAT=json` 在启动早期安装 GoFrame JSON stdout handler |
 | B4 | `postgres_cdc` TRUNCATE/DDL 完整语义 | 部分完成，TRUNCATE 不再中断但未同步目标清空语义 |
 | B5 | S3 multipart/retry、ES cluster/429 retry | 已完成，S3 Parquet 类型丢失仍是 SK-5 |
 
@@ -207,7 +207,7 @@ openetl-go/
 | ID | 问题 | 修复方向 |
 | --- | --- | --- |
 | P4-19 | `SchemaValidator`/`SchemaDescriptor` 无实现者 | 在关系型 source/sink 实现，或移除接口与声明。 |
-| P4-20 | 非 ClickHouse sink 无 `SinkMetricsProvider` | 在 MySQL/PG/Doris/JDBC/Kafka/ES/Redis/S3 写路径记录指标。 |
+| P4-20 | 非 ClickHouse sink 无 `SinkMetricsProvider` | 已完成：内置 sink 通过共享 `sinkCounters` 暴露指标并在成功写入后记录。 |
 | P4-21 | S3 Parquet 所有列写成 String | 根据样本值推断 Parquet 类型。 |
 | P4-22 | WASM runtime 默认链接 | 拆分 build-tagged extism 包。 |
 | P4-23 | router 覆盖 `Metadata.Source` | 新增 route 字段，保留 provenance。 |
@@ -257,13 +257,13 @@ openetl-go/
 ### P2：宣称缺失 / 打磨项
 
 - **SK-1**：ClickHouse auto-create 绕过 typing。修复：接入 `typing.InferFromValue`。
-- **SK-2**：Doris auto-create 只按列名推断。修复：传入 fieldValues 并补 Doris dialect。
+- **SK-2（已完成）**：Doris auto-create 已传入代表性 field values，并有 Doris DDL/类型推断单测覆盖。
 - **SK-3**：schema optional interfaces 无实现者。修复：实现或删除。
-- **SK-4**：sink metrics 只有 ClickHouse。修复：所有 sink 写路径补指标。
+- **SK-4（已完成）**：内置 sink 通过共享 `sinkCounters` 暴露指标。
 - **SK-5**：S3 Parquet 全部 string。修复：按值类型映射。
 - **SV-3**：preflight error 被降级为 warning。修复：`valid:false` 并返回 errors。
 - **SV-4**：AI generation handler 未挂路由且输出未 validate。修复：注册路由并接 ValidateSpec/RunPreflight。
-- **SV-6**：JSON logging 声明需与实际实现继续核对。修复：配置 GoFrame JSON 或撤回声明。
+- **SV-6（已完成）**：`internal/logic/app/logging.go` 在 `LOGGER_FORMAT=json` 时安装 JSON stdout handler。
 - **TF-4**：WASM 默认链接。修复：build tag 隔离。
 - **TF-5**：router 覆盖 provenance。修复：新增 route 字段。
 - **TF-11**：transform chain 共享 Data map。修复：deep copy。

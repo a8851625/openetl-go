@@ -239,7 +239,7 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 
 ## 审计事件
 
-返回写入 `ETL_AUDIT_LOG` 或默认 `data/audit.log` 的最近变更事件。
+返回持久化在当前 SQL storage backend 中的最近变更事件。可通过 `ETL_AUDIT_ENABLED=false`、`etl.audit.enabled: false` 或 `--audit-enabled=false` 禁用 audit 写入。
 
 ```sh
 curl -H "X-API-Token: $ETL_API_TOKEN" \

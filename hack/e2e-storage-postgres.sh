@@ -11,6 +11,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 CONTAINER="etl-storage-test-pg"
 DB="openetl_conf"
 USER="etl"
@@ -18,13 +21,13 @@ PASS="etl123"
 HOST_PORT="15432"
 
 cleanup() {
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  "$CONTAINER_CLI" rm -f "$CONTAINER" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
 echo "==> Start throwaway PostgreSQL 16 container (port $HOST_PORT)"
 cleanup
-docker run -d --name "$CONTAINER" \
+"$CONTAINER_CLI" run -d --name "$CONTAINER" \
   --add-host host.docker.internal:host-gateway \
   -e POSTGRES_DB="$DB" \
   -e POSTGRES_USER="$USER" \
@@ -35,7 +38,7 @@ docker run -d --name "$CONTAINER" \
 echo "==> Wait for PostgreSQL to accept connections"
 i=0
 while [ "$i" -lt 60 ]; do
-  if docker exec "$CONTAINER" pg_isready -U "$USER" -d "$DB" >/dev/null 2>&1; then
+  if "$CONTAINER_CLI" exec "$CONTAINER" pg_isready -U "$USER" -d "$DB" >/dev/null 2>&1; then
     break
   fi
   i=$((i + 1)); sleep 2
@@ -47,10 +50,10 @@ fi
 DSN="postgres://${USER}:${PASS}@127.0.0.1:${HOST_PORT}/${DB}?sslmode=disable"
 
 echo "==> Run storage conformance suite (SQLite always + PostgreSQL)"
-if docker ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
+if "$CONTAINER_CLI" ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
   HOST_GATEWAY="host.docker.internal"
   DEV_DSN="postgres://${USER}:${PASS}@${HOST_GATEWAY}:${HOST_PORT}/${DB}?sslmode=disable"
-  docker exec -e POSTGRES_DSN="$DEV_DSN" -w /workspace etl-go-dev \
+  "$CONTAINER_CLI" exec -e POSTGRES_DSN="$DEV_DSN" -w /workspace etl-go-dev \
     go test -race -count=1 -v -run 'TestSQLiteConformance|TestPostgresConformance' ./internal/etl/storage/
 else
   echo "   (etl-go-dev container not found — running tests on host Go toolchain)"

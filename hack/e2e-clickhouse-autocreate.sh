@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 CLICKHOUSE_CONTAINER="etl-clickhouse"
 APP_CONTAINER="etl-openetl-go-clickhouse-autocreate"
@@ -20,10 +23,10 @@ wait_http() {
 }
 
 echo "==> Build image"
-docker build -t "$IMAGE" -f Dockerfile .
+"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start ClickHouse"
-docker compose -f docker-compose.dev.yml up -d clickhouse
+compose -f docker-compose.dev.yml up -d clickhouse
 
 echo "==> Wait ClickHouse HTTP"
 i=0
@@ -34,8 +37,8 @@ done
 curl -fsS http://127.0.0.1:8123/ping >/dev/null
 
 echo "==> Reset ClickHouse target"
-docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "CREATE DATABASE IF NOT EXISTS dzh3136_go"
-docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "DROP TABLE IF EXISTS dzh3136_go.auto_customers"
+"$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "CREATE DATABASE IF NOT EXISTS dzh3136_go"
+"$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "DROP TABLE IF EXISTS dzh3136_go.auto_customers"
 
 echo "==> Reset ETL data"
 rm -rf data-clickhouse-autocreate
@@ -44,8 +47,8 @@ chmod -R a+rwX data-clickhouse-autocreate
 chmod a+rwX logs
 
 echo "==> Run auto-create pipeline"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8006:8001 \
@@ -68,13 +71,13 @@ body="$(curl -fsS http://127.0.0.1:8006/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep '"records_written":2'
 
-count="$(docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM dzh3136_go.auto_customers FINAL" | tr -d '[:space:]')"
+count="$("$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM dzh3136_go.auto_customers FINAL" | tr -d '[:space:]')"
 test "$count" = "2"
 
-level_count="$(docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM system.columns WHERE database='dzh3136_go' AND table='auto_customers' AND name='level'" | tr -d '[:space:]')"
+level_count="$("$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM system.columns WHERE database='dzh3136_go' AND table='auto_customers' AND name='level'" | tr -d '[:space:]')"
 test "$level_count" = "1"
 
-gold="$(docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM dzh3136_go.auto_customers FINAL WHERE id=2 AND level='gold'" | tr -d '[:space:]')"
+gold="$("$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM dzh3136_go.auto_customers FINAL WHERE id=2 AND level='gold'" | tr -d '[:space:]')"
 test "$gold" = "1"
 
 echo "ClickHouse auto-create E2E passed"

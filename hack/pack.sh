@@ -15,6 +15,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+. "$PWD/hack/container-cli.sh"
+
 SRC="${SRC:-resource}"
 DST="${DST:-internal/packed/packed.go}"
 
@@ -26,12 +28,13 @@ if [[ "${SKIP_UI:-0}" != "1" ]]; then
   if [[ -d web && -f web/package.json ]]; then
     echo "Building frontend (web/ → resource/public)..."
     # Prefer local npm; fall back to the node:20-alpine container so this
-    # works on CI runners that have neither node nor Docker.
+    # works on CI runners that have neither node nor a container runtime.
     if command -v npm >/dev/null 2>&1; then
       (cd web && npm install --no-audit --no-fund && npm run build)
-    elif command -v docker >/dev/null 2>&1; then
-      echo "npm not found locally; building via docker node:20-alpine"
-      docker run --rm -v "$PWD:/workspace" -w /workspace/web docker.io/library/node:20-alpine \
+    elif [[ -n "${CONTAINER_CLI:-}" ]] || has_container_cli; then
+      detect_container_cli
+      echo "npm not found locally; building via $CONTAINER_CLI node:20-alpine"
+      "$CONTAINER_CLI" run --rm -v "$PWD:/workspace" -w /workspace/web docker.io/library/node:20-alpine \
         sh -c 'npm install --no-audit --no-fund && npm run build'
     else
       echo "WARNING: neither npm nor a container runtime is available;" \

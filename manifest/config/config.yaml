@@ -1,6 +1,8 @@
 # OpenETL-Go — 默认配置(单节点 ETL 模式)。
 #
 # 启动: ./openetl-go
+# 参数化启动: ./openetl-go --help 查看 CLI flags。优先级为
+# CLI flags > 环境变量 > config.yaml > 内置默认值。
 # 容器: 挂载到 /app/manifest/config/config.yaml
 #
 # 结构化日志: 设置环境变量 LOGGER_FORMAT=json(见 internal/logic/app/logging.go)。
@@ -20,6 +22,11 @@ server:
 etl:
   enabled: true
   address: ":8001"
+  # API token 也可通过 ETL_API_TOKEN 或 --api-token 指定；生产必须设置。
+  apiToken: ""
+  tls:
+    cert: ""            # ETL_TLS_CERT / --tls-cert
+    key: ""             # ETL_TLS_KEY / --tls-key
   # 进程角色(分布式): standalone(默认,单进程) | master | worker
   # master/worker 要求 storage.type 为 mysql/postgresql(跨进程共享元数据)。
   # 环境变量 ETL_ROLE 覆盖此值。DAG 管道不分片,仅线性 spec 走分布式分发。
@@ -30,6 +37,10 @@ etl:
   specsDir: "./pipes"
   checkpointDir: "./data/checkpoint"
   dlqDir: "./data/dlq"
+  pluginsDir: "./data/plugins"
+  schemasDir: "./data/schemas"
+  audit:
+    enabled: true       # ETL_AUDIT_ENABLED / --audit-enabled；audit 写入 SQL storage。
   # 存储引擎:pipeline 定义 / checkpoint / DLQ / audit 等元数据持久化。
   # sqlite(默认)- 零依赖单文件,单机部署。
   # mysql / postgresql - 多实例共享元数据(配合 master/worker)。

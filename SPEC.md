@@ -163,14 +163,14 @@ openetl-go is production-ready when, for **both** modes:
 | `make test` | Unit tests with `-race` across `internal/etl/...`, `internal/logic/...`, `internal/controller/...` |
 | `make test-quick` | Same without `-race` |
 | `make test-pkg PKG=pipeline` | One package, verbose |
-| `make test-integration` | Integration tests with docker compose services (MySQL + ClickHouse + …) |
+| `make test-integration` | Integration tests with container compose services (MySQL + ClickHouse + …) |
 
 Integration tests use the **`integration` build tag** and require live databases. Go runs inside
-the `etl-go-dev` docker container (host has no `go`).
+the `etl-go-dev` container (host has no `go`).
 
 ### 2.3 Dev environment
 
-- **docker** is the supported runtime (`docker compose -f docker-compose.dev.yml`).
+- **docker or podman** is selected automatically by hack scripts; override with `CONTAINER_CLI`.
 - `etl-go-dev` container (golang:1.24) mounts the workspace; builds/tests run there.
 - Services: `mysql-source` (binlog enabled), `clickhouse`, plus `minio`/`redpanda`/`postgres` as needed.
 
@@ -321,8 +321,8 @@ error, to keep specs forward-compatible.
 | Layer | Scope | Tooling | Required for PR |
 |-------|-------|---------|-----------------|
 | **Unit** | Pure functions, interfaces, type mappers, DDL, DAG routing, retry, breaker | `go test -race` in-package | ✅ All |
-| **Integration** | Sink writes vs live DBs (type inference, idempotency, auto-create), source resume | `_test.go` `//go:build integration`, docker | ✅ Changed plugin |
-| **E2E** | Full pipeline MySQL CDC → ClickHouse, crash recovery, DLQ replay, distributed | `hack/e2e-*.sh` over docker compose | ✅ Pipeline/core changes |
+| **Integration** | Sink writes vs live DBs (type inference, idempotency, auto-create), source resume | `_test.go` `//go:build integration`, container services | ✅ Changed plugin |
+| **E2E** | Full pipeline MySQL CDC → ClickHouse, crash recovery, DLQ replay, distributed | `hack/e2e-*.sh` over detected container compose | ✅ Pipeline/core changes |
 
 ### 5.2 Test matrix for dual-mode
 
@@ -517,17 +517,19 @@ Carry-forward: P4-3 folds into Wave 3 (P5-22).
 ## 8. Verification (how Phase 5 acceptance is proven)
 
 ```bash
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+
 # Wave 0 smoke: standalone pipelines boot again
-docker exec etl-go-dev go build ./...
-docker exec etl-go-dev go test -race -count=1 ./internal/etl/server/... ./internal/etl/source/...
+"$CONTAINER_CLI" exec etl-go-dev go build ./...
+"$CONTAINER_CLI" exec etl-go-dev go test -race -count=1 ./internal/etl/server/... ./internal/etl/source/...
 
 # Waves 1–3: full reliability + race
-docker exec etl-go-dev go test -race -count=1 ./internal/etl/...
+"$CONTAINER_CLI" exec etl-go-dev go test -race -count=1 ./internal/etl/...
 
 # Lightweight: default build excludes all opt-in runtimes
-docker exec etl-go-dev go list -deps ./... | grep -E 'gopher-lua|quickjs|extism|wazero'   # must be EMPTY for default
-docker exec etl-go-dev go build -tags=extism -o /tmp/oa-extism .                          # still compiles
-docker exec etl-go-dev go build -tags=nolua -o /tmp/oa-nolua .                            # 轻量: Lua opt-out (P5-22)
+"$CONTAINER_CLI" exec etl-go-dev go list -deps ./... | grep -E 'gopher-lua|quickjs|extism|wazero'   # must be EMPTY for default
+"$CONTAINER_CLI" exec etl-go-dev go build -tags=extism -o /tmp/oa-extism .                          # still compiles
+"$CONTAINER_CLI" exec etl-go-dev go build -tags=nolua -o /tmp/oa-nolua .                            # 轻量: Lua opt-out (P5-22)
 
 # Dual-mode E2E
 ./hack/e2e.sh                       # file→file, mysql_batch→mysql

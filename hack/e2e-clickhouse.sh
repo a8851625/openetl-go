@@ -5,6 +5,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 MYSQL_CONTAINER="etl-mysql-source"
 CH_CONTAINER="etl-clickhouse"
@@ -23,38 +26,38 @@ wait_http() {
   return 1
 }
 
-if ! docker image inspect docker.io/clickhouse/clickhouse-server:24.3-alpine >/dev/null 2>&1; then
-  echo "ClickHouse image is not available locally. Pull it first: docker pull docker.io/clickhouse/clickhouse-server:24.3-alpine" >&2
+if ! "$CONTAINER_CLI" image inspect docker.io/clickhouse/clickhouse-server:24.3-alpine >/dev/null 2>&1; then
+  echo "ClickHouse image is not available locally. Pull it first: $CONTAINER_CLI pull docker.io/clickhouse/clickhouse-server:24.3-alpine" >&2
   exit 2
 fi
 
 echo "==> Build image"
-docker build -t "$IMAGE" -f Dockerfile .
+"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
 
 echo "==> Start MySQL and ClickHouse"
-docker compose -f docker-compose.dev.yml up -d mysql-source clickhouse
+compose -f docker-compose.dev.yml up -d mysql-source clickhouse
 
 echo "==> Wait MySQL healthy"
 i=0
 while [ "$i" -lt 60 ]; do
-  status="$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
+  status="$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || true)"
   if [ "$status" = "healthy" ]; then
     break
   fi
   i=$((i + 1))
   sleep 2
 done
-[ "$(docker inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
+[ "$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
 
 echo "==> Wait ClickHouse HTTP"
 wait_http "http://127.0.0.1:8123/ping"
 
 echo "==> Prepare ClickHouse target"
-docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --multiquery < testdata/clickhouse/init/01-init.sql
-docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "TRUNCATE TABLE dzh3136_go.customers"
+"$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --multiquery < testdata/clickhouse/init/01-init.sql
+"$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "TRUNCATE TABLE dzh3136_go.customers"
 
 echo "==> Reset test row in MySQL"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "DELETE FROM customers WHERE id=9101;"
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "DELETE FROM customers WHERE id=9101;"
 
 echo "==> Reset ETL data"
 rm -rf data-clickhouse
@@ -63,8 +66,8 @@ chmod -R a+rwX data-clickhouse
 chmod a+rwX logs
 
 echo "==> Run CDC to ClickHouse pipeline"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8003:8001 \
@@ -86,12 +89,12 @@ while [ "$i" -lt 60 ]; do
 done
 
 echo "==> Emit MySQL CDC event"
-docker exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO customers (id, name, email, phone, status, amount) VALUES (9101, 'CH CDC Alice', 'ch-cdc@example.com', '13900009101', 'active', 111.11); UPDATE customers SET amount=222.22 WHERE id=9101;"
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "INSERT INTO customers (id, name, email, phone, status, amount) VALUES (9101, 'CH CDC Alice', 'ch-cdc@example.com', '13900009101', 'active', 111.11); UPDATE customers SET amount=222.22 WHERE id=9101;"
 
 echo "==> Verify ClickHouse row"
 i=0
 while [ "$i" -lt 90 ]; do
-  copied="$(docker exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM dzh3136_go.customers FINAL WHERE id=9101 AND amount=222.22" 2>/dev/null | tr -d '[:space:]')"
+  copied="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM dzh3136_go.customers FINAL WHERE id=9101 AND amount=222.22" 2>/dev/null | tr -d '[:space:]')"
   if [ "$copied" = "1" ]; then
     break
   fi

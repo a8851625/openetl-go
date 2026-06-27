@@ -6,12 +6,13 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcmd"
 
-	"github.com/a8851625/openetl-go/internal/logic/app"
 	"github.com/a8851625/openetl-go/internal/consts"
+	"github.com/a8851625/openetl-go/internal/logic/app"
 	"github.com/a8851625/openetl-go/internal/service"
 )
 
@@ -20,11 +21,19 @@ var (
 		Name:  "main",
 		Usage: "main",
 		Brief: "start openetl-go ETL/CDC service",
+		HelpFunc: func(ctx context.Context, parser *gcmd.Parser) error {
+			fmt.Print(runtimeHelpText())
+			return nil
+		},
 		Func: func(ctx context.Context, parser *gcmd.Parser) (err error) {
+			if _, err := applyRuntimeFlags(); err != nil {
+				return err
+			}
 			// Structured (JSON stdout) logging before any g.Log() call (P5-16).
 			app.ConfigureStructuredLogging()
 			// 打印版本号
 			g.Log().Infof(ctx, "OpenETL-Go Version: %s", consts.Version)
+			logRuntimeSummary()
 
 			a := service.App()
 

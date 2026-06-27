@@ -11,6 +11,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 CONTAINER="etl-dispatch-test-mysql"
 DB="openetl_conf"
 HOST_PORT="13400"
@@ -18,16 +21,16 @@ ROOT_PASS="root123456"
 IMAGE="openetl-go-e2e:dev"
 
 cleanup() {
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-  docker rm -f etl-e2e-instance1 >/dev/null 2>&1 || true
-  docker rm -f etl-e2e-instance2 >/dev/null 2>&1 || true
+  "$CONTAINER_CLI" rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  "$CONTAINER_CLI" rm -f etl-e2e-instance1 >/dev/null 2>&1 || true
+  "$CONTAINER_CLI" rm -f etl-e2e-instance2 >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
 # ── 1. Spin up a throwaway MySQL container ───────────────────────────
 echo "==> Start MySQL container (port $HOST_PORT)"
 cleanup
-docker run -d --name "$CONTAINER" \
+"$CONTAINER_CLI" run -d --name "$CONTAINER" \
   --add-host host.docker.internal:host-gateway \
   -e MYSQL_ROOT_PASSWORD="$ROOT_PASS" \
   -e MYSQL_DATABASE="$DB" \
@@ -37,7 +40,7 @@ docker run -d --name "$CONTAINER" \
 echo "==> Wait for MySQL"
 i=0
 while [ "$i" -lt 60 ]; do
-  if docker exec "$CONTAINER" mysql -h localhost -u root -p"$ROOT_PASS" -e "SELECT 1" >/dev/null 2>&1; then
+  if "$CONTAINER_CLI" exec "$CONTAINER" mysql -h localhost -u root -p"$ROOT_PASS" -e "SELECT 1" >/dev/null 2>&1; then
     break
   fi
   i=$((i + 1)); sleep 2
@@ -45,12 +48,12 @@ done
 if [ "$i" -ge 60 ]; then echo "!! MySQL did not become ready"; exit 1; fi
 
 # Ensure DB exists.
-docker exec "$CONTAINER" mysql -u root -p"$ROOT_PASS" \
+"$CONTAINER_CLI" exec "$CONTAINER" mysql -u root -p"$ROOT_PASS" \
   -e "CREATE DATABASE IF NOT EXISTS $DB;" >/dev/null 2>&1 || true
 
 # ── 2. Build the binary ──────────────────────────────────────────────
 echo "==> Build binary"
-docker build -t "$IMAGE" -f Dockerfile . >/dev/null 2>&1 || {
+"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile . >/dev/null 2>&1 || {
   echo "   Image already exists or build failed — reusing."
 }
 
@@ -66,8 +69,8 @@ echo "==> Run Go integration tests: distributed dispatch (real workers + reassig
 MYSQL_DSN="root:${ROOT_PASS}@tcp(host.docker.internal:${HOST_PORT})/${DB}?parseTime=true&multiStatements=true"
 
 # Use the go-dev container if available; otherwise fall back to host go.
-if docker ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
-  docker exec -e MYSQL_DSN="$MYSQL_DSN" -w /workspace etl-go-dev \
+if "$CONTAINER_CLI" ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
+  "$CONTAINER_CLI" exec -e MYSQL_DSN="$MYSQL_DSN" -w /workspace etl-go-dev \
     go test -race -count=1 -v -tags=integration -run 'TestDistributed' ./internal/etl/master/
 else
   MYSQL_DSN="$MYSQL_DSN" go test -race -count=1 -v -tags=integration \

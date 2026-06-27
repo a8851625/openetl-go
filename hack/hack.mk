@@ -37,21 +37,24 @@ release:
 	@chmod +x hack/release.sh && ./hack/release.sh
 
 
-# Build docker image.
+# Build container image.
 .PHONY: image
-image: cli.install
+image:
 	$(eval _TAG  = $(shell git rev-parse --short HEAD))
 ifneq (, $(shell git status --porcelain 2>/dev/null))
 	$(eval _TAG  = $(_TAG).dirty)
 endif
 	$(eval _TAG  = $(if ${TAG},  ${TAG}, $(_TAG)))
 	$(eval _PUSH = $(if ${PUSH}, ${PUSH}, ))
-	@gf docker ${_PUSH} -tn $(DOCKER_NAME):${_TAG};
+	@. ./hack/container-cli.sh; \
+	detect_container_cli; \
+	"$$CONTAINER_CLI" build -t $(DOCKER_NAME):${_TAG} -f Dockerfile .; \
+	if [ -n "${_PUSH}" ]; then "$$CONTAINER_CLI" push $(DOCKER_NAME):${_TAG}; fi
 
 
-# Build docker image and automatically push to docker repo.
+# Build container image and automatically push to image repository.
 .PHONY: image.push
-image.push: cli.install
+image.push:
 	@make image PUSH=-p;
 
 

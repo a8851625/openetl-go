@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [v0.2.3-beta-1] — 2026-06-27 — 首次任务 UI 与运行参数
+
+### 亮点
+- React UI 新增首次任务向导，覆盖数据库同步、Kafka 明细/聚合、Debezium CDC 同步、Kafka 报文解析、文件/HTTP 落地。向导生成普通 pipeline spec，YAML 仍作为可审计事实源。
+- 向导支持由 schema 驱动的 source/sink/transform 配置表单、生成 YAML 编辑、YAML 回填表单、transform dry-run、validate + preflight，以及创建后启动。
+- DAG 编辑器支持 YAML 与 canvas/form 往返、validate + preflight 操作，并结构化展示错误、warning、preflight issue、field issue、修复建议和 DDL preview。
+- 后端新增 runtime CLI flags，覆盖配置文件、本地 data/log/plugin/schema/spec 目录、HTTP 与 ETL API 绑定地址、storage、TLS、API token、audit、日志格式，以及 standalone/master/worker 运行角色。运行配置优先级明确为 CLI flags > 环境变量 > 配置文件 > 内置默认值。
+- 新增 `hack/container-cli.sh` 统一检测 Podman/Docker，并同步更新 e2e 脚本和文档中的容器运行时选择。
+
+### 验证
+- `go test ./internal/cmd ./internal/etl/server ./internal/etl/sink`
+- `go run . --help`
+- 非法 `--role` 启动前失败检查
+- `E2E_SKIP_BUILD=1 ./hack/e2e-ui.sh` — 88 passed, 0 failed
+
 ## [v0.2.3-beta] — Doris 验证与调度约束
 
 ### 亮点
@@ -14,9 +29,9 @@
 - DAG 编辑器会加载 connector descriptor，按当前 source 集合过滤 schedule 类型，支持 dependency schedule，并在切换 source 后重置不再支持的调度选择。
 
 ### 验证
-- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace localhost/etl-go-dev:latest sh -c 'go test ./internal/etl/...'`
+- `CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"; "$CONTAINER_CLI" run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace localhost/etl-go-dev:latest sh -c 'go test ./internal/etl/...'`
 - `web/` 下执行 `npm run build`
-- `CONTAINER_CLI=podman E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh`
+- `E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh`
 
 ## [v0.2.1] — Pipeline 编排口径收敛与连接复用
 

@@ -65,7 +65,8 @@ If a future repository policy restricts `GITHUB_TOKEN`, enable package write per
 
    ```sh
    gh release view v0.1.0
-   docker pull ghcr.io/a8851625/openetl-go:v0.1.0
+   CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+   "$CONTAINER_CLI" pull ghcr.io/a8851625/openetl-go:v0.1.0
    ```
 
 Use semantic tags (`vMAJOR.MINOR.PATCH`) for stable releases. GoReleaser marks prereleases automatically when the tag matches its prerelease rules.
@@ -147,9 +148,10 @@ export ETL_SPEC_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ### Run the Released Image
 
 ```sh
-docker pull ghcr.io/a8851625/openetl-go:v0.1.0
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" pull ghcr.io/a8851625/openetl-go:v0.1.0
 
-docker run -d \
+"$CONTAINER_CLI" run -d \
   --name openetl-go \
   --restart unless-stopped \
   -p 8000:8000 \
@@ -176,20 +178,22 @@ Open the UI at `http://<server>:8000`.
 ### Upgrade
 
 ```sh
-docker pull ghcr.io/a8851625/openetl-go:v0.1.1
-docker stop openetl-go
-docker rm openetl-go
-# run the same docker run command with the new tag
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" pull ghcr.io/a8851625/openetl-go:v0.1.1
+"$CONTAINER_CLI" stop openetl-go
+"$CONTAINER_CLI" rm openetl-go
+# run the same container run command with the new tag
 ```
 
-For scripted deployments, keep the `docker run` command in a checked deployment script or use Compose/systemd. Do not store runtime state inside the container filesystem; only mounted `/app/data` should persist.
+For scripted deployments, keep the container `run` command in a checked deployment script or use Compose/systemd. Do not store runtime state inside the container filesystem; only mounted `/app/data` should persist.
 
 ### Rollback
 
 ```sh
-docker pull ghcr.io/a8851625/openetl-go:v0.1.0
-docker stop openetl-go
-docker rm openetl-go
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" pull ghcr.io/a8851625/openetl-go:v0.1.0
+"$CONTAINER_CLI" stop openetl-go
+"$CONTAINER_CLI" rm openetl-go
 # run the previous tag with the same mounted config/data directories
 ```
 
@@ -238,8 +242,9 @@ Commit intentional dependency changes before tagging.
 Check logs and the mounted config:
 
 ```sh
-docker logs --tail 200 openetl-go
-docker exec openetl-go ls -la /app/manifest/config /app/pipes /app/data
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" logs --tail 200 openetl-go
+"$CONTAINER_CLI" exec openetl-go ls -la /app/manifest/config /app/pipes /app/data
 ```
 
 Common causes are an invalid config path, missing SQL credentials, a port already in use, or a pipeline spec that references an unreachable source/sink.

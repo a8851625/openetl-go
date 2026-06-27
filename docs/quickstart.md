@@ -8,7 +8,7 @@ OpenETL-Go fits common sync, cleansing, enrichment, deduplication, and tumbling-
 
 ## 1. Environment Setup (5 minutes)
 
-### One-Click Docker Compose
+### One-Click Container Compose
 
 ```bash
 # Clone the repo
@@ -16,7 +16,8 @@ git clone <repo-url> openetl-go
 cd openetl-go
 
 # Start all dependencies (MySQL, ClickHouse, MinIO, Redpanda) + ETL service
-docker compose -f docker-compose.quickstart.yml up -d
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+"$CONTAINER_CLI" compose -f docker-compose.quickstart.yml up -d
 
 # Verify
 curl http://localhost:8000/api/v2/health
@@ -33,16 +34,30 @@ export ETL_API_TOKEN=$(openssl rand -hex 16)
 export ETL_SPEC_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
 # Restart the service
-docker compose -f docker-compose.quickstart.yml restart etl
+"$CONTAINER_CLI" compose -f docker-compose.quickstart.yml restart etl
 ```
 
 ---
 
 ## 2. Create Your First Pipeline (3 minutes)
 
-### Option 1: Web UI Designer
+### Option 1: Web UI Wizard
 
-Visit `http://localhost:8000/#/designer` and drag-and-drop to build pipelines visually.
+Visit `http://localhost:8000`, open **Pipelines**, and click **Create from wizard**.
+
+The wizard creates normal pipeline specs for database sync, Kafka detail/aggregate,
+Debezium CDC, Kafka parser, and file/HTTP landing tasks. Pick a template, review
+the descriptor-driven source/sink schema summary, run **Transform dry-run**, then
+run **Validate + preflight**. If preflight reports a field or connector issue,
+fix the form or YAML panel and validate again. Click **Create and start** only
+after preflight passes.
+
+The generated YAML remains visible and editable; **Sync YAML to form** lets you
+round-trip edits back into the form before creating the pipeline.
+
+### Option 1b: Web UI Designer
+
+Visit `http://localhost:8000/#/designer` and drag-and-drop to build advanced DAGs visually.
 
 ### Option 2: YAML Declaration
 

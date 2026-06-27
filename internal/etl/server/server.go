@@ -50,6 +50,7 @@ type Server struct {
 	mu               sync.RWMutex
 	specsDir         string
 	apiToken         string
+	auditEnabled     bool
 	masterNode       *master.Master
 	standaloneWorker *worker.StandaloneWorker
 	pluginMgr        *pluginsystem.Manager
@@ -88,6 +89,7 @@ func (s *Server) newRunner(spec *pipeline.Spec) (pipeline.RunnerInterface, error
 // NewServer creates a new ETL server backed by the given storage.
 // specsDir is still used for YAML file hot-reload (specs are persisted to storage on load).
 func NewServer(store storage.Storage, specsDir string) (*Server, error) {
+	ctx := context.Background()
 	am := alert.NewManager()
 	am.Register(&alert.LogChannel{})
 
@@ -106,7 +108,8 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 		specStore:       NewEncryptedSpecStore(storage.NewPipelineSpecStore(store)),
 		alertManager:    am,
 		specsDir:        specsDir,
-		apiToken:        os.Getenv("ETL_API_TOKEN"),
+		apiToken:        configString(ctx, "ETL_API_TOKEN", "etl.apiToken", ""),
+		auditEnabled:    configBool(ctx, "ETL_AUDIT_ENABLED", "etl.audit.enabled", true),
 		restartAttempts: make(map[string]int),
 	}
 
@@ -136,22 +139,16 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 	}
 
 	// Schema Registry
-	schemasDir := os.Getenv("ETL_SCHEMAS_DIR")
-	if schemasDir == "" {
-		schemasDir = "./data/schemas"
-	}
+	schemasDir := configString(ctx, "ETL_SCHEMAS_DIR", "etl.schemasDir", "./data/schemas")
 	s.schemaRegistry = NewSchemaRegistry(schemasDir)
 
 	// Register alert channels from env
 	s.registerAlertChannels()
 
 	// Initialize plugin manager
-	pluginsDir := os.Getenv("ETL_PLUGINS_DIR")
-	if pluginsDir == "" {
-		pluginsDir = "./data/plugins"
-	}
+	pluginsDir := configString(ctx, "ETL_PLUGINS_DIR", "etl.pluginsDir", "./data/plugins")
 	if pm, pErr := pluginsystem.NewManager(store, pluginsDir); pErr != nil {
-		g.Log().Warningf(nil, "Plugin manager init failed: %v", pErr)
+		g.Log().Warningf(ctx, "Plugin manager init failed: %v", pErr)
 	} else {
 		s.pluginMgr = pm
 		// Register all loaded transform-kind plugins so pipeline specs can
@@ -162,6 +159,24 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 	}
 
 	return s, nil
+}
+
+func configString(ctx context.Context, envName, key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(envName)); v != "" {
+		return v
+	}
+	return g.Cfg().MustGet(ctx, key, def).String()
+}
+
+func configBool(ctx context.Context, envName, key string, def bool) bool {
+	if v := strings.TrimSpace(os.Getenv(envName)); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+		g.Log().Warningf(ctx, "invalid %s=%q, using %v", envName, v, def)
+		return def
+	}
+	return g.Cfg().MustGet(ctx, key, def).Bool()
 }
 
 func (s *Server) RegisterWebhookAlert(url string) {
@@ -948,6 +963,10 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
+	}
+	if !s.auditEnabled {
+		json.NewEncoder(w).Encode(map[string]any{"events": []any{}, "enabled": false})
+		return
 	}
 	events, err := s.auditAdapter.List(r.Context(), limit)
 	if err != nil {
@@ -3498,8 +3517,8 @@ func (s *Server) StartHTTP(addr string) error {
 	}
 
 	// TLS support: if cert and key files are provided, serve HTTPS
-	certFile := os.Getenv("ETL_TLS_CERT")
-	keyFile := os.Getenv("ETL_TLS_KEY")
+	certFile := configString(context.Background(), "ETL_TLS_CERT", "etl.tls.cert", "")
+	keyFile := configString(context.Background(), "ETL_TLS_KEY", "etl.tls.key", "")
 	if certFile != "" && keyFile != "" {
 		g.Log().Infof(context.Background(), "TLS enabled: cert=%s key=%s", certFile, keyFile)
 		return s.httpServer.ListenAndServeTLS(certFile, keyFile)
@@ -3632,6 +3651,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) audit(r *http.Request, action, target string) {
+	if !s.auditEnabled {
+		return
+	}
 	_ = s.auditAdapter.Write(r.Context(), action, r.Method, r.URL.Path, target, r.RemoteAddr)
 }
 

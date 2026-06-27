@@ -4,6 +4,9 @@ set -eu
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+. "$ROOT_DIR/hack/container-cli.sh"
+detect_container_cli
+
 IMAGE="openetl-go-etl:dev"
 ES_CONTAINER="etl-opensearch"
 APP_CONTAINER="etl-openetl-go-es"
@@ -26,12 +29,12 @@ if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
   echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
 else
   echo "==> Build image (or use cache)"
-  docker build -t "$IMAGE" -f Dockerfile . 2>&1 | tail -1
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile . 2>&1 | tail -1
 fi
 
 echo "==> Start OpenSearch"
-docker rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$ES_CONTAINER" \
   -e "discovery.type=single-node" \
@@ -43,7 +46,7 @@ docker run -d \
 echo "==> Wait OpenSearch ready"
 if ! wait_http "http://127.0.0.1:$ES_PORT/_cluster/health"; then
   echo "OpenSearch failed to start"
-  docker rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
+  "$CONTAINER_CLI" rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
   exit 1
 fi
 echo "==> OpenSearch is ready"
@@ -66,19 +69,19 @@ curl -fsS -X PUT "http://127.0.0.1:$ES_PORT/$INDEX" \
   }' >/dev/null
 
 echo "==> Start MySQL source"
-docker compose -f docker-compose.dev.yml up -d mysql-source
+compose -f docker-compose.dev.yml up -d mysql-source
 
 echo "==> Wait MySQL healthy"
 i=0
 while [ "$i" -lt 60 ]; do
-  status="$(docker inspect -f '{{.State.Health.Status}}' etl-mysql-source 2>/dev/null || true)"
+  status="$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' etl-mysql-source 2>/dev/null || true)"
   if [ "$status" = "healthy" ]; then break; fi
   i=$((i + 1)); sleep 2
 done
-[ "$(docker inspect -f '{{.State.Health.Status}}' etl-mysql-source)" = "healthy" ]
+[ "$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' etl-mysql-source)" = "healthy" ]
 
 echo "==> Prepare source data"
-docker exec etl-mysql-source mysql -uroot -proot123456 -e "
+"$CONTAINER_CLI" exec etl-mysql-source mysql -uroot -proot123456 -e "
 DELETE FROM dzh3136_go.customers WHERE id >= 9400;
 INSERT INTO dzh3136_go.customers (id, name, email, phone, status, amount) VALUES
   (9401, 'ES Alice', 'es-alice@example.com', '13900009401', 'active', 100.00),
@@ -93,8 +96,8 @@ chmod -R a+rwX data-es
 chmod a+rwX logs
 
 echo "==> Run ETL pipeline"
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker run -d \
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d \
   --add-host host.docker.internal:host-gateway \
   --name "$APP_CONTAINER" \
   -p 8018:8001 \
@@ -190,7 +193,7 @@ body="$(curl -fsS http://127.0.0.1:8018/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep "\"name\":\"$PIPELINE\""
 
-docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-docker rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" rm -f "$ES_CONTAINER" >/dev/null 2>&1 || true
 
 echo "Elasticsearch mapping conflict E2E passed"

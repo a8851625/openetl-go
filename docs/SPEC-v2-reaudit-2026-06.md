@@ -6,12 +6,12 @@
 
 > **Re-Audit Changelog (v1 → v2, 2026-06-21)**: An independent six-subsystem re-audit
 > verified every v1 "done" claim against actual code (not the TODO log). **Several were
-> overstated**: A11 (distributed dispatch) is decorative — no binary runs a real worker;
-> A3/R1.4 (unified typing) is wired into only 3 of 5 relational sinks (ClickHouse + Doris
-> bypass it); A8/R2.3 (schema validation) is wired but inert — zero implementors; A9/R2.5
-> (per-sink metrics) is ClickHouse-only; P1-6 (Lua memory/time budget) is absent; P1-6 (DLQ
+> overstated**: historical A11 (distributed dispatch) was decorative before the later
+> master/worker implementation; historical A3/R1.4 (unified typing) and A8/R2.3
+> (schema validation) lacked connector coverage before the Doris gate work; historical A9/R2.5
+> (per-sink metrics) was ClickHouse-only before shared `sinkCounters`; P1-6 (Lua memory/time budget) is absent; P1-6 (DLQ
 > replay atomicity) is still lossy; P2-1 (extism injection) is open; B2 (sink-reachable
-> preflight) and B3 (JSON logging) are not delivered. The re-audit also surfaced ~35 new
+> preflight) remains under review while B3 (JSON logging) is now delivered through `LOGGER_FORMAT=json`. The re-audit also surfaced ~35 new
 > gaps (6 P0, 15 P1). **§7 and §9 below are the corrected source of truth**; the v1 errata
 > is retained in §8 for history. What is genuinely solid: the linear pipeline's at-least-once
 > ordering, circuit breaker, retry, storage-backend conformance (SQLite/MySQL/PG), Kafka/HTTP/
@@ -100,7 +100,7 @@ openetl-go is production-ready when, for **both** operating modes:
 | `make test` | Unit tests with `-race` across `internal/etl/...`, `internal/logic/...`, `internal/controller/...` |
 | `make test-quick` | Same without `-race` (fast dev loop) |
 | `make test-pkg PKG=pipeline` | One package, verbose |
-| `make test-integration` | Integration tests with docker compose services (MySQL + ClickHouse) |
+| `make test-integration` | Integration tests with container compose services (MySQL + ClickHouse) |
 
 Integration tests use the **`integration` build tag** and require live databases:
 
@@ -110,7 +110,7 @@ CLICKHOUSE_HOST=... MYSQL_HOST=... go test -tags=integration ./internal/etl/sink
 
 ### 2.3 Dev environment
 
-- **docker** is the supported dev/container runtime (`docker compose -f docker-compose.dev.yml`).
+- **docker or podman** is selected automatically by hack scripts; override with `CONTAINER_CLI`.
 - `go-dev` container (golang:1.24-alpine) mounts the workspace and is where builds/tests run.
 - Required dev services: `mysql-source` (binlog enabled), `clickhouse`, plus `minio`/`redpanda` as needed.
 
@@ -226,8 +226,8 @@ Prefer typed optional interfaces (`SchemaDescriptor`, `SinkMetricsProvider`) ove
 | Layer | Scope | Tooling | Required for PR |
 |-------|-------|---------|-----------------|
 | **Unit** | Pure functions, interfaces, type mappers, DDL translation, DAG routing, retry/backoff, circuit breaker | `go test -race` in-package `_test.go` | ✅ All |
-| **Integration** | Sink writes against live DBs (type inference, idempotency, auto-create), source checkpoint resume | `_test.go` with `//go:build integration`, docker services | ✅ For changed plugin |
-| **E2E** | Full pipeline MySQL CDC → ClickHouse, crash recovery, DLQ replay | `hack/e2e-*.sh` over docker compose | ✅ For pipeline/core changes |
+| **Integration** | Sink writes against live DBs (type inference, idempotency, auto-create), source checkpoint resume | `_test.go` with `//go:build integration`, container services | ✅ For changed plugin |
+| **E2E** | Full pipeline MySQL CDC → ClickHouse, crash recovery, DLQ replay | `hack/e2e-*.sh` over detected container compose | ✅ For pipeline/core changes |
 
 ### 5.2 Test matrix for dual-mode
 
@@ -299,13 +299,13 @@ Mapping the SPEC's bars to the remaining work. Status reflects the **2026-06-21 
 |----|-----|----------|--------|
 | A1 | LogBuffer formatting bug (args dropped) | §4 | ✅ done |
 | A2 | DAG condition operators Gt/Lt/Ge/Le/Regex unimplemented | §3.2 | ✅ done |
-| A3 | Sink auto-create used all-TEXT | §1.4 | ⚠️ **partial** — MySQL/PG/JDBC fixed; **ClickHouse + Doris bypass `typing`** (SK-1, SK-2) |
+| A3 | Sink auto-create used all-TEXT | §1.4 | ⚠️ **partial** — MySQL/PG/JDBC/Doris fixed; remaining connector evidence is tracked outside the Doris gate |
 | A4 | Redis source used blocking `KEYS` | §1.5 | ✅ done (SCAN) |
 | A5 | Prometheus metrics wrong types (gauge for counters) | §1.5, §3.2 | ✅ done |
 | A6 | `_version` non-monotonic under concurrency | §5.3 | ✅ done |
-| A7 | DDL `apply` sent raw source DDL to target | §1.4 | ⚠️ **partial** — translator wired into ClickHouse only; Doris/MySQL/PG still apply raw |
-| A8 | Schema mismatch failed silently at runtime | §1.4, §3.2 | ❌ **false** — interfaces wired but **zero implementors** (SK-3); startup validation never runs |
-| A9 | Per-sink metrics only on ClickHouse | §1.5 | ❌ **false** — still ClickHouse-only (SK-4) |
+| A7 | DDL `apply` sent raw source DDL to target | §1.4 | ⚠️ **partial** — ClickHouse has translator wiring; Doris defaults to `reject` and limits `apply` to safe `ALTER TABLE ... ADD COLUMN`; MySQL/PG need separate review |
+| A8 | Schema mismatch failed silently at runtime | §1.4, §3.2 | ⚠️ **partial** — Doris implements `SchemaValidator` and preflight Unique Key/model checks; full connector coverage remains open |
+| A9 | Per-sink metrics only on ClickHouse | §1.5 | ✅ done for built-in sinks — MySQL/PG/Doris/JDBC/Kafka/ES/Redis/S3/MaxCompute expose `SinkMetricsProvider` via `sinkCounters` |
 | A10 | MySQL/PG storage backends unverified | §1.5, §3.3, §5.2 | ✅ done — conformance suite passes on all 3 backends |
 | A11 | Master-worker dispatch verified end-to-end | §1.5, §3.4, §5.2 | ✅ **done (A11-redo, 2026-06-22)** — real `worker.New` + `ExecuteShard` + distributed ParallelRunner (`ShardDispatcher`); roles `standalone`/`master`/`worker`. 3 integration tests PASS against MySQL: 4 shards split 2/2 with NO overlap via real HTTP worker poll, + crash reassignment (dead worker's shards re-queued, survivor completes them). Three-separate-OS-process deployment via `ETL_ROLE` is wired but not yet exercised by an automated multi-binary E2E. |
 | A12 | `make test`/CI scaffolding | §5, §2.2 | ✅ done (CI workflow itself is the one excluded deliverable, per user) |
@@ -344,7 +344,7 @@ Mapping the SPEC's bars to the remaining work. Status reflects the **2026-06-21 
 |----|-----|----------|--------|
 | B1 | 5-minute quickstart (SQLite → ClickHouse) validated | §1.3, §1.5 | ✅ done |
 | B2 | Clear startup checks (binlog ROW, perms, reachability) | §4.3 | ⚠️ **partial** — binlog/grants/tables real; **sink-reachability no-op** (SV-2); preflight errors downgraded to warnings (SV-3) |
-| B3 | Structured/JSON logging option | §1.5 | ❌ **false** — documentation only, not configured anywhere (SV-6) |
+| B3 | Structured/JSON logging option | §1.5 | ✅ done — `LOGGER_FORMAT=json` installs a GoFrame log handler before startup logging |
 | B4 | postgres_cdc completeness (TRUNCATE/DDL) | §1.4 | ⚠️ **partial** — TRUNCATE no longer halts the loop; semantic replication (sink still populated) is a known limitation (SRC-2) |
 | B5 | S3 multipart + retry; ES cluster + 429 retry | §1.4 | ✅ done — ES round-robin + Retry-After; S3 5xx retry; (S3 Parquet still loses all column types — SK-5) |
 
@@ -353,7 +353,7 @@ Mapping the SPEC's bars to the remaining work. Status reflects the **2026-06-21 
 | ID | Gap | SPEC ref | Status |
 |----|-----|----------|--------|
 | P4-19 | SchemaValidator/SchemaDescriptor are dead code — implement or remove (A8) | §3.2 | 🆕 open (SK-3) |
-| P4-20 | `SinkMetricsProvider` on the 8 non-ClickHouse sinks (A9) | §1.5 | 🆕 open (SK-4) |
+| P4-20 | `SinkMetricsProvider` on the 8 non-ClickHouse sinks (A9) | §1.5 | ✅ done — built-in sinks embed `sinkCounters` and record successful writes |
 | P4-21 | S3 Parquet encodes every column as String (loses all types) | §1.4 | 🆕 open (SK-5) |
 | P4-22 | WASM runtime linked unconditionally — gate behind `//go:build extism` | §6.1 | 🆕 open (TF-4) |
 | P4-23 | Router overwrites `Metadata.Source` as a route tag (destroys provenance) | §3.2 | 🆕 open (TF-5) |
@@ -385,7 +385,7 @@ These were recorded as complete in v1. The 2026-06-21 re-audit **confirmed** the
 
 - **2026-06-21**: B1 5-min quickstart validated ✅ (re-confirmed)
 - **2026-06-21**: B2 preflight startup checks ⚠️ (binlog/grants/tables real; sink-reachability no-op — SV-2)
-- **2026-06-21**: B3 JSON logging ❌ (documentation only, not configured — SV-6)
+- **2026-06-21**: B3 JSON logging ❌ at re-audit time; superseded by `LOGGER_FORMAT=json` implementation (SV-6 closed)
 - **2026-06-21**: B4 postgres_cdc TRUNCATE fix ⚠️ (no-crash yes; semantic replication still missing — SRC-2)
 - **2026-06-21**: B5 S3/ES hardening ✅ (re-confirmed; S3 Parquet type-loss — SK-5)
 - **2026-06-21**: Phase 3 legacy freeze + docs pass ✅ (re-confirmed)
@@ -425,13 +425,13 @@ Six independent auditors read the actual code across pipeline-core, sources, sin
 ### P2 — advertised-missing / polish
 
 - **SK-1 (P1→P2)** — ClickHouse auto-create ignores `typing` — `sink/clickhouse.go:1161-1183` (`inferClickHouseType`); name-blind, all `int`→`Int64`, no DECIMAL, no `id`/`_at` hints. The most-used sink bypasses the unified engine. **Fix:** `return typing.InferFromValue(typing.DialectClickHouse, colName, v)`; thread column names through.
-- **SK-2 (P1→P2)** — Doris auto-create is name-only — `sink/doris.go:880-904` (`inferDorisType(colName)`); `EnsureSchemaGeneric` called with `nil` fieldValues. A column named `foo` with an int value → `STRING`. **Fix:** populate `fieldValues`; add a Doris dialect to `typing` (or fall back to value-driven).
+- **SK-2 (✅ done)** — Doris auto-create no longer relies on name-only inference: `collectSchemaInputs` passes representative field values into table creation, and Doris tests cover numeric/decimal inference plus stable Unique Key DDL.
 - **SK-3 (P2)** — `SchemaValidator`/`SchemaDescriptor` are dead code — `core/core.go:108-118`, wired at `pipeline.go:382-396`, **zero implementors** in source/sink. Startup validation never runs. **Fix:** implement on the 5 relational sinks + MySQL/PG CDC sources, or remove the interfaces + wiring.
-- **SK-4 (P2)** — `SinkMetricsProvider` only on ClickHouse — only `sink/clickhouse.go:216`; the other 8 sinks report zero to Prometheus. **Fix:** add the `recordMetrics` helper to MySQL/PG/Doris/JDBC/Kafka/ES/Redis/S3 `Write` paths.
+- **SK-4 (✅ done)** — Non-ClickHouse built-in sinks expose `SinkMetricsProvider` via shared `sinkCounters` and call `recordMetrics` on successful writes.
 - **SK-5 (P2)** — S3 Parquet encodes every column as String — `sink/s3.go:329-372` (`parquet.String()` + `fmt.Sprintf("%v", v)`). All type info lost. **Fix:** switch on the sample value (`parquet.Int(64)`, `Double`, `Timestamp`, `String`).
 - **SV-3 (P2)** — Preflight errors downgraded to warnings — `server.go:716-724` appends `level:"error"` issues to `warnings` and still returns `valid:true`. **Fix:** surface `level=="error"` as `valid:false` in `errors`.
 - **SV-4 (P2)** — AI-generation endpoint not mounted; generated YAML unvalidated — `server.go:3055-3158` handler exists but no route in the table (`:582-600`); LLM output returned raw. **Fix:** register the route; pipe output through `ValidateSpec` + `RunPreflight`.
-- **SV-6 (P2)** — B3 JSON logging not implemented — all logging is `g.Log()` default text; no `format: json` wiring in code or `manifest/config/config.yaml`. **Fix:** set GoFrame glog JSON format + document, or retract the "done" claim.
+- **SV-6 (✅ done)** — `internal/logic/app/logging.go` installs a JSON stdout handler when `LOGGER_FORMAT=json` is set, before startup logs are emitted.
 - **TF-4 (P2)** — WASM linked unconditionally — `plugin/pluginsystem/manager.go:11` imports extism with no `//go:build extism` tag; every binary links wazero. Violates lightweight-core (QuickJS/Lua are correctly gated). **Fix:** split registry (core) from `extism` (build-tagged) package.
 - **TF-5 (P2)** — Router overwrites `Metadata.Source` — `transform/router.go:78,85,87` reuses the provenance field as a route tag; downstream nodes lose origin. **Fix:** add `Metadata.Route`; teach DAG edge-matching to consult it.
 - **TF-11 (P2)** — Transform chain shares `Record.Data` by reference — `core/core.go:146-155`; `join.go:148` aliases `&e.record`. In-place mutation → cross-batch contamination. **Fix:** deep-copy `Data` at chain entry, or enforce a no-mutation contract.
