@@ -108,4 +108,9 @@ func TestParallelRunnerLifecycle(t *testing.T) {
 	if err := pr.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
+	select {
+	case <-pr.Done():
+	case <-time.After(time.Second):
+		t.Fatal("ParallelRunner did not finish after Stop")
+	}
 }
