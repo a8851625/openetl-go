@@ -20,6 +20,8 @@ sink:
   type: file_sink
   connection: saved-sink
   config: {}
+schedule:
+  type: once
 batch_size: 1000
 checkpoint_interval_sec: 30
 backpressure_buffer: 100
@@ -41,6 +43,10 @@ dlq:
 | `sink.type` | yes unless `sink.connection` is set | Registered sink plugin name. If omitted with `connection`, it is inferred from the saved connection. |
 | `sink.connection` / `sink.connection_ref` | no | Saved connection catalog entry to use as the base sink config. Inline `sink.config` overrides fields from the saved connection. |
 | `sink.config` | no | Sink-specific settings. Defaults to `{}`. |
+| `schedule.type` | no | Trigger type. If omitted, the source `default_schedule` is applied. Built-in CDC/stream sources (`mysql_cdc`, `postgres_cdc`, `mysql_snapshot_cdc`, `kafka`) currently support only `streaming`; batch/pull sources (`mysql_batch`, `file`, `http`) support `once`, `cron`, `periodic`, and `dependency`. `spec validate` rejects schedule types outside the source descriptor's `supported_schedules`. |
+| `schedule.cron` | for `cron` | Cron expression used when `schedule.type: cron`. |
+| `schedule.interval_sec` | for `periodic` | Positive interval in seconds used when `schedule.type: periodic`. |
+| `schedule.depends_on` | for `dependency` | Upstream pipeline names that trigger this pipeline after completion. |
 | `batch_size` | no | Sink flush size. Default `1000`. |
 | `checkpoint_interval_sec` | no | Reserved interval setting; checkpoints currently advance after successful writes. Default `30`. |
 | `backpressure_buffer` | no | Internal record channel size. Default `100`. |
@@ -440,6 +446,48 @@ sink:
 | `password` | no | | ES password (**secret**). |
 | `index` | yes | | Target index name. |
 | `id_column` | no | `id` | Column for document ID (enables upsert). |
+
+### `doris`
+
+```yaml
+sink:
+  type: doris
+  config:
+    host: doris-fe
+    port: 9030
+    http_port: 8030
+    user: root
+    password: ${DORIS_PASSWORD}
+    database: analytics
+    table: customers
+    write_mode: stream_load
+    stream_load_format: json
+    batch_mode: upsert
+    pk_columns: [id]
+    auto_create: true
+    schema_drift: add_columns
+    ddl_policy: reject
+```
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `host` | yes | | Doris FE host. |
+| `port` | no | `9030` | Doris MySQL protocol port used for DDL, fallback INSERT, and DELETE. |
+| `http_port` | no | `8030` | Doris Stream Load HTTP port. |
+| `user` | no | `root` | Doris user. |
+| `password` | no | | Doris password (**secret**). |
+| `database` | yes | | Target database name. |
+| `table` | yes | | Target table name. Leave empty only for dynamic CDC table routing where `record.metadata.table` is always present. |
+| `write_mode` | no | `stream_load` | `stream_load` or MySQL-protocol `insert` fallback. |
+| `batch_mode` | no | `insert` | `insert` or `upsert`. Production CDC/upsert requires a Doris Unique Key table and stable `pk_columns`. |
+| `pk_columns` | no | | Key columns for DELETE, auto-created Unique Key tables, and replay-safe upsert validation. |
+| `stream_load_format` | no | `json` | `json` or `csv`. |
+| `stream_load_scheme` | no | `http` | `http` or `https`. |
+| `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
+| `auto_create` | no | `false` | Auto-create missing Doris Unique Key tables. If no `pk_columns` are set, an `id` column is required. |
+| `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
+| `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. The production default rejects source DDL; Doris `apply` is limited to safe `ALTER TABLE ... ADD COLUMN` statements. |
+| `allow_mixed_cdc_non_atomic` | no | `false` | Allow mixed write/delete CDC batches even though Stream Load and MySQL DELETE are not atomic together. |
 
 ## Transforms
 

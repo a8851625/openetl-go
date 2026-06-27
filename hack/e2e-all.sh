@@ -18,6 +18,7 @@ TESTS=(
   "e2e-clickhouse.sh|MySQL CDC->ClickHouse"
   "e2e-clickhouse-autocreate.sh|ClickHouse auto-create + schema drift"
   "e2e-snapshot-cdc-clickhouse.sh|MySQL snapshot+CDC->ClickHouse"
+  "e2e-doris.sh|MySQL batch->Doris Stream Load/insert"
   "e2e-snapshot-cdc.sh|MySQL snapshot+CDC->MySQL"
   "e2e-dlq.sh|DLQ list/replay/delete"
   "e2e-s3-minio.sh|S3/MinIO sink + deterministic replay"

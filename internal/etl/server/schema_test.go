@@ -158,6 +158,9 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if !contains(kafka.SecretFields, "sasl_password") {
 		t.Fatalf("kafka secret fields = %#v", kafka.SecretFields)
 	}
+	if !contains(kafka.SupportedSchedules, "streaming") || kafka.DefaultSchedule != "streaming" {
+		t.Fatalf("kafka schedules = %#v default=%q, want streaming only", kafka.SupportedSchedules, kafka.DefaultSchedule)
+	}
 
 	mysqlBatch := findDescriptor(descriptors, "source", "mysql_batch")
 	if mysqlBatch == nil {
@@ -166,12 +169,23 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if !contains(mysqlBatch.Capabilities, "schema_descriptor") {
 		t.Fatalf("mysql_batch capabilities = %#v, want schema_descriptor", mysqlBatch.Capabilities)
 	}
+	for _, schedule := range []string{"once", "cron", "periodic", "dependency"} {
+		if !contains(mysqlBatch.SupportedSchedules, schedule) {
+			t.Fatalf("mysql_batch supported_schedules = %#v, want %s", mysqlBatch.SupportedSchedules, schedule)
+		}
+	}
+	if mysqlBatch.DefaultSchedule != "once" {
+		t.Fatalf("mysql_batch default_schedule = %q, want once", mysqlBatch.DefaultSchedule)
+	}
 	mysqlCDC := findDescriptor(descriptors, "source", "mysql_cdc")
 	if mysqlCDC == nil {
 		t.Fatal("missing mysql_cdc source descriptor")
 	}
 	if !contains(mysqlCDC.Capabilities, "schema_descriptor_single_table") {
 		t.Fatalf("mysql_cdc capabilities = %#v, want schema_descriptor_single_table", mysqlCDC.Capabilities)
+	}
+	if len(mysqlCDC.SupportedSchedules) != 1 || mysqlCDC.SupportedSchedules[0] != "streaming" || mysqlCDC.DefaultSchedule != "streaming" {
+		t.Fatalf("mysql_cdc schedules = %#v default=%q, want streaming only", mysqlCDC.SupportedSchedules, mysqlCDC.DefaultSchedule)
 	}
 
 	clickhouse := findDescriptor(descriptors, "sink", "clickhouse")

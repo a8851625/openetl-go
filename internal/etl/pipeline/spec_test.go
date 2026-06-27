@@ -41,6 +41,76 @@ func TestValidateSpecRejectsUnknownPlugins(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultsSetsSourceDefaultSchedule(t *testing.T) {
+	spec := &Spec{
+		Name:   "cdc-default",
+		Source: SourceSpec{Type: "mysql_cdc"},
+		Sink:   SinkSpec{Type: "mysql"},
+	}
+	ApplyDefaults(spec)
+	if spec.Schedule == nil || spec.Schedule.Type != ScheduleStreaming {
+		t.Fatalf("schedule = %#v, want streaming default", spec.Schedule)
+	}
+
+	spec = &Spec{
+		Name:   "batch-default",
+		Source: SourceSpec{Type: "mysql_batch"},
+		Sink:   SinkSpec{Type: "mysql"},
+	}
+	ApplyDefaults(spec)
+	if spec.Schedule == nil || spec.Schedule.Type != ScheduleOnce {
+		t.Fatalf("schedule = %#v, want once default", spec.Schedule)
+	}
+}
+
+func TestValidateSpecRejectsUnsupportedSourceSchedule(t *testing.T) {
+	spec := &Spec{
+		Name:                  "bad-schedule",
+		Source:                SourceSpec{Type: "mysql_cdc"},
+		Sink:                  SinkSpec{Type: "mysql"},
+		Schedule:              &ScheduleConfig{Type: ScheduleCron, Cron: "0 * * * * *"},
+		BatchSize:             1,
+		CheckpointIntervalSec: 1,
+		BackpressureBuffer:    1,
+		Retry:                 &RetrySpec{MaxAttempts: 1, InitialIntervalMs: 1, MaxIntervalMs: 1},
+	}
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "does not support schedule.type") {
+		t.Fatalf("ValidateSpec() error = %v, want unsupported schedule", err)
+	}
+}
+
+func TestValidateSpecChecksScheduleRequiredFields(t *testing.T) {
+	base := func(schedule *ScheduleConfig) *Spec {
+		return &Spec{
+			Name:                  "schedule-required",
+			Source:                SourceSpec{Type: "mysql_batch"},
+			Sink:                  SinkSpec{Type: "mysql"},
+			Schedule:              schedule,
+			BatchSize:             1,
+			CheckpointIntervalSec: 1,
+			BackpressureBuffer:    1,
+			Retry:                 &RetrySpec{MaxAttempts: 1, InitialIntervalMs: 1, MaxIntervalMs: 1},
+		}
+	}
+	cases := []struct {
+		name     string
+		schedule *ScheduleConfig
+		want     string
+	}{
+		{"cron", &ScheduleConfig{Type: ScheduleCron}, "schedule.cron"},
+		{"periodic", &ScheduleConfig{Type: SchedulePeriodic}, "schedule.interval_sec"},
+		{"dependency", &ScheduleConfig{Type: ScheduleDependency}, "schedule.depends_on"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateSpec(base(tc.schedule))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ValidateSpec() error = %v, want %s", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadSpecAppliesDefaultsAndExpandsEnv(t *testing.T) {
 	t.Setenv("ETL_TEST_FILE", "/tmp/input.jsonl")
 	file, err := os.CreateTemp(t.TempDir(), "spec-*.yaml")

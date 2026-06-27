@@ -9,19 +9,9 @@ import '@xyflow/react/dist/style.css';
 import YAML from 'yaml';
 import cronstrue from 'cronstrue';
 import type { TFunc, Lang } from './types';
+import { ConfigForm, type PluginSchemaField } from './configFields';
 
 // ── Types ─────────────────────────────────────────────────────────────
-
-type PluginSchemaField = {
-  name: string;
-  type: 'string' | 'int' | 'float' | 'bool' | 'string_array' | 'map';
-  required?: boolean;
-  default?: any;
-  description?: string;
-  secret?: boolean;
-  example?: string;
-  enum?: string[];
-};
 
 type PluginSchemaResp = {
   sources: Record<string, PluginSchemaField[]>;
@@ -31,10 +21,20 @@ type PluginSchemaResp = {
 
 type PluginListResp = { sources: string[]; sinks: string[]; transforms: string[] };
 
+type ConnectorDescriptor = {
+  kind: string;
+  type: string;
+  supported_schedules?: string[];
+  default_schedule?: string;
+};
+
 type ConnectionEntry = {
   name: string;
   kind: 'source' | 'sink' | 'transform';
   type: string;
+  last_status?: string;
+  last_error?: string;
+  updated_at?: string;
 };
 
 type DAGNodeData = {
@@ -65,6 +65,9 @@ const KIND_STYLES: Record<string, { color: string; bg: string; border: string; i
   enricher:     { color: '#ec4899', bg: '#fdf2f8', border: '#f9a8d4', icon: 'Ⓔ' },
   lookup:       { color: '#a855f7', bg: '#faf5ff', border: '#d8b4fe', icon: 'Ⓛ' },
 };
+
+const ADVANCED_NODE_KINDS = ['fanout', 'router', 'tap', 'rate_limiter', 'enricher', 'lookup'];
+const ADVANCED_TRANSFORM_PLUGINS = new Set(ADVANCED_NODE_KINDS);
 
 // Toolbar palette grouped by category
 const NODE_PALETTE = (t: (key: string) => string): { category: string; catLabel: string; catColor: string; nodes: { kind: string; label: string; defaultPlugin: string }[] }[] => [
@@ -108,6 +111,24 @@ let nodeCounter = 0;
 function nextNodeId(kind: string) {
   nodeCounter++;
   return `${kind}-${nodeCounter}`;
+}
+
+function schedulePolicyForSources(sourcePlugins: string[], descriptors: ConnectorDescriptor[]) {
+  if (sourcePlugins.length === 0) return { supported: ALL_SCHEDULE_TYPES, defaultType: 'streaming' };
+  const sourceDescriptors = sourcePlugins
+    .map((plugin) => descriptors.find((d) => d.kind === 'source' && d.type === plugin))
+    .filter(Boolean) as ConnectorDescriptor[];
+  if (sourceDescriptors.length !== sourcePlugins.length) {
+    return { supported: ALL_SCHEDULE_TYPES, defaultType: 'streaming' };
+  }
+  const supported = sourceDescriptors
+    .map((d) => d.supported_schedules || ALL_SCHEDULE_TYPES)
+    .reduce((acc, current) => acc.filter((value) => current.includes(value)), ALL_SCHEDULE_TYPES);
+  const firstDefault = sourceDescriptors[0]?.default_schedule || supported[0] || 'streaming';
+  return {
+    supported: supported.length > 0 ? supported : [],
+    defaultType: supported.includes(firstDefault) ? firstDefault : supported[0] || firstDefault,
+  };
 }
 
 // ── Custom Node Component with Handles ────────────────────────────────
@@ -159,88 +180,29 @@ function PipelineNode({ id, data, selected }: NodeProps) {
 
 const nodeTypes: NodeTypes = { pipelineNode: PipelineNode as any };
 
-// ── Schema-driven Config Form ─────────────────────────────────────────
-
-function ConfigForm({
-  fields,
-  config,
-  onChange,
-  t,
-}: {
-  fields: PluginSchemaField[];
-  config: Record<string, unknown>;
-  onChange: (cfg: Record<string, unknown>) => void;
-  t: TFunc;
-}) {
-  if (!fields || fields.length === 0) {
-    return <div className="text-xs text-slate-400">This plugin has no configurable fields.</div>;
-  }
-
-  const update = (name: string, value: unknown) => {
-    onChange({ ...config, [name]: value });
-  };
-
-  return (
-    <div className="space-y-2.5">
-      {fields.map((f) => {
-        const val = config[f.name] ?? f.default ?? '';
-        const label = (
-          <label className="flex items-center gap-1 text-xs font-medium text-slate-600">
-            {f.name}
-            {f.required && <span className="text-rose-500">*</span>}
-            {f.secret && <span className="text-xs text-amber-500" title={t('ui.secret')}>🔒</span>}
-          </label>
-        );
-        let input: React.ReactNode;
-        if (f.enum && f.enum.length > 0) {
-          input = (
-            <select className="input w-full text-sm" value={String(val)} onChange={(e) => update(f.name, e.target.value)}>
-              {f.enum.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-            </select>
-          );
-        } else if (f.type === 'bool') {
-          input = (
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={!!val} onChange={(e) => update(f.name, e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
-              <span className="text-xs text-slate-500">{val ? t('common.enabled') : t('common.disabled')}</span>
-            </label>
-          );
-        } else if (f.type === 'int' || f.type === 'float') {
-          input = <input type="number" step={f.type === 'float' ? '0.01' : '1'} className="input w-full text-sm" value={val} onChange={(e) => update(f.name, f.type === 'int' ? parseInt(e.target.value) || 0 : parseFloat(e.target.value) || 0)} />;
-        } else if (f.type === 'string_array') {
-          input = (
-            <input
-              className="input w-full text-sm"
-              value={Array.isArray(val) ? val.join(', ') : String(val)}
-              onChange={(e) => update(f.name, e.target.value.split(',').map((s) => s.trim()).filter(Boolean))}
-              placeholder="comma, separated, values"
-            />
-          );
-        } else {
-          input = <input type={f.secret ? 'password' : 'text'} className="input w-full text-sm" value={String(val)} onChange={(e) => update(f.name, e.target.value)} placeholder={f.example || f.description || ''} />;
-        }
-        return (
-          <div key={f.name}>
-            {label}
-            <div className="mt-1">{input}</div>
-            {f.description && <div className="mt-0.5 text-xs text-slate-400">{f.description}</div>}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 // ── Schedule Config Form ──────────────────────────────────────────────
 
-function ScheduleForm({ schedule, onChange, t }: { schedule: ScheduleConfig; onChange: (s: ScheduleConfig) => void; t: TFunc }) {
+const ALL_SCHEDULE_TYPES = ['streaming', 'cron', 'periodic', 'once', 'dependency'];
+
+function ScheduleForm({
+  schedule,
+  onChange,
+  t,
+  supportedTypes = ALL_SCHEDULE_TYPES,
+}: {
+  schedule: ScheduleConfig;
+  onChange: (s: ScheduleConfig) => void;
+  t: TFunc;
+  supportedTypes?: string[];
+}) {
   const [cronDesc, setCronDesc] = useState('');
   const types = [
     { value: 'streaming', label: t('sched.streaming') },
     { value: 'cron', label: t('sched.cron') },
     { value: 'periodic', label: t('sched.periodic') },
     { value: 'once', label: t('sched.once') },
-  ];
+    { value: 'dependency', label: t('sched.dependency') },
+  ].filter((tp) => supportedTypes.includes(tp.value));
 
   const updateType = (type: string) => {
     onChange({ ...schedule, type });
@@ -284,6 +246,12 @@ function ScheduleForm({ schedule, onChange, t }: { schedule: ScheduleConfig; onC
         <div>
           <label className="mb-1 block text-xs font-medium text-slate-500">{t('common.interval')}</label>
           <input type="number" className="input w-full text-sm" value={schedule.interval_sec || 60} onChange={(e) => onChange({ ...schedule, interval_sec: parseInt(e.target.value) || 60 })} />
+        </div>
+      )}
+      {schedule.type === 'dependency' && (
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-500">{t('sched.dependsOn')}</label>
+          <input className="input w-full text-sm" value={(schedule.depends_on || []).join(', ')} onChange={(e) => onChange({ ...schedule, depends_on: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
         </div>
       )}
       {schedule.type === 'streaming' && (
@@ -334,6 +302,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [showNodeProps, setShowNodeProps] = useState(false);
   const [testResult, setTestResult] = useState<string>('');
   const [connections, setConnections] = useState<ConnectionEntry[]>([]);
+  const [descriptors, setDescriptors] = useState<ConnectorDescriptor[]>([]);
 
   const testNodeConnection = async () => {
     if (!selectedNode) {
@@ -373,6 +342,9 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     apiGet<{ connections?: ConnectionEntry[] }>('/api/v2/connections')
       .then((res) => setConnections(res.connections || []))
       .catch(() => setConnections([]));
+    apiGet<{ descriptors?: ConnectorDescriptor[] }>('/api/v2/connectors/descriptors')
+      .then((res) => setDescriptors(res.descriptors || []))
+      .catch(() => setDescriptors([]));
   }, []);
 
   // Load pipeline when editTarget changes
@@ -495,9 +467,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     });
 
     // Detect non-linear nodes that require DAG format
-    const hasComplexTopology = nodes.some((n) =>
-      ['fanout', 'router', 'tap', 'rate_limiter', 'enricher', 'lookup'].includes(n.data.kind)
-    );
+    const hasComplexTopology = nodes.some((n) => ADVANCED_NODE_KINDS.includes(n.data.kind));
     const hasMultipleSources = nodes.filter((n) => n.data.kind === 'source').length > 1;
     const hasMultipleSinks = nodes.filter((n) => n.data.kind === 'sink').length > 1;
 
@@ -670,12 +640,10 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   const selKind = selectedNode?.data.kind;
   const selPlugin = selectedNode?.data.plugin;
-  // Advanced node kinds (fanout/router/tap/etc.) are registered as transforms.
-  const ADVANCED_KINDS = ['fanout', 'router', 'tap', 'rate_limiter', 'enricher', 'lookup'];
   const pluginList: string[] = selKind === 'source' ? (plugins?.data?.sources || [])
     : selKind === 'sink' ? (plugins?.data?.sinks || [])
-    : ADVANCED_KINDS.includes(selKind || '') ? [selKind || '']  // advanced kinds have exactly one plugin (themselves)
-    : (plugins?.data?.transforms || []);
+    : ADVANCED_NODE_KINDS.includes(selKind || '') ? [selKind || '']
+    : (plugins?.data?.transforms || []).filter((name: string) => !ADVANCED_TRANSFORM_PLUGINS.has(name));
   const schemaFields: PluginSchemaField[] = useMemo(() => {
     if (!schema?.data || !selKind || !selPlugin) return [];
     const kindKey = selKind === 'source' ? 'sources' : selKind === 'sink' ? 'sinks' : 'transforms';
@@ -683,7 +651,19 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   }, [schema, selKind, selPlugin]);
 
   const nodeConnectionKind = selKind === 'source' ? 'source' : selKind === 'sink' ? 'sink' : 'transform';
-  const matchingConnections = connections.filter((c) => c.kind === nodeConnectionKind);
+  const nodeSupportsConnection = ['source', 'sink', 'transform', 'enricher', 'lookup'].includes(selKind || '');
+  const matchingConnections = connections
+    .filter((c) => c.kind === nodeConnectionKind)
+    .sort((a, b) => Number(b.type === selPlugin) - Number(a.type === selPlugin) || a.name.localeCompare(b.name));
+  const selectedConnection = connections.find((conn) => conn.name === selectedNode?.data.connection);
+  const sourcePlugins = useMemo(() => nodes.filter((n) => n.data.kind === 'source').map((n) => n.data.plugin), [nodes]);
+  const schedulePolicy = useMemo(() => schedulePolicyForSources(sourcePlugins, descriptors), [sourcePlugins, descriptors]);
+
+  useEffect(() => {
+    if (schedulePolicy.supported.length === 0) return;
+    if (schedulePolicy.supported.includes(schedule.type)) return;
+    setSchedule({ type: schedulePolicy.defaultType });
+  }, [schedule.type, schedulePolicy.defaultType, schedulePolicy.supported]);
 
   // Toggle drawer: clicking same tab again closes it
   const toggleDrawer = (tab: string) => setDrawerTab((prev) => (prev === tab ? null : tab));
@@ -781,17 +761,62 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('dag.plugin')}</label>
-                  <select className="input w-full text-sm" value={selPlugin} onChange={(e) => updateNodePlugin(e.target.value)}>
-                    {pluginList.length > 0 ? pluginList.map((p) => <option key={p} value={p}>{p}</option>) : <option value={selPlugin}>{selPlugin}</option>}
-                  </select>
+                  {ADVANCED_NODE_KINDS.includes(selKind || '') ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">{selPlugin}</div>
+                  ) : (
+                    <select className="input w-full text-sm" value={selPlugin} onChange={(e) => updateNodePlugin(e.target.value)}>
+                      {pluginList.length > 0 ? pluginList.map((p) => <option key={p} value={p}>{p}</option>) : <option value={selPlugin}>{selPlugin}</option>}
+                    </select>
+                  )}
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-500">{t('conn.useSaved')}</label>
-                  <select className="input w-full text-sm" value={selectedNode.data.connection || ''} onChange={(e) => updateNodeConnection(e.target.value)}>
-                    <option value="">{t('conn.noSaved')}</option>
-                    {matchingConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type}</option>)}
-                  </select>
-                </div>
+                {nodeSupportsConnection && (
+                  <div>
+                    <div className="mb-1 flex items-center justify-between">
+                      <label className="block text-xs font-medium text-slate-500">{t('conn.useSaved')}</label>
+                      {selectedNode.data.connection && (
+                        <button className="text-xs font-medium text-indigo-600 hover:text-indigo-700" onClick={() => updateNodeConnection('')}>
+                          {t('conn.useInline')}
+                        </button>
+                      )}
+                    </div>
+                    {selectedConnection ? (
+                      <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-indigo-800">{selectedConnection.name}</div>
+                            <div className="text-xs text-indigo-600">{selectedConnection.kind} / {selectedConnection.type}</div>
+                          </div>
+                          <span className={`badge ${selectedConnection.last_status === 'ok' ? 'badge-emerald' : selectedConnection.last_status === 'error' ? 'badge-rose' : 'badge-slate'}`}>
+                            {selectedConnection.last_status || 'unknown'}
+                          </span>
+                        </div>
+                        {selectedConnection.last_error && <div className="mt-1 text-xs text-rose-600">{selectedConnection.last_error}</div>}
+                      </div>
+                    ) : (
+                      <button className="w-full rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-500 hover:border-indigo-300 hover:bg-indigo-50/40" onClick={() => updateNodeConnection('')}>
+                        {t('conn.inlineConfig')}
+                      </button>
+                    )}
+                    {matchingConnections.length > 0 ? (
+                      <div className="mt-2 max-h-36 space-y-1 overflow-y-auto">
+                        {matchingConnections.slice(0, 8).map((conn) => (
+                          <button
+                            key={conn.name}
+                            className={`w-full rounded-lg border px-2.5 py-2 text-left transition ${conn.name === selectedNode.data.connection ? 'border-indigo-400 bg-indigo-50' : conn.type === selPlugin ? 'border-slate-200 bg-white hover:border-indigo-300' : 'border-slate-200 bg-slate-50 hover:border-slate-300'}`}
+                            onClick={() => updateNodeConnection(conn.name)}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-xs font-semibold text-slate-700">{conn.name}</span>
+                              <span className={`badge ${conn.type === selPlugin ? 'badge-indigo' : 'badge-slate'}`}>{conn.type}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-400">{t('conn.noMatchingSaved')}</div>
+                    )}
+                  </div>
+                )}
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">{t('dag.config')}</label>
                   <ConfigForm fields={schemaFields} config={selectedNode.data.config} onChange={updateNodeConfig} t={t} />
@@ -827,7 +852,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
             </div>
             <div className="max-h-[calc(100%-44px)] overflow-y-auto p-4">
               {/* Schedule */}
-              {drawerTab === 'schedule' && <ScheduleForm schedule={schedule} onChange={setSchedule} t={t} />}
+              {drawerTab === 'schedule' && <ScheduleForm schedule={schedule} onChange={setSchedule} t={t} supportedTypes={schedulePolicy.supported} />}
 
               {/* Hooks */}
               {drawerTab === 'hooks' && (

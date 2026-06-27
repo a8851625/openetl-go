@@ -2989,7 +2989,7 @@ func pluginMetadata() map[string]any {
 			"es":            pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "beta"),
 			"redis":         pluginInfo([]string{"addr"}, []string{"stream"}, "experimental"),
 
-			"doris":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "stream_load", "upsert", "auto_create", "schema_drift"}, "experimental"),
+			"doris":      pluginInfo([]string{"host", "database", "table"}, []string{"batch", "stream_load", "insert_fallback", "upsert", "delete", "auto_create", "schema_drift", "schema_validator", "unique_key_replay_safe"}, "production"),
 			"jdbc":       pluginInfo([]string{"dsn", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "generic"}, "experimental"),
 			"maxcompute": pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "partitioned_table", "schema_validator", "partition_preflight", "experimental_contract"}, "experimental"),
 			"odps":       pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "partitioned_table", "schema_validator", "partition_preflight", "experimental_contract"}, "experimental"),

@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [v0.2.3-beta] — Doris validation and schedule constraints
+
+### Highlights
+- Promoted the Doris sink contract with safer defaults and real FE/BE validation: `ddl_policy` now defaults to `reject`, schema validation checks table existence, field compatibility, and Unique Key / `pk_columns` alignment, and `ddl_policy=apply` is limited to safe add-column changes.
+- Hardened Doris writes and DDL for Doris 2.1: Stream Load labels are deterministic, JSON/CSV headers are explicit, errors are classified for retry/DLQ behavior, auto-create requires a stable key, and generated Unique Key DDL uses Doris-compatible column ordering and type inference.
+- Added `hack/e2e-doris.sh` and included it in `hack/e2e-all.sh`; the script runs with Podman or Docker and validates MySQL batch -> Doris Stream Load JSON, Stream Load CSV, MySQL insert fallback, auto-create Unique Key, decimal inference, and zero failed records against official Doris FE/BE 2.1.11 images.
+- Added source-bound scheduling metadata: source descriptors now expose `supported_schedules` and `default_schedule`, specs apply default schedules, and validation rejects unsupported `schedule.type` values with required-field checks for `cron`, `periodic`, and `dependency`.
+- Updated the DAG editor to load connector descriptors, filter schedule types by the selected source set, support dependency schedules, and reset unsupported schedule selections when sources change.
+
+### Validation
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace localhost/etl-go-dev:latest sh -c 'go test ./internal/etl/...'`
+- `npm run build` in `web/`
+- `CONTAINER_CLI=podman E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh`
+
 ## [v0.2.1] — Pipeline orchestration cleanup and connection reuse
 
 ### Highlights

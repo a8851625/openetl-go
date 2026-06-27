@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [v0.2.3-beta] — Doris 验证与调度约束
+
+### 亮点
+- 收紧 Doris sink 合约并补真实 FE/BE 验证：`ddl_policy` 默认改为 `reject`，schema validation 会校验目标表存在性、字段兼容性、Unique Key 与 `pk_columns` 是否一致，`ddl_policy=apply` 只允许安全的 add-column 变更。
+- 修正 Doris 2.1 写入和 DDL 细节：Stream Load label 改为确定性生成，JSON/CSV header 显式设置，错误按 retry/DLQ 语义分类，auto-create 要求稳定主键，生成的 Unique Key DDL 使用 Doris 兼容的列顺序和类型推断。
+- 新增 `hack/e2e-doris.sh` 并纳入 `hack/e2e-all.sh`；脚本支持 Podman 或 Docker，使用官方 Doris FE/BE 2.1.11 镜像验证 MySQL batch -> Doris 的 Stream Load JSON、Stream Load CSV、MySQL insert fallback、auto-create Unique Key、decimal 推断和零失败记录。
+- 增加 source 绑定的调度元数据：source descriptor 暴露 `supported_schedules` 和 `default_schedule`，spec 会回填默认调度，并拒绝不支持的 `schedule.type`，同时校验 `cron`、`periodic`、`dependency` 的必填字段。
+- DAG 编辑器会加载 connector descriptor，按当前 source 集合过滤 schedule 类型，支持 dependency schedule，并在切换 source 后重置不再支持的调度选择。
+
+### 验证
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace localhost/etl-go-dev:latest sh -c 'go test ./internal/etl/...'`
+- `web/` 下执行 `npm run build`
+- `CONTAINER_CLI=podman E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh`
+
 ## [v0.2.1] — Pipeline 编排口径收敛与连接复用
 
 ### 亮点

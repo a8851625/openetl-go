@@ -49,6 +49,7 @@ Roadmap 按以下差异化推进：
 - DAG DLQ replay 当前不支持，必须持续显式暴露，不让用户误以为可用。
 - Elasticsearch partial bulk 已能按失败条目进入 DLQ；S3/File 重放幂等、跨 sink fanout 非原子等边界仍需要更清楚的测试和文档。
 - Connector maturity 需要由测试证据驱动，而不是手写字符串。
+- Doris sink 的 maturity 必须持续由真实 Doris e2e、schema/model preflight、DDL 安全策略、幂等语义验证，以及文档、descriptor 和实现一致性共同约束。
 
 ### 2. 上手路径仍偏工程化
 
@@ -56,6 +57,7 @@ Roadmap 按以下差异化推进：
 
 - 常见任务缺少固定向导：数据库同步、Kafka 实时明细/聚合、文件/HTTP 落地。
 - 启动前 schema/sample/DDL/幂等策略预览还不完整。
+- 调度配置和 source 能力已经建立第一版显式绑定：source descriptor 暴露 `supported_schedules` / `default_schedule`，spec validate/preflight 拒绝不支持的 `schedule.type`，UI 按当前 source 过滤调度类型；后续需要继续把调度重跑风险和 sink 幂等性 warning 串起来。
 - preflight 错误需要更明确地指向 pipeline、node、字段、风险、修复动作和是否可 replay。
 - UI 应降低“必须手写 YAML”的比例，但 YAML 仍保留为高级和可审计入口。
 - UI 配置页需要复用更多上下文，而不是只暴露静态表单：
@@ -127,6 +129,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 - 默认二进制包含很多内置能力，长期需要更清楚的裁剪策略。
 - API-only、master-only、worker-only、headless 模式需要文档和 smoke test。
+- 后端启动命令仍需要参数化：配置文件路径、本地数据/日志/插件目录、HTTP/ETL API 绑定 host/port、storage backend、specsDir、TLS/auth/audit 等运行参数应能通过 CLI flags 指定，并与环境变量和配置文件保持同一套优先级规则。
 - SQLite/MySQL/PostgreSQL storage 已存在，但升级、回滚、retention、备份恢复、worker 扩缩容 runbook 还不够系统。
 
 ## Roadmap 主线
@@ -171,6 +174,20 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 交付项：
 
+- 首要任务：把 Doris sink 做到 production-ready gate。当前代码侧已推进：
+  - 已补 `hack/e2e-doris.sh` 并纳入 `hack/e2e-all.sh`：使用 Podman 启动官方 Doris FE/BE 2.1.11 镜像，已实跑通过 MySQL batch -> Doris 的 Stream Load JSON、Stream Load CSV、MySQL 协议 insert fallback、auto-create Unique Key、decimal 类型推断和零失败记录断言。后续仍需在 CI 中扩展并实跑 MySQL CDC/snapshot+CDC -> Doris、update/upsert、delete、schema drift add-columns、checkpoint restart、checkpoint reset replay、DLQ/replay，以及 Doris FE/BE outage/recover。
+  - 已实现 Doris `SchemaValidator` 和 preflight 接入：校验目标表存在、字段缺失、类型兼容、`pk_columns` 与 Doris Unique Key 模型一致；接入已有非 Unique Key 表时，不允许把 `batch_mode=upsert` 宣称为幂等。
+  - 已修正 DDL 策略：Doris 默认 `reject`，支持明确的 `reject` / `ignore` / `apply` 语义；`apply` 仅允许安全的 `ALTER TABLE ... ADD COLUMN` 子集，不 raw apply 任意源端 DDL。
+  - 已修复 auto-create / schema drift 类型推断：`ensureTablesAndColumns` 传入代表性 field values，避免首跑建表退化为列名/默认 STRING 推断；文档中的 Doris DDL 配置口径已和实际建表策略对齐。
+  - 已明确 Doris 幂等边界：production CDC 只支持 Doris Unique Key 表和稳定业务主键；DELETE、混合 write/delete 批次、checkpoint replay、DLQ replay 仍需要完整 e2e 证明。
+  - 已统一配置契约：修正 `port` / `http_port` 文档、API schema、UI descriptor 和示例 YAML，移除未实现的 `mysql_port` 口径；maturity metadata 已提升为 `production`，但 CI 必须补齐真实 Doris e2e 才能对外强宣称 production-ready。
+  - 已补 observability 和错误分类：Stream Load HTTP 5xx/429/timeout 按 transient，auth/schema/data 类错误进入对应 DLQ 分类；Doris sink 暴露 `SinkMetricsProvider`。
+- 建立 source 与调度类型的第一版绑定规则：
+  - 已落地每个内置 source descriptor 的 `supported_schedules` 和 `default_schedule`，第一版只使用这两个字段，不引入额外运行分类。
+  - `mysql_cdc`、`postgres_cdc`、`mysql_snapshot_cdc`、`kafka` 默认只允许 `streaming`；`mysql_batch`、`file`、`http` 默认允许 `once` / `cron` / `periodic` / `dependency`；`redis` 按现有模式保守声明为 `once`。
+  - `spec validate` 和 preflight 已拒绝不在 `supported_schedules` 内的 `schedule.type`；缺省 schedule 会按 source 的 `default_schedule` 回填，并校验 `cron`、`periodic`、`dependency` 的必填字段。
+  - UI 创建/编辑 pipeline 时已按当前 source 支持的 schedule 类型过滤选项，并在切换 source 后重新校验已有 schedule；多 source DAG 使用支持类型交集。
+  - 调度校验仍需结合 sink 幂等性给出重跑风险 warning，但第一版不把 sink 风险混入 source capability 字段。
 - 为三条主路径补齐 e2e：
   - MySQL snapshot/CDC -> ClickHouse，覆盖 schema drift、重启恢复、重复吸收、DLQ/replay。MySQL snapshot+CDC -> ClickHouse 已补 Docker e2e，覆盖 auto-create、DDL/schema drift add-column、CDC update/delete/insert、checkpoint restart、checkpoint reset replay 后 ReplacingMergeTree 吸收重复，以及 ClickHouse 下线 DLQ/replay。
   - MySQL batch/CDC -> MySQL/PostgreSQL，覆盖 upsert/delete、事务批写、checkpoint 恢复。MySQL batch custom-query/JOIN -> PostgreSQL upsert 已补 Docker e2e，覆盖 schema preflight 拦截和 checkpoint reset replay 后 upsert 吸收重复；MySQL CDC -> PostgreSQL 已补 Docker e2e，覆盖 insert/update/delete 和 stop/restart checkpoint 恢复。
@@ -281,6 +298,13 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 交付项：
 
 - 文档化 API-only/headless、standalone、master-only、worker-only 运行形态，并补 smoke test。
+- 后端启动命令参数化：
+  - 支持 `--config` 指定配置文件路径，支持 `--data-dir` / `--log-dir` / `--plugins-dir` / `--specs-dir` 指定本地存储、日志、插件和 pipeline spec 目录。
+  - 支持 `--host` / `--port` / `--etl-api-host` / `--etl-api-port` 等绑定参数，覆盖本地开发、容器、内网部署和反向代理场景。
+  - 支持 storage、TLS、API token、audit log、worker/master mode 等关键运行参数通过 CLI flags 指定；所有 flags 必须和现有环境变量、`config.yaml` 字段一一对齐。
+  - 明确配置优先级：CLI flag > 环境变量 > 配置文件 > 内置默认值；启动日志输出最终生效的非敏感配置摘要。
+  - 支持 `--help` / `-h` 查看使用手册，包含参数说明、默认值、对应环境变量、示例命令和敏感字段提示。
+  - 补单测和 smoke test，覆盖 help 输出、优先级覆盖、缺失/非法参数报错、容器入口命令和本地二进制启动。
 - 评估 source/sink build tags，优先裁剪重依赖或低频连接器。
 - SQL storage 收敛：保留 SQLite/MySQL/PostgreSQL，减少重复 CRUD/migration，补升级/回滚 smoke test。
 - 生产 runbook：
@@ -295,6 +319,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 验收指标：
 
 - 最小部署、单机部署、master-worker 部署都有明确命令和 smoke test。
+- 后端 CLI flags、环境变量和配置文件字段保持一致，`--help` 能作为可执行使用手册。
 - 升级/回滚路径有文档和自动化验证。
 - 运维指标能定位 source lag、sink latency、DLQ 积压、checkpoint age、worker health。
 
@@ -335,3 +360,5 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 9. 改造 UI 配置上下文：descriptor/schema/sample/preflight/dry-run/docs 统一驱动表单、向导和 YAML/DAG 编辑器。
 10. 建立 AI DAG context pack：核心组件 Markdown、使用方法、示例、边界和 maturity 进入可校验事实源。
 11. 为 connector certification test kit 写第一版，先认证 MySQL、ClickHouse、Kafka、S3/File。
+12. 参数化后端启动命令：补 `--config`、本地目录、绑定 host/port、storage、TLS/auth/audit、master/worker mode 等 flags，并让 `--help`、环境变量和 `config.yaml` 保持一致。
+13. 建立 source `supported_schedules` / `default_schedule` 事实源，并接入 spec validate、preflight 和 UI schedule 表单。

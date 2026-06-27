@@ -94,6 +94,7 @@ func ConvertLinearSpec(spec *pipeline.Spec) (*PipelineSpec, error) {
 			Type:      ScheduleType(spec.Schedule.Type),
 			Cron:      spec.Schedule.Cron,
 			IntervalS: spec.Schedule.IntervalSec,
+			DependsOn: append([]string(nil), spec.Schedule.DependsOn...),
 		}
 	}
 

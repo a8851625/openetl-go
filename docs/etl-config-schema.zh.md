@@ -20,6 +20,8 @@ sink:
   type: file_sink
   connection: saved-sink
   config: {}
+schedule:
+  type: once
 batch_size: 1000
 flush_interval_ms: 1000
 checkpoint_interval_sec: 30
@@ -42,6 +44,10 @@ dlq:
 | `sink.type` | 设置 `sink.connection` 时可省略 | 已注册的 Sink 插件名称。使用 `connection` 且省略 `type` 时，会从已保存连接推断。 |
 | `sink.connection` / `sink.connection_ref` | 否 | 引用连接目录中的 Sink 配置作为基础配置。内联 `sink.config` 会覆盖连接配置中的同名字段。 |
 | `sink.config` | 否 | Sink 专属设置。默认为 `{}`。 |
+| `schedule.type` | 否 | 触发类型。省略时使用 source descriptor 的 `default_schedule`。内置 CDC/流式 source（`mysql_cdc`、`postgres_cdc`、`mysql_snapshot_cdc`、`kafka`）当前只支持 `streaming`；批/拉取 source（`mysql_batch`、`file`、`http`）支持 `once`、`cron`、`periodic` 和 `dependency`。`spec validate` 会拒绝不在 source descriptor `supported_schedules` 内的调度类型。 |
+| `schedule.cron` | `cron` 时必填 | `schedule.type: cron` 使用的 Cron 表达式。 |
+| `schedule.interval_sec` | `periodic` 时必填 | `schedule.type: periodic` 使用的正整数秒级间隔。 |
+| `schedule.depends_on` | `dependency` 时必填 | 上游 pipeline 名称列表，上游完成后触发当前 pipeline。 |
 | `batch_size` | 否 | Sink 每批最大记录数。默认 `1000`。 |
 | `flush_interval_ms` | 否 | 批次 flush 间隔（毫秒）。默认 `1000`。 |
 | `checkpoint_interval_sec` | 否 | 检查点保存间隔（秒）。默认 `30`。 |
@@ -502,25 +508,40 @@ sink:
   type: doris
   config:
     host: doris-fe
-    port: 8030
-    mysql_port: 9030
+    port: 9030
+    http_port: 8030
     user: root
     password: ${DORIS_PASSWORD}
     database: analytics
     table: customers
+    write_mode: stream_load
+    stream_load_format: json
+    batch_mode: upsert
+    pk_columns: [id]
     auto_create: true
+    schema_drift: add_columns
+    ddl_policy: reject
 ```
 
 | 字段 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `host` | 是 | | Doris FE 主机。 |
-| `port` | 否 | `8030` | Stream Load HTTP 端口。 |
-| `mysql_port` | 否 | `9030` | MySQL 协议端口（DELETE 用）。 |
-| `user` | 是 | | Doris 用户。 |
+| `port` | 否 | `9030` | Doris MySQL 协议端口，用于 DDL、insert fallback 和 DELETE。 |
+| `http_port` | 否 | `8030` | Stream Load HTTP 端口。 |
+| `user` | 否 | `root` | Doris 用户。 |
 | `password` | 否 | | Doris 密码（**密钥**）。 |
 | `database` | 是 | | 目标数据库。 |
-| `table` | 是 | | 目标表。 |
-| `auto_create` | 否 | `false` | 自动建表。 |
+| `table` | 是 | | 目标表。只有 CDC 动态表路由且每条记录都有 `metadata.table` 时才可留空。 |
+| `write_mode` | 否 | `stream_load` | `stream_load` 或 MySQL 协议 `insert` fallback。 |
+| `batch_mode` | 否 | `insert` | `insert` 或 `upsert`。生产 CDC/upsert 需要 Doris Unique Key 表和稳定 `pk_columns`。 |
+| `pk_columns` | 否 | | DELETE、自动创建 Unique Key 表和 replay-safe upsert 校验使用的业务主键列。 |
+| `stream_load_format` | 否 | `json` | `json` 或 `csv`。 |
+| `stream_load_scheme` | 否 | `http` | `http` 或 `https`。 |
+| `tls_skip_verify` | 否 | `false` | 跳过 TLS 证书校验。 |
+| `auto_create` | 否 | `false` | 自动创建 Doris Unique Key 表。未配置 `pk_columns` 时必须存在 `id` 字段。 |
+| `schema_drift` | 否 | `ignore` | `ignore`、`fail` 或 `add_columns`。 |
+| `ddl_policy` | 否 | `reject` | `reject`、`ignore` 或 `apply`。生产默认拒绝源端 DDL；Doris `apply` 仅允许安全的 `ALTER TABLE ... ADD COLUMN` 子集。 |
+| `allow_mixed_cdc_non_atomic` | 否 | `false` | 允许混合 write/delete CDC 批次，需接受 Stream Load 与 MySQL DELETE 非原子语义。 |
 
 ### `redis`
 

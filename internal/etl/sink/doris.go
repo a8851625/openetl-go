@@ -84,9 +84,9 @@ type DorisSink struct {
 	ddLPolicy              DDLPolicy
 	allowMixedCDCNonAtomic bool
 
-	db          *sql.DB
-	httpClient  *http.Client
-	schemaCache *core.SchemaCache
+	db           *sql.DB
+	httpClient   *http.Client
+	schemaCache  *core.SchemaCache
 	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
@@ -210,7 +210,7 @@ func NewDorisSink(config map[string]any) (*DorisSink, error) {
 		}
 	}
 	if s.ddLPolicy == "" {
-		s.ddLPolicy = DDLPolicyApply
+		s.ddLPolicy = DDLPolicyReject
 	}
 	if v, ok := config["allow_mixed_cdc_non_atomic"]; ok {
 		if b, ok := v.(bool); ok {
@@ -225,6 +225,47 @@ func (s *DorisSink) Name() string { return s.name }
 
 // SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
 func (s *DorisSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
+
+func (s *DorisSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) error {
+	if len(schema.Columns) == 0 || s.table == "" {
+		return nil
+	}
+	exists, err := s.tableExists(ctx, s.table)
+	if err != nil {
+		return fmt.Errorf("validate doris schema: check table %s.%s: %w", s.database, s.table, err)
+	}
+	if !exists {
+		if s.autoCreate {
+			if s.batchMode == "upsert" && len(s.pkColumns) == 0 && !schemaHasColumn(schema, "id") {
+				return fmt.Errorf("schema validation failed for doris %s.%s: batch_mode=upsert with auto_create requires pk_columns or an id column for a stable Doris UNIQUE KEY model", s.database, s.table)
+			}
+			return nil
+		}
+		return fmt.Errorf("schema validation failed for doris %s.%s: target table does not exist; enable auto_create or create a Doris UNIQUE KEY table first", s.database, s.table)
+	}
+	target, err := s.getExistingColumnInfo(ctx, s.table)
+	if err != nil {
+		return fmt.Errorf("validate doris schema: read columns for %s.%s: %w", s.database, s.table, err)
+	}
+	if err := validateSchemaCompatibility(schema, target, schemaValidationOptions{
+		targetName:     fmt.Sprintf("doris %s.%s", s.database, s.table),
+		allowMissing:   s.schemaDrift == string(core.DriftAddCols),
+		missingRemedy:  "enable schema_drift=add_columns or add the columns manually",
+		allowTypeSync:  false,
+		typeSyncRemedy: "change the Doris target column type or add a transform/type_convert before the sink",
+	}); err != nil {
+		return err
+	}
+	if s.batchMode == "upsert" || len(s.pkColumns) > 0 {
+		if len(s.pkColumns) == 0 {
+			return fmt.Errorf("schema validation failed for doris %s.%s: batch_mode=upsert requires pk_columns so checkpoint/DLQ replay targets a stable Doris UNIQUE KEY", s.database, s.table)
+		}
+		if err := s.validateUniqueKeyModel(ctx, s.table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (s *DorisSink) Open(ctx context.Context) error {
 	// MySQL protocol connection (for DDL + DELETE + fallback INSERT)
@@ -255,7 +296,11 @@ func (s *DorisSink) Open(ctx context.Context) error {
 }
 
 func (s *DorisSink) Write(ctx context.Context, records []core.Record) (err error) {
-	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
+	defer func() {
+		if err != nil {
+			s.recordError()
+		}
+	}() // P5-12: count write failures
 	if len(records) == 0 {
 		return nil
 	}
@@ -273,6 +318,9 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) (err error
 
 	// Apply DDL first according to ddl_policy (schema changes precede data).
 	if err := ApplyDDLRecords(ctx, ddlRecords, s.ddLPolicy, func(ctx context.Context, ddl, table string) error {
+		if err := validateDorisApplyDDL(ddl); err != nil {
+			return err
+		}
 		if _, err := s.db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("execute DDL %q: %w", ddl, err)
 		}
@@ -409,8 +457,7 @@ func isRetryableStreamLoadErr(err error) bool {
 	if strings.Contains(msg, "connection") || strings.Contains(msg, "timeout") || strings.Contains(msg, "EOF") || strings.Contains(msg, "refused") {
 		return true
 	}
-	// HTTP 5xx responses are retryable.
-	return strings.Contains(msg, "HTTP 5")
+	return core.IsRetryableError(err) || strings.Contains(msg, "HTTP 5") || strings.Contains(msg, "HTTP 429")
 }
 
 // streamLoadOnce performs a single Stream Load HTTP request without retry.
@@ -437,14 +484,16 @@ func (s *DorisSink) streamLoadOnce(ctx context.Context, tableName string, record
 	// Doris Stream Load headers
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Expect", "100-continue")
+	req.Header.Set("format", s.streamLoadFormat)
+	if s.streamLoadFormat == "json" {
+		req.Header.Set("read_json_by_line", "true")
+	}
 	// Deterministic label: hash of (database, table, payload) so retries
 	// produce the same label and Doris can deduplicate. Different batches
 	// get different labels because the payload differs.
-	labelHash := sha256.Sum256(append([]byte(s.database+"."+tableName+"|"), body...))
+	labelHash := sha256.Sum256(append([]byte(fmt.Sprintf("%s:%d/%s.%s|", s.host, s.httpPort, s.database, tableName)), body...))
 	label := fmt.Sprintf("etl_%x", labelHash[:16])
 	req.Header.Set("label", label)
-	// Tell Doris to merge based on Unique Key (default behavior for UK model tables)
-	req.Header.Set("merge_type", "MERGE")
 
 	// For CSV, specify column order so Doris maps correctly.
 	if s.streamLoadFormat == "csv" {
@@ -452,6 +501,7 @@ func (s *DorisSink) streamLoadOnce(ctx context.Context, tableName string, record
 		if len(cols) > 0 {
 			req.Header.Set("columns", strings.Join(cols, ","))
 		}
+		req.Header.Set("column_separator", ",")
 	}
 
 	// Auth
@@ -468,7 +518,7 @@ func (s *DorisSink) streamLoadOnce(ctx context.Context, tableName string, record
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("stream load failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return classifyDorisStreamLoadError(resp.StatusCode, fmt.Sprintf("stream load failed (HTTP %d): %s", resp.StatusCode, string(respBody)))
 	}
 
 	// Parse Doris Stream Load response JSON to check success.
@@ -481,11 +531,11 @@ func (s *DorisSink) streamLoadOnce(ctx context.Context, tableName string, record
 	}
 	if err := json.Unmarshal(respBody, &slResp); err != nil {
 		// If the response is not valid JSON, it's likely an error page.
-		return fmt.Errorf("stream load: unparseable response (HTTP %d): %s", resp.StatusCode, string(respBody)[:min(len(respBody), 200)])
+		return core.ClassifiedError{Class: core.ErrorClassTransient, Err: fmt.Errorf("stream load: unparseable response (HTTP %d): %s", resp.StatusCode, string(respBody)[:min(len(respBody), 200)])}
 	}
 	if slResp.Status == "Fail" || slResp.StatusCode >= 400 {
-		return fmt.Errorf("stream load rejected: %s (loaded %d/%d)",
-			slResp.Message, slResp.NumberLoadedRows, slResp.NumberTotalRows)
+		return classifyDorisStreamLoadError(slResp.StatusCode, fmt.Sprintf("stream load rejected: %s (loaded %d/%d)",
+			slResp.Message, slResp.NumberLoadedRows, slResp.NumberTotalRows))
 	}
 
 	return nil
@@ -496,6 +546,26 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func classifyDorisStreamLoadError(statusCode int, message string) error {
+	class := core.ErrorClassData
+	lower := strings.ToLower(message)
+	switch {
+	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
+		class = core.ErrorClassAuth
+	case statusCode == http.StatusTooManyRequests || statusCode >= 500:
+		class = core.ErrorClassTransient
+	case strings.Contains(lower, "unknown column") || strings.Contains(lower, "schema") || (strings.Contains(lower, "table") && strings.Contains(lower, "not exist")):
+		class = core.ErrorClassSchema
+	case strings.Contains(lower, "data quality") || strings.Contains(lower, "too many filtered rows") || strings.Contains(lower, "invalid") || strings.Contains(lower, "out of range") || strings.Contains(lower, "data too long"):
+		class = core.ErrorClassData
+	default:
+		if statusCode == 0 {
+			class = core.ClassifyError(fmt.Errorf("%s", message))
+		}
+	}
+	return core.ClassifiedError{Class: class, Err: fmt.Errorf("%s", message)}
 }
 
 // buildJSONBody converts records to Doris Stream Load JSON format.
@@ -739,11 +809,25 @@ func (s *DorisSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 	if !s.autoCreate && s.schemaDrift != "add_columns" && s.schemaDrift != "fail" {
 		return nil
 	}
+	tableCols, tableValues := s.collectSchemaInputs(records)
+	for tableName, cols := range tableCols {
+		if err := s.EnsureSchema(ctx, tableName, cols, tableValues[tableName]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *DorisSink) collectSchemaInputs(records []core.Record) (map[string][]string, map[string]map[string]any) {
 	tableCols := make(map[string][]string)
+	tableValues := make(map[string]map[string]any)
 	for _, rec := range records {
 		tableName := s.resolveTable(rec)
 		if tableName == "" {
 			continue
+		}
+		if tableValues[tableName] == nil {
+			tableValues[tableName] = make(map[string]any)
 		}
 		for k := range rec.Data {
 			found := false
@@ -756,14 +840,12 @@ func (s *DorisSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 			if !found {
 				tableCols[tableName] = append(tableCols[tableName], k)
 			}
+			if _, ok := tableValues[tableName][k]; !ok && rec.Data[k] != nil {
+				tableValues[tableName][k] = rec.Data[k]
+			}
 		}
 	}
-	for tableName, cols := range tableCols {
-		if err := s.EnsureSchema(ctx, tableName, cols, nil); err != nil {
-			return err
-		}
-	}
-	return nil
+	return tableCols, tableValues
 }
 
 func (s *DorisSink) tableExists(ctx context.Context, table string) (bool, error) {
@@ -798,32 +880,224 @@ func (s *DorisSink) getExistingColumns(ctx context.Context, table string) (map[s
 	return cols, nil
 }
 
-// createTableFromFields creates a Doris table with UNIQUE KEY model.
-// Doris requires ENGINE=OLAP and a key definition. We use UNIQUE KEY on
-// pk_columns (or the first few columns if pk_columns is not set).
-func (s *DorisSink) createTableFromFields(ctx context.Context, table string, columns []string, fieldValues map[string]any) error {
-	if len(columns) == 0 {
+func (s *DorisSink) getExistingColumnInfo(ctx context.Context, table string) ([]core.ColumnInfo, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT column_name, column_type, is_nullable FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position`,
+		s.database, table,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cols []core.ColumnInfo
+	for rows.Next() {
+		var name, dataType, nullable string
+		if err := rows.Scan(&name, &dataType, &nullable); err != nil {
+			return nil, err
+		}
+		cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES")})
+	}
+	return cols, rows.Err()
+}
+
+func (s *DorisSink) validateUniqueKeyModel(ctx context.Context, table string) error {
+	createStmt, err := s.showCreateTable(ctx, table)
+	if err != nil {
+		return fmt.Errorf("validate doris unique key model for %s.%s: %w", s.database, table, err)
+	}
+	uniqueKeys := parseDorisUniqueKeyColumns(createStmt)
+	if len(uniqueKeys) == 0 {
+		return fmt.Errorf("schema validation failed for doris %s.%s: batch_mode=upsert requires a Doris UNIQUE KEY table; existing table is not Unique Key or SHOW CREATE TABLE did not expose UNIQUE KEY", s.database, table)
+	}
+	if !sameIdentifierSet(uniqueKeys, s.pkColumns) {
+		return fmt.Errorf("schema validation failed for doris %s.%s: pk_columns %v do not match Doris UNIQUE KEY %v; replay-safe upsert requires the configured business key to be the table unique key", s.database, table, s.pkColumns, uniqueKeys)
+	}
+	return nil
+}
+
+func (s *DorisSink) showCreateTable(ctx context.Context, table string) (string, error) {
+	rows, err := s.db.QueryContext(ctx, "SHOW CREATE TABLE "+quoteIdentMySQL(table))
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return "", sql.ErrNoRows
+	}
+	cols, err := rows.Columns()
+	if err != nil {
+		return "", err
+	}
+	values := make([]sql.NullString, len(cols))
+	scan := make([]any, len(cols))
+	for i := range values {
+		scan[i] = &values[i]
+	}
+	if err := rows.Scan(scan...); err != nil {
+		return "", err
+	}
+	for i, col := range cols {
+		if strings.EqualFold(col, "Create Table") && values[i].Valid {
+			return values[i].String, nil
+		}
+	}
+	if len(values) > 1 && values[1].Valid {
+		return values[1].String, nil
+	}
+	return "", fmt.Errorf("SHOW CREATE TABLE returned no create statement")
+}
+
+func parseDorisUniqueKeyColumns(createStmt string) []string {
+	upper := strings.ToUpper(createStmt)
+	idx := strings.Index(upper, "UNIQUE KEY")
+	if idx < 0 {
 		return nil
+	}
+	rest := createStmt[idx+len("UNIQUE KEY"):]
+	open := strings.Index(rest, "(")
+	if open < 0 {
+		return nil
+	}
+	rest = rest[open+1:]
+	close := strings.Index(rest, ")")
+	if close < 0 {
+		return nil
+	}
+	rawCols := strings.Split(rest[:close], ",")
+	cols := make([]string, 0, len(rawCols))
+	for _, raw := range rawCols {
+		col := normalizeIdentifier(raw)
+		if col != "" {
+			cols = append(cols, col)
+		}
+	}
+	return cols
+}
+
+func normalizeIdentifier(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.Trim(v, "`\"[]")
+	if dot := strings.LastIndex(v, "."); dot >= 0 {
+		v = v[dot+1:]
+		v = strings.Trim(v, "`\"[]")
+	}
+	return strings.ToLower(v)
+}
+
+func sameIdentifierSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, item := range a {
+		seen[normalizeIdentifier(item)]++
+	}
+	for _, item := range b {
+		key := normalizeIdentifier(item)
+		if seen[key] == 0 {
+			return false
+		}
+		seen[key]--
+	}
+	return true
+}
+
+func schemaHasColumn(schema core.SchemaInfo, name string) bool {
+	for _, col := range schema.Columns {
+		if strings.EqualFold(col.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func orderDorisColumns(columns, keyCols []string) []string {
+	keySet := make(map[string]bool, len(keyCols))
+	out := make([]string, 0, len(columns))
+	for _, key := range keyCols {
+		keyNorm := normalizeIdentifier(key)
+		if keySet[keyNorm] {
+			continue
+		}
+		keySet[keyNorm] = true
+		out = append(out, key)
+	}
+
+	rest := make([]string, 0, len(columns)-len(out))
+	for _, col := range columns {
+		if !keySet[normalizeIdentifier(col)] {
+			rest = append(rest, col)
+		}
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
+}
+
+func validateDorisApplyDDL(ddl string) error {
+	normalized := strings.ToUpper(strings.Join(strings.Fields(ddl), " "))
+	if strings.HasPrefix(normalized, "ALTER TABLE ") && strings.Contains(normalized, " ADD COLUMN ") {
+		for _, blocked := range []string{" DROP ", " DROP COLUMN ", " MODIFY ", " CHANGE ", " RENAME ", " TRUNCATE "} {
+			if strings.Contains(normalized, blocked) {
+				return fmt.Errorf("doris ddl_policy=apply only permits safe ALTER TABLE ADD COLUMN statements, got %q", ddl)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("doris ddl_policy=apply only permits safe ALTER TABLE ADD COLUMN statements, got %q", ddl)
+}
+
+// createTableFromFields creates a Doris table with UNIQUE KEY model.
+// Doris requires ENGINE=OLAP and a key definition. We use pk_columns, or id
+// only when present, so replay-safe upsert never relies on an arbitrary column.
+func (s *DorisSink) createTableFromFields(ctx context.Context, table string, columns []string, fieldValues map[string]any) error {
+	ddl, err := s.buildCreateTableDDL(table, columns, fieldValues)
+	if err != nil || ddl == "" {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, ddl)
+	return err
+}
+
+func (s *DorisSink) buildCreateTableDDL(table string, columns []string, fieldValues map[string]any) (string, error) {
+	if len(columns) == 0 {
+		return "", nil
 	}
 	sort.Strings(columns)
 
 	// Determine key columns
-	keyCols := s.pkColumns
-	if len(keyCols) == 0 {
-		// Default: use "id" if present, otherwise first column
-		for _, c := range columns {
-			if c == "id" || c == "ID" {
-				keyCols = []string{c}
-				break
+	columnByNorm := make(map[string]string, len(columns))
+	for _, c := range columns {
+		columnByNorm[normalizeIdentifier(c)] = c
+	}
+	keyCols := make([]string, 0, len(s.pkColumns))
+	if len(s.pkColumns) > 0 {
+		seen := make(map[string]bool, len(s.pkColumns))
+		for _, configured := range s.pkColumns {
+			norm := normalizeIdentifier(configured)
+			if seen[norm] {
+				continue
 			}
+			actual, ok := columnByNorm[norm]
+			if !ok {
+				return "", fmt.Errorf("create doris table %s: pk_column %q is not present in source fields %v", table, configured, columns)
+			}
+			seen[norm] = true
+			keyCols = append(keyCols, actual)
+		}
+	} else {
+		// Default: use "id" if present. Do not silently pick the first
+		// arbitrary column: replay-safe Doris upsert requires a stable key.
+		if actual, ok := columnByNorm["id"]; ok {
+			keyCols = []string{actual}
 		}
 		if len(keyCols) == 0 {
-			keyCols = []string{columns[0]}
+			return "", fmt.Errorf("create doris table %s: pk_columns is required when no id column is present; Doris production upsert requires an explicit UNIQUE KEY", table)
 		}
 	}
+	columns = orderDorisColumns(columns, keyCols)
 	keySet := make(map[string]bool)
 	for _, c := range keyCols {
-		keySet[c] = true
+		keySet[normalizeIdentifier(c)] = true
 	}
 
 	var b strings.Builder
@@ -839,7 +1113,7 @@ func (s *DorisSink) createTableFromFields(ctx context.Context, table string, col
 		b.WriteString(quoteIdentMySQL(c))
 		b.WriteString(" ")
 
-		if keySet[c] {
+		if keySet[normalizeIdentifier(c)] {
 			b.WriteString(inferDorisKeyType(c, fieldValues[c]))
 			b.WriteString(" NOT NULL")
 		} else {
@@ -852,11 +1126,6 @@ func (s *DorisSink) createTableFromFields(ctx context.Context, table string, col
 	for i, c := range keyCols {
 		quotedKeys[i] = quoteIdentMySQL(c)
 	}
-	b.WriteString(",\n  INDEX idx_")
-	b.WriteString(sanitizeIndexName(table))
-	b.WriteString(" (")
-	b.WriteString(strings.Join(quotedKeys, ", "))
-	b.WriteString(") USING BTREE")
 	b.WriteString("\n) ENGINE=OLAP\n")
 	b.WriteString("UNIQUE KEY(")
 	b.WriteString(strings.Join(quotedKeys, ", "))
@@ -869,8 +1138,7 @@ func (s *DorisSink) createTableFromFields(ctx context.Context, table string, col
 	b.WriteString("  \"light_schema_change\" = \"true\"\n")
 	b.WriteString(")")
 
-	_, err := s.db.ExecContext(ctx, b.String())
-	return err
+	return b.String(), nil
 }
 
 // addColumn adds a column to an existing Doris table.
@@ -903,10 +1171,10 @@ func inferDorisKeyType(colName string, v any) string {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 func (s *DorisSink) resolveTable(rec core.Record) string {
-	if rec.Metadata.Table != "" {
-		return rec.Metadata.Table
+	if s.table != "" {
+		return s.table
 	}
-	return s.table
+	return rec.Metadata.Table
 }
 
 func (s *DorisSink) Close() error {
@@ -915,3 +1183,5 @@ func (s *DorisSink) Close() error {
 	}
 	return nil
 }
+
+var _ core.SchemaValidator = (*DorisSink)(nil)

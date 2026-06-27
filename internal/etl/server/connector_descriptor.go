@@ -5,19 +5,22 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
 )
 
 type ConnectorDescriptor struct {
-	Version      string        `json:"version"`
-	Kind         string        `json:"kind"`
-	Type         string        `json:"type"`
-	Maturity     string        `json:"maturity"`
-	Required     []string      `json:"required"`
-	Capabilities []string      `json:"capabilities"`
-	Fields       []ConfigField `json:"fields"`
-	SecretFields []string      `json:"secret_fields"`
-	Registered   bool          `json:"registered"`
+	Version            string        `json:"version"`
+	Kind               string        `json:"kind"`
+	Type               string        `json:"type"`
+	Maturity           string        `json:"maturity"`
+	Required           []string      `json:"required"`
+	Capabilities       []string      `json:"capabilities"`
+	Fields             []ConfigField `json:"fields"`
+	SecretFields       []string      `json:"secret_fields"`
+	Registered         bool          `json:"registered"`
+	SupportedSchedules []string      `json:"supported_schedules,omitempty"`
+	DefaultSchedule    string        `json:"default_schedule,omitempty"`
 }
 
 var connectorMaturityLevels = []string{"production", "beta", "experimental", "dev-only"}
@@ -88,16 +91,24 @@ func descriptorsForKind(kind string, registered []string, schemas map[string][]C
 		sort.Strings(required)
 		sort.Strings(secretFields)
 		sort.Strings(capabilities)
+		var supportedSchedules []string
+		var defaultSchedule string
+		if kind == "source" {
+			supportedSchedules = pipeline.SupportedSourceSchedules(name)
+			defaultSchedule = pipeline.DefaultSourceSchedule(name)
+		}
 		out = append(out, ConnectorDescriptor{
-			Version:      "v1",
-			Kind:         kind,
-			Type:         name,
-			Maturity:     maturity,
-			Required:     required,
-			Capabilities: capabilities,
-			Fields:       fields,
-			SecretFields: secretFields,
-			Registered:   registeredSet[name],
+			Version:            "v1",
+			Kind:               kind,
+			Type:               name,
+			Maturity:           maturity,
+			Required:           required,
+			Capabilities:       capabilities,
+			Fields:             fields,
+			SecretFields:       secretFields,
+			Registered:         registeredSet[name],
+			SupportedSchedules: supportedSchedules,
+			DefaultSchedule:    defaultSchedule,
 		})
 	}
 	return out

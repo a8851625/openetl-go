@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { TFunc, Lang } from './types';
+import { ConfigForm, buildDefaultConfig, missingRequiredFields, type PluginSchemaField } from './configFields';
 
 type ConnectorKind = 'source' | 'sink' | 'transform';
 
@@ -21,6 +22,7 @@ type ConnectorDescriptor = {
   maturity: string;
   required?: string[];
   capabilities?: string[];
+  fields?: PluginSchemaField[];
   secret_fields?: string[];
   registered?: boolean;
 };
@@ -53,7 +55,10 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const [kind, setKind] = useState<ConnectorKind>('source');
   const [type, setType] = useState('kafka');
   const [name, setName] = useState('orders-kafka');
+  const [config, setConfig] = useState<Record<string, unknown>>(starterConfig.source);
   const [configText, setConfigText] = useState(JSON.stringify(starterConfig.source, null, 2));
+  const [jsonOpen, setJsonOpen] = useState(false);
+  const [jsonError, setJsonError] = useState('');
   const [openOnTest, setOpenOnTest] = useState(true);
 
   const refresh = () => {
@@ -79,15 +84,54 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   }, [descriptors, kind]);
 
   const selectedDescriptor = descriptors.find((d) => d.kind === kind && d.type === type);
+  const selectedFields = selectedDescriptor?.fields || [];
+  const missingFields = missingRequiredFields(selectedFields, config);
+
+  const nextConfigFor = (nextKind: ConnectorKind, nextType: string) => {
+    const descriptor = descriptors.find((d) => d.kind === nextKind && d.type === nextType);
+    if (descriptor?.fields?.length) return buildDefaultConfig(descriptor.fields);
+    return starterConfig[nextKind] || {};
+  };
+
+  const applyConfig = (next: Record<string, unknown>) => {
+    setConfig(next);
+    setConfigText(JSON.stringify(next, null, 2));
+    setJsonError('');
+  };
+
+  const applyType = (nextType: string, nextKind = kind) => {
+    setType(nextType);
+    setName(`${nextType}-connection`);
+    applyConfig(nextConfigFor(nextKind, nextType));
+  };
+
+  useEffect(() => {
+    if (!descriptors.length) return;
+    if (selectedDescriptor) return;
+    const first = descriptors.find((d) => d.kind === kind && d.registered !== false)?.type;
+    if (first) applyType(first);
+  }, [descriptors, kind, selectedDescriptor]);
 
   const onKindChange = (next: ConnectorKind) => {
     setKind(next);
     const first = descriptors.find((d) => d.kind === next && d.registered !== false)?.type;
     const fallback = next === 'source' ? 'kafka' : next === 'sink' ? 'clickhouse' : 'identity';
     const nextType = first || fallback;
-    setType(nextType);
-    setName(`${nextType}-connection`);
-    setConfigText(JSON.stringify(starterConfig[next], null, 2));
+    applyType(nextType, next);
+  };
+
+  const updateConfigFromJson = (text: string) => {
+    setConfigText(text);
+    try {
+      const parsed = JSON.parse(text || '{}');
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(t('conn.jsonObjectRequired'));
+      }
+      setConfig(parsed as Record<string, unknown>);
+      setJsonError('');
+    } catch (e) {
+      setJsonError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const save = async () => {
@@ -95,6 +139,13 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     setError('');
     try {
       const parsed = JSON.parse(configText || '{}');
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(t('conn.jsonObjectRequired'));
+      }
+      const missing = missingRequiredFields(selectedFields, parsed as Record<string, unknown>);
+      if (missing.length) {
+        throw new Error(`${t('conn.missingRequired')}: ${missing.join(', ')}`);
+      }
       await api('/api/v2/connections', {
         method: 'POST',
         body: JSON.stringify({ name, kind, type, config: parsed }),
@@ -134,6 +185,13 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     }
   };
 
+  const loadConnection = (conn: ConnectionEntry) => {
+    setKind(conn.kind);
+    setType(conn.type);
+    setName(conn.name);
+    applyConfig(conn.config || {});
+  };
+
   const healthClass = (status?: string) => {
     if (status === 'ok') return 'badge-emerald';
     if (status === 'error') return 'badge-rose';
@@ -142,7 +200,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid gap-4 md:grid-cols-3">
         <div className="card card-body">
           <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{t('conn.saved')}</span>
           <div className="mt-2 text-3xl font-bold text-indigo-600">{connections.length}</div>
@@ -159,7 +217,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
 
       {error && <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>}
 
-      <div className="grid grid-cols-[minmax(0,1fr)_360px] gap-6">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="card">
           <div className="card-header flex items-center justify-between">
             <h2 className="text-sm font-semibold">{t('conn.catalog')}</h2>
@@ -203,6 +261,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                       <td className="text-xs text-slate-400">{fmtTime(conn.last_tested_at)}</td>
                       <td>
                         <div className="flex gap-2">
+                          <button className="btn btn-secondary btn-sm" onClick={() => loadConnection(conn)}>{t('conn.load')}</button>
                           <button className="btn btn-secondary btn-sm" disabled={testing === conn.name} onClick={() => testConnection(conn)}>
                             {testing === conn.name ? t('conn.testing') : t('conn.test')}
                           </button>
@@ -235,36 +294,60 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{t('conn.type')}</span>
-                <select className="input w-full" value={type} onChange={(e) => { setType(e.target.value); setName(`${e.target.value}-connection`); }}>
+                <select className="input w-full" value={type} onChange={(e) => applyType(e.target.value)}>
                   {(typeOptions.length > 0 ? typeOptions : [type]).map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
               </label>
             </div>
             {selectedDescriptor && (
-              <div className="space-y-2 rounded-lg bg-slate-50 p-3">
-                <div className="flex flex-wrap gap-1">
-                  <span className={`badge ${selectedDescriptor.maturity === 'production' ? 'badge-emerald' : selectedDescriptor.maturity === 'beta' ? 'badge-blue' : 'badge-amber'}`}>
-                    {selectedDescriptor.maturity}
-                  </span>
-                  {(selectedDescriptor.capabilities || []).slice(0, 4).map((cap) => <span key={cap} className="badge badge-slate">{cap}</span>)}
+              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-wrap gap-1.5">
+                  <span className={`badge ${selectedDescriptor.maturity === 'production' ? 'badge-emerald' : selectedDescriptor.maturity === 'beta' ? 'badge-blue' : 'badge-amber'}`}>{selectedDescriptor.maturity}</span>
+                  {(selectedDescriptor.capabilities || []).slice(0, 6).map((cap) => <span key={cap} className="badge badge-slate">{cap}</span>)}
                 </div>
-                <div className="text-xs text-slate-500">
-                  {t('conn.required')}: {(selectedDescriptor.required || []).join(', ') || 'n/a'}
-                </div>
-                <div className="text-xs text-slate-500">
-                  {t('conn.secrets')}: {(selectedDescriptor.secret_fields || []).join(', ') || 'n/a'}
+                <div className="grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
+                  <div>
+                    <div className="font-medium text-slate-600">{t('conn.required')}</div>
+                    <div>{(selectedDescriptor.required || []).join(', ') || 'n/a'}</div>
+                  </div>
+                  <div>
+                    <div className="font-medium text-slate-600">{t('conn.secrets')}</div>
+                    <div>{(selectedDescriptor.secret_fields || []).join(', ') || 'n/a'}</div>
+                  </div>
                 </div>
               </div>
             )}
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{t('dag.config')}</span>
-              <textarea
-                className="input h-52 w-full resize-none font-mono text-xs leading-relaxed"
-                value={configText}
-                onChange={(e) => setConfigText(e.target.value)}
-              />
-            </label>
-            <button className="btn btn-primary w-full" disabled={saving} onClick={save}>
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{t('dag.config')}</span>
+                <button className="text-xs font-medium text-indigo-600 hover:text-indigo-700" onClick={() => applyConfig(nextConfigFor(kind, type))}>
+                  {t('conn.loadDefaults')}
+                </button>
+              </div>
+              <ConfigForm fields={selectedFields} config={config} onChange={applyConfig} t={t} />
+              {missingFields.length > 0 && (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  {t('conn.missingRequired')}: {missingFields.join(', ')}
+                </div>
+              )}
+            </div>
+            <div className="rounded-lg border border-slate-200">
+              <button className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-slate-600" onClick={() => setJsonOpen((v) => !v)}>
+                <span>{t('conn.advancedJson')}</span>
+                <span>{jsonOpen ? '-' : '+'}</span>
+              </button>
+              {jsonOpen && (
+                <div className="border-t border-slate-100 p-3">
+                  <textarea
+                    className="input h-52 w-full resize-y py-2 font-mono text-xs leading-relaxed"
+                    value={configText}
+                    onChange={(e) => updateConfigFromJson(e.target.value)}
+                  />
+                  {jsonError && <div className="mt-2 text-xs text-rose-600">{jsonError}</div>}
+                </div>
+              )}
+            </div>
+            <button className="btn btn-primary w-full" disabled={saving || !!jsonError || missingFields.length > 0} onClick={save}>
               {saving ? t('ui.starting') : t('conn.save')}
             </button>
           </div>

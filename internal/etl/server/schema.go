@@ -267,7 +267,7 @@ func sinkConfigSchemas() map[string][]ConfigField {
 			{Name: "insert_chunk_size", Type: FieldInt, Required: false, Default: 500, Description: "Rows per INSERT statement"},
 			{Name: "auto_create", Type: FieldBool, Required: false, Default: false, Description: "Auto-create target table if missing"},
 			{Name: "schema_drift", Type: FieldString, Required: false, Default: "ignore", Description: "Schema drift handling", Enum: []string{"ignore", "fail", "add_columns"}},
-			{Name: "ddl_policy", Type: FieldString, Required: false, Default: "ignore", Description: "DDL policy for schema changes", Enum: []string{"ignore", "fail", "add_columns"}},
+			{Name: "ddl_policy", Type: FieldString, Required: false, Default: "reject", Description: "DDL record policy. reject is the production default; Doris apply is limited to safe ALTER TABLE ADD COLUMN statements.", Enum: []string{"reject", "ignore", "apply"}},
 			{Name: "allow_mixed_cdc_non_atomic", Type: FieldBool, Required: false, Default: false, Description: "Allow mixed CDC batches when DELETE handling cannot be atomic"},
 		},
 		"jdbc": {

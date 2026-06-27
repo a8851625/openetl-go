@@ -14,9 +14,10 @@ import (
 )
 
 type ScheduleConfig struct {
-	Type        string `yaml:"type" json:"type"`
-	Cron        string `yaml:"cron,omitempty" json:"cron,omitempty"`
-	IntervalSec int    `yaml:"interval_sec,omitempty" json:"interval_sec,omitempty"`
+	Type        string   `yaml:"type" json:"type"`
+	Cron        string   `yaml:"cron,omitempty" json:"cron,omitempty"`
+	IntervalSec int      `yaml:"interval_sec,omitempty" json:"interval_sec,omitempty"`
+	DependsOn   []string `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 }
 
 type SourceSpec struct {
@@ -315,10 +316,12 @@ func ApplyDefaults(spec *Spec) {
 			MaxIntervalMs:     30000,
 		}
 	}
+	ApplyDefaultSchedule(spec)
 }
 
 func ValidateSpec(spec *Spec) error {
 	var problems []string
+	ApplyDefaultSchedule(spec)
 	if strings.TrimSpace(spec.Name) == "" {
 		problems = append(problems, "name is required")
 	}
@@ -368,6 +371,9 @@ func ValidateSpec(spec *Spec) error {
 		if spec.Retry.MaxIntervalMs <= 0 {
 			problems = append(problems, "retry.max_interval_ms must be > 0")
 		}
+	}
+	if err := ValidateSourceSchedule(spec); err != nil {
+		problems = append(problems, err.Error())
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid pipeline %q: %s", spec.Name, strings.Join(problems, "; "))
