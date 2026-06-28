@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [v0.2.4-beta.1] — 2026-06-29 — 连接上下文与 schema introspection
+
+### 亮点
+- 新增 `GET /api/v2/connections/{name}/context`，返回保存连接、connector descriptor、推荐调度/batch/checkpoint 参数，以及尽力而为的 source introspection。
+- Source introspection 第一版覆盖 file/HTTP/demo 采样、MySQL/PostgreSQL database/table/column/primary key 元数据、Kafka topic/partition 元数据。
+- 首次任务向导支持选择保存的 source/sink 连接，展示健康状态、schema/sample/topic/table 上下文，并生成带 `connection` 引用和推荐 batch/checkpoint 参数的普通 spec。
+- DAG 编辑器节点属性支持展示保存连接 context，同时保持 DAG spec 使用现有 `connection` 字段。
+- 更新 API 文档、OpenAPI metadata、内嵌 UI 资源，并扩展 UI e2e 的保存连接上下文覆盖。
+
+### 验证
+- `go test ./internal/etl/server -count=1`
+- `web/` 下执行 `npm run build`
+- `./hack/pack.sh`
+- `./hack/e2e-ui.sh` — 92 passed, 0 failed
+
 ## [v0.2.3-beta-1] — 2026-06-27 — 首次任务 UI 与运行参数
 
 ### 亮点

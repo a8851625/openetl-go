@@ -10,6 +10,7 @@ APP="etl-ui-e2e"
 DATA_DIR="$ROOT_DIR/data-ui-e2e"
 LOG_DIR="$ROOT_DIR/logs"
 BASE_URL="http://127.0.0.1:8076"
+OPEN_URL="${BASE_URL}/?e2e=$(date +%s)"
 PASS=0
 FAIL=0
 
@@ -49,7 +50,7 @@ if ! curl -fsS "${BASE_URL}/api/v2/health" >/dev/null 2>&1; then echo "ERROR: re
 echo "    Reverse proxy OK"
 
 echo "==> Open browser"
-playwright-cli open "${BASE_URL}/" >/dev/null
+playwright-cli open "$OPEN_URL" >/dev/null
 sleep 2
 
 pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
@@ -61,13 +62,14 @@ evaljs() {
     printf '%s\n' "$out"
     return 0
   fi
-  playwright-cli open "${BASE_URL}/" >/dev/null 2>&1 || true
+  playwright-cli open "${BASE_URL}/?e2e=$(date +%s%N)" >/dev/null 2>&1 || true
   sleep 2
   playwright-cli --raw eval "$1"
 }
 
 open_app() {
-  playwright-cli open "${BASE_URL}/" >/dev/null 2>&1 || true
+  OPEN_URL="${BASE_URL}/?e2e=$(date +%s%N)"
+  playwright-cli open "$OPEN_URL" >/dev/null 2>&1 || true
   sleep 2
   playwright-cli --raw eval "(() => { localStorage.setItem('etl_lang','en'); return true; })()" >/dev/null 2>&1 || true
   sleep 0.5
@@ -157,12 +159,34 @@ for _ in $(seq 1 10); do
   sleep 1
 done
 check "D2.0: Wizard button present" "$has_wizard"
+curl -fsS -X POST "${BASE_URL}/api/v2/connections" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"ui-file-source","kind":"source","type":"file","config":{"path":"/app/testdata/files/customers.jsonl","format":"json"}}' >/dev/null
+curl -fsS -X POST "${BASE_URL}/api/v2/connections" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"ui-file-sink","kind":"sink","type":"file_sink","config":{"output_dir":"/app/data/output/ui-wizard-connection","format":"jsonl","prefix":"conn_"}}' >/dev/null
+connections_seeded="$(curl -fsS "${BASE_URL}/api/v2/connections" | grep -q 'ui-file-source' && curl -fsS "${BASE_URL}/api/v2/connections" | grep -q 'ui-file-sink' && echo true || echo false)"
+check "D2.0a: Saved connections seeded" "$connections_seeded"
 evaljs "(() => { document.querySelector('[data-testid=\"open-first-task-wizard\"]')?.click(); return true; })()" >/dev/null
 sleep 1
 check "D2.1: Wizard opened" "$(evaljs "document.body.innerText.includes('Create Pipeline Wizard')")"
 check "D2.1a: Fixed templates visible" "$(evaljs "['Database sync','Kafka detail / aggregate','Debezium CDC','Kafka parser','File / HTTP landing'].every(x=>document.body.innerText.includes(x))")"
 check "D2.1b: Schema-driven config forms visible" "$(evaljs "document.querySelector('[data-testid=\"wizard-source-config-form\"] input, [data-testid=\"wizard-source-config-form\"] select, [data-testid=\"wizard-source-config-form\"] textarea') !== null && document.querySelector('[data-testid=\"wizard-sink-config-form\"] input, [data-testid=\"wizard-sink-config-form\"] select, [data-testid=\"wizard-sink-config-form\"] textarea') !== null && document.querySelector('[data-testid=\"wizard-transform-config-form\"]') !== null")"
 check "D2.1c: Docs link visible" "$(evaljs "Array.from(document.querySelectorAll('a')).some(a=>a.getAttribute('href')==='/api/v2/docs')")"
+for _ in $(seq 1 10); do
+  connection_options="$(evaljs "Array.from(document.querySelectorAll('[data-testid=\"wizard-source-connection\"] option')).some(o=>o.value==='ui-file-source') && Array.from(document.querySelectorAll('[data-testid=\"wizard-sink-connection\"] option')).some(o=>o.value==='ui-file-sink')")"
+  if [[ "$connection_options" == "true" ]]; then break; fi
+  sleep 1
+done
+check "D2.1d: Saved connections available in wizard" "$connection_options"
+playwright-cli select "[data-testid='wizard-source-connection']" "ui-file-source" >/dev/null
+playwright-cli select "[data-testid='wizard-sink-connection']" "ui-file-sink" >/dev/null
+for _ in $(seq 1 10); do
+  context_loaded="$(evaljs "document.querySelector('[data-testid=\"source-context\"]')?.innerText.includes('id') && (document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || '').includes('connection: ui-file-source') && (document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || '').includes('connection: ui-file-sink')")"
+  if [[ "$context_loaded" == "true" ]]; then break; fi
+  sleep 1
+done
+check "D2.1e: Wizard loads connection context and YAML refs" "$context_loaded"
 evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Failure demo')?.click(); return true; })()" >/dev/null
 for _ in $(seq 1 10); do
   failure_selected="$(evaljs "(document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || '').includes('type: maxcompute')")"
@@ -246,6 +270,13 @@ check "E9: Sink node exists" "$(evaljs "Array.from(document.querySelectorAll('.r
 playwright-cli click ".react-flow__node:first-child" >/dev/null 2>&1 || true
 sleep 1
 check "E10: Properties panel shown" "$(evaljs "document.body.innerText.includes('Plugin') || document.body.innerText.includes('plugin')")"
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('ui-file-source'))?.click(); return true; })()" >/dev/null
+for _ in $(seq 1 10); do
+  dag_context_loaded="$(evaljs "document.querySelector('[data-testid=\"dag-connection-context\"]')?.innerText.includes('Context') || false")"
+  if [[ "$dag_context_loaded" == "true" ]]; then break; fi
+  sleep 1
+done
+check "E10a: DAG saved connection context visible" "$dag_context_loaded"
 
 # Check that config form renders (schema-driven)
 check "E11: Config form visible" "$(evaljs "document.querySelectorAll('.react-flow__node-selected').length > 0 || document.body.innerText.includes('Config') || document.querySelector('input[type=text]') !== null")"
@@ -273,7 +304,7 @@ check "E15: DAG validation error positioned" "$dag_validation_failed"
 echo "=== F: DLQ Page ==="
 open_app
 if ! playwright-cli --raw eval "true" >/dev/null 2>&1; then
-  playwright-cli open "${BASE_URL}/" >/dev/null
+  playwright-cli open "${BASE_URL}/?e2e=$(date +%s%N)" >/dev/null
   sleep 2
 fi
 goto_page "DLQ"

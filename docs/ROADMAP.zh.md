@@ -266,10 +266,18 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - `docs/quickstart.md` / `docs/quickstart.zh.md` 已把 Web UI Wizard 放到首选路径，覆盖 dry-run、Validate + preflight、修复、Create and start，以及 YAML 可见/可同步。
 - `hack/e2e-ui.sh` 已覆盖：五类向导入口可见、schema-driven 表单、docs 入口、preflight 失败、修复后创建启动、向导 YAML -> 表单同步、DAG YAML -> canvas/form 同步、DAG validation 错误定位、DLQ 查看与 replay。验证命令：`E2E_SKIP_BUILD=1 ./hack/e2e-ui.sh`，结果 `88 passed, 0 failed`。
 
+连接上下文闭环证据（2026-06-29）：
+
+- 新增 `/api/v2/connections/{name}/context`：返回保存连接、connector descriptor、推荐 `schedule.type` / `batch_size` / `checkpoint_interval_sec`，以及尽力而为的 source introspection。
+- Source introspection 第一版覆盖：file/HTTP/demo sample 与 schema 推断、MySQL/PostgreSQL database/table/column/primary key 元数据、Kafka topic/partition 元数据；真实启动拦截仍走 spec validate 与 preflight。
+- `web/src/main.tsx` 向导已接入保存连接选择：source/sink 可选择 Connection Catalog，生成 YAML 使用普通 `connection` 引用，展示最近健康状态、schema/sample/topic/table 上下文和推荐参数；推荐 batch/checkpoint 会进入生成 spec。
+- `web/src/DagEditorPage.tsx` 节点属性已复用保存连接 context，DAG/YAML 继续使用普通 `connection` 字段，不引入专用执行路径。
+- `docs/etl-api.md` / `docs/etl-api.zh.md` / `docs/openapi.yaml` 已补保存连接上下文接口。
+- 本轮已验证：`go test ./internal/etl/server -count=1`、`npm run build`、`./hack/pack.sh`、`./hack/e2e-ui.sh`，UI e2e 结果 `92 passed, 0 failed`。
+
 剩余缺口：
 
 - 复杂 transform chain 的增删、排序和跨 transform 错误定位仍需从 JSON 辅助编辑继续产品化。
-- 保存连接、最近健康状态、真实 database/table/topic/partition introspection 与推荐 batch/checkpoint 参数仍需继续接入向导。
 - AI context pack 和每个内置组件的可复用 Markdown 文档仍未完成。
 
 ## Phase 3：扩展合约与认证，10-14 周

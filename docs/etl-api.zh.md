@@ -186,6 +186,46 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 }
 ```
 
+## 保存连接上下文
+
+读取保存连接，同时返回 descriptor、健康状态、推荐运行参数和尽力而为的 source introspection。
+
+```sh
+curl -H "X-API-Token: $ETL_API_TOKEN" \
+  'http://127.0.0.1:8001/api/v2/connections/file-source/context'
+```
+
+响应：
+
+```json
+{
+  "connection": {
+    "name": "file-source",
+    "kind": "source",
+    "type": "file",
+    "last_status": "ok"
+  },
+  "recommendations": [
+    {"field": "schedule.type", "value": "once"},
+    {"field": "batch_size", "value": 1000},
+    {"field": "checkpoint_interval_sec", "value": 30}
+  ],
+  "introspection": {
+    "ok": true,
+    "type": "file",
+    "schema": [
+      {"name": "id", "data_type": "string"},
+      {"name": "name", "data_type": "string"}
+    ],
+    "sample": [
+      {"operation": "INSERT", "data": {"id": "1", "name": "Alice"}}
+    ]
+  }
+}
+```
+
+当前内置 adapter 覆盖 file/HTTP/demo 采样、MySQL/PostgreSQL 表和字段元数据、Kafka topic/partition 元数据。Introspection 是控制面提示；真正的启动拦截仍由 `spec validate` 和 preflight 执行。
+
 ## Transform 试运行
 
 在单条样本记录上执行 Transform 链，不启动管道。

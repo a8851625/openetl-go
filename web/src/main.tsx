@@ -86,6 +86,49 @@ type PreviewResponse = {
   shard_logs: { shard: number; entries: PipelineLogEntry[] }[];
   total_logs: number;
 };
+type ConnectionEntry = {
+  name: string;
+  kind: 'source' | 'sink' | 'transform';
+  type: string;
+  last_status?: string;
+  last_error?: string;
+  last_tested_at?: string;
+  config?: Record<string, unknown>;
+};
+type ConnectionContext = {
+  connection?: ConnectionEntry;
+  recommendations?: { field: string; value: unknown; reason: string }[];
+  introspection?: {
+    ok?: boolean;
+    status?: string;
+    error?: string;
+    databases?: string[];
+    tables?: { name: string; database?: string; schema?: string; columns?: { name: string; data_type?: string; nullable?: boolean }[]; primary_key?: string[] }[];
+    topics?: { name: string; partitions?: { id: number; oldest_offset?: number; newest_offset?: number; leader?: number }[] }[];
+    schema?: { name: string; data_type?: string; nullable?: boolean }[];
+    sample?: Record<string, unknown>[];
+    warnings?: string[];
+    checked_at?: string;
+  };
+};
+
+function normalizeConnectionEntry(raw: any): ConnectionEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = String(raw.name || raw.Name || '').trim();
+  const kind = String(raw.kind || raw.Kind || '').trim();
+  const type = String(raw.type || raw.Type || '').trim();
+  if (!name || !kind || !type) return null;
+  if (kind !== 'source' && kind !== 'sink' && kind !== 'transform') return null;
+  return {
+    name,
+    kind,
+    type,
+    last_status: raw.last_status || raw.LastStatus,
+    last_error: raw.last_error || raw.LastError,
+    last_tested_at: raw.last_tested_at || raw.LastTestedAt,
+    config: raw.config || raw.Config,
+  };
+}
 
 // ════════════════════════════════════════════════
 // API helpers
@@ -993,19 +1036,37 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   const [dryRunResult, setDryRunResult] = useState<unknown>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
+  const [connections, setConnections] = useState<ConnectionEntry[]>([]);
+  const [sourceConnection, setSourceConnection] = useState('');
+  const [sinkConnection, setSinkConnection] = useState('');
+  const [sourceContext, setSourceContext] = useState<ConnectionContext | null>(null);
+  const [sinkContext, setSinkContext] = useState<ConnectionContext | null>(null);
 
   const sourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
   const sinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
   const sourceConfig = parseJSONObject(sourceConfigText);
   const sinkConfig = parseJSONObject(sinkConfigText);
   const transformConfigs = parseTransformList(transformsText);
-  const sourceMissing = missingRequiredFields(sourceFields, sourceConfig);
-  const sinkMissing = missingRequiredFields(sinkFields, sinkConfig);
+  const sourceMissing = sourceConnection ? [] : missingRequiredFields(sourceFields, sourceConfig);
+  const sinkMissing = sinkConnection ? [] : missingRequiredFields(sinkFields, sinkConfig);
   const metadata = plugins?.data?.metadata || {};
   const sourceMaturity = metadata.sources?.[sourceType]?.maturity || 'unknown';
   const sinkMaturity = metadata.sinks?.[sinkType]?.maturity || 'unknown';
   const sourceCapabilities = metadata.sources?.[sourceType]?.capabilities || [];
   const sinkCapabilities = metadata.sinks?.[sinkType]?.capabilities || [];
+  const sourceConnections = connections.filter((conn) => conn.kind === 'source');
+  const sinkConnections = connections.filter((conn) => conn.kind === 'sink');
+  const recommendationValue = (field: string, fallback: number) => {
+    const rec = sourceContext?.recommendations?.find((item) => item.field === field);
+    return typeof rec?.value === 'number' ? rec.value : fallback;
+  };
+  const recommendedBatchSize = recommendationValue('batch_size', 100);
+  const recommendedCheckpointSec = recommendationValue('checkpoint_interval_sec', 1);
+  const refreshConnections = useCallback(() => {
+    return api<{ connections?: ConnectionEntry[] }>('/api/v2/connections')
+      .then((data) => setConnections((data.connections || []).map(normalizeConnectionEntry).filter((conn): conn is ConnectionEntry => conn !== null)))
+      .catch(() => setConnections([]));
+  }, []);
 
   const seedSourceConfig = useCallback((type: string) => {
     const fields = (schema?.data?.sources?.[type] || []) as PluginSchemaField[];
@@ -1017,18 +1078,30 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     return { ...buildDefaultConfig(fields), ...defaultSinkConfig(type) };
   }, [schema?.data]);
 
-  const buildSpec = useCallback(() => ({
-    name: name.trim(),
-    source: { type: sourceType, config: parseJSONText(sourceConfigText, {}) },
-    transforms: parseJSONText(transformsText, []),
-    sink: { type: sinkType, config: parseJSONText(sinkConfigText, {}) },
-    batch_size: 100,
-    checkpoint_interval_sec: 1,
-    backpressure_buffer: 100,
-    retry: { max_attempts: 3, initial_interval_ms: 100, max_interval_ms: 1000 },
-    dlq: { enable: true },
-    tags: ['ui-wizard', template.id],
-  }), [name, sourceType, sourceConfigText, transformsText, sinkType, sinkConfigText, template.id]);
+  const buildSpec = useCallback(() => {
+    const source: Record<string, unknown> = { type: sourceType, config: parseJSONText(sourceConfigText, {}) };
+    const sink: Record<string, unknown> = { type: sinkType, config: parseJSONText(sinkConfigText, {}) };
+    if (sourceConnection) source.connection = sourceConnection;
+    if (sinkConnection) sink.connection = sinkConnection;
+    return {
+      name: name.trim(),
+      source,
+      transforms: parseJSONText(transformsText, []),
+      sink,
+      batch_size: recommendedBatchSize,
+      checkpoint_interval_sec: recommendedCheckpointSec,
+      backpressure_buffer: 100,
+      retry: { max_attempts: 3, initial_interval_ms: 100, max_interval_ms: 1000 },
+      dlq: { enable: true },
+      tags: ['ui-wizard', template.id],
+    };
+  }, [name, sourceType, sourceConfigText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, recommendedBatchSize, recommendedCheckpointSec, template.id]);
+
+  useEffect(() => {
+    refreshConnections();
+    const timer = window.setInterval(refreshConnections, 3000);
+    return () => window.clearInterval(timer);
+  }, [refreshConnections]);
 
   useEffect(() => {
     const nextTemplate = WIZARD_TEMPLATES.find((tpl) => tpl.id === templateId) || WIZARD_TEMPLATES[0];
@@ -1038,6 +1111,10 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     setSinkType(nextSink);
     setSourceConfigText(prettyJSON(seedSourceConfig(nextSource)));
     setSinkConfigText(prettyJSON(seedSinkConfig(nextSink)));
+    setSourceConnection('');
+    setSinkConnection('');
+    setSourceContext(null);
+    setSinkContext(null);
     setTransformsText(prettyJSON(nextTemplate.transforms));
     setSampleText(prettyJSON(nextTemplate.sample));
     setSourceJsonOpen(false);
@@ -1049,6 +1126,46 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   useEffect(() => {
     setYamlText(YAML.stringify(buildSpec()));
   }, [buildSpec]);
+
+  const loadConnectionContext = useCallback(async (name: string, target: 'source' | 'sink') => {
+    if (!name) {
+      if (target === 'source') setSourceContext(null);
+      if (target === 'sink') setSinkContext(null);
+      return;
+    }
+    const data = await api<ConnectionContext>(`/api/v2/connections/${encodeURIComponent(name)}/context`);
+    if (target === 'source') {
+      setSourceContext(data);
+      if (data.connection?.type) setSourceType(data.connection.type);
+      const firstSample = data.introspection?.sample?.[0];
+      if (firstSample) setSampleText(prettyJSON(firstSample));
+    } else {
+      setSinkContext(data);
+      if (data.connection?.type) setSinkType(data.connection.type);
+    }
+  }, []);
+
+  const selectSourceConnection = async (connName: string) => {
+    setSourceConnection(connName);
+    setResult(null);
+    setError('');
+    try {
+      await loadConnectionContext(connName, 'source');
+    } catch (e) {
+      setSourceContext({ introspection: { ok: false, error: e instanceof Error ? e.message : String(e) } });
+    }
+  };
+
+  const selectSinkConnection = async (connName: string) => {
+    setSinkConnection(connName);
+    setResult(null);
+    setError('');
+    try {
+      await loadConnectionContext(connName, 'sink');
+    } catch (e) {
+      setSinkContext({ introspection: { ok: false, error: e instanceof Error ? e.message : String(e) } });
+    }
+  };
 
   const validate = async (throwOnInvalid = false) => {
     setBusy('validate'); setError(''); setResult(null);
@@ -1172,6 +1289,56 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     </div>
   );
 
+  const renderConnectionContext = (title: string, ctx: ConnectionContext | null) => {
+    if (!ctx) {
+      return <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-400">{title}: select a saved connection to load health, schema, sample, and recommendations.</div>;
+    }
+    const intro = ctx.introspection;
+    const schemaRows = intro?.schema || intro?.tables?.find((table) => table.columns?.length)?.columns || [];
+    return (
+      <div className={`rounded-lg border p-3 ${intro?.ok === false ? 'border-rose-200 bg-rose-50' : 'border-cyan-200 bg-cyan-50'}`} data-testid={`${title.toLowerCase().replace(/\s+/g, '-')}-context`}>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-xs font-semibold text-slate-700">{title} context</div>
+          <span className={`badge ${intro?.ok === false ? 'badge-rose' : 'badge-blue'}`}>{intro?.status || 'ready'}</span>
+        </div>
+        {ctx.connection && (
+          <div className="mb-2 text-xs text-slate-600">
+            {ctx.connection.name} · {ctx.connection.type}
+            {ctx.connection.last_status ? ` · last ${ctx.connection.last_status}` : ''}
+            {ctx.connection.last_error ? ` · ${ctx.connection.last_error}` : ''}
+          </div>
+        )}
+        {intro?.error && <div className="mb-2 text-xs text-rose-700">{intro.error}</div>}
+        {ctx.recommendations?.length ? (
+          <div className="mb-2 flex flex-wrap gap-1">
+            {ctx.recommendations.map((rec) => <span key={rec.field} className="badge badge-blue text-[10px]">{rec.field}: {String(rec.value || 'review')}</span>)}
+          </div>
+        ) : null}
+        {intro?.tables?.length ? (
+          <div className="mb-2 text-xs text-slate-600">
+            Tables: {intro.tables.slice(0, 6).map((table) => table.schema ? `${table.schema}.${table.name}` : table.name).join(', ')}
+            {intro.tables.length > 6 ? ` +${intro.tables.length - 6}` : ''}
+          </div>
+        ) : null}
+        {intro?.topics?.length ? (
+          <div className="mb-2 text-xs text-slate-600">
+            Topics: {intro.topics.slice(0, 6).map((topic) => `${topic.name}${topic.partitions?.length ? `(${topic.partitions.length})` : ''}`).join(', ')}
+            {intro.topics.length > 6 ? ` +${intro.topics.length - 6}` : ''}
+          </div>
+        ) : null}
+        {schemaRows.length ? (
+          <div className="mb-2 grid grid-cols-2 gap-1 text-xs sm:grid-cols-3">
+            {schemaRows.slice(0, 9).map((col) => <div key={col.name} className="truncate rounded bg-white/80 px-2 py-1 font-mono text-slate-600">{col.name}<span className="ml-1 text-slate-400">{col.data_type}</span></div>)}
+          </div>
+        ) : null}
+        {intro?.sample?.length ? (
+          <pre className="max-h-32 overflow-auto rounded bg-white/80 p-2 text-xs">{prettyJSON(intro.sample[0])}</pre>
+        ) : null}
+        {intro?.warnings?.map((warning, i) => <div key={i} className="mt-1 text-xs text-amber-700">{warning}</div>)}
+      </div>
+    );
+  };
+
   const updateTransformConfig = (index: number, nextConfig: Record<string, unknown>) => {
     const next = transformConfigs.map((item, i) => i === index ? { ...item, config: nextConfig } : item);
     setTransformsText(prettyJSON(next));
@@ -1196,23 +1363,31 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">Source</label>
-              <select data-testid="wizard-source-type" className="input w-full" value={sourceType} onChange={(e) => { setSourceType(e.target.value); setSourceConfigText(prettyJSON(seedSourceConfig(e.target.value))); }}>
+              <select data-testid="wizard-source-type" className="input w-full" value={sourceType} onChange={(e) => { setSourceType(e.target.value); setSourceConnection(''); setSourceContext(null); setSourceConfigText(prettyJSON(seedSourceConfig(e.target.value))); }}>
                 {template.sourceTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+              </select>
+              <select data-testid="wizard-source-connection" className="input mt-2 w-full text-sm" value={sourceConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSourceConnection(e.target.value)}>
+                <option value="">Inline source config</option>
+                {sourceConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type} · {conn.last_status || 'untested'}</option>)}
               </select>
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">Sink</label>
-              <select data-testid="wizard-sink-type" className="input w-full" value={sinkType} onChange={(e) => { setSinkType(e.target.value); setSinkConfigText(prettyJSON(seedSinkConfig(e.target.value))); }}>
+              <select data-testid="wizard-sink-type" className="input w-full" value={sinkType} onChange={(e) => { setSinkType(e.target.value); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig(e.target.value))); }}>
                 {template.sinkTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+              </select>
+              <select data-testid="wizard-sink-connection" className="input mt-2 w-full text-sm" value={sinkConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSinkConnection(e.target.value)}>
+                <option value="">Inline sink config</option>
+                {sinkConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type} · {conn.last_status || 'untested'}</option>)}
               </select>
               <div className="mt-1 flex flex-wrap gap-1">
                 {template.sinkTypes.includes('maxcompute') && (
-                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('maxcompute'); setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute'))); setResult(null); }}>
+                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('maxcompute'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute'))); setResult(null); }}>
                     Failure demo
                   </button>
                 )}
                 {template.sinkTypes.includes('file_sink') && (
-                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('file_sink'); setSinkConfigText(prettyJSON(seedSinkConfig('file_sink'))); setResult(null); }}>
+                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('file_sink'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('file_sink'))); setResult(null); }}>
                     Repair to file_sink
                   </button>
                 )}
@@ -1222,6 +1397,10 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
           <div className="grid gap-3 md:grid-cols-2">
             {renderSchemaSummary(`Descriptor schema: ${sourceType}`, sourceFields, sourceMaturity, sourceCapabilities, sourceMissing)}
             {renderSchemaSummary(`Descriptor schema: ${sinkType}`, sinkFields, sinkMaturity, sinkCapabilities, sinkMissing)}
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {renderConnectionContext('Source', sourceContext)}
+            {renderConnectionContext('Sink', sinkContext)}
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
             {renderConfigEditor('Source config', sourceFields, sourceConfig, sourceConfigText, setSourceConfigText, sourceJsonOpen, setSourceJsonOpen, 'wizard-source-config-form')}

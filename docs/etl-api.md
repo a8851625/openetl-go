@@ -186,6 +186,46 @@ Response:
 }
 ```
 
+## Saved Connection Context
+
+Fetch a saved connection together with its descriptor, health, recommended runtime parameters, and best-effort source introspection.
+
+```sh
+curl -H "X-API-Token: $ETL_API_TOKEN" \
+  'http://127.0.0.1:8001/api/v2/connections/file-source/context'
+```
+
+Response:
+
+```json
+{
+  "connection": {
+    "name": "file-source",
+    "kind": "source",
+    "type": "file",
+    "last_status": "ok"
+  },
+  "recommendations": [
+    {"field": "schedule.type", "value": "once"},
+    {"field": "batch_size", "value": 1000},
+    {"field": "checkpoint_interval_sec", "value": 30}
+  ],
+  "introspection": {
+    "ok": true,
+    "type": "file",
+    "schema": [
+      {"name": "id", "data_type": "string"},
+      {"name": "name", "data_type": "string"}
+    ],
+    "sample": [
+      {"operation": "INSERT", "data": {"id": "1", "name": "Alice"}}
+    ]
+  }
+}
+```
+
+Current built-in adapters cover file/HTTP/demo sampling, MySQL and PostgreSQL table/schema metadata, and Kafka topic/partition metadata. Introspection is advisory control-plane context; pipeline startup still relies on `spec validate` and preflight as the enforcement gate.
+
 ## Transform Dry Run
 
 Execute a transform chain on one sample record without starting a pipeline.

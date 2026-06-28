@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
@@ -217,6 +219,109 @@ func TestDAGValidateResolvesSavedConnections(t *testing.T) {
 	snk := nodes[1].(map[string]any)
 	if snk["plugin"] != "file_sink" {
 		t.Fatalf("sink plugin not resolved: %#v", snk)
+	}
+}
+
+func TestConnectionContextIncludesRecommendationsAndDescriptor(t *testing.T) {
+	_, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	saveTestConnection(t, ts.URL, map[string]any{
+		"name": "demo-context",
+		"kind": "source",
+		"type": "demo",
+		"config": map[string]any{
+			"fields": []map[string]any{
+				{"name": "id", "type": "counter"},
+				{"name": "name", "type": "string"},
+			},
+		},
+	})
+
+	resp, err := http.Get(ts.URL + "/api/v2/connections/demo-context/context")
+	if err != nil {
+		t.Fatalf("GET connection context: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("context status = %d, want 200", resp.StatusCode)
+	}
+	var got struct {
+		Descriptor *struct {
+			Kind string `json:"kind"`
+			Type string `json:"type"`
+		} `json:"descriptor"`
+		Recommendations []map[string]any `json:"recommendations"`
+		Introspection   struct {
+			OK     bool             `json:"ok"`
+			Schema []map[string]any `json:"schema"`
+			Sample []map[string]any `json:"sample"`
+		} `json:"introspection"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode context: %v", err)
+	}
+	if got.Descriptor == nil || got.Descriptor.Kind != "source" || got.Descriptor.Type != "demo" {
+		t.Fatalf("descriptor not returned: %#v", got.Descriptor)
+	}
+	if !got.Introspection.OK || len(got.Introspection.Schema) != 2 || len(got.Introspection.Sample) != 1 {
+		t.Fatalf("unexpected demo introspection: %#v", got.Introspection)
+	}
+	if len(got.Recommendations) == 0 {
+		t.Fatalf("expected recommendations, got none")
+	}
+}
+
+func TestConnectionContextIntrospectsFileSource(t *testing.T) {
+	_, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "orders.csv")
+	if err := os.WriteFile(path, []byte("id,name\n1,Alice\n2,Bob\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	saveTestConnection(t, ts.URL, map[string]any{
+		"name": "file-context",
+		"kind": "source",
+		"type": "file",
+		"config": map[string]any{
+			"path":       path,
+			"format":     "csv",
+			"has_header": true,
+		},
+	})
+
+	resp, err := http.Get(ts.URL + "/api/v2/connections/file-context/context")
+	if err != nil {
+		t.Fatalf("GET file context: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("context status = %d, want 200", resp.StatusCode)
+	}
+	var got struct {
+		Introspection struct {
+			OK     bool `json:"ok"`
+			Schema []struct {
+				Name string `json:"name"`
+			} `json:"schema"`
+			Sample []struct {
+				Data map[string]any `json:"data"`
+			} `json:"sample"`
+		} `json:"introspection"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode file context: %v", err)
+	}
+	if !got.Introspection.OK {
+		t.Fatalf("file introspection failed: %#v", got.Introspection)
+	}
+	if len(got.Introspection.Schema) != 2 || got.Introspection.Schema[0].Name != "id" || got.Introspection.Schema[1].Name != "name" {
+		t.Fatalf("unexpected schema: %#v", got.Introspection.Schema)
+	}
+	if len(got.Introspection.Sample) != 2 || got.Introspection.Sample[0].Data["name"] != "Alice" {
+		t.Fatalf("unexpected sample: %#v", got.Introspection.Sample)
 	}
 }
 

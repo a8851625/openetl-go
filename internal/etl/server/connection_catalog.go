@@ -73,6 +73,10 @@ func (s *Server) handleConnectionAction(w http.ResponseWriter, r *http.Request) 
 		s.testSavedConnection(w, r, name)
 		return
 	}
+	if len(parts) == 2 && (parts[1] == "context" || parts[1] == "introspect") {
+		s.connectionContext(w, r, name)
+		return
+	}
 	if len(parts) != 1 {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]any{"error": "unknown connection action"})

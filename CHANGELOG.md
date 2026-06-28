@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [v0.2.4-beta.1] — 2026-06-29 — Connection context and schema introspection
+
+### Highlights
+- Added `GET /api/v2/connections/{name}/context`, returning a saved connection, connector descriptor, recommended schedule/batch/checkpoint settings, and best-effort source introspection.
+- Added source introspection adapters for file/HTTP/demo samples, MySQL/PostgreSQL database/table/column/primary-key metadata, and Kafka topic/partition metadata.
+- Updated the first-task wizard to select saved source/sink connections, render health/schema/sample/topic/table context, and generate ordinary specs with `connection` references plus recommended batch/checkpoint values.
+- Updated the DAG editor node properties to show saved connection context while preserving the existing `connection` field in DAG specs.
+- Refreshed API docs, OpenAPI metadata, embedded UI assets, and UI e2e coverage for saved connection context.
+
+### Validation
+- `go test ./internal/etl/server -count=1`
+- `npm run build` in `web/`
+- `./hack/pack.sh`
+- `./hack/e2e-ui.sh` — 92 passed, 0 failed
+
 ## [v0.2.3-beta-1] — 2026-06-27 — First-task UI and runtime flags
 
 ### Highlights

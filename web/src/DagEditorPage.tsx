@@ -37,6 +37,36 @@ type ConnectionEntry = {
   updated_at?: string;
 };
 
+type ConnectionContext = {
+  recommendations?: { field: string; value: unknown; reason: string }[];
+  introspection?: {
+    ok?: boolean;
+    status?: string;
+    error?: string;
+    tables?: { name: string; schema?: string; columns?: { name: string; data_type?: string }[] }[];
+    topics?: { name: string; partitions?: { id: number }[] }[];
+    schema?: { name: string; data_type?: string }[];
+    sample?: Record<string, unknown>[];
+    warnings?: string[];
+  };
+};
+
+function normalizeConnectionEntry(raw: any): ConnectionEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = String(raw.name || raw.Name || '').trim();
+  const kind = String(raw.kind || raw.Kind || '').trim();
+  const type = String(raw.type || raw.Type || '').trim();
+  if (!name || !type || (kind !== 'source' && kind !== 'sink' && kind !== 'transform')) return null;
+  return {
+    name,
+    kind,
+    type,
+    last_status: raw.last_status || raw.LastStatus,
+    last_error: raw.last_error || raw.LastError,
+    updated_at: raw.updated_at || raw.UpdatedAt,
+  };
+}
+
 type DAGNodeData = {
   kind: string;
   plugin: string;
@@ -318,6 +348,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [testResult, setTestResult] = useState<string>('');
   const [connections, setConnections] = useState<ConnectionEntry[]>([]);
   const [descriptors, setDescriptors] = useState<ConnectorDescriptor[]>([]);
+  const [selectedConnectionContext, setSelectedConnectionContext] = useState<ConnectionContext | null>(null);
 
   const testNodeConnection = async () => {
     if (!selectedNode) {
@@ -355,7 +386,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
 
   useEffect(() => {
     apiGet<{ connections?: ConnectionEntry[] }>('/api/v2/connections')
-      .then((res) => setConnections(res.connections || []))
+      .then((res) => setConnections((res.connections || []).map(normalizeConnectionEntry).filter((conn): conn is ConnectionEntry => conn !== null)))
       .catch(() => setConnections([]));
     apiGet<{ descriptors?: ConnectorDescriptor[] }>('/api/v2/connectors/descriptors')
       .then((res) => setDescriptors(res.descriptors || []))
@@ -749,8 +780,21 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     .filter((c) => c.kind === nodeConnectionKind)
     .sort((a, b) => Number(b.type === selPlugin) - Number(a.type === selPlugin) || a.name.localeCompare(b.name));
   const selectedConnection = connections.find((conn) => conn.name === selectedNode?.data.connection);
+  const selectedConnectionName = selectedNode?.data.connection || '';
   const sourcePlugins = useMemo(() => nodes.filter((n) => n.data.kind === 'source').map((n) => n.data.plugin), [nodes]);
   const schedulePolicy = useMemo(() => schedulePolicyForSources(sourcePlugins, descriptors), [sourcePlugins, descriptors]);
+
+  useEffect(() => {
+    if (!selectedConnectionName) {
+      setSelectedConnectionContext(null);
+      return;
+    }
+    let cancelled = false;
+    apiGet<ConnectionContext>(`/api/v2/connections/${encodeURIComponent(selectedConnectionName)}/context`)
+      .then((res) => { if (!cancelled) setSelectedConnectionContext(res); })
+      .catch((e) => { if (!cancelled) setSelectedConnectionContext({ introspection: { ok: false, error: e instanceof Error ? e.message : String(e) } }); });
+    return () => { cancelled = true; };
+  }, [selectedConnectionName]);
 
   useEffect(() => {
     if (schedulePolicy.supported.length === 0) return;
@@ -930,6 +974,29 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                       </div>
                     ) : (
                       <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-400">{t('conn.noMatchingSaved')}</div>
+                    )}
+                    {selectedConnectionContext && (
+                      <div className={`mt-2 rounded-lg border p-2.5 text-xs ${selectedConnectionContext.introspection?.ok === false ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-cyan-200 bg-cyan-50 text-slate-600'}`} data-testid="dag-connection-context">
+                        <div className="mb-1 flex items-center justify-between">
+                          <span className="font-semibold">Context</span>
+                          <span className={`badge ${selectedConnectionContext.introspection?.ok === false ? 'badge-rose' : 'badge-blue'}`}>{selectedConnectionContext.introspection?.status || 'ready'}</span>
+                        </div>
+                        {selectedConnectionContext.introspection?.error && <div className="mb-1 text-rose-700">{selectedConnectionContext.introspection.error}</div>}
+                        {selectedConnectionContext.recommendations?.length ? (
+                          <div className="mb-1 flex flex-wrap gap-1">
+                            {selectedConnectionContext.recommendations.slice(0, 3).map((rec) => <span key={rec.field} className="badge badge-blue text-[10px]">{rec.field}: {String(rec.value || 'review')}</span>)}
+                          </div>
+                        ) : null}
+                        {selectedConnectionContext.introspection?.tables?.length ? (
+                          <div className="truncate">Tables: {selectedConnectionContext.introspection.tables.slice(0, 4).map((table) => table.schema ? `${table.schema}.${table.name}` : table.name).join(', ')}</div>
+                        ) : null}
+                        {selectedConnectionContext.introspection?.topics?.length ? (
+                          <div className="truncate">Topics: {selectedConnectionContext.introspection.topics.slice(0, 4).map((topic) => `${topic.name}${topic.partitions?.length ? `(${topic.partitions.length})` : ''}`).join(', ')}</div>
+                        ) : null}
+                        {(selectedConnectionContext.introspection?.schema || selectedConnectionContext.introspection?.tables?.find((table) => table.columns?.length)?.columns || []).slice(0, 6).map((col) => (
+                          <span key={col.name} className="mr-1 mt-1 inline-block rounded bg-white/80 px-1.5 py-0.5 font-mono text-[10px]">{col.name}{col.data_type ? ` ${col.data_type}` : ''}</span>
+                        ))}
+                      </div>
                     )}
                   </div>
                 )}

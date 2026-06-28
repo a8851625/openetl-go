@@ -474,6 +474,17 @@ paths:
         '400': { description: Build/open failed }
         '404': { description: Connection not found }
 
+  /connections/{name}/context:
+    get:
+      tags: [Connections]
+      summary: Get saved connection descriptor, health, recommendations, and source introspection
+      description: Returns masked connection metadata, connector descriptor, recommended batch/checkpoint/schedule settings, and best-effort source metadata such as database/table/columns, Kafka topics/partitions, or file/HTTP sample records.
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Connection context }
+        '404': { description: Connection not found }
+
   /connections/test:
     post:
       tags: [Connections]
