@@ -307,6 +307,19 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - Quickstart 或 API 文档给出 AI/DAG 辅助入口的边界说明：AI 只辅助生成普通 spec，不能绕过 validate/preflight 和人工确认。
 - `go test ./internal/etl/server` 以及新增文档/context pack 校验通过；如涉及 UI 展示，需同步运行 `npm run build` 和 `./hack/e2e-ui.sh`。
 
+当前证据（2026-06-29）：
+
+- 已新增 `internal/etl/server/ai_context.go`：AI context pack 从 connector descriptor、plugin schema、maturity metadata、组件文档、产品边界、DAG 规则、示例和常见错误生成；`/api/v2/ai/context` 暴露该事实源。
+- `/api/v2/ai/generate` 已改为使用 context pack system prompt，不再使用硬编码 “Flink-like” 口径；响应包含 `context_pack_version`、`validation` 和 `review`，其中 review 覆盖缺失字段、secret 确认、非 production maturity、CDC -> append sink、MaxCompute writer-disabled、DDL apply、脚本 transform 和 DLQ disabled 等风险。
+- `web/src/DagEditorPage.tsx` 已将 AI 生成改为“审阅后应用”：展示 validation、缺失字段、风险、确认项、当前 YAML 与生成 YAML，用户点击 Apply 后才写入 canvas。
+- `web/src/main.tsx` 首次任务向导的 transform chain 已支持增删、排序、切换 transform 类型和逐阶段 dry-run，仍然生成普通 `transforms` 数组。
+- `docs/components/` 已补第一批核心组件文档，覆盖 MySQL/Kafka/File/HTTP sources，ClickHouse/MySQL/PostgreSQL/Doris/Kafka/S3/File sinks，以及 lookup/deduplicate/window/flat_map/udtf/project/select_fields/type_convert/debezium_cdc/cdc_policy。
+- `internal/etl/server/ai_context_test.go` 已补 context pack、组件文档覆盖和 AI 风险审阅测试；API/OpenAPI/Quickstart 和中英文 changelog 已同步。
+- 已验证：`npm --prefix web run build` 通过，生成新的 `resource/public`。
+- 已验证：临时 Go toolchain 执行 `go test ./internal/etl/server ./internal/etl/transform -count=1` 通过；Podman 容器路径执行 `go test ./internal/etl/server ./internal/etl/transform -count=1` 通过。
+- 已验证：`./hack/e2e-ui.sh` 通过，结果 `92 passed, 0 failed`。
+- 已验证：`./hack/pack.sh` 通过，`internal/packed/packed.go` 已重新打包当前 UI 资源。
+
 ## Phase 3：扩展合约与认证，10-14 周
 
 目标：把“开放”和“可扩展”做成可维护机制。

@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [v0.2.5-beta.1] — 2026-06-29 — AI context pack and reviewed DAG generation
+
+### Highlights
+- Added an AI context pack generated from connector descriptors, plugin schema, maturity metadata, component docs, product boundaries, DAG rules, examples, and common error patterns.
+- Added `GET /api/v2/ai/context` and updated `POST /api/v2/ai/generate` to use the context pack instead of a hard-coded prompt; generated drafts now return `context_pack_version`, `validation`, and `review` metadata.
+- Added AI review flags for missing required fields, secret confirmation, experimental/dev-only maturity, CDC-to-append replay risk, MaxCompute/ODPS writer-disabled paths, DDL apply, script transforms, and disabled DLQ.
+- Updated the DAG editor AI drawer to show validation status, missing fields, risk flags, required confirmations, and current-vs-generated YAML before the user applies the draft to the canvas.
+- Improved the first-task wizard transform chain with add/remove/reorder controls, transform type switching, and per-stage dry-run while preserving the ordinary `transforms` array spec.
+- Added first-batch component docs under `docs/components/` for core production-candidate sources, sinks, and transforms, with purpose, fields, record shape, checkpoint/DLQ/idempotency boundaries, examples, and evidence.
+- Refreshed API/OpenAPI/Quickstart docs and UI assets for AI-assisted generation boundaries.
+
+### Validation
+- `npm --prefix web run build`
+- `go test ./internal/etl/server ./internal/etl/transform -count=1`
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c 'go test ./internal/etl/server ./internal/etl/transform -count=1'`
+- `./hack/e2e-ui.sh` — 92 passed, 0 failed
+- `./hack/pack.sh`
+
 ## [v0.2.4-beta.1] — 2026-06-29 — Connection context and schema introspection
 
 ### Highlights

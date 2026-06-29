@@ -1034,6 +1034,7 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   const [sinkJsonOpen, setSinkJsonOpen] = useState(false);
   const [result, setResult] = useState<ValidateResult | null>(null);
   const [dryRunResult, setDryRunResult] = useState<unknown>(null);
+  const [stageDryRunResult, setStageDryRunResult] = useState<{ index: number; result: unknown } | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [connections, setConnections] = useState<ConnectionEntry[]>([]);
@@ -1050,6 +1051,7 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   const sourceMissing = sourceConnection ? [] : missingRequiredFields(sourceFields, sourceConfig);
   const sinkMissing = sinkConnection ? [] : missingRequiredFields(sinkFields, sinkConfig);
   const metadata = plugins?.data?.metadata || {};
+  const transformTypes = Object.keys(schema?.data?.transforms || {}).sort();
   const sourceMaturity = metadata.sources?.[sourceType]?.maturity || 'unknown';
   const sinkMaturity = metadata.sinks?.[sinkType]?.maturity || 'unknown';
   const sourceCapabilities = metadata.sources?.[sourceType]?.capabilities || [];
@@ -1121,6 +1123,7 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     setSinkJsonOpen(false);
     setResult(null);
     setDryRunResult(null);
+    setStageDryRunResult(null);
   }, [templateId, seedSourceConfig, seedSinkConfig]);
 
   useEffect(() => {
@@ -1194,7 +1197,7 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   };
 
   const dryRun = async () => {
-    setBusy('dry-run'); setError(''); setDryRunResult(null);
+    setBusy('dry-run'); setError(''); setDryRunResult(null); setStageDryRunResult(null);
     try {
       const data = await api('/api/v2/transforms/dry-run', {
         method: 'POST',
@@ -1344,6 +1347,49 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     setTransformsText(prettyJSON(next));
   };
 
+  const updateTransformType = (index: number, type: string) => {
+    const fields = (schema?.data?.transforms?.[type] || []) as PluginSchemaField[];
+    const next = transformConfigs.map((item, i) => i === index ? { type, config: buildDefaultConfig(fields) } : item);
+    setTransformsText(prettyJSON(next));
+    setStageDryRunResult(null);
+  };
+
+  const addTransform = () => {
+    const type = transformTypes.includes('project') ? 'project' : transformTypes[0] || 'identity';
+    const fields = (schema?.data?.transforms?.[type] || []) as PluginSchemaField[];
+    setTransformsText(prettyJSON([...transformConfigs, { type, config: buildDefaultConfig(fields) }]));
+    setStageDryRunResult(null);
+  };
+
+  const removeTransform = (index: number) => {
+    setTransformsText(prettyJSON(transformConfigs.filter((_, i) => i !== index)));
+    setStageDryRunResult(null);
+  };
+
+  const moveTransform = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= transformConfigs.length) return;
+    const next = [...transformConfigs];
+    [next[index], next[target]] = [next[target], next[index]];
+    setTransformsText(prettyJSON(next));
+    setStageDryRunResult(null);
+  };
+
+  const dryRunThroughStage = async (index: number) => {
+    setBusy(`stage-${index}`); setError(''); setStageDryRunResult(null);
+    try {
+      const data = await api('/api/v2/transforms/dry-run', {
+        method: 'POST',
+        body: JSON.stringify({ transforms: transformConfigs.slice(0, index + 1), record: parseJSONText(sampleText, template.sample) }),
+      });
+      setStageDryRunResult({ index, result: data });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy('');
+    }
+  };
+
   return (
     <Modal title="Create Pipeline Wizard" onClose={onClose} width="max-w-6xl">
       <div className="grid gap-5 xl:grid-cols-[280px_1fr]">
@@ -1408,7 +1454,10 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">Transform chain</label>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <label className="block text-xs font-medium text-slate-500">Transform chain</label>
+                <button className="btn btn-secondary btn-sm text-[11px]" onClick={addTransform}>Add transform</button>
+              </div>
               <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3" data-testid="wizard-transform-config-form">
                 {transformConfigs.length ? (
                   <div className="space-y-4">
@@ -1417,15 +1466,34 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
                       return (
                         <div key={`${item.type}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-3">
                           <div className="mb-2 flex items-center justify-between gap-2">
-                            <span className="text-xs font-semibold text-slate-600">{index + 1}. {item.type}</span>
-                            <span className="badge badge-slate text-[10px]">{metadata.transforms?.[item.type]?.maturity || 'unknown'}</span>
+                            <div className="flex min-w-0 flex-1 items-center gap-2">
+                              <span className="shrink-0 text-xs font-semibold text-slate-600">{index + 1}.</span>
+                              <select className="input h-8 min-w-0 flex-1 text-xs" value={item.type} onChange={(e) => updateTransformType(index, e.target.value)}>
+                                {transformTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+                              </select>
+                              <span className="badge badge-slate text-[10px]">{metadata.transforms?.[item.type]?.maturity || 'unknown'}</span>
+                            </div>
+                            <div className="flex shrink-0 gap-1">
+                              <button className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, -1)} disabled={index === 0} title="Move up">↑</button>
+                              <button className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, 1)} disabled={index === transformConfigs.length - 1} title="Move down">↓</button>
+                              <button className="btn btn-secondary btn-sm px-2" onClick={() => dryRunThroughStage(index)} disabled={busy === `stage-${index}`} title="Dry-run through this stage">▶</button>
+                              <button className="btn btn-danger btn-sm px-2" onClick={() => removeTransform(index)} title="Remove">×</button>
+                            </div>
                           </div>
                           <ConfigForm fields={fields} config={item.config || {}} onChange={(next) => updateTransformConfig(index, next)} t={t} emptyText="No config fields for this transform." />
+                          {stageDryRunResult?.index === index && (
+                            <pre className="mt-2 max-h-36 overflow-auto rounded bg-white p-2 text-xs text-slate-700">{prettyJSON(stageDryRunResult.result)}</pre>
+                          )}
                         </div>
                       );
                     })}
                   </div>
-                ) : <div className="text-xs text-slate-400">Invalid transform JSON.</div>}
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-400">No valid transforms in the chain.</div>
+                    <button className="btn btn-secondary btn-sm" onClick={addTransform}>Add transform</button>
+                  </div>
+                )}
               </div>
               <textarea className="input min-h-32 w-full font-mono text-xs" value={transformsText} onChange={(e) => setTransformsText(e.target.value)} />
             </div>

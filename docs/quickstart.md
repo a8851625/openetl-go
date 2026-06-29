@@ -58,6 +58,10 @@ round-trip edits back into the form before creating the pipeline.
 ### Option 1b: Web UI Designer
 
 Visit `http://localhost:8000/#/designer` and drag-and-drop to build advanced DAGs visually.
+After configuring an OpenAI-compatible LLM in Settings, the Designer AI tab can
+draft ordinary YAML from a prompt. Review the generated diff, missing fields,
+risk flags, and required confirmations before applying it to the canvas; the
+result still has to pass **Validate + preflight** before creation.
 
 ### Option 2: YAML Declaration
 

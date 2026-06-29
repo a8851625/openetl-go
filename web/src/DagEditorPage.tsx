@@ -95,6 +95,18 @@ type ValidateResult = {
   };
 };
 
+type AIGenerationResp = {
+  yaml?: string;
+  context_pack_version?: string;
+  validation?: ValidateResult;
+  review?: {
+    missing_fields?: { kind: string; type: string; field: string; secret?: boolean; message: string }[];
+    risk_flags?: { code: string; level: string; message: string; remediation?: string }[];
+    requires_confirmation?: { code: string; message: string }[];
+    recommended_actions?: string[];
+  };
+};
+
 // ── Visual Constants ──────────────────────────────────────────────────
 
 const KIND_STYLES: Record<string, { color: string; bg: string; border: string; icon: string }> = {
@@ -336,6 +348,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  const [aiResult, setAiResult] = useState<AIGenerationResp | null>(null);
   const [parallelism, setParallelism] = useState(1);
   const [shardStrategy, setShardStrategy] = useState('round_robin');
   const [shardKey, setShardKey] = useState('');
@@ -685,37 +698,30 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     if (!aiPrompt.trim()) return;
     setAiLoading(true);
     setAiError('');
+    setAiResult(null);
     try {
-      const res = await apiPost('/api/v2/ai/generate', { prompt: aiPrompt });
-      const yamlStr = (res as any).yaml || '';
+      const res = await apiPost('/api/v2/ai/generate', { prompt: aiPrompt }) as AIGenerationResp;
+      const yamlStr = res.yaml || '';
       setYamlOutput(yamlStr);
-      // Try to parse and load into canvas
-      try {
-        const parsed = YAML.parse(yamlStr);
-        if (parsed?.source?.type) {
-          setPipelineName(parsed.name || 'ai-generated');
-          const newNodes: Node<DAGNodeData>[] = [];
-          newNodes.push({ id: 'source-1', type: 'pipelineNode', position: { x: 250, y: 50 }, data: { kind: 'source', plugin: parsed.source.type, config: parsed.source.config || {}, label: 'source-1' } });
-          const tfms = parsed.transforms || [];
-          tfms.forEach((tf: any, i: number) => {
-            newNodes.push({ id: `transform-${i + 1}`, type: 'pipelineNode', position: { x: 250, y: 150 + i * 100 }, data: { kind: 'transform', plugin: tf.type, config: tf.config || {}, label: `transform-${i + 1}` } });
-          });
-          const lastY = 150 + tfms.length * 100;
-          newNodes.push({ id: 'sink-1', type: 'pipelineNode', position: { x: 250, y: lastY }, data: { kind: 'sink', plugin: parsed.sink?.type || 'file_sink', config: parsed.sink?.config || {}, label: 'sink-1' } });
-          // Auto-connect
-          const newEdges: Edge[] = [];
-          for (let i = 0; i < newNodes.length - 1; i++) {
-            newEdges.push({ id: `e-${i}`, source: newNodes[i].id, target: newNodes[i + 1].id, animated: true, markerEnd: { type: MarkerType.ArrowClosed } });
-          }
-          setNodes(newNodes);
-          setEdges(newEdges);
-        }
-      } catch { /* yaml parse error, just show YAML */ }
-      setDrawerTab(null);
+      setAiResult(res);
     } catch (e) {
       setAiError(e instanceof Error ? e.message : String(e));
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  const applyAiGeneratedSpec = () => {
+    if (!aiResult?.yaml) return;
+    try {
+      const parsed = YAML.parse(aiResult.yaml);
+      loadSpecIntoCanvas(parsed);
+      setYamlOutput(aiResult.yaml);
+      setValidateResult(aiResult.validation || null);
+      setValidateError('');
+      setDrawerTab(null);
+    } catch (e) {
+      setAiError(`YAML parse error: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -1152,6 +1158,55 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                   <button className="btn btn-primary btn-sm w-full" onClick={aiGenerate} disabled={aiLoading}>
                     {aiLoading ? '⏳ ' + t('dag.generating') : '✨ ' + t('dag.generatePipeline')}
                   </button>
+                  {aiResult && (
+                    <div className="space-y-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs" data-testid="dag-ai-review">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-indigo-900">AI draft review</span>
+                        <span className={`badge ${aiResult.validation?.valid === false ? 'badge-rose' : 'badge-blue'}`}>
+                          {aiResult.validation?.valid === false ? 'needs fixes' : 'validated'}
+                        </span>
+                      </div>
+                      {aiResult.context_pack_version && <div className="text-slate-500">Context: {aiResult.context_pack_version}</div>}
+                      {(aiResult.validation?.errors || []).map((msg, i) => <div key={`ai-err-${i}`} className="rounded border border-rose-200 bg-white/80 p-2 text-rose-700">{msg}</div>)}
+                      {(aiResult.validation?.warnings || []).slice(0, 4).map((msg, i) => <div key={`ai-warn-${i}`} className="rounded border border-amber-200 bg-white/80 p-2 text-amber-800">{msg}</div>)}
+                      {(aiResult.review?.missing_fields || []).length > 0 && (
+                        <div className="rounded border border-rose-200 bg-white/80 p-2">
+                          <div className="mb-1 font-semibold text-rose-700">Missing fields</div>
+                          {aiResult.review?.missing_fields?.map((item, i) => <div key={i}>{item.kind}/{item.type}.{item.field}{item.secret ? ' (secret)' : ''}: {item.message}</div>)}
+                        </div>
+                      )}
+                      {(aiResult.review?.risk_flags || []).length > 0 && (
+                        <div className="rounded border border-amber-200 bg-white/80 p-2">
+                          <div className="mb-1 font-semibold text-amber-800">Risks</div>
+                          {aiResult.review?.risk_flags?.map((risk, i) => (
+                            <div key={i} className={risk.level === 'error' ? 'text-rose-700' : 'text-amber-800'}>
+                              {risk.level} · {risk.code}: {risk.message}
+                              {risk.remediation ? <span className="block text-slate-500">Fix: {risk.remediation}</span> : null}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {(aiResult.review?.requires_confirmation || []).length > 0 && (
+                        <div className="rounded border border-slate-200 bg-white/80 p-2">
+                          <div className="mb-1 font-semibold text-slate-700">Requires confirmation</div>
+                          {aiResult.review?.requires_confirmation?.slice(0, 6).map((item, i) => <div key={i}>{item.message}</div>)}
+                        </div>
+                      )}
+                      <div className="grid gap-2">
+                        <div>
+                          <div className="mb-1 font-semibold text-slate-600">Current YAML</div>
+                          <pre className="max-h-28 overflow-auto rounded bg-white p-2 font-mono text-[11px] text-slate-500">{YAML.stringify(buildSpec())}</pre>
+                        </div>
+                        <div>
+                          <div className="mb-1 font-semibold text-slate-600">AI YAML</div>
+                          <pre className="max-h-40 overflow-auto rounded bg-white p-2 font-mono text-[11px] text-slate-700">{aiResult.yaml}</pre>
+                        </div>
+                      </div>
+                      <button data-testid="dag-ai-apply" className="btn btn-secondary btn-sm w-full" onClick={applyAiGeneratedSpec}>
+                        Apply reviewed draft
+                      </button>
+                    </div>
+                  )}
                   <p className="text-xs text-slate-400">{t('dag.aiDesc')}</p>
                 </div>
               )}

@@ -138,6 +138,30 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 }
 ```
 
+## AI Context And Generation
+
+AI-assisted DAG generation uses the same connector descriptors, plugin schema,
+component docs, and validate/preflight path as the UI and YAML flows. It only
+drafts ordinary pipeline/DAG specs; it does not start pipelines or bypass user
+confirmation.
+
+```sh
+curl -H "X-API-Token: $ETL_API_TOKEN" \
+  'http://127.0.0.1:8001/api/v2/ai/context'
+```
+
+```sh
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Read Debezium orders from Kafka and upsert to MySQL ODS."}' \
+  'http://127.0.0.1:8001/api/v2/ai/generate'
+```
+
+The generation response includes `yaml`, `context_pack_version`, `validation`,
+and `review` fields. Resolve or explicitly accept `review.missing_fields`,
+`review.risk_flags`, and `review.requires_confirmation` before applying and
+starting the generated spec.
+
 ## Spec Validation
 
 Validate a pipeline spec without creating a runtime pipeline.

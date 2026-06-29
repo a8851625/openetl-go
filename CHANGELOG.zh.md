@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [v0.2.5-beta.1] — 2026-06-29 — AI context pack 与受控 DAG 生成
+
+### 亮点
+- 新增由 connector descriptor、插件 schema、maturity metadata、组件文档、产品边界、DAG 规则、示例和常见错误生成的 AI context pack。
+- 新增 `GET /api/v2/ai/context`，并将 `POST /api/v2/ai/generate` 改为使用 context pack，不再依赖硬编码 prompt；生成结果返回 `context_pack_version`、`validation` 和 `review`。
+- AI review 会标记缺失必填字段、secret 确认、experimental/dev-only 成熟度、CDC 写 append sink 的重放风险、MaxCompute/ODPS writer-disabled、DDL apply、脚本 transform 和未启用 DLQ 等问题。
+- DAG 编辑器 AI 面板会在应用到画布前展示 validation 状态、缺失字段、风险、确认项，以及当前 YAML 与生成 YAML 对照。
+- 首次任务向导的 transform chain 支持增删、排序、切换 transform 类型和逐阶段 dry-run，同时仍生成普通 `transforms` 数组。
+- 在 `docs/components/` 下补齐第一批核心 production-candidate source/sink/transform 组件文档，包含用途、字段、record 形态、checkpoint/DLQ/幂等边界、示例和证据。
+- 更新 API/OpenAPI/Quickstart 文档和内嵌 UI 资源，明确 AI 辅助生成不能绕过 validate/preflight 和人工确认。
+
+### 验证
+- `npm --prefix web run build`
+- `go test ./internal/etl/server ./internal/etl/transform -count=1`
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c 'go test ./internal/etl/server ./internal/etl/transform -count=1'`
+- `./hack/e2e-ui.sh` — 92 passed, 0 failed
+- `./hack/pack.sh`
+
 ## [v0.2.4-beta.1] — 2026-06-29 — 连接上下文与 schema introspection
 
 ### 亮点

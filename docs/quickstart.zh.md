@@ -52,6 +52,9 @@ export ETL_SPEC_ENCRYPTION_KEY=$(openssl rand -base64 32)
 ### 方式一补充：Web UI 设计器
 
 访问 `http://localhost:8000/#/designer`，可视化拖拽构建高级 DAG。
+在 Settings 配置 OpenAI 兼容 LLM 后，设计器的 AI 面板可以根据提示词生成普通
+YAML 草稿。应用到画布前需要先审阅 diff、缺失字段、风险标记和确认项；最终仍
+必须通过 **Validate + preflight** 后才能创建。
 
 ### 方式二：YAML 声明式
 

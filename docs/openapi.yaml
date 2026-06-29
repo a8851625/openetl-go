@@ -510,6 +510,21 @@ paths:
       responses:
         '200': { description: Connector descriptors for UI forms, preflight, and connector test kits }
 
+  /ai/context:
+    get:
+      tags: [AI]
+      summary: Get the AI context pack generated from descriptors, schema, component docs, boundaries, and examples
+      responses:
+        '200': { description: AI context pack }
+
+  /ai/generate:
+    post:
+      tags: [AI]
+      summary: Generate an ordinary pipeline/DAG YAML draft with validation and review metadata
+      description: AI generation never starts a pipeline and must still pass validate/preflight and user confirmation.
+      responses:
+        '200': { description: Generated YAML plus context_pack_version, validation, and review fields }
+
   /transforms/dry-run:
     post:
       tags: [Transforms]

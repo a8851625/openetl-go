@@ -668,6 +668,7 @@ func (s *Server) RegisterHTTPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/nodes/types", s.handleNodeTypes)
 	mux.HandleFunc("/api/v2/dlq/", s.handleDLQAction)
 	mux.HandleFunc("/api/v2/settings", s.handleSettings)
+	mux.HandleFunc("/api/v2/ai/context", s.handleAIContext)
 	mux.HandleFunc("/api/v2/ai/generate", s.handleAIGenerate)
 	mux.HandleFunc("/api/v2/openapi.yaml", s.handleOpenAPI)
 	mux.HandleFunc("/api/v2/docs", s.handleSwaggerUI)
@@ -3746,6 +3747,16 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // ── AI Generate API (OpenAI-compatible proxy) ─────────────────────────
 
+func (s *Server) handleAIContext(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]any{"error": "method not allowed"})
+		return
+	}
+	json.NewEncoder(w).Encode(buildAIContextPack())
+}
+
 func (s *Server) handleAIGenerate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -3776,68 +3787,8 @@ func (s *Server) handleAIGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build system prompt for pipeline generation
-	systemPrompt := `You are an ETL pipeline configuration assistant for a Flink-like streaming/batch platform.
-Given a user's data integration requirement, generate a YAML pipeline spec.
-
-## Available Connectors
-
-Sources: file, http, mysql_batch, mysql_cdc, mysql_snapshot_cdc, kafka, postgres_cdc, redis, demo
-Transforms: identity, rename, drop_field, add_field, project, select_fields, type_convert, filter, flat_map, udtf, debezium_cdc, cdc_policy, ddl_guard, lua, ts, router, fanout, tap, rate_limiter, enricher, lookup, window, deduplicate
-Sinks: file_sink, s3, mysql, clickhouse, postgres, postgresql, kafka, elasticsearch, es, redis
-
-## Transform Highlights
-- lua/ts: inline script transforms. Lua: "return record" pattern. TS: "transform(record) { ... return record; }"
-- flat_map/udtf: Lua one-to-many transform returning nil, one record, or an array of records
-- project/select_fields: explicit projection, aliases, constants, and time formatting
-- debezium_cdc/cdc_policy: normalize Debezium Kafka CDC, map target tables, and reject/drop risky CDC events
-- filter: boolean expression like "amount > 100" or "status == 'active'"
-- tap: pass-through observer for latency monitoring (log_every, alert_on_lag_ms)
-- rate_limiter: token-bucket throttle (rate: records/sec, burst)
-- enricher: HTTP/SQL field enrichment (mode: http|sql, url with {{field}} templates)
-- lookup: stream-table join via dimension DB (dsn, query, join_key, dim_key, fields)
-- window: tumbling window aggregation (window_sec, group_by, aggregates as JSON)
-- deduplicate: LRU dedup by composite key (keys, window_size)
-- router: conditional routing by field values
-- fanout: 1-to-N broadcast
-
-## Output Format
-Output ONLY valid YAML (no markdown fences, no explanation).
-
-## Full Spec Structure
-name: "<descriptive-name>"
-source:
-  type: <source_type>
-  config:
-    <fields>
-transforms:
-  - type: <transform_type>
-    config:
-      <fields>
-sink:
-  type: <sink_type>
-  config:
-    <fields>
-batch_size: 1000
-checkpoint_interval_sec: 30
-backpressure_buffer: 100
-retry:
-  max_attempts: 3
-  initial_interval_ms: 1000
-  max_interval_ms: 30000
-dlq:
-  enable: true
-# Optional advanced features (include when user requests them):
-# schedule: { type: "streaming|cron|periodic|once", cron: "*/5 * * * *", interval_sec: 60 }
-# tags: ["production", "realtime"]
-# parallelism: { count: 4, shard_strategy: "round_robin|partition|id_range", shard_key: "id" }
-# hooks:
-#   on_init: { type: "lua", code: "log('starting')" }
-#   on_error: { type: "webhook", name: "alert-svc", config: { url: "http://alert-svc/notify" } }
-#   on_post_batch: { type: "lua", code: "log('batch done')" }
-# restart_policy: { mode: "on-failure", max_restarts: 5, initial_delay_ms: 2000, backoff_multiplier: 2.0 }
-# worker_selector: { match_labels: { zone: "us-east", gpu: "true" } }
-# table_mapping: { rules: { "order_*": "orders" } }`
+	contextPack := buildAIContextPack()
+	systemPrompt := contextPack.SystemPrompt()
 
 	// Call OpenAI-compatible API
 	llmReq := map[string]any{
@@ -3900,6 +3851,7 @@ dlq:
 	// Validate the generated YAML through ValidateSpec + RunPreflight
 	// so callers know immediately whether the LLM output is usable (P4-24, SV-4).
 	var validation map[string]any
+	var review AIGenerationReview
 	var spec pipeline.Spec
 	if err := yaml.Unmarshal([]byte(content), &spec); err != nil {
 		validation = map[string]any{
@@ -3908,6 +3860,7 @@ dlq:
 		}
 	} else {
 		pipeline.ApplyDefaults(&spec)
+		review = reviewGeneratedSpec(r.Context(), &spec, nil)
 		if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
 			validation = map[string]any{
 				"valid":  false,
@@ -3934,12 +3887,16 @@ dlq:
 				"valid":           preflightErrCount == 0,
 				"warnings":        preflightIssues,
 				"preflightPassed": preflightResult == nil || preflightErrCount == 0,
+				"preflight":       preflightResult,
 			}
+			review = reviewGeneratedSpec(r.Context(), &spec, preflightResult)
 		}
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{
-		"yaml":       content,
-		"validation": validation,
+		"yaml":                 content,
+		"validation":           validation,
+		"review":               review,
+		"context_pack_version": contextPack.Version,
 	})
 }

@@ -138,6 +138,28 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 }
 ```
 
+## AI 上下文与生成
+
+AI 辅助 DAG 生成使用与 UI/YAML 相同的 connector descriptor、插件 schema、
+组件文档和 validate/preflight 路径。它只生成普通 pipeline/DAG spec 草稿；
+不会启动管道，也不能绕过人工确认。
+
+```sh
+curl -H "X-API-Token: $ETL_API_TOKEN" \
+  'http://127.0.0.1:8001/api/v2/ai/context'
+```
+
+```sh
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"从 Kafka 读取 Debezium orders 并 upsert 到 MySQL ODS。"}' \
+  'http://127.0.0.1:8001/api/v2/ai/generate'
+```
+
+生成响应包含 `yaml`、`context_pack_version`、`validation` 和 `review`。
+应用并启动前需要处理或明确接受 `review.missing_fields`、
+`review.risk_flags` 和 `review.requires_confirmation`。
+
 ## Spec 校验
 
 校验 pipeline spec 而不创建运行时管道。
