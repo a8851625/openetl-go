@@ -280,6 +280,33 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - 复杂 transform chain 的增删、排序和跨 transform 错误定位仍需从 JSON 辅助编辑继续产品化。
 - AI context pack 和每个内置组件的可复用 Markdown 文档仍未完成。
 
+### 下一迭代：v0.2.5-beta.1，组件文档与 AI context pack
+
+目标：把已经落地的 connector descriptor、schema、dry-run、preflight 和示例 pipeline 收束成可复用事实源，让 UI、静态文档和 AI 辅助生成 DAG 使用同一套组件知识。
+
+范围：
+
+- 为 production candidate 主路径涉及的核心组件补第一批 Markdown 组件文档：`mysql_batch`、`mysql_cdc`、`mysql_snapshot_cdc`、`kafka`、`file`、`http`、`clickhouse`、`mysql`、`postgres`、`kafka` sink、`s3`/`file_sink`、`lookup`、`deduplicate`、`window`、`flat_map`/`udtf`、`project`/`select_fields`、`type_convert`、`debezium_cdc`、`cdc_policy`。
+- 每个组件文档必须包含：用途、配置字段、输入/输出 record 形态、checkpoint/DLQ/幂等边界、适用/不适用场景、最小 YAML 示例、相关 e2e 或单测证据。
+- 建立 AI context pack 生成入口，把定位边界、DAG 语义、组件文档、connector descriptors、transform dry-run 约定、常见错误和成熟度说明打包成稳定 Markdown/JSON 产物。
+- AI 生成 DAG 仍只输出普通 pipeline/DAG spec；生成结果必须展示 diff、缺失字段、风险和需要用户确认的 secret/权限/危险 DDL，并走现有 validate/preflight。
+- 增加文档/descriptor 一致性检查的第一版脚本或单测，至少校验组件文档覆盖到 descriptor 中的核心 source/sink/transform 名称，避免 UI、文档和 LLM context 漂移。
+- 继续把复杂 transform chain 的 UI 产品化拆成后续任务；本迭代只补文档事实源、context pack 和最小校验，不引入新的 transform 执行语义。
+
+明确不做：
+
+- 不新增通用 SQL planner、Flink SQL 兼容层或 AI 直启 pipeline 的专用执行路径。
+- 不把 MaxCompute、WASM plugin e2e、connector certification test kit 扩大进本迭代主范围；这些继续留在 Phase 1/Phase 3 对应条目。
+- 不把未有真实 e2e 证据的 connector maturity 提升为 production。
+
+验收指标：
+
+- `docs/components/` 或等价目录中存在第一批核心组件文档，字段、maturity 和示例与 descriptor/API 文档不冲突。
+- AI context pack 可以从仓库内容生成或校验，并包含产品边界、组件清单、DAG 规则、示例 spec、常见错误和成熟度信息。
+- 至少补一个后端或脚本级测试，验证核心组件文档覆盖率和 context pack 产物结构。
+- Quickstart 或 API 文档给出 AI/DAG 辅助入口的边界说明：AI 只辅助生成普通 spec，不能绕过 validate/preflight 和人工确认。
+- `go test ./internal/etl/server` 以及新增文档/context pack 校验通过；如涉及 UI 展示，需同步运行 `npm run build` 和 `./hack/e2e-ui.sh`。
+
 ## Phase 3：扩展合约与认证，10-14 周
 
 目标：把“开放”和“可扩展”做成可维护机制。
