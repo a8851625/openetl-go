@@ -758,7 +758,7 @@ func (s *ClickHouseSink) writeInsertHTTP(ctx context.Context, tableName string, 
 			if col.Name == s.versionCol {
 				row[col.Name] = s.nextVersion()
 			} else if v, ok := rec.Data[col.Name]; ok {
-				row[col.Name] = convertClickHouseValue(v, col.Type)
+				row[col.Name] = convertClickHouseHTTPValue(v, col.Type)
 			} else {
 				row[col.Name] = nil
 			}
@@ -1107,6 +1107,30 @@ func convertClickHouseValue(v any, typ string) any {
 	}
 
 	return v
+}
+
+func convertClickHouseHTTPValue(v any, typ string) any {
+	converted := convertClickHouseValue(v, typ)
+	if converted == nil {
+		return nil
+	}
+
+	innerType := typ
+	innerType = strings.TrimSuffix(strings.TrimPrefix(innerType, "Nullable("), ")")
+	innerType = strings.TrimSuffix(strings.TrimPrefix(innerType, "LowCardinality("), ")")
+
+	if t, ok := converted.(time.Time); ok {
+		switch {
+		case innerType == "Date":
+			return t.Format("2006-01-02")
+		case innerType == "DateTime":
+			return t.Format("2006-01-02 15:04:05")
+		case strings.HasPrefix(innerType, "DateTime64"):
+			return t.Format("2006-01-02 15:04:05.000")
+		}
+	}
+
+	return converted
 }
 
 // convertArrayValue converts a Go slice to a ClickHouse Array.

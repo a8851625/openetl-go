@@ -58,6 +58,7 @@ func (r *MetricsRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 type PipelineMetrics struct {
+	ID                   string     `json:"id,omitempty"`
 	Name                 string     `json:"name"`
 	Status               string     `json:"status"`
 	RecordsRead          int64      `json:"records_read"`

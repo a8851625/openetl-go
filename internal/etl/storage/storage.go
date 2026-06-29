@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/google/uuid"
 )
 
 // CheckpointRecord is the storage-layer representation of a checkpoint.
@@ -56,11 +57,20 @@ type AuditEntry struct {
 
 // PipelineRow is the storage-layer representation of a stored pipeline definition.
 type PipelineRow struct {
+	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	SpecYAML  string    `json:"spec_yaml"`
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// EnsurePipelineID assigns a stable UUID to a pipeline row before persistence.
+func EnsurePipelineID(row *PipelineRow) {
+	if row == nil || row.ID != "" {
+		return
+	}
+	row.ID = uuid.NewString()
 }
 
 // PipelineVersion is a versioned snapshot of a pipeline definition.

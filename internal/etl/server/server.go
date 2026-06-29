@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +42,8 @@ type Server struct {
 	pipelines        map[string]pipeline.RunnerInterface
 	specs            map[string]*pipeline.Spec
 	dagSpecs         map[string]*orchestrator.PipelineSpec
+	pipelineNames    map[string]string
+	pipelineNameRefs map[string]map[string]struct{}
 	cpAdapter        *storage.CheckpointStoreAdapter
 	dlqWriter        *storage.DLQCompatWriter
 	auditAdapter     *storage.AuditWriterAdapter
@@ -65,6 +68,126 @@ type Server struct {
 }
 
 var errDAGDLQReplayUnsupported = errors.New("dag dlq replay unsupported")
+
+func newPipelineInstanceID() string {
+	row := &storage.PipelineRow{}
+	storage.EnsurePipelineID(row)
+	return row.ID
+}
+
+func pipelineDisplayName(spec *pipeline.Spec, dagSpec *orchestrator.PipelineSpec, fallback string) string {
+	if spec != nil && strings.TrimSpace(spec.Name) != "" {
+		return spec.Name
+	}
+	if dagSpec != nil && strings.TrimSpace(dagSpec.Name) != "" {
+		return dagSpec.Name
+	}
+	return fallback
+}
+
+func runtimeSpec(spec *pipeline.Spec, id string) *pipeline.Spec {
+	if spec == nil {
+		return nil
+	}
+	cp := *spec
+	cp.Name = id
+	return &cp
+}
+
+func runtimeDAGSpec(spec *orchestrator.PipelineSpec, id string) *orchestrator.PipelineSpec {
+	if spec == nil {
+		return nil
+	}
+	cp := *spec
+	cp.Name = id
+	return &cp
+}
+
+func (s *Server) registerPipelineLocked(id, name string, runner pipeline.RunnerInterface, spec *pipeline.Spec, dagSpec *orchestrator.PipelineSpec) {
+	if id == "" {
+		id = newPipelineInstanceID()
+	}
+	if name == "" {
+		name = pipelineDisplayName(spec, dagSpec, id)
+	}
+	s.pipelines[id] = runner
+	if spec != nil {
+		s.specs[id] = spec
+	} else {
+		delete(s.specs, id)
+	}
+	if dagSpec != nil {
+		s.dagSpecs[id] = dagSpec
+	} else {
+		delete(s.dagSpecs, id)
+	}
+	if oldName, ok := s.pipelineNames[id]; ok && oldName != name {
+		s.removeNameRefLocked(oldName, id)
+	}
+	s.pipelineNames[id] = name
+	if s.pipelineNameRefs[name] == nil {
+		s.pipelineNameRefs[name] = map[string]struct{}{}
+	}
+	s.pipelineNameRefs[name][id] = struct{}{}
+}
+
+func (s *Server) unregisterPipelineLocked(id string) {
+	delete(s.pipelines, id)
+	delete(s.specs, id)
+	delete(s.dagSpecs, id)
+	if name, ok := s.pipelineNames[id]; ok {
+		s.removeNameRefLocked(name, id)
+	}
+	delete(s.pipelineNames, id)
+	delete(s.restartAttempts, id)
+}
+
+func (s *Server) removeNameRefLocked(name, id string) {
+	refs := s.pipelineNameRefs[name]
+	if refs == nil {
+		return
+	}
+	delete(refs, id)
+	if len(refs) == 0 {
+		delete(s.pipelineNameRefs, name)
+	}
+}
+
+func (s *Server) resolvePipelineRefLocked(ref string) (string, error) {
+	if ref == "" {
+		return "", fmt.Errorf("pipeline id is required")
+	}
+	if _, ok := s.pipelineNames[ref]; ok {
+		return ref, nil
+	}
+	if _, ok := s.pipelines[ref]; ok {
+		return ref, nil
+	}
+	if _, ok := s.specs[ref]; ok {
+		return ref, nil
+	}
+	if _, ok := s.dagSpecs[ref]; ok {
+		return ref, nil
+	}
+	refs := s.pipelineNameRefs[ref]
+	switch len(refs) {
+	case 0:
+		return "", fmt.Errorf("pipeline not found")
+	case 1:
+		for id := range refs {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("pipeline name %q matches multiple instances; use pipeline id", ref)
+}
+
+func pathPart(raw string) string {
+	v, err := url.PathUnescape(raw)
+	if err != nil {
+		return raw
+	}
+	return v
+}
 
 // SetDistributed enables master-role distributed dispatch (A11-redo): parallel
 // pipelines delegate shard execution to worker processes via the master
@@ -98,19 +221,21 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 	}
 
 	s := &Server{
-		store:           store,
-		pipelines:       make(map[string]pipeline.RunnerInterface),
-		specs:           make(map[string]*pipeline.Spec),
-		dagSpecs:        make(map[string]*orchestrator.PipelineSpec),
-		cpAdapter:       storage.NewCheckpointStoreAdapter(store),
-		dlqWriter:       storage.NewDLQCompatWriter(store),
-		auditAdapter:    storage.NewAuditWriterAdapter(store),
-		specStore:       NewEncryptedSpecStore(storage.NewPipelineSpecStore(store)),
-		alertManager:    am,
-		specsDir:        specsDir,
-		apiToken:        configString(ctx, "ETL_API_TOKEN", "etl.apiToken", ""),
-		auditEnabled:    configBool(ctx, "ETL_AUDIT_ENABLED", "etl.audit.enabled", true),
-		restartAttempts: make(map[string]int),
+		store:            store,
+		pipelines:        make(map[string]pipeline.RunnerInterface),
+		specs:            make(map[string]*pipeline.Spec),
+		dagSpecs:         make(map[string]*orchestrator.PipelineSpec),
+		pipelineNames:    make(map[string]string),
+		pipelineNameRefs: make(map[string]map[string]struct{}),
+		cpAdapter:        storage.NewCheckpointStoreAdapter(store),
+		dlqWriter:        storage.NewDLQCompatWriter(store),
+		auditAdapter:     storage.NewAuditWriterAdapter(store),
+		specStore:        NewEncryptedSpecStore(storage.NewPipelineSpecStore(store)),
+		alertManager:     am,
+		specsDir:         specsDir,
+		apiToken:         configString(ctx, "ETL_API_TOKEN", "etl.apiToken", ""),
+		auditEnabled:     configBool(ctx, "ETL_AUDIT_ENABLED", "etl.audit.enabled", true),
+		restartAttempts:  make(map[string]int),
 	}
 
 	// Initialize master node and standalone worker (single-process mode)
@@ -217,6 +342,10 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 		if row.SpecYAML == "" {
 			continue
 		}
+		if row.ID == "" {
+			storage.EnsurePipelineID(row)
+			_ = s.store.SavePipeline(ctx, row)
+		}
 
 		yamlBytes := []byte(row.SpecYAML)
 
@@ -232,30 +361,32 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 				continue
 			}
 
+			displayName := pipelineDisplayName(nil, &dagSpec, row.Name)
+
 			s.mu.RLock()
-			_, exists := s.pipelines[dagSpec.Name]
+			_, exists := s.pipelines[row.ID]
 			s.mu.RUnlock()
 			if exists {
 				continue
 			}
 
 			if err := s.resolveDAGConnections(ctx, &dagSpec); err != nil {
-				g.Log().Warningf(ctx, "Skip DAG pipeline %s from DB: %v", dagSpec.Name, err)
+				g.Log().Warningf(ctx, "Skip DAG pipeline %s from DB: %v", displayName, err)
 				continue
 			}
-			exec, err := orchestrator.NewDAGExecutor(&dagSpec, s.cpAdapter, s.dlqWriter, s.alertManager)
+			runtime := runtimeDAGSpec(&dagSpec, row.ID)
+			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
-				g.Log().Warningf(ctx, "Skip DAG pipeline %s from DB: %v", dagSpec.Name, err)
+				g.Log().Warningf(ctx, "Skip DAG pipeline %s from DB: %v", displayName, err)
 				continue
 			}
 			runner := orchestrator.NewDAGRunnerWrapper(exec)
 
 			s.mu.Lock()
-			s.pipelines[dagSpec.Name] = runner
-			s.dagSpecs[dagSpec.Name] = &dagSpec
+			s.registerPipelineLocked(row.ID, displayName, runner, nil, &dagSpec)
 			s.mu.Unlock()
 
-			g.Log().Infof(ctx, "Restored DAG pipeline from DB: %s", dagSpec.Name)
+			g.Log().Infof(ctx, "Restored DAG pipeline from DB: %s (%s)", displayName, row.ID)
 			continue
 		}
 
@@ -266,36 +397,37 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 			continue
 		}
 		pipeline.ApplyDefaults(&spec)
+		displayName := pipelineDisplayName(&spec, nil, row.Name)
 		if err := s.resolvePipelineConnections(ctx, &spec); err != nil {
 			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", spec.Name, err)
 			continue
 		}
-		if err := pipeline.ValidateSpec(&spec); err != nil {
+		runtime := runtimeSpec(&spec, row.ID)
+		if err := pipeline.ValidateSpec(runtime); err != nil {
 			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", spec.Name, err)
 			continue
 		}
 
 		s.mu.RLock()
-		_, exists := s.pipelines[spec.Name]
+		_, exists := s.pipelines[row.ID]
 		s.mu.RUnlock()
 		if exists {
 			continue
 		}
 
-		runner, err := s.newRunner(&spec)
+		runner, err := s.newRunner(runtime)
 		if err != nil {
-			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", spec.Name, err)
+			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", displayName, err)
 			continue
 		}
 
-		s.dispatchIfParallel(ctx, runner, &spec)
+		s.dispatchIfParallel(ctx, runner, runtime)
 
 		s.mu.Lock()
-		s.pipelines[spec.Name] = runner
-		s.specs[spec.Name] = &spec
+		s.registerPipelineLocked(row.ID, displayName, runner, &spec, nil)
 		s.mu.Unlock()
 
-		g.Log().Infof(ctx, "Restored pipeline from DB: %s", spec.Name)
+		g.Log().Infof(ctx, "Restored pipeline from DB: %s (%s)", displayName, row.ID)
 	}
 	return nil
 }
@@ -352,34 +484,36 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 		seen[spec.Name] = entry.Name()
 
 		s.mu.RLock()
-		_, exists := s.pipelines[spec.Name]
+		refs := s.pipelineNameRefs[spec.Name]
+		exists := len(refs) > 0
 		s.mu.RUnlock()
 		if skipExisting && exists {
 			result.Skipped[entry.Name()] = fmt.Sprintf("pipeline %s already loaded", spec.Name)
 			continue
 		}
 
-		runner, err := s.newRunner(spec)
+		id := newPipelineInstanceID()
+		runtime := runtimeSpec(spec, id)
+		runner, err := s.newRunner(runtime)
 		if err != nil {
 			result.Errors[entry.Name()] = err.Error()
 			g.Log().Warningf(ctx, "Skip pipeline %s: %v", spec.Name, err)
 			continue
 		}
 
-		s.dispatchIfParallel(ctx, runner, spec)
+		s.dispatchIfParallel(ctx, runner, runtime)
 
 		// Persist spec to storage (best-effort)
 		if yamlBytes, mErr := pipeline.MarshalSpecYAML(spec); mErr == nil {
-			_ = s.specStore.Save(ctx, spec.Name, string(yamlBytes), "loaded")
+			_ = s.specStore.SaveWithID(ctx, id, spec.Name, string(yamlBytes), "loaded")
 		}
 
 		s.mu.Lock()
-		s.pipelines[spec.Name] = runner
-		s.specs[spec.Name] = spec
+		s.registerPipelineLocked(id, spec.Name, runner, spec, nil)
 		s.mu.Unlock()
 
-		result.Loaded = append(result.Loaded, spec.Name)
-		g.Log().Infof(ctx, "Loaded pipeline: %s", spec.Name)
+		result.Loaded = append(result.Loaded, id)
+		g.Log().Infof(ctx, "Loaded pipeline: %s (%s)", spec.Name, id)
 	}
 
 	return result, nil
@@ -389,23 +523,26 @@ func (s *Server) StartAll(ctx context.Context) error {
 	s.ctx = ctx
 	s.mu.RLock()
 	runners := make(map[string]pipeline.RunnerInterface)
-	for name, r := range s.pipelines {
-		runners[name] = r
+	names := make(map[string]string, len(s.pipelines))
+	for id, r := range s.pipelines {
+		runners[id] = r
+		names[id] = s.pipelineNames[id]
 	}
 	s.mu.RUnlock()
 
-	for name, runner := range runners {
+	for id, runner := range runners {
+		name := names[id]
 		if err := runner.Start(ctx); err != nil {
-			g.Log().Warningf(ctx, "Failed to start pipeline %s: %v", name, err)
-			_ = s.store.UpdatePipelineStatus(ctx, name, "failed")
+			g.Log().Warningf(ctx, "Failed to start pipeline %s (%s): %v", name, id, err)
+			_ = s.store.UpdatePipelineStatus(ctx, id, "failed")
 			continue
 		}
-		g.Log().Infof(ctx, "Started pipeline: %s", name)
+		g.Log().Infof(ctx, "Started pipeline: %s (%s)", name, id)
 
-		_ = s.store.UpdatePipelineStatus(ctx, name, "running")
-		runID, _ := s.store.RecordRunStart(ctx, name)
+		_ = s.store.UpdatePipelineStatus(ctx, id, "running")
+		runID, _ := s.store.RecordRunStart(ctx, id)
 
-		name := name
+		id := id
 		runner := runner
 		go func() {
 			<-runner.Done()
@@ -416,7 +553,7 @@ func (s *Server) StartAll(ctx context.Context) error {
 			if status == "" || status == "running" {
 				status = "completed"
 			}
-			_ = s.store.UpdatePipelineStatus(bg, name, status)
+			_ = s.store.UpdatePipelineStatus(bg, id, status)
 			_ = s.store.RecordRunEnd(bg, runID, status, stats.RecordsRead, stats.RecordsWritten, stats.RecordsFailed, stats.RecordsDLQ, dur.Milliseconds())
 		}()
 	}
@@ -478,14 +615,14 @@ func (s *Server) reconcilerLoop(ctx context.Context) {
 func (s *Server) reconcileFailed(ctx context.Context) {
 	s.mu.RLock()
 	type failedInfo struct {
-		name       string
+		id         string
 		restartPol *pipeline.RestartPolicy
 		runner     pipeline.RunnerInterface
 	}
 	var failed []failedInfo
-	for name, runner := range s.pipelines {
-		spec := s.specs[name]
-		dagSpec := s.dagSpecs[name]
+	for id, runner := range s.pipelines {
+		spec := s.specs[id]
+		dagSpec := s.dagSpecs[id]
 		var rp *pipeline.RestartPolicy
 		if spec != nil {
 			rp = spec.RestartPolicy
@@ -502,31 +639,32 @@ func (s *Server) reconcileFailed(ctx context.Context) {
 		if status != "failed" {
 			continue
 		}
-		failed = append(failed, failedInfo{name: name, restartPol: rp, runner: runner})
+		failed = append(failed, failedInfo{id: id, restartPol: rp, runner: runner})
 	}
 	s.mu.RUnlock()
 
 	for _, f := range failed {
-		s.restartPipeline(ctx, f.name, f.restartPol)
+		s.restartPipeline(ctx, f.id, f.restartPol)
 	}
 }
 
 // restartPipeline rebuilds and restarts a failed pipeline with exponential backoff.
-func (s *Server) restartPipeline(ctx context.Context, name string, rp *pipeline.RestartPolicy) {
+func (s *Server) restartPipeline(ctx context.Context, id string, rp *pipeline.RestartPolicy) {
 	if rp == nil {
 		return
 	}
 
 	// Track restart attempts in-memory (persisted best-effort).
 	s.mu.Lock()
-	attempt := s.restartAttempts[name] + 1
+	name := s.pipelineNames[id]
+	attempt := s.restartAttempts[id] + 1
 	maxRestarts := rp.MaxRestarts
 	if maxRestarts > 0 && attempt > maxRestarts {
 		s.mu.Unlock()
-		g.Log().Warningf(ctx, "[reconciler] pipeline %s reached max restarts (%d), giving up", name, maxRestarts)
+		g.Log().Warningf(ctx, "[reconciler] pipeline %s (%s) reached max restarts (%d), giving up", name, id, maxRestarts)
 		return
 	}
-	s.restartAttempts[name] = attempt
+	s.restartAttempts[id] = attempt
 	s.mu.Unlock()
 
 	// Calculate backoff delay.
@@ -547,7 +685,7 @@ func (s *Server) restartPipeline(ctx context.Context, name string, rp *pipeline.
 		delay = maxDelay
 	}
 
-	g.Log().Infof(ctx, "[reconciler] restarting pipeline %s (attempt %d) in %v", name, attempt, delay)
+	g.Log().Infof(ctx, "[reconciler] restarting pipeline %s (%s) (attempt %d) in %v", name, id, attempt, delay)
 
 	select {
 	case <-time.After(delay):
@@ -557,51 +695,51 @@ func (s *Server) restartPipeline(ctx context.Context, name string, rp *pipeline.
 
 	// Build a new runner from the spec.
 	s.mu.RLock()
-	spec := s.specs[name]
-	dagSpec := s.dagSpecs[name]
+	spec := s.specs[id]
+	dagSpec := s.dagSpecs[id]
 	s.mu.RUnlock()
 
 	var runner pipeline.RunnerInterface
 	if dagSpec != nil {
-		exec, err := orchestrator.NewDAGExecutor(dagSpec, s.cpAdapter, s.dlqWriter, s.alertManager)
+		exec, err := orchestrator.NewDAGExecutor(runtimeDAGSpec(dagSpec, id), s.cpAdapter, s.dlqWriter, s.alertManager)
 		if err != nil {
-			g.Log().Errorf(ctx, "[reconciler] rebuild DAG pipeline %s failed: %v", name, err)
+			g.Log().Errorf(ctx, "[reconciler] rebuild DAG pipeline %s (%s) failed: %v", name, id, err)
 			return
 		}
 		runner = orchestrator.NewDAGRunnerWrapper(exec)
 	} else if spec != nil {
 		var err error
-		runner, err = s.newRunner(spec)
+		runner, err = s.newRunner(runtimeSpec(spec, id))
 		if err != nil {
-			g.Log().Errorf(ctx, "[reconciler] rebuild pipeline %s failed: %v", name, err)
+			g.Log().Errorf(ctx, "[reconciler] rebuild pipeline %s (%s) failed: %v", name, id, err)
 			return
 		}
 	} else {
-		g.Log().Errorf(ctx, "[reconciler] pipeline %s has no spec to rebuild", name)
+		g.Log().Errorf(ctx, "[reconciler] pipeline %s (%s) has no spec to rebuild", name, id)
 		return
 	}
 
 	// Swap in the new runner.
 	s.mu.Lock()
-	s.pipelines[name] = runner
+	s.pipelines[id] = runner
 	s.mu.Unlock()
 
 	if spec != nil {
-		s.dispatchIfParallel(ctx, runner, spec)
+		s.dispatchIfParallel(ctx, runner, runtimeSpec(spec, id))
 	}
 
 	if err := runner.Start(ctx); err != nil {
-		g.Log().Errorf(ctx, "[reconciler] restart pipeline %s failed: %v", name, err)
-		_ = s.store.UpdatePipelineStatus(ctx, name, "failed")
+		g.Log().Errorf(ctx, "[reconciler] restart pipeline %s (%s) failed: %v", name, id, err)
+		_ = s.store.UpdatePipelineStatus(ctx, id, "failed")
 		return
 	}
 
-	g.Log().Infof(ctx, "[reconciler] pipeline %s restarted successfully", name)
-	_ = s.store.UpdatePipelineStatus(ctx, name, "running")
+	g.Log().Infof(ctx, "[reconciler] pipeline %s (%s) restarted successfully", name, id)
+	_ = s.store.UpdatePipelineStatus(ctx, id, "running")
 
 	// Reset attempt counter on successful restart.
 	s.mu.Lock()
-	s.restartAttempts[name] = 0
+	s.restartAttempts[id] = 0
 	s.mu.Unlock()
 
 	// Watch for the next failure.
@@ -614,7 +752,7 @@ func (s *Server) restartPipeline(ctx context.Context, name string, rp *pipeline.
 		if status == "" || status == "running" {
 			status = "completed"
 		}
-		_ = s.store.UpdatePipelineStatus(bg, name, status)
+		_ = s.store.UpdatePipelineStatus(bg, id, status)
 		_ = s.store.RecordRunEnd(bg, 0, status, stats.RecordsRead, stats.RecordsWritten, stats.RecordsFailed, stats.RecordsDLQ, dur.Milliseconds())
 	}()
 }
@@ -634,11 +772,11 @@ func (s *Server) StopAll() {
 	ctx := context.Background()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for name, runner := range s.pipelines {
+	for id, runner := range s.pipelines {
 		if err := runner.Stop(); err != nil {
-			g.Log().Warningf(context.Background(), "Failed to stop pipeline %s: %v", name, err)
+			g.Log().Warningf(context.Background(), "Failed to stop pipeline %s (%s): %v", s.pipelineNames[id], id, err)
 		}
-		_ = s.store.UpdatePipelineStatus(ctx, name, "stopped")
+		_ = s.store.UpdatePipelineStatus(ctx, id, "stopped")
 	}
 }
 
@@ -754,11 +892,11 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.mu.RLock()
-		_, exists := s.pipelines[dagSpec.Name]
+		exists := len(s.pipelineNameRefs[dagSpec.Name]) > 0
 		s.mu.RUnlock()
 		warnings := []string{}
 		if exists {
-			warnings = append(warnings, "pipeline already exists; create would return 409")
+			warnings = append(warnings, "another pipeline instance already uses this display name; create will allocate a new id")
 		}
 
 		json.NewEncoder(w).Encode(map[string]any{"valid": true, "warnings": warnings, "spec": dagSpec})
@@ -784,11 +922,11 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.RLock()
-	_, exists := s.pipelines[spec.Name]
+	exists := len(s.pipelineNameRefs[spec.Name]) > 0
 	s.mu.RUnlock()
 	warnings := []string{}
 	if exists {
-		warnings = append(warnings, "pipeline already exists; create would return 409")
+		warnings = append(warnings, "another pipeline instance already uses this display name; create will allocate a new id")
 	}
 	idempotencyWarnings := pipeline.ValidateIdempotency(&spec)
 	warnings = append(warnings, idempotencyWarnings...)
@@ -1009,16 +1147,23 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		tagFilter := r.URL.Query().Get("tag")
 		s.mu.RLock()
-		names := make([]string, 0, len(s.pipelines))
-		for name := range s.pipelines {
-			names = append(names, name)
+		ids := make([]string, 0, len(s.pipelines))
+		for id := range s.pipelines {
+			ids = append(ids, id)
 		}
-		sort.Strings(names)
-		result := make([]map[string]any, 0, len(names))
-		for _, name := range names {
-			runner := s.pipelines[name]
-			spec := s.specs[name]
-			dagSpec := s.dagSpecs[name]
+		sort.Slice(ids, func(i, j int) bool {
+			ni, nj := s.pipelineNames[ids[i]], s.pipelineNames[ids[j]]
+			if ni == nj {
+				return ids[i] < ids[j]
+			}
+			return ni < nj
+		})
+		result := make([]map[string]any, 0, len(ids))
+		for _, id := range ids {
+			runner := s.pipelines[id]
+			spec := s.specs[id]
+			dagSpec := s.dagSpecs[id]
+			name := s.pipelineNames[id]
 
 			if tagFilter != "" {
 				hasTag := false
@@ -1044,6 +1189,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 
 			info := map[string]any{
+				"id":     id,
 				"name":   name,
 				"status": runner.Status(),
 				"stats":  runner.Stats(),
@@ -1113,12 +1259,14 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				dagSpec.Retry = &orchestrator.RetryConfig{MaxAttempts: 3, InitialIntervalMs: 1000, MaxIntervalMs: 30000}
 			}
 
+			id := newPipelineInstanceID()
 			if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-			exec, err := orchestrator.NewDAGExecutor(&dagSpec, s.cpAdapter, s.dlqWriter, s.alertManager)
+			runtime := runtimeDAGSpec(&dagSpec, id)
+			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
@@ -1126,23 +1274,17 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			runner := orchestrator.NewDAGRunnerWrapper(exec)
 
 			s.mu.Lock()
-			if _, exists := s.pipelines[dagSpec.Name]; exists {
-				s.mu.Unlock()
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(map[string]any{"error": "pipeline already exists"})
-				return
-			}
-			s.pipelines[dagSpec.Name] = runner
-			s.dagSpecs[dagSpec.Name] = &dagSpec
+			s.registerPipelineLocked(id, dagSpec.Name, runner, nil, &dagSpec)
 			s.mu.Unlock()
 
 			// Persist DAG spec to storage
 			if yamlBytes, mErr := yaml.Marshal(&dagSpec); mErr == nil {
-				_ = s.specStore.Save(r.Context(), dagSpec.Name, string(yamlBytes), "created")
+				_ = s.specStore.SaveWithID(r.Context(), id, dagSpec.Name, string(yamlBytes), "created")
 			}
-			s.audit(r, "pipeline.create", dagSpec.Name)
+			s.audit(r, "pipeline.create", id)
 
 			json.NewEncoder(w).Encode(map[string]any{
+				"id":     id,
 				"name":   dagSpec.Name,
 				"status": runner.Status(),
 			})
@@ -1157,12 +1299,14 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pipeline.ApplyDefaults(&spec)
+		id := newPipelineInstanceID()
 		if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
-		if err := pipeline.ValidateSpec(&spec); err != nil {
+		runtime := runtimeSpec(&spec, id)
+		if err := pipeline.ValidateSpec(runtime); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
@@ -1185,32 +1329,26 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		runner, err := s.newRunner(&spec)
+		runner, err := s.newRunner(runtime)
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
 
 		s.mu.Lock()
-		if _, exists := s.pipelines[spec.Name]; exists {
-			s.mu.Unlock()
-			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(map[string]any{"error": "pipeline already exists"})
-			return
-		}
-		s.pipelines[spec.Name] = runner
-		s.specs[spec.Name] = &spec
+		s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
 		s.mu.Unlock()
 
-		s.dispatchIfParallel(r.Context(), runner, &spec)
+		s.dispatchIfParallel(r.Context(), runner, runtime)
 
 		// Persist spec to storage
 		if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
-			_ = s.specStore.Save(r.Context(), spec.Name, string(yamlBytes), "created")
+			_ = s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "created")
 		}
-		s.audit(r, "pipeline.create", spec.Name)
+		s.audit(r, "pipeline.create", id)
 
 		json.NewEncoder(w).Encode(map[string]any{
+			"id":                 id,
 			"name":               spec.Name,
 			"status":             runner.Status(),
 			"preflight_valid":    true,
@@ -1222,6 +1360,8 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		// Update/replace an existing pipeline
 		var req struct {
 			Spec            json.RawMessage `json:"spec"`
+			ID              string          `json:"id"`
+			PipelineID      string          `json:"pipeline_id"`
 			ResetCheckpoint bool            `json:"reset_checkpoint"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1246,6 +1386,20 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": "name is required"})
 				return
 			}
+			id := strings.TrimSpace(req.ID)
+			if id == "" {
+				id = strings.TrimSpace(req.PipelineID)
+			}
+			if id == "" {
+				s.mu.RLock()
+				resolved, resolveErr := s.resolvePipelineRefLocked(dagSpec.Name)
+				s.mu.RUnlock()
+				if resolveErr != nil {
+					id = newPipelineInstanceID()
+				} else {
+					id = resolved
+				}
+			}
 
 			// Apply defaults
 			if dagSpec.Execution == nil {
@@ -1266,7 +1420,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 
 			specChanged := false
 			s.mu.RLock()
-			oldDagSpec, dagSpecExists := s.dagSpecs[dagSpec.Name]
+			oldDagSpec, dagSpecExists := s.dagSpecs[id]
 			s.mu.RUnlock()
 			if dagSpecExists {
 				specChanged = true
@@ -1278,19 +1432,20 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
+			runtime := runtimeDAGSpec(&dagSpec, id)
 
 			// Stop old runner if exists
 			s.mu.Lock()
-			if oldRunner, ok := s.pipelines[dagSpec.Name]; ok {
+			if oldRunner, ok := s.pipelines[id]; ok {
 				oldRunner.Stop()
 			}
 			s.mu.Unlock()
 
 			if req.ResetCheckpoint {
-				s.cpAdapter.Delete(r.Context(), dagSpec.Name)
+				s.cpAdapter.Delete(r.Context(), id)
 			}
 
-			exec, err := orchestrator.NewDAGExecutor(&dagSpec, s.cpAdapter, s.dlqWriter, s.alertManager)
+			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
@@ -1298,17 +1453,16 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			runner := orchestrator.NewDAGRunnerWrapper(exec)
 
 			s.mu.Lock()
-			s.pipelines[dagSpec.Name] = runner
-			s.dagSpecs[dagSpec.Name] = &dagSpec
-			delete(s.specs, dagSpec.Name)
+			s.registerPipelineLocked(id, dagSpec.Name, runner, nil, &dagSpec)
 			s.mu.Unlock()
 
 			if yamlBytes, mErr := yaml.Marshal(&dagSpec); mErr == nil {
-				_ = s.specStore.Save(r.Context(), dagSpec.Name, string(yamlBytes), "updated")
+				_ = s.specStore.SaveWithID(r.Context(), id, dagSpec.Name, string(yamlBytes), "updated")
 			}
-			s.audit(r, "pipeline.update", dagSpec.Name)
+			s.audit(r, "pipeline.update", id)
 
 			json.NewEncoder(w).Encode(map[string]any{
+				"id":                 id,
 				"name":               dagSpec.Name,
 				"status":             runner.Status(),
 				"spec_changed":       specChanged,
@@ -1326,12 +1480,27 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pipeline.ApplyDefaults(&spec)
+		id := strings.TrimSpace(req.ID)
+		if id == "" {
+			id = strings.TrimSpace(req.PipelineID)
+		}
+		if id == "" {
+			s.mu.RLock()
+			resolved, resolveErr := s.resolvePipelineRefLocked(spec.Name)
+			s.mu.RUnlock()
+			if resolveErr != nil {
+				id = newPipelineInstanceID()
+			} else {
+				id = resolved
+			}
+		}
 		if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
-		if err := pipeline.ValidateSpec(&spec); err != nil {
+		runtime := runtimeSpec(&spec, id)
+		if err := pipeline.ValidateSpec(runtime); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
@@ -1339,7 +1508,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 
 		// Detect spec changes and checkpoint compatibility
 		s.mu.RLock()
-		oldSpec, specExists := s.specs[spec.Name]
+		oldSpec, specExists := s.specs[id]
 		s.mu.RUnlock()
 
 		specChanged := false
@@ -1370,37 +1539,36 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 
 		// Stop old runner if exists
 		s.mu.Lock()
-		if oldRunner, ok := s.pipelines[spec.Name]; ok {
+		if oldRunner, ok := s.pipelines[id]; ok {
 			oldRunner.Stop()
 		}
 		s.mu.Unlock()
 
 		// Optionally reset checkpoint
 		if req.ResetCheckpoint {
-			s.cpAdapter.Delete(r.Context(), spec.Name)
+			s.cpAdapter.Delete(r.Context(), id)
 		}
 
 		// Create new runner
-		runner, err := s.newRunner(&spec)
+		runner, err := s.newRunner(runtime)
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
 
 		s.mu.Lock()
-		s.pipelines[spec.Name] = runner
-		s.specs[spec.Name] = &spec
-		delete(s.dagSpecs, spec.Name)
+		s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
 		s.mu.Unlock()
 
-		s.dispatchIfParallel(r.Context(), runner, &spec)
+		s.dispatchIfParallel(r.Context(), runner, runtime)
 
 		// Save spec version
 		if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
-			_ = s.specStore.Save(r.Context(), spec.Name, string(yamlBytes), "updated")
+			_ = s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "updated")
 		}
-		s.audit(r, "pipeline.update", spec.Name)
+		s.audit(r, "pipeline.update", id)
 		json.NewEncoder(w).Encode(map[string]any{
+			"id":                 id,
 			"name":               spec.Name,
 			"status":             runner.Status(),
 			"preflight_valid":    true,
@@ -1503,7 +1671,7 @@ func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		s.audit(r, "pipeline.schedule.update", name)
-		json.NewEncoder(w).Encode(map[string]any{"name": name, "enabled": true, "schedule": req})
+		json.NewEncoder(w).Encode(map[string]any{"id": name, "name": s.pipelineNames[name], "enabled": true, "schedule": req})
 
 	case http.MethodDelete:
 		s.mu.Lock()
@@ -1528,7 +1696,7 @@ func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		s.audit(r, "pipeline.schedule.disable", name)
-		json.NewEncoder(w).Encode(map[string]any{"name": name, "enabled": false})
+		json.NewEncoder(w).Encode(map[string]any{"id": name, "name": s.pipelineNames[name], "enabled": false})
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1564,14 +1732,14 @@ func (s *Server) persistPipelineSchedule(ctx context.Context, name, status strin
 		if err != nil {
 			return fmt.Errorf("marshal dag spec: %w", err)
 		}
-		return s.specStore.Save(ctx, name, string(yamlBytes), status)
+		return s.specStore.SaveWithID(ctx, name, pipelineDisplayName(nil, dagSpec, name), string(yamlBytes), status)
 	}
 	if spec != nil {
 		yamlBytes, err := pipeline.MarshalSpecYAML(spec)
 		if err != nil {
 			return fmt.Errorf("marshal spec: %w", err)
 		}
-		return s.specStore.Save(ctx, name, string(yamlBytes), status)
+		return s.specStore.SaveWithID(ctx, name, pipelineDisplayName(spec, nil, name), string(yamlBytes), status)
 	}
 	return fmt.Errorf("pipeline %s not found", name)
 }
@@ -1654,7 +1822,7 @@ func (s *Server) handlePipelineExport(w http.ResponseWriter, r *http.Request, na
 	}
 
 	w.Header().Set("Content-Type", "application/x-yaml")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.yaml"`, name))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.yaml"`, pipelineDisplayName(spec, dagSpec, name)))
 
 	if dagSpec != nil {
 		yamlBytes, err := yaml.Marshal(maskDAGSpecSecrets(dagSpec))
@@ -1757,6 +1925,7 @@ func (s *Server) handlePipelineDAG(w http.ResponseWriter, r *http.Request, name 
 // handlePipelineDelete stops and deletes a pipeline.
 func (s *Server) handlePipelineDelete(w http.ResponseWriter, r *http.Request, name string) {
 	s.mu.RLock()
+	displayName := s.pipelineNames[name]
 	runner, hasRunner := s.pipelines[name]
 	_, hasSpec := s.specs[name]
 	_, hasDagSpec := s.dagSpecs[name]
@@ -1773,9 +1942,7 @@ func (s *Server) handlePipelineDelete(w http.ResponseWriter, r *http.Request, na
 	}
 
 	s.mu.Lock()
-	delete(s.pipelines, name)
-	delete(s.specs, name)
-	delete(s.dagSpecs, name)
+	s.unregisterPipelineLocked(name)
 	s.mu.Unlock()
 
 	// Delete from storage
@@ -1783,8 +1950,8 @@ func (s *Server) handlePipelineDelete(w http.ResponseWriter, r *http.Request, na
 	_ = s.cpAdapter.Delete(r.Context(), name)
 
 	s.audit(r, "pipeline.delete", name)
-	g.Log().Infof(s.ctx, "Pipeline deleted via API: %s", name)
-	json.NewEncoder(w).Encode(map[string]any{"status": "deleted"})
+	g.Log().Infof(s.ctx, "Pipeline deleted via API: %s (%s)", displayName, name)
+	json.NewEncoder(w).Encode(map[string]any{"id": name, "name": displayName, "status": "deleted"})
 }
 
 // handlePipelineVersions dispatches version-related sub-actions.
@@ -1943,26 +2110,27 @@ func (s *Server) handlePipelineVersionRollback(w http.ResponseWriter, r *http.Re
 		oldRunner.Stop()
 	}
 
-	runner, err := s.newRunner(&spec)
+	runtime := runtimeSpec(&spec, name)
+	runner, err := s.newRunner(runtime)
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
 
 	s.mu.Lock()
-	s.pipelines[name] = runner
-	s.specs[name] = &spec
+	s.registerPipelineLocked(name, spec.Name, runner, &spec, nil)
 	s.mu.Unlock()
 
 	// Persist the rollback as a new version
 	if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
-		_ = s.specStore.Save(r.Context(), name, string(yamlBytes), "rollback")
+		_ = s.specStore.SaveWithID(r.Context(), name, spec.Name, string(yamlBytes), "rollback")
 	}
 
 	s.audit(r, "pipeline.rollback", name)
 	g.Log().Infof(s.ctx, "Pipeline rolled back to version %d: %s", version, name)
 	json.NewEncoder(w).Encode(map[string]any{
-		"name":    name,
+		"id":      name,
+		"name":    spec.Name,
 		"version": version,
 		"status":  "rolled_back",
 	})
@@ -2083,40 +2251,42 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 
 	// Check if pipeline already exists
 	s.mu.RLock()
-	_, exists := s.pipelines[spec.Name]
+	existingID, resolveErr := s.resolvePipelineRefLocked(spec.Name)
+	exists := resolveErr == nil
 	s.mu.RUnlock()
 
 	if exists {
 		// Update existing
-		if err := s.handlePipelinesPut(r.Context(), &spec); err != nil {
+		if err := s.handlePipelinesPut(r.Context(), existingID, &spec); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
-		s.audit(r, "spec.import.update", spec.Name)
-		json.NewEncoder(w).Encode(map[string]any{"name": spec.Name, "action": "updated"})
+		s.audit(r, "spec.import.update", existingID)
+		json.NewEncoder(w).Encode(map[string]any{"id": existingID, "name": spec.Name, "action": "updated"})
 	} else {
 		// Create new
-		runner, err := s.newRunner(&spec)
+		id := newPipelineInstanceID()
+		runtime := runtimeSpec(&spec, id)
+		runner, err := s.newRunner(runtime)
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
 		s.mu.Lock()
-		s.pipelines[spec.Name] = runner
-		s.specs[spec.Name] = &spec
+		s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
 		s.mu.Unlock()
-		s.dispatchIfParallel(r.Context(), runner, &spec)
+		s.dispatchIfParallel(r.Context(), runner, runtime)
 		if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
-			_ = s.specStore.Save(r.Context(), spec.Name, string(yamlBytes), "imported")
+			_ = s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "imported")
 		}
-		s.audit(r, "spec.import.create", spec.Name)
-		json.NewEncoder(w).Encode(map[string]any{"name": spec.Name, "action": "created"})
+		s.audit(r, "spec.import.create", id)
+		json.NewEncoder(w).Encode(map[string]any{"id": id, "name": spec.Name, "action": "created"})
 	}
 }
 
 // handlePipelinesPut is a helper to update an existing pipeline (used by spec import).
-func (s *Server) handlePipelinesPut(ctx context.Context, spec *pipeline.Spec) error {
+func (s *Server) handlePipelinesPut(ctx context.Context, id string, spec *pipeline.Spec) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2127,21 +2297,21 @@ func (s *Server) handlePipelinesPut(ctx context.Context, spec *pipeline.Spec) er
 		return err
 	}
 
-	if oldRunner, ok := s.pipelines[spec.Name]; ok {
+	if oldRunner, ok := s.pipelines[id]; ok {
 		oldRunner.Stop()
 	}
 
-	runner, err := s.newRunner(spec)
+	runtime := runtimeSpec(spec, id)
+	runner, err := s.newRunner(runtime)
 	if err != nil {
 		return err
 	}
 
-	s.pipelines[spec.Name] = runner
-	s.specs[spec.Name] = spec
-	s.dispatchIfParallel(ctx, runner, spec)
+	s.registerPipelineLocked(id, spec.Name, runner, spec, nil)
+	s.dispatchIfParallel(ctx, runner, runtime)
 
 	if yamlBytes, mErr := pipeline.MarshalSpecYAML(spec); mErr == nil {
-		_ = s.specStore.Save(ctx, spec.Name, string(yamlBytes), "imported")
+		_ = s.specStore.SaveWithID(ctx, id, spec.Name, string(yamlBytes), "imported")
 	}
 	return nil
 }
@@ -2150,28 +2320,46 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	path := r.URL.Path[len("/api/v2/pipelines/"):]
-	name := ""
+	ref := ""
 	action := ""
 	for i, c := range path {
 		if c == '/' {
-			name = path[:i]
+			ref = path[:i]
 			action = path[i+1:]
 			break
 		}
 	}
-	if name == "" {
-		name = path
+	if ref == "" {
+		ref = path
 	}
+	ref = pathPart(ref)
+	name := ref
+	s.mu.RLock()
+	id, resolveErr := s.resolvePipelineRefLocked(ref)
+	if resolveErr == nil {
+		name = s.pipelineNames[id]
+		if name == "" {
+			name = id
+		}
+	} else {
+		id = ref
+	}
+	s.mu.RUnlock()
 
 	// Multi-level action dispatch (e.g. versions/1/diff)
 	if action == "versions" || strings.HasPrefix(action, "versions/") {
-		s.handlePipelineVersions(w, r, name, action)
+		if resolveErr != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"error": resolveErr.Error()})
+			return
+		}
+		s.handlePipelineVersions(w, r, id, action)
 		return
 	}
 
 	s.mu.RLock()
-	runner, ok := s.pipelines[name]
-	spec := s.specs[name]
+	runner, ok := s.pipelines[id]
+	spec := s.specs[id]
 	s.mu.RUnlock()
 
 	// Actions that don't require a running pipeline
@@ -2181,7 +2369,11 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok && !standaloneActions[action] {
 		w.WriteHeader(404)
-		json.NewEncoder(w).Encode(map[string]any{"error": "pipeline not found"})
+		msg := "pipeline not found"
+		if resolveErr != nil {
+			msg = resolveErr.Error()
+		}
+		json.NewEncoder(w).Encode(map[string]any{"error": msg})
 		return
 	}
 
@@ -2192,9 +2384,9 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-			s.audit(r, "pipeline.start", name)
-			g.Log().Infof(s.ctx, "Pipeline started via API: %s", name)
-			json.NewEncoder(w).Encode(map[string]any{"name": name, "status": runner.Status(), "stats": runner.Stats()})
+			s.audit(r, "pipeline.start", id)
+			g.Log().Infof(s.ctx, "Pipeline started via API: %s (%s)", name, id)
+			json.NewEncoder(w).Encode(map[string]any{"id": id, "name": name, "status": runner.Status(), "stats": runner.Stats()})
 			return
 		}
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -2202,13 +2394,23 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	case "":
 		switch r.Method {
 		case http.MethodGet:
+			if resolveErr != nil || runner == nil {
+				w.WriteHeader(http.StatusNotFound)
+				msg := "pipeline not found"
+				if resolveErr != nil {
+					msg = resolveErr.Error()
+				}
+				json.NewEncoder(w).Encode(map[string]any{"error": msg})
+				return
+			}
 			json.NewEncoder(w).Encode(map[string]any{
+				"id":     id,
 				"name":   name,
 				"status": runner.Status(),
 				"stats":  runner.Stats(),
 			})
 		case http.MethodDelete:
-			s.handlePipelineDelete(w, r, name)
+			s.handlePipelineDelete(w, r, id)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
@@ -2216,7 +2418,7 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	case "stop":
 		if r.Method == http.MethodPost {
 			runner.Stop()
-			s.audit(r, "pipeline.stop", name)
+			s.audit(r, "pipeline.stop", id)
 			json.NewEncoder(w).Encode(map[string]any{"status": "stopped"})
 		}
 
@@ -2226,9 +2428,9 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-			_ = s.store.UpdatePipelineStatus(r.Context(), name, "paused")
-			s.audit(r, "pipeline.pause", name)
-			json.NewEncoder(w).Encode(map[string]any{"name": name, "status": "paused"})
+			_ = s.store.UpdatePipelineStatus(r.Context(), id, "paused")
+			s.audit(r, "pipeline.pause", id)
+			json.NewEncoder(w).Encode(map[string]any{"id": id, "name": name, "status": "paused"})
 			return
 		}
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -2239,15 +2441,15 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-			_ = s.store.UpdatePipelineStatus(r.Context(), name, "running")
-			s.audit(r, "pipeline.resume", name)
-			json.NewEncoder(w).Encode(map[string]any{"name": name, "status": "running"})
+			_ = s.store.UpdatePipelineStatus(r.Context(), id, "running")
+			s.audit(r, "pipeline.resume", id)
+			json.NewEncoder(w).Encode(map[string]any{"id": id, "name": name, "status": "running"})
 			return
 		}
 		w.WriteHeader(http.StatusMethodNotAllowed)
 
 	case "checkpoint":
-		cp, err := s.cpAdapter.Load(r.Context(), name)
+		cp, err := s.cpAdapter.Load(r.Context(), id)
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
@@ -2256,8 +2458,8 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 
 	case "checkpoint/reset":
 		if r.Method == http.MethodPost {
-			s.cpAdapter.Delete(r.Context(), name)
-			s.audit(r, "checkpoint.reset", name)
+			s.cpAdapter.Delete(r.Context(), id)
+			s.audit(r, "checkpoint.reset", id)
 			json.NewEncoder(w).Encode(map[string]any{"status": "reset"})
 		}
 
@@ -2269,7 +2471,7 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": "invalid body: " + err.Error()})
 				return
 			}
-			cp, details, err := buildCheckpointForSet(name, spec, body)
+			cp, details, err := buildCheckpointForSet(id, spec, body)
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -2280,7 +2482,7 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-			s.audit(r, "checkpoint.set", name)
+			s.audit(r, "checkpoint.set", id)
 			resp := map[string]any{"status": "set", "source": cp.Source, "position": cp.Position}
 			for k, v := range details {
 				resp[k] = v
@@ -2290,7 +2492,7 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 
 	case "history":
 		if r.Method == http.MethodGet {
-			runs, err := s.store.ListRunHistory(r.Context(), name, 20)
+			runs, err := s.store.ListRunHistory(r.Context(), id, 20)
 			if err != nil {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
@@ -2299,10 +2501,10 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case "schedule":
-		s.handlePipelineSchedule(w, r, name)
+		s.handlePipelineSchedule(w, r, id)
 
 	case "spec":
-		s.handlePipelineSpecGET(w, r, name)
+		s.handlePipelineSpecGET(w, r, id)
 
 	case "log":
 		if r.Method == http.MethodGet && ok {
@@ -2355,17 +2557,17 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 
 	case "export":
-		s.handlePipelineExport(w, r, name)
+		s.handlePipelineExport(w, r, id)
 
 	case "dag":
-		s.handlePipelineDAG(w, r, name)
+		s.handlePipelineDAG(w, r, id)
 
 	case "delete":
-		s.handlePipelineDelete(w, r, name)
+		s.handlePipelineDelete(w, r, id)
 
 	case "preview":
 		if r.Method == http.MethodGet && ok {
-			s.handlePipelinePreview(w, r, name, runner)
+			s.handlePipelinePreview(w, r, id, runner)
 			return
 		}
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -2560,8 +2762,14 @@ func kafkaStoredOffset(partitionText string, offset int64, mode string) (int32, 
 }
 
 func (s *Server) handleCheckpointAction(w http.ResponseWriter, r *http.Request) {
-	name := r.URL.Path[len("/api/v2/checkpoints/"):]
+	ref := pathPart(r.URL.Path[len("/api/v2/checkpoints/"):])
 	w.Header().Set("Content-Type", "application/json")
+	name := ref
+	s.mu.RLock()
+	if id, err := s.resolvePipelineRefLocked(ref); err == nil {
+		name = id
+	}
+	s.mu.RUnlock()
 
 	switch r.Method {
 	case http.MethodDelete:
@@ -2988,23 +3196,23 @@ func (s *Server) handlePluginAction(w http.ResponseWriter, r *http.Request) {
 func pluginMetadata() map[string]any {
 	return map[string]any{
 		"sources": map[string]any{
-			"file":               pluginInfo([]string{"path", "format"}, []string{"batch", "checkpoint"}, "beta"),
-			"http":               pluginInfo([]string{"url"}, []string{"pagination", "auth_headers", "checkpoint"}, "beta"),
-			"mysql_batch":        pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "checkpoint", "schema_descriptor"}, "beta"),
-			"mysql_cdc":          pluginInfo([]string{"host", "user", "database", "tables"}, []string{"cdc", "checkpoint", "schema_descriptor_single_table"}, "beta"),
-			"mysql_snapshot_cdc": pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "cdc", "checkpoint", "schema_descriptor_single_table"}, "beta"),
-			"kafka":              pluginInfo([]string{"brokers", "topic"}, []string{"stream", "checkpoint"}, "beta"),
+			"file":               pluginInfo([]string{"path", "format"}, []string{"batch", "checkpoint"}, "production"),
+			"http":               pluginInfo([]string{"url"}, []string{"pagination", "auth_headers", "checkpoint"}, "production"),
+			"mysql_batch":        pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "checkpoint", "schema_descriptor"}, "production"),
+			"mysql_cdc":          pluginInfo([]string{"host", "user", "database", "tables"}, []string{"cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
+			"mysql_snapshot_cdc": pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
+			"kafka":              pluginInfo([]string{"brokers", "topic"}, []string{"stream", "checkpoint"}, "production"),
 			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot", "checkpoint"}, "beta"),
 			"redis":              pluginInfo([]string{"addr"}, []string{"stream", "checkpoint"}, "experimental"),
 		},
 		"sinks": map[string]any{
-			"file_sink":     pluginInfo([]string{"output_dir", "format"}, []string{"batch", "local_file"}, "beta"),
-			"s3":            pluginInfo([]string{"bucket", "format"}, []string{"batch", "minio_compatible"}, "beta"),
-			"mysql":         pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator"}, "beta"),
-			"clickhouse":    pluginInfo([]string{"host", "database", "table"}, []string{"batch", "auto_create", "schema_drift", "schema_validator", "sync", "distributed", "update", "delete", "optimize"}, "beta"),
-			"postgres":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator"}, "beta"),
-			"postgresql":    pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "schema_validator"}, "beta"),
-			"kafka":         pluginInfo([]string{"brokers", "topic"}, []string{"stream"}, "beta"),
+			"file_sink":     pluginInfo([]string{"output_dir", "format"}, []string{"batch", "local_file"}, "production"),
+			"s3":            pluginInfo([]string{"bucket", "format"}, []string{"batch", "minio_compatible"}, "production"),
+			"mysql":         pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator"}, "production"),
+			"clickhouse":    pluginInfo([]string{"host", "database", "table"}, []string{"batch", "auto_create", "schema_drift", "schema_validator", "sync", "distributed", "update", "delete", "optimize"}, "production"),
+			"postgres":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator"}, "production"),
+			"postgresql":    pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "schema_validator"}, "production"),
+			"kafka":         pluginInfo([]string{"brokers", "topic"}, []string{"stream"}, "production"),
 			"elasticsearch": pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "beta"),
 			"es":            pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "beta"),
 			"redis":         pluginInfo([]string{"addr"}, []string{"stream"}, "experimental"),
@@ -3058,20 +3266,27 @@ func pluginInfo(required, capabilities []string, maturity string) map[string]any
 func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	path := r.URL.Path[len("/api/v2/dlq/"):]
-	name := path
+	ref := path
 	action := ""
 	for i, c := range path {
 		if c == '/' {
-			name = path[:i]
+			ref = path[:i]
 			action = path[i+1:]
 			break
 		}
 	}
-	if name == "" {
+	ref = pathPart(ref)
+	if ref == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "pipeline name is required"})
+		json.NewEncoder(w).Encode(map[string]any{"error": "pipeline id is required"})
 		return
 	}
+	name := ref
+	s.mu.RLock()
+	if id, err := s.resolvePipelineRefLocked(ref); err == nil {
+		name = id
+	}
+	s.mu.RUnlock()
 	filter := dlqFilterFromRequest(r)
 
 	switch {
@@ -3344,28 +3559,36 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 
 func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 	s.mu.RLock()
-	names := make([]string, 0, len(s.pipelines))
+	ids := make([]string, 0, len(s.pipelines))
 	runners := make(map[string]pipeline.RunnerInterface, len(s.pipelines))
-	for name, runner := range s.pipelines {
-		runners[name] = runner
-		names = append(names, name)
+	names := make(map[string]string, len(s.pipelines))
+	for id, runner := range s.pipelines {
+		runners[id] = runner
+		names[id] = s.pipelineNames[id]
+		ids = append(ids, id)
 	}
 	s.mu.RUnlock()
-	sort.Strings(names)
+	sort.Slice(ids, func(i, j int) bool {
+		if names[ids[i]] == names[ids[j]] {
+			return ids[i] < ids[j]
+		}
+		return names[ids[i]] < names[ids[j]]
+	})
 
 	var metrics []telemetry.PipelineMetrics
 	ctx := context.Background()
-	for _, name := range names {
-		runner := runners[name]
+	for _, id := range ids {
+		runner := runners[id]
 		stats := runner.Stats()
 		pipelineMetrics := runner.MetricsSnapshot()
 		checkpointAgeSeconds := int64(0)
-		if cp, err := s.cpAdapter.Load(ctx, name); err == nil && cp != nil && !cp.Timestamp.IsZero() {
+		if cp, err := s.cpAdapter.Load(ctx, id); err == nil && cp != nil && !cp.Timestamp.IsZero() {
 			checkpointAgeSeconds = int64(time.Since(cp.Timestamp).Seconds())
 		}
-		dlqFileCount := s.dlqWriter.Count(ctx, name)
+		dlqFileCount := s.dlqWriter.Count(ctx, id)
 		metrics = append(metrics, telemetry.PipelineMetrics{
-			Name:                 name,
+			ID:                   id,
+			Name:                 names[id],
 			Status:               string(runner.Status()),
 			RecordsRead:          stats.RecordsRead,
 			RecordsWritten:       stats.RecordsWritten,

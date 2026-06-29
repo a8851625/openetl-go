@@ -138,6 +138,10 @@ func (e *EncryptedSpecStore) Save(ctx context.Context, name, specYAML, status st
 	return e.inner.Save(ctx, name, encryptSpec(specYAML), status)
 }
 
+func (e *EncryptedSpecStore) SaveWithID(ctx context.Context, id, name, specYAML, status string) error {
+	return e.inner.SaveWithID(ctx, id, name, encryptSpec(specYAML), status)
+}
+
 func (e *EncryptedSpecStore) Get(ctx context.Context, name string) (string, error) {
 	yaml, err := e.inner.Get(ctx, name)
 	if err != nil {

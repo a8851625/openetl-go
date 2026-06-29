@@ -56,6 +56,7 @@ components:
     PipelineStatus:
       type: object
       properties:
+        id: { type: string, description: Pipeline instance UUID }
         name: { type: string }
         status: { type: string, enum: [running, stopped, failed, paused, completed] }
         stats:
@@ -79,6 +80,7 @@ components:
     PipelineMetrics:
       type: object
       properties:
+        id: { type: string, description: Pipeline instance UUID }
         name: { type: string }
         status: { type: string }
         records_read: { type: integer, format: int64 }
@@ -148,8 +150,7 @@ paths:
               properties:
                 spec: { $ref: '#/components/schemas/PipelineSpec' }
       responses:
-        '200': { description: Created }
-        '409': { description: Already exists }
+        '200': { description: Created with a generated pipeline instance id }
     put:
       tags: [Pipelines]
       summary: Update an existing pipeline
@@ -159,17 +160,19 @@ paths:
             schema:
               type: object
               properties:
+                id: { type: string, description: Pipeline instance UUID. If omitted, a single matching legacy name may be used. }
                 spec: { $ref: '#/components/schemas/PipelineSpec' }
                 reset_checkpoint: { type: boolean }
       responses:
         '200': { description: Updated }
 
-  /pipelines/{name}:
+  /pipelines/{id}:
     get:
       tags: [Pipelines]
       summary: Get pipeline status
+      description: The path value is the pipeline instance UUID. For backward compatibility, a display name is accepted only when it resolves to one instance.
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200':
           description: Pipeline status
@@ -177,68 +180,68 @@ paths:
       tags: [Pipelines]
       summary: Delete pipeline
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Deleted }
 
-  /pipelines/{name}/start:
+  /pipelines/{id}/start:
     post:
       tags: [Pipelines]
       summary: Start pipeline
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Started }
 
-  /pipelines/{name}/stop:
+  /pipelines/{id}/stop:
     post:
       tags: [Pipelines]
       summary: Stop pipeline
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Stopped }
 
-  /pipelines/{name}/pause:
+  /pipelines/{id}/pause:
     post:
       tags: [Pipelines]
       summary: Pause pipeline (suspend source reading, keep checkpoint)
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Paused }
 
-  /pipelines/{name}/resume:
+  /pipelines/{id}/resume:
     post:
       tags: [Pipelines]
       summary: Resume pipeline from pause
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Resumed }
 
-  /pipelines/{name}/spec:
+  /pipelines/{id}/spec:
     get:
       tags: [Pipelines]
       summary: Get pipeline spec (secrets masked)
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Spec with masked secrets }
 
-  /pipelines/{name}/schedule:
+  /pipelines/{id}/schedule:
     get:
       tags: [Pipelines]
       summary: Get pipeline schedule config
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Schedule config and enabled flag }
     put:
       tags: [Pipelines]
       summary: Create or update pipeline schedule config
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       requestBody:
         content:
           application/json:
@@ -255,44 +258,44 @@ paths:
       tags: [Pipelines]
       summary: Disable pipeline schedule config
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Schedule disabled }
 
-  /pipelines/{name}/history:
+  /pipelines/{id}/history:
     get:
       tags: [Pipelines]
       summary: Get pipeline run history
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Run history }
 
-  /pipelines/{name}/log:
+  /pipelines/{id}/log:
     get:
       tags: [Pipelines]
       summary: Get recent pipeline logs
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
         - { name: since, in: query, schema: { type: integer } }
       responses:
         '200': { description: Log entries }
 
-  /pipelines/{name}/shards:
+  /pipelines/{id}/shards:
     get:
       tags: [Pipelines]
       summary: Get per-shard stats
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Shard info }
 
-  /pipelines/{name}/checkpoint/set:
+  /pipelines/{id}/checkpoint/set:
     post:
       tags: [Pipelines, Checkpoints]
       summary: Set checkpoint position or Kafka replay offset
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       requestBody:
         content:
           application/json:
@@ -334,12 +337,12 @@ paths:
         '200': { description: Checkpoint saved }
         '400': { description: Invalid checkpoint request }
 
-  /pipelines/{name}/checkpoint/reset:
+  /pipelines/{id}/checkpoint/reset:
     post:
       tags: [Pipelines, Checkpoints]
       summary: Reset checkpoint (start from beginning)
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Checkpoint reset }
 
@@ -364,12 +367,12 @@ paths:
         '200': { description: Healthy }
         '503': { description: Unhealthy }
 
-  /dlq/{name}:
+  /dlq/{id}:
     get:
       tags: [DLQ]
       summary: List dead-letter records
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string }, description: Pipeline instance UUID; a unique legacy display name is accepted for compatibility. }
         - { name: limit, in: query, schema: { type: integer } }
         - { name: contains, in: query, schema: { type: string } }
       responses:
@@ -378,36 +381,36 @@ paths:
       tags: [DLQ]
       summary: Delete DLQ records
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Deleted }
 
-  /dlq/{name}/replay:
+  /dlq/{id}/replay:
     post:
       tags: [DLQ]
       summary: Replay DLQ records
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Replayed }
         '501': { description: DAG pipeline DLQ replay is not implemented; response code is dag_dlq_replay_unsupported }
 
-  /dlq/{name}/{id}:
+  /dlq/{pipeline_id}/{id}:
     delete:
       tags: [DLQ]
       summary: Delete one DLQ record by stable ID
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: pipeline_id, in: path, required: true, schema: { type: string } }
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
       responses:
         '200': { description: Deleted }
 
-  /dlq/{name}/{id}/replay:
+  /dlq/{pipeline_id}/{id}/replay:
     post:
       tags: [DLQ]
       summary: Replay one DLQ record by stable ID
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: pipeline_id, in: path, required: true, schema: { type: string } }
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
       responses:
         '200': { description: Replayed }

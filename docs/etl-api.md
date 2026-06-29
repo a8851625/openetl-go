@@ -105,7 +105,7 @@ Response includes legacy lists plus `metadata`:
       "mysql_cdc": {
         "required": ["host", "user", "database", "tables"],
         "capabilities": ["cdc", "checkpoint", "schema_descriptor_single_table"],
-        "maturity": "beta"
+        "maturity": "production"
       }
     }
   }

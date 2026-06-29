@@ -107,6 +107,37 @@ func TestPluginMetadataUsesEvidenceDrivenMaturity(t *testing.T) {
 			}
 		}
 	}
+
+	for _, tc := range []struct {
+		kind     string
+		name     string
+		maturity string
+	}{
+		{"sources", "file", "production"},
+		{"sources", "http", "production"},
+		{"sources", "mysql_batch", "production"},
+		{"sources", "mysql_cdc", "production"},
+		{"sources", "mysql_snapshot_cdc", "production"},
+		{"sources", "kafka", "production"},
+		{"sources", "postgres_cdc", "beta"},
+		{"sources", "redis", "experimental"},
+		{"sinks", "file_sink", "production"},
+		{"sinks", "s3", "production"},
+		{"sinks", "mysql", "production"},
+		{"sinks", "clickhouse", "production"},
+		{"sinks", "postgres", "production"},
+		{"sinks", "postgresql", "production"},
+		{"sinks", "kafka", "production"},
+		{"sinks", "doris", "production"},
+		{"sinks", "elasticsearch", "beta"},
+		{"sinks", "es", "beta"},
+		{"sinks", "redis", "experimental"},
+		{"sinks", "jdbc", "experimental"},
+		{"sinks", "maxcompute", "experimental"},
+		{"sinks", "odps", "experimental"},
+	} {
+		assertPluginMaturity(t, metadata, tc.kind, tc.name, tc.maturity)
+	}
 }
 
 func TestConnectorMaturityLevelsAreExplicit(t *testing.T) {
@@ -149,7 +180,7 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if kafka == nil {
 		t.Fatal("missing kafka source descriptor")
 	}
-	if kafka.Version != "v1" || kafka.Maturity != "beta" || !kafka.Registered {
+	if kafka.Version != "v1" || kafka.Maturity != "production" || !kafka.Registered {
 		t.Fatalf("unexpected kafka descriptor metadata: %#v", kafka)
 	}
 	if !contains(kafka.Required, "brokers") || !contains(kafka.Required, "topic") {
@@ -166,6 +197,9 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if mysqlBatch == nil {
 		t.Fatal("missing mysql_batch source descriptor")
 	}
+	if mysqlBatch.Maturity != "production" {
+		t.Fatalf("mysql_batch maturity = %q, want production", mysqlBatch.Maturity)
+	}
 	if !contains(mysqlBatch.Capabilities, "schema_descriptor") {
 		t.Fatalf("mysql_batch capabilities = %#v, want schema_descriptor", mysqlBatch.Capabilities)
 	}
@@ -181,6 +215,9 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if mysqlCDC == nil {
 		t.Fatal("missing mysql_cdc source descriptor")
 	}
+	if mysqlCDC.Maturity != "production" {
+		t.Fatalf("mysql_cdc maturity = %q, want production", mysqlCDC.Maturity)
+	}
 	if !contains(mysqlCDC.Capabilities, "schema_descriptor_single_table") {
 		t.Fatalf("mysql_cdc capabilities = %#v, want schema_descriptor_single_table", mysqlCDC.Capabilities)
 	}
@@ -192,8 +229,15 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if clickhouse == nil {
 		t.Fatal("missing clickhouse sink descriptor")
 	}
-	if !contains(clickhouse.Capabilities, "schema_drift") || !contains(clickhouse.Capabilities, "schema_validator") || clickhouse.Maturity != "beta" {
+	if !contains(clickhouse.Capabilities, "schema_drift") || !contains(clickhouse.Capabilities, "schema_validator") || clickhouse.Maturity != "production" {
 		t.Fatalf("unexpected clickhouse descriptor: %#v", clickhouse)
+	}
+	postgresql := findDescriptor(descriptors, "sink", "postgresql")
+	if postgresql == nil {
+		t.Fatal("missing postgresql sink descriptor")
+	}
+	if postgresql.Maturity != "production" || !contains(postgresql.Capabilities, "upsert") {
+		t.Fatalf("unexpected postgresql descriptor: %#v", postgresql)
 	}
 	maxcompute := findDescriptor(descriptors, "sink", "maxcompute")
 	if maxcompute == nil {
@@ -349,6 +393,22 @@ func TestCompileWithExtismJSRequiresExplicitNpxPackage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "OPENETL_EXTISM_JS_PKG") {
 		t.Fatalf("compileWithExtismJS() error = %v, want explicit package guidance", err)
+	}
+}
+
+func assertPluginMaturity(t *testing.T, metadata map[string]any, kind, name, want string) {
+	t.Helper()
+
+	group, ok := metadata[kind].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata[%s] has type %T", kind, metadata[kind])
+	}
+	info, ok := group[name].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata[%s][%s] has type %T", kind, name, group[name])
+	}
+	if got, _ := info["maturity"].(string); got != want {
+		t.Fatalf("metadata[%s][%s] maturity = %q, want %q", kind, name, got, want)
 	}
 }
 

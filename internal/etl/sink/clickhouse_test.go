@@ -3,6 +3,7 @@ package sink
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestNextVersionMonotonic(t *testing.T) {
@@ -63,5 +64,28 @@ func TestClickHouseSchemaDriftBoolCompatibility(t *testing.T) {
 	}
 	if disabled.schemaDrift != "ignore" {
 		t.Fatalf("schemaDrift = %q, want ignore", disabled.schemaDrift)
+	}
+}
+
+func TestConvertClickHouseHTTPValueFormatsTemporalTypes(t *testing.T) {
+	ts := time.Date(2026, 6, 29, 14, 13, 15, 123456789, time.UTC)
+
+	tests := []struct {
+		name string
+		typ  string
+		want any
+	}{
+		{name: "datetime64", typ: "DateTime64(3)", want: "2026-06-29 14:13:15.123"},
+		{name: "nullable_datetime", typ: "Nullable(DateTime)", want: "2026-06-29 14:13:15"},
+		{name: "date", typ: "Date", want: "2026-06-29"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertClickHouseHTTPValue(ts, tt.typ)
+			if got != tt.want {
+				t.Fatalf("convertClickHouseHTTPValue() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

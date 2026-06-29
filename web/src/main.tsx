@@ -19,12 +19,12 @@ type PipelineStats = {
   bytes_read?: number; bytes_written?: number; dlq_replay_count?: number; dlq_delete_count?: number;
 };
 type MetricsPipeline = PipelineStats & {
-  name: string; status: string;
+  id?: string; name: string; status: string;
   checkpoint_age_seconds: number; source_read_latency_ms: number; sink_write_latency_ms: number;
   last_batch_size: number; avg_batch_size: number; batch_count: number; cdc_lag_ms: number;
   dlq_file_count: number;
 };
-type Pipeline = { name: string; status: string; stats: PipelineStats; dag?: boolean; parallelism?: number; shard_strategy?: string; shard_count?: number; shards?: { index: number; status: string; stats: PipelineStats }[]; tags?: string[] };
+type Pipeline = { id?: string; name: string; status: string; stats: PipelineStats; dag?: boolean; parallelism?: number; shard_strategy?: string; shard_count?: number; shards?: { index: number; status: string; stats: PipelineStats }[]; tags?: string[] };
 type ShardInfo = { index: number; status: string; stats: PipelineStats; logs?: PipelineLogEntry[]; logs_last_seq?: number };
 type PluginResponse = { sources: string[]; sinks: string[]; transforms: string[]; metadata?: Record<string, Record<string, PluginInfo>> };
 type PluginInfo = { required?: string[]; capabilities?: string[]; maturity?: string };
@@ -55,14 +55,24 @@ function normalizePipeline(raw: unknown): Pipeline | null {
   const p = raw as any;
   const name = typeof p.name === 'string' ? p.name.trim() : '';
   if (!name) return null;
+  const id = typeof p.id === 'string' ? p.id.trim() : '';
   return {
     ...p,
+    id: id || undefined,
     name,
     status: typeof p.status === 'string' && p.status ? p.status : 'unknown',
     stats: zeroPipelineStats(p.stats),
     tags: Array.isArray(p.tags) ? p.tags.filter((tag: unknown): tag is string => typeof tag === 'string' && tag.trim() !== '') : [],
     shards: Array.isArray(p.shards) ? p.shards.map((s: any) => ({ ...s, stats: zeroPipelineStats(s?.stats) })) : undefined,
   };
+}
+
+function pipelineRef(p?: Pick<Pipeline, 'id' | 'name'> | null): string {
+  return encodeURIComponent((p?.id || p?.name || '').trim());
+}
+
+function pipelineKey(p?: Pick<Pipeline, 'id' | 'name'> | null): string {
+  return (p?.id || p?.name || '').trim();
 }
 
 function normalizePipelines(data?: { pipelines?: Pipeline[] | null }): Pipeline[] {
@@ -289,8 +299,8 @@ function App() {
   // field, so `(d?.pipelines)` evaluates to null and `.find` would throw.
   const pipelinesList = normalizePipelines(pipelines.data);
   const metricsList = metrics.data?.pipelines || [];
-  const selected = pipelinesList.find((p) => p.name === selectedPipeline) || pipelinesList[0];
-  const selectedMetric = metricsList.find((p) => p.name === selected?.name);
+  const selected = pipelinesList.find((p) => pipelineKey(p) === selectedPipeline || p.name === selectedPipeline) || pipelinesList[0];
+  const selectedMetric = metricsList.find((p) => (p.id && p.id === selected?.id) || p.name === selected?.name);
 
   const totals = useMemo(() => {
     const list = normalizePipelines(pipelines.data);
@@ -318,8 +328,8 @@ function App() {
     catch (e) { toast('error', `${label}: ${e instanceof Error ? e.message : String(e)}`); }
   }, [toast]);
 
-  const editPipeline = useCallback((name: string) => {
-    setEditTarget(name);
+  const editPipeline = useCallback((ref: string) => {
+    setEditTarget(ref);
     setPage('designer');
   }, []);
 
@@ -416,7 +426,7 @@ function App() {
 
         <div className="p-8">
           {page === 'dashboard' && <DashboardPage t={t} lang={lang} totals={totals} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} />}
-          {page === 'pipelines' && <PipelinesPage t={t} lang={lang} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} onAction={runAction} checkpoints={checkpoints} onResetCheckpoint={(name: string) => runAction(`${t('toast.resetCheckpoint')}: ${name}`, () => api(`/api/v2/pipelines/${name}/checkpoint/reset`, { method: 'POST' }))} onEdit={editPipeline} refreshKey={refreshKey} onShowToast={toast} plugins={plugins} pluginSchema={pluginSchema} />}
+          {page === 'pipelines' && <PipelinesPage t={t} lang={lang} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} onAction={runAction} checkpoints={checkpoints} onResetCheckpoint={(ref: string, label?: string) => runAction(`${t('toast.resetCheckpoint')}: ${label || ref}`, () => api(`/api/v2/pipelines/${encodeURIComponent(ref)}/checkpoint/reset`, { method: 'POST' }))} onEdit={editPipeline} refreshKey={refreshKey} onShowToast={toast} plugins={plugins} pluginSchema={pluginSchema} />}
           {page === 'connections' && <ConnectionsPage t={t} lang={lang} />}
           {page === 'designer' && <DagEditorPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} onAction={runAction} editTarget={editTarget} />}
           {page === 'dlq' && <DLQPage t={t} lang={lang} pipelines={pipelines} selected={selected} onSelect={setSelectedPipeline} onAction={runAction} />}
@@ -580,7 +590,7 @@ function DashboardPage({ t, totals, pipelines, selected, selectedMetric, onSelec
           <div className="card-header"><h2 className="text-sm font-semibold">{t('dash.pipelineOverview')}</h2></div>
           <div className="card-body space-y-2">
             {pList.map((p: Pipeline) => (
-              <div key={p.name} className={`pipeline-row ${selected?.name === p.name ? 'selected' : ''}`} onClick={() => onSelect(p.name)}>
+              <div key={pipelineKey(p)} className={`pipeline-row ${pipelineKey(selected) === pipelineKey(p) ? 'selected' : ''}`} onClick={() => onSelect(pipelineKey(p))}>
                 <span className={`status-dot status-${p.status}`} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 truncate">
@@ -644,11 +654,11 @@ function Modal({ title, onClose, children, width = 'max-w-3xl' }: { title: strin
 // ════════════════════════════════════════════════
 // Pipeline Log Modal (independent modal, co-located with start/stop)
 // ════════════════════════════════════════════════
-function PipelineLogModal({ t, name, onClose }: { t: (k: string) => string; name: string; onClose: () => void }) {
+function PipelineLogModal({ t, name, refId, onClose }: { t: (k: string) => string; name: string; refId: string; onClose: () => void }) {
   return (
     <Modal title={`${t('pipe.logs')} · ${name}`} onClose={onClose} width="max-w-4xl">
       <div style={{ height: '60vh' }}>
-        <PipelineLogDrawer t={t} name={name} />
+        <PipelineLogDrawer t={t} name={refId} />
       </div>
     </Modal>
   );
@@ -657,8 +667,8 @@ function PipelineLogModal({ t, name, onClose }: { t: (k: string) => string; name
 // ════════════════════════════════════════════════
 // Pipeline Runtime Preview Modal (node-level data)
 // ════════════════════════════════════════════════
-function PipelinePreviewModal({ t, name, onClose }: { t: (k: string) => string; name: string; onClose: () => void }) {
-  const { data, error, loading } = useApi<PreviewResponse>(`/api/v2/pipelines/${name}/preview`, 0);
+function PipelinePreviewModal({ t, name, refId, onClose }: { t: (k: string) => string; name: string; refId: string; onClose: () => void }) {
+  const { data, error, loading } = useApi<PreviewResponse>(`/api/v2/pipelines/${refId}/preview`, 0);
 
   const renderStage = (title: string, entries?: PipelineLogEntry[]) => (
     <div className="card">
@@ -709,8 +719,8 @@ function PipelinePreviewModal({ t, name, onClose }: { t: (k: string) => string; 
 // ════════════════════════════════════════════════
 // Pipeline DAG + Logs Combined Modal (replaces Preview + DAG)
 // ════════════════════════════════════════════════
-function PipelineDAGModal({ t, name, onClose }: { t: (k: string) => string; name: string; onClose: () => void }) {
-  const { data, error, loading } = useApi<DAGResponse>(`/api/v2/pipelines/${name}/dag`, 0);
+function PipelineDAGModal({ t, name, refId, onClose }: { t: (k: string) => string; name: string; refId: string; onClose: () => void }) {
+  const { data, error, loading } = useApi<DAGResponse>(`/api/v2/pipelines/${refId}/dag`, 0);
   const [selectedNode, setSelectedNode] = useState<DAGNode | null>(null);
   const [tab, setTab] = useState<'dag' | 'logs'>('dag');
 
@@ -797,7 +807,7 @@ function PipelineDAGModal({ t, name, onClose }: { t: (k: string) => string; name
       ) : (
         /* Logs tab — embedded real-time log viewer */
         <div style={{ height: '55vh' }}>
-          <PipelineLogDrawer t={t} name={name} />
+          <PipelineLogDrawer t={t} name={refId} />
         </div>
       )}
     </Modal>
@@ -807,14 +817,14 @@ function PipelineDAGModal({ t, name, onClose }: { t: (k: string) => string; name
 // ════════════════════════════════════════════════
 // Pipeline Version Management Modal
 // ════════════════════════════════════════════════
-function PipelineVersionsModal({ t, name, onClose, onAction }: { t: (k: string) => string; name: string; onClose: () => void; onAction: (label: string, fn: () => Promise<unknown>) => void }) {
-  const { data, error, loading } = useApi<{ versions: PipelineVersion[] }>(`/api/v2/pipelines/${name}/versions`, 0);
+function PipelineVersionsModal({ t, name, refId, onClose, onAction }: { t: (k: string) => string; name: string; refId: string; onClose: () => void; onAction: (label: string, fn: () => Promise<unknown>) => void }) {
+  const { data, error, loading } = useApi<{ versions: PipelineVersion[] }>(`/api/v2/pipelines/${refId}/versions`, 0);
   const [diffData, setDiffData] = useState<{ version: number; current: string; historical: string } | null>(null);
 
   const doRollback = async (version: number) => {
     if (!confirm(t('pipe.confirmRollback').replace('{version}', String(version)))) return;
     onAction(t('pipe.rolledBack').replace('{version}', String(version)), () =>
-      api(`/api/v2/pipelines/${name}/versions/${version}/rollback`, { method: 'POST' })
+      api(`/api/v2/pipelines/${refId}/versions/${version}/rollback`, { method: 'POST' })
     );
     onClose();
   };
@@ -822,7 +832,7 @@ function PipelineVersionsModal({ t, name, onClose, onAction }: { t: (k: string) 
   const doDiff = async (version: number) => {
     try {
       const d = await api<{ version: { version: number; spec_yaml: string }; current: string; historical: string }>(
-        `/api/v2/pipelines/${name}/versions/${version}/diff`
+        `/api/v2/pipelines/${refId}/versions/${version}/diff`
       );
       setDiffData({ version: d.version.version, current: d.current, historical: d.version.spec_yaml });
     } catch { /* ignore */ }
@@ -1217,8 +1227,8 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
       const checked = await validate(true);
       if (checked.valid === false) throw new Error((checked.errors || checked.warnings || ['preflight failed']).join('\n'));
       const spec = YAML.parse(yamlText);
-      const created = await api<{ name: string }>('/api/v2/pipelines', { method: 'POST', body: JSON.stringify({ spec }) });
-      await api(`/api/v2/pipelines/${encodeURIComponent(created.name || spec.name)}/start`, { method: 'POST' });
+      const created = await api<{ id?: string; name: string }>('/api/v2/pipelines', { method: 'POST', body: JSON.stringify({ spec }) });
+      await api(`/api/v2/pipelines/${encodeURIComponent(created.id || created.name || spec.name)}/start`, { method: 'POST' });
       onCreated(created.name || spec.name);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1634,8 +1644,9 @@ const PipelineRow = React.memo(function PipelineRow({ p, m, compact, selected, t
   onSelect: (n: string) => void; onAction: (msg: string, fn: () => Promise<any>) => void;
   onShowLogs: () => void; onShowDAG: () => void; onEdit: () => void; onExport: () => void; onDelete: () => void;
 }) {
+  const ref = pipelineRef(p);
   return (
-    <div className={`pipeline-row ${compact ? 'py-2' : ''} ${selected ? 'selected' : ''}`} onClick={() => onSelect(p.name)}>
+    <div className={`pipeline-row ${compact ? 'py-2' : ''} ${selected ? 'selected' : ''}`} onClick={() => onSelect(pipelineKey(p))}>
       <span className={`status-dot status-${p.status}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 truncate">
@@ -1653,10 +1664,10 @@ const PipelineRow = React.memo(function PipelineRow({ p, m, compact, selected, t
         {!compact && p.stats.records_written > 0 && <span className="badge badge-emerald text-[10px] px-1">{p.stats.records_written}</span>}
       </div>
       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-        <button className={`btn btn-sm ${p.status === 'running' ? 'btn-ghost opacity-40' : 'btn-secondary'}`} disabled={p.status === 'running'} onClick={() => onAction(`Start ${p.name}`, () => api(`/api/v2/pipelines/${p.name}/start`, { method: 'POST' }))}>
+        <button className={`btn btn-sm ${p.status === 'running' ? 'btn-ghost opacity-40' : 'btn-secondary'}`} disabled={p.status === 'running'} onClick={() => onAction(`Start ${p.name}`, () => api(`/api/v2/pipelines/${ref}/start`, { method: 'POST' }))}>
           ▶
         </button>
-        <button className={`btn btn-sm ${p.status !== 'running' ? 'btn-ghost opacity-40' : 'btn-secondary'}`} disabled={p.status !== 'running'} onClick={() => onAction(`Stop ${p.name}`, () => api(`/api/v2/pipelines/${p.name}/stop`, { method: 'POST' }))}>
+        <button className={`btn btn-sm ${p.status !== 'running' ? 'btn-ghost opacity-40' : 'btn-secondary'}`} disabled={p.status !== 'running'} onClick={() => onAction(`Stop ${p.name}`, () => api(`/api/v2/pipelines/${ref}/stop`, { method: 'POST' }))}>
           ⏹
         </button>
         <PipelineActionMenu p={p} t={t} onLogs={onShowLogs} onDAG={onShowDAG} onEdit={onEdit} onDelete={onDelete} onExport={onExport} />
@@ -1668,6 +1679,7 @@ const PipelineRow = React.memo(function PipelineRow({ p, m, compact, selected, t
   // hasn't meaningfully changed, even if object references differ.
   const p1 = prev.p, p2 = next.p;
   if (p1.name !== p2.name ||
+      p1.id !== p2.id ||
       p1.status !== p2.status ||
       p1.stats.records_written !== p2.stats.records_written ||
       p1.stats.records_failed !== p2.stats.records_failed ||
@@ -1713,8 +1725,8 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
     }
     // Sort
     list = [...list].sort((a: Pipeline, b: Pipeline) => {
-      const mA = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => x.name === a.name);
-      const mB = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => x.name === b.name);
+      const mA = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => (x.id && x.id === a.id) || x.name === a.name);
+      const mB = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => (x.id && x.id === b.id) || x.name === b.name);
       switch (sortKey) {
         case 'name': return a.name.localeCompare(b.name);
         case 'status': return a.status.localeCompare(b.status);
@@ -1727,12 +1739,12 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
     return list;
   }, [pipelines.data, tagFilter, search, sortKey, metrics.data]);
 
-  useEffect(() => { setShowLogs(false); setShowDAG(false); setShowVersions(false); }, [selected?.name]);
+  useEffect(() => { setShowLogs(false); setShowDAG(false); setShowVersions(false); }, [selected?.id, selected?.name]);
 
   const handleDelete = (p: Pipeline) => {
     if (!confirm(t('pipe.confirmDelete').replace('{name}', p.name))) return;
     onAction(t('pipe.deleted').replace('{name}', p.name), () =>
-      api(`/api/v2/pipelines/${p.name}`, { method: 'DELETE' })
+      api(`/api/v2/pipelines/${pipelineRef(p)}`, { method: 'DELETE' })
     );
   };
 
@@ -1741,7 +1753,7 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
       const token = getToken();
       const headers: Record<string, string> = {};
       if (token) headers['X-API-Token'] = token;
-      const res = await fetch(`/api/v2/pipelines/${p.name}/export`, { headers });
+      const res = await fetch(`/api/v2/pipelines/${pipelineRef(p)}/export`, { headers });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -1759,7 +1771,7 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
     if (!targets.length) return;
     onShowToast?.('info', `${action === 'start' ? t('ui.starting') : t('ui.stopping')} ${targets.length} ${t('ui.pipelines')}...`);
     targets.forEach((p: Pipeline) => {
-      onAction(`${action} ${p.name}`, () => api(`/api/v2/pipelines/${p.name}/${action}`, { method: 'POST' }));
+      onAction(`${action} ${p.name}`, () => api(`/api/v2/pipelines/${pipelineRef(p)}/${action}`, { method: 'POST' }));
     });
   };
 
@@ -1769,9 +1781,9 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
 
   return (
     <>
-    {showLogs && selected?.name && <PipelineLogModal t={t} name={selected.name} onClose={() => setShowLogs(false)} />}
-    {showDAG && selected?.name && <PipelineDAGModal t={t} name={selected.name} onClose={() => setShowDAG(false)} />}
-    {showVersions && selected?.name && <PipelineVersionsModal t={t} name={selected.name} onClose={() => setShowVersions(false)} onAction={onAction} />}
+    {showLogs && selected?.name && <PipelineLogModal t={t} name={selected.name} refId={pipelineRef(selected)} onClose={() => setShowLogs(false)} />}
+    {showDAG && selected?.name && <PipelineDAGModal t={t} name={selected.name} refId={pipelineRef(selected)} onClose={() => setShowDAG(false)} />}
+    {showVersions && selected?.name && <PipelineVersionsModal t={t} name={selected.name} refId={pipelineRef(selected)} onClose={() => setShowVersions(false)} onAction={onAction} />}
     {showImport && <SpecImportModal t={t} onClose={() => setShowImport(false)} onImported={(name: string) => onShowToast?.('success', t('pipe.importSuccess').replace('{name}', name))} />}
     {showWizard && <FirstTaskWizard t={t} plugins={plugins} schema={pluginSchema} onClose={() => setShowWizard(false)} onCreated={(name: string) => { onShowToast?.('success', `Pipeline created: ${name}`); setShowWizard(false); }} />}
 
@@ -1827,20 +1839,20 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
         </div>
         <div className="card-body space-y-1.5">
           {filteredPipelines.map((p: Pipeline) => {
-            const m = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => x.name === p.name);
+            const m = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => (x.id && x.id === p.id) || x.name === p.name);
             return (
               <PipelineRow
-                key={p.name}
+                key={pipelineKey(p)}
                 p={p}
                 m={m}
                 compact={compact}
-                selected={selected?.name === p.name}
+                selected={pipelineKey(selected) === pipelineKey(p)}
                 t={t}
                 onSelect={onSelect}
                 onAction={onAction}
-                onShowLogs={() => { onSelect(p.name); setShowLogs(true); }}
-                onShowDAG={() => { onSelect(p.name); setShowDAG(true); }}
-                onEdit={() => onEdit(p.name)}
+                onShowLogs={() => { onSelect(pipelineKey(p)); setShowLogs(true); }}
+                onShowDAG={() => { onSelect(pipelineKey(p)); setShowDAG(true); }}
+                onEdit={() => onEdit(pipelineKey(p))}
                 onExport={() => handleExport(p)}
                 onDelete={() => handleDelete(p)}
               />
@@ -1895,7 +1907,7 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
                 {selected.shard_count && selected.shard_count > 1 && (
                   <>
                     <h3 className="text-sm font-semibold pt-2 border-t">{t('pipe.shardsLabel')} ({selected.shard_count})</h3>
-                    <ShardsInline t={t} name={selected.name} refreshKey={refreshKey} />
+                    <ShardsInline t={t} name={pipelineRef(selected)} refreshKey={refreshKey} />
                   </>
                 )}
               </div>
@@ -1910,14 +1922,15 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
           <div className="card-body space-y-2">
             {selected?.name ? (
               (() => {
-                const selCps = (checkpoints.data?.checkpoints || []).filter((cp: Checkpoint) => cp.job_name === selected.name);
+                const selectedJob = pipelineKey(selected);
+                const selCps = (checkpoints.data?.checkpoints || []).filter((cp: Checkpoint) => cp.job_name === selectedJob);
                 return selCps.length > 0 ? selCps.map((cp: Checkpoint) => (
                   <div key={cp.job_name} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium">{cp.job_name}</div>
                       <div className="text-xs text-slate-400">{cp.source} · {fmtTime(cp.timestamp)}</div>
                     </div>
-                    <button className="btn btn-ghost btn-sm" onClick={() => onResetCheckpoint(cp.job_name)}>{t('pipe.reset')}</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => onResetCheckpoint(cp.job_name, selected.name)}>{t('pipe.reset')}</button>
                   </div>
                 )) : <Empty text={t('pipe.noCheckpoints')} />;
               })()
@@ -2060,15 +2073,16 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
   const [filter, setFilter] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const query = filter ? `limit=50&contains=${encodeURIComponent(filter)}` : 'limit=50';
-  const dlq = useApi<{ items: DLQItem[] }>(selected ? `/api/v2/dlq/${selected.name}?${query}` : '/api/v2/dlq/_missing', selected ? refreshKey : -1);
+  const selectedRef = pipelineRef(selected);
+  const dlq = useApi<{ items: DLQItem[] }>(selected ? `/api/v2/dlq/${selectedRef}?${query}` : '/api/v2/dlq/_missing', selected ? refreshKey : -1);
   const replayUnsupported = Boolean(selected?.dag);
 
   const deleteOne = async (item: DLQItem) => {
     try {
       if (item.id) {
-        await api(`/api/v2/dlq/${selected.name}/${item.id}`, { method: 'DELETE' });
+        await api(`/api/v2/dlq/${selectedRef}/${item.id}`, { method: 'DELETE' });
       } else {
-        await api(`/api/v2/dlq/${selected.name}?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`, { method: 'DELETE' });
+        await api(`/api/v2/dlq/${selectedRef}?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`, { method: 'DELETE' });
       }
       setRefreshKey((n) => n + 1);
     } catch (e) { /* ignore */ }
@@ -2080,7 +2094,7 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
         <div className="card-header"><h2 className="text-sm font-semibold">{t('dlq.selectPipeline')}</h2></div>
         <div className="card-body space-y-1">
           {normalizePipelines(pipelines.data).map((p: Pipeline) => (
-            <div key={p.name} className={`pipeline-row ${selected?.name === p.name ? 'selected' : ''} !p-3`} onClick={() => { onSelect(p.name); setRefreshKey(n => n + 1); }}>
+            <div key={pipelineKey(p)} className={`pipeline-row ${pipelineKey(selected) === pipelineKey(p) ? 'selected' : ''} !p-3`} onClick={() => { onSelect(pipelineKey(p)); setRefreshKey(n => n + 1); }}>
               <span className={`status-dot status-${p.status}`} />
               <span className="truncate text-sm">{p.name}</span>
               {p.stats.records_dlq > 0 && <span className="badge badge-rose ml-auto">{p.stats.records_dlq}</span>}
@@ -2094,8 +2108,8 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
           <div className="flex items-center gap-2">
             <input className="input w-56" placeholder={t('dlq.filter')} value={filter} onChange={(e) => { setFilter(e.target.value); setRefreshKey(n => n + 1); }} />
             <button className="btn btn-secondary btn-sm" onClick={() => { setRefreshKey(n => n + 1); }}>{t('dlq.refresh')}</button>
-            <button className="btn btn-secondary btn-sm" disabled={!selected || replayUnsupported} title={replayUnsupported ? t('dlq.dagReplayUnsupported') : t('dlq.replay')} onClick={() => onAction(`${t('toast.replayDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selected.name}/replay${q}`, { method: 'POST' }).then(() => setRefreshKey(n => n + 1)); })}>{t('dlq.replay')}</button>
-            <button className="btn btn-danger btn-sm" disabled={!selected} onClick={() => { if (confirm(t('dlq.confirmDeleteAll'))) { onAction(`${t('toast.deleteDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selected.name}${q}`, { method: 'DELETE' }).then(() => setRefreshKey(n => n + 1)); }); } }}>{t('dlq.deleteAll')}</button>
+            <button className="btn btn-secondary btn-sm" disabled={!selected || replayUnsupported} title={replayUnsupported ? t('dlq.dagReplayUnsupported') : t('dlq.replay')} onClick={() => onAction(`${t('toast.replayDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selectedRef}/replay${q}`, { method: 'POST' }).then(() => setRefreshKey(n => n + 1)); })}>{t('dlq.replay')}</button>
+            <button className="btn btn-danger btn-sm" disabled={!selected} onClick={() => { if (confirm(t('dlq.confirmDeleteAll'))) { onAction(`${t('toast.deleteDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selectedRef}${q}`, { method: 'DELETE' }).then(() => setRefreshKey(n => n + 1)); }); } }}>{t('dlq.deleteAll')}</button>
           </div>
         </div>
         <div className="card-body">
@@ -2109,7 +2123,7 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
               <div className="space-y-2">
                 {dlq.data.items.map((item, i) => (
                   <DLQRow key={item.id || i} t={t} item={item} onDelete={() => deleteOne(item)} onReplay={() => onAction(`Replay: ${selected.name}`, () => {
-                    const url = item.id ? `/api/v2/dlq/${selected.name}/${item.id}/replay` : `/api/v2/dlq/${selected.name}/replay?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`;
+                    const url = item.id ? `/api/v2/dlq/${selectedRef}/${item.id}/replay` : `/api/v2/dlq/${selectedRef}/replay?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`;
                     return api(url, { method: 'POST' }).then(() => setRefreshKey(n => n + 1));
                   })} replayDisabled={replayUnsupported} />
                 ))}

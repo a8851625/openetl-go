@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import cronstrue from 'cronstrue';
 import type { TFunc, Lang } from './types';
 
-type Pipeline = { name: string; status: string; stats?: Record<string, number> };
+type Pipeline = { id?: string; name: string; status: string; stats?: Record<string, number> };
 type Schedule = { type: string; cron?: string; interval_sec?: number };
 type ScheduleRow = Pipeline & { enabled: boolean; schedule?: Schedule };
 type RunHistory = {
@@ -35,10 +35,19 @@ function normalizePipelines(data: any): Pipeline[] {
   return data.pipelines
     .filter((p: any) => p && typeof p.name === 'string')
     .map((p: any) => ({
+      id: typeof p.id === 'string' && p.id.trim() ? p.id.trim() : undefined,
       name: p.name,
       status: typeof p.status === 'string' ? p.status : 'unknown',
       stats: p.stats || {},
     }));
+}
+
+function pipelineKey(p?: Pick<Pipeline, 'id' | 'name'> | null) {
+  return (p?.id || p?.name || '').trim();
+}
+
+function pipelineRef(p?: Pick<Pipeline, 'id' | 'name'> | null) {
+  return encodeURIComponent(pipelineKey(p));
 }
 
 function describeSchedule(t: TFunc, lang: Lang, schedule?: Schedule) {
@@ -76,7 +85,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
     async function load() {
       const loaded = await Promise.all(allPipelines.map(async (p) => {
         try {
-          const res = await api<{ enabled: boolean; schedule?: Schedule }>(`/api/v2/pipelines/${p.name}/schedule`);
+          const res = await api<{ enabled: boolean; schedule?: Schedule }>(`/api/v2/pipelines/${pipelineRef(p)}/schedule`);
           return { ...p, enabled: !!res.enabled, schedule: res.schedule };
         } catch {
           return { ...p, enabled: false };
@@ -84,14 +93,14 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
       }));
       if (!cancelled) {
         setRows(loaded);
-        if (!selected && loaded[0]) setSelected(loaded[0].name);
+        if (!selected && loaded[0]) setSelected(pipelineKey(loaded[0]));
       }
     }
     load();
     return () => { cancelled = true; };
   }, [allPipelines, refreshKey, selected]);
 
-  const selectedRow = rows.find((r) => r.name === selected);
+  const selectedRow = rows.find((r) => pipelineKey(r) === selected || r.name === selected);
 
   useEffect(() => {
     if (!selectedRow) return;
@@ -109,7 +118,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
       return;
     }
     let cancelled = false;
-    api<{ history: RunHistory[] }>(`/api/v2/pipelines/${selected}/history`)
+    api<{ history: RunHistory[] }>(`/api/v2/pipelines/${encodeURIComponent(selected)}/history`)
       .then((res) => { if (!cancelled) setHistory(Array.isArray(res.history) ? res.history : []); })
       .catch(() => { if (!cancelled) setHistory([]); });
     return () => { cancelled = true; };
@@ -145,7 +154,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
       const body: Schedule = { type };
       if (type === 'cron') body.cron = cron;
       if (type === 'periodic') body.interval_sec = Number(intervalSec) || 60;
-      await api(`/api/v2/pipelines/${selected}/schedule`, { method: 'PUT', body: JSON.stringify(body) });
+      await api(`/api/v2/pipelines/${encodeURIComponent(selected)}/schedule`, { method: 'PUT', body: JSON.stringify(body) });
       setMessage(t('sched.saved'));
       setRefreshKey((n) => n + 1);
     } catch (e) {
@@ -161,7 +170,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
     setError('');
     setMessage('');
     try {
-      await api(`/api/v2/pipelines/${selected}/schedule`, { method: 'DELETE' });
+      await api(`/api/v2/pipelines/${encodeURIComponent(selected)}/schedule`, { method: 'DELETE' });
       setMessage(t('sched.disabled'));
       setRefreshKey((n) => n + 1);
     } catch (e) {
@@ -177,7 +186,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
     setError('');
     setMessage('');
     try {
-      await api(`/api/v2/pipelines/${selected}/start`, { method: 'POST' });
+      await api(`/api/v2/pipelines/${encodeURIComponent(selected)}/start`, { method: 'POST' });
       setMessage(t('sched.runStarted'));
       setRefreshKey((n) => n + 1);
     } catch (e) {
@@ -215,7 +224,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{t('sched.pipeline')}</span>
                 <select className="input w-full" value={selected} onChange={(e) => setSelected(e.target.value)}>
-                  {rows.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+                  {rows.map((p) => <option key={pipelineKey(p)} value={pipelineKey(p)}>{p.name}</option>)}
                 </select>
               </label>
               <div className="grid grid-cols-2 gap-2">
@@ -289,7 +298,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
                     {filtered.map((p) => {
                       const schedType = p.enabled ? p.schedule?.type || 'manual' : 'manual';
                       return (
-                        <tr key={p.name} className={selected === p.name ? 'bg-slate-50' : ''} onClick={() => setSelected(p.name)}>
+                        <tr key={pipelineKey(p)} className={selected === pipelineKey(p) ? 'bg-slate-50' : ''} onClick={() => setSelected(pipelineKey(p))}>
                           <td className="font-medium">{p.name}</td>
                           <td><span className={`badge ${typeBadge[schedType] || 'badge-slate'}`}>{schedType}</span></td>
                           <td className="text-sm text-slate-500">{p.schedule?.cron || (p.schedule?.interval_sec ? `${p.schedule.interval_sec}s` : '—')}</td>

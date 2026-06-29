@@ -86,7 +86,12 @@ func mustPipelineJSON(t *testing.T, spec pipeline.Spec) []byte {
 
 func mustPipelineUpdateJSON(t *testing.T, spec pipeline.Spec) []byte {
 	t.Helper()
-	body, err := json.Marshal(map[string]any{"spec": spec, "reset_checkpoint": false})
+	return mustPipelineUpdateJSONWithID(t, "", spec)
+}
+
+func mustPipelineUpdateJSONWithID(t *testing.T, id string, spec pipeline.Spec) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"id": id, "spec": spec, "reset_checkpoint": false})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
@@ -230,7 +235,11 @@ func TestCreatePipelineReturnsPreflightWarningsWithoutBlocking(t *testing.T) {
 	if !warningsContain(body["preflight_warnings"], "sink-reachable") {
 		t.Fatalf("preflight_warnings = %#v, want sink-reachable warning", body["preflight_warnings"])
 	}
-	if _, exists := s.pipelines[spec.Name]; !exists {
+	id, _ := body["id"].(string)
+	if id == "" {
+		t.Fatalf("create response id is empty: %#v", body)
+	}
+	if _, exists := s.pipelines[id]; !exists {
 		t.Fatalf("pipeline %q should be created when preflight has warnings only", spec.Name)
 	}
 }
@@ -281,7 +290,7 @@ func TestCreatePipelineRejectsPreflightErrors(t *testing.T) {
 	if got, _ := body["preflight_valid"].(bool); got {
 		t.Fatalf("preflight_valid = %v, want false", got)
 	}
-	if _, exists := s.pipelines[spec.Name]; exists {
+	if refs := s.pipelineNameRefs[spec.Name]; len(refs) > 0 {
 		t.Fatalf("pipeline %q should not be created when preflight fails", spec.Name)
 	}
 }
@@ -325,7 +334,7 @@ func TestCreatePipelineRejectsSchemaPreflightErrors(t *testing.T) {
 	if !warningsContain(body["preflight_warnings"], "schema-compatibility") {
 		t.Fatalf("preflight_warnings = %#v, want schema-compatibility issue", body["preflight_warnings"])
 	}
-	if _, exists := s.pipelines[spec.Name]; exists {
+	if refs := s.pipelineNameRefs[spec.Name]; len(refs) > 0 {
 		t.Fatalf("pipeline %q should not be created when schema preflight fails", spec.Name)
 	}
 }
@@ -533,8 +542,8 @@ func TestUpdatePipelineRejectsPreflightErrorsWithoutReplacingRunner(t *testing.T
 	if err != nil {
 		t.Fatalf("newRunner(original): %v", err)
 	}
-	s.pipelines[original.Name] = runner
-	s.specs[original.Name] = &original
+	originalID := newPipelineInstanceID()
+	s.registerPipelineLocked(originalID, original.Name, runner, &original, nil)
 
 	badUpdate := pipeline.Spec{
 		Name: "p5-14-update",
@@ -561,7 +570,7 @@ func TestUpdatePipelineRejectsPreflightErrorsWithoutReplacingRunner(t *testing.T
 	}
 	pipeline.ApplyDefaults(&badUpdate)
 
-	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v2/pipelines", bytes.NewReader(mustPipelineUpdateJSON(t, badUpdate)))
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v2/pipelines", bytes.NewReader(mustPipelineUpdateJSONWithID(t, originalID, badUpdate)))
 	if err != nil {
 		t.Fatalf("new PUT request: %v", err)
 	}
@@ -577,10 +586,10 @@ func TestUpdatePipelineRejectsPreflightErrorsWithoutReplacingRunner(t *testing.T
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
 
-	if got := s.pipelines[original.Name]; got != runner {
+	if got := s.pipelines[originalID]; got != runner {
 		t.Fatalf("runner replaced on failed update")
 	}
-	if got := s.specs[original.Name]; got != &original {
+	if got := s.specs[originalID]; got != &original {
 		t.Fatalf("spec replaced on failed update")
 	}
 }

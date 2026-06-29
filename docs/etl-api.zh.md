@@ -105,7 +105,7 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
       "mysql_cdc": {
         "required": ["host", "user", "database", "tables"],
         "capabilities": ["cdc", "checkpoint", "schema_descriptor_single_table"],
-        "maturity": "beta"
+        "maturity": "production"
       }
     }
   }

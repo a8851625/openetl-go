@@ -211,11 +211,15 @@ func NewPipelineSpecStore(s Storage) *PipelineSpecStore {
 }
 
 func (p *PipelineSpecStore) Save(ctx context.Context, name, specYAML, status string) error {
-	row := &PipelineRow{Name: name, SpecYAML: specYAML, Status: status}
+	return p.SaveWithID(ctx, "", name, specYAML, status)
+}
+
+func (p *PipelineSpecStore) SaveWithID(ctx context.Context, id, name, specYAML, status string) error {
+	row := &PipelineRow{ID: id, Name: name, SpecYAML: specYAML, Status: status}
 	if err := p.store.SavePipeline(ctx, row); err != nil {
 		return err
 	}
-	_, err := p.store.SavePipelineVersion(ctx, name, specYAML)
+	_, err := p.store.SavePipelineVersion(ctx, row.ID, specYAML)
 	return err
 }
 

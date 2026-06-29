@@ -477,7 +477,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   // Load pipeline when editTarget changes
   useEffect(() => {
     if (!editTarget) return;
-    apiGet<{ spec: any }>(`/api/v2/pipelines/${editTarget}/spec`).then((res) => {
+    apiGet<{ spec: any }>(`/api/v2/pipelines/${encodeURIComponent(editTarget)}/spec`).then((res) => {
       if (res.spec) loadSpecIntoCanvas(res.spec);
     }).catch(() => {});
   }, [editTarget, loadSpecIntoCanvas]);
@@ -745,7 +745,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     }
     if (editTarget) {
       // Update mode: PUT + checkpoint warning
-      const doUpdate = () => apiPost('/api/v2/pipelines', { spec, reset_checkpoint: false }, 'PUT');
+      const doUpdate = () => apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: false }, 'PUT');
       onAction(`${t('dag.updatePipeline')}: ${pipelineName}`, doUpdate);
     } else {
       // Create mode: POST
@@ -761,7 +761,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     if (!editTarget) return;
     const spec = buildSpec();
     onAction(`${t('dag.updatePipeline')}: ${pipelineName}`, () =>
-      apiPost('/api/v2/pipelines', { spec, reset_checkpoint: true }, 'PUT')
+      apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: true }, 'PUT')
     );
   };
 
@@ -817,7 +817,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       <div className="card card-body flex flex-wrap items-center gap-2 py-2">
         <div className="flex items-center gap-2">
           <input className="input w-48 text-sm" value={pipelineName} onChange={(e) => setPipelineName(e.target.value)} placeholder={t('design.name')} />
-          {editTarget && <span className="badge badge-amber text-xs">✏️ {t('dag.editing')}</span>}
+          {editTarget && <span className="badge badge-amber text-xs">✏️ {t('dag.editing').replace('{name}', editTarget)}</span>}
         </div>
         <div className="h-5 w-px bg-slate-200" />
         {/* Node palette — icon-only compact */}

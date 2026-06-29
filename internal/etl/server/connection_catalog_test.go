@@ -138,9 +138,17 @@ func TestPipelineUsesSavedConnections(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&got)
 		t.Fatalf("create status = %d, body=%#v", resp.StatusCode, got)
 	}
+	var created map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("create response missing id: %#v", created)
+	}
 
 	s.mu.RLock()
-	resolved := s.specs["connection-ref-linear"]
+	resolved := s.specs[id]
 	s.mu.RUnlock()
 	if resolved == nil {
 		t.Fatal("pipeline was not created")

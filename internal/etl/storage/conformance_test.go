@@ -20,6 +20,7 @@ func runConformanceSuite(t *testing.T, newStore func(t *testing.T) (storage.Stor
 	t.Helper()
 
 	t.Run("PipelineCRUD", func(t *testing.T) { testPipelineCRUD(t, newStore) })
+	t.Run("PipelineDuplicateNamesUseID", func(t *testing.T) { testPipelineDuplicateNamesUseID(t, newStore) })
 	t.Run("PipelineStatus", func(t *testing.T) { testPipelineStatus(t, newStore) })
 	t.Run("PipelineVersions", func(t *testing.T) { testPipelineVersions(t, newStore) })
 	t.Run("CheckpointCRUD", func(t *testing.T) { testCheckpointCRUD(t, newStore) })
@@ -102,6 +103,44 @@ func testPipelineCRUD(t *testing.T, newStore func(t *testing.T) (storage.Storage
 	}
 	if got, _ := s.GetPipeline(ctx, "my-pipe"); got != nil {
 		t.Error("expected nil after delete")
+	}
+}
+
+func testPipelineDuplicateNamesUseID(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())) {
+	s, cleanup := newStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	first := &storage.PipelineRow{ID: "11111111-1111-4111-8111-111111111111", Name: "same-name", SpecYAML: "name: same-name\n", Status: "stopped"}
+	second := &storage.PipelineRow{ID: "22222222-2222-4222-8222-222222222222", Name: "same-name", SpecYAML: "name: same-name\n", Status: "loaded"}
+	if err := s.SavePipeline(ctx, first); err != nil {
+		t.Fatalf("save first: %v", err)
+	}
+	if err := s.SavePipeline(ctx, second); err != nil {
+		t.Fatalf("save second with duplicate name: %v", err)
+	}
+
+	gotFirst, err := s.GetPipeline(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("get first by id: %v", err)
+	}
+	gotSecond, err := s.GetPipeline(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("get second by id: %v", err)
+	}
+	if gotFirst == nil || gotSecond == nil {
+		t.Fatalf("pipelines not found by id: first=%+v second=%+v", gotFirst, gotSecond)
+	}
+	if gotFirst.ID == gotSecond.ID || gotFirst.Name != gotSecond.Name {
+		t.Fatalf("duplicate name instances not preserved: first=%+v second=%+v", gotFirst, gotSecond)
+	}
+
+	list, err := s.ListPipelines(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("list len = %d, want 2 duplicate-name instances", len(list))
 	}
 }
 
