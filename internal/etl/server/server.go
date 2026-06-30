@@ -29,6 +29,7 @@ import (
 	"github.com/a8851625/openetl-go/internal/etl/plugin/pluginsystem"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
 	"github.com/a8851625/openetl-go/internal/etl/retry"
+	"github.com/a8851625/openetl-go/internal/etl/state"
 	"github.com/a8851625/openetl-go/internal/etl/storage"
 	"github.com/a8851625/openetl-go/internal/etl/telemetry"
 	"github.com/a8851625/openetl-go/internal/etl/worker"
@@ -891,6 +892,11 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
 			return
 		}
+		if problems := validateDAGRuntimeStateRequirements(&dagSpec); len(problems) > 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": problems})
+			return
+		}
 		s.mu.RLock()
 		exists := len(s.pipelineNameRefs[dagSpec.Name]) > 0
 		s.mu.RUnlock()
@@ -947,6 +953,30 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	json.NewEncoder(w).Encode(map[string]any{"valid": preflightValid, "warnings": warnings, "spec": spec, "preflight": preflightResult})
+}
+
+func validateDAGRuntimeStateRequirements(spec *orchestrator.PipelineSpec) []string {
+	if spec == nil {
+		return nil
+	}
+	var problems []string
+	for i, node := range spec.DAG.Nodes {
+		if node == nil {
+			continue
+		}
+		typ := strings.TrimSpace(node.Plugin)
+		if typ == "" {
+			typ = string(node.Kind)
+		}
+		for _, problem := range pipeline.ValidateTransformRuntimeStateRequirements(i, typ, node.Config) {
+			if node.ID != "" {
+				problems = append(problems, fmt.Sprintf("dag.nodes[%q]: %s", node.ID, problem))
+			} else {
+				problems = append(problems, problem)
+			}
+		}
+	}
+	return problems
 }
 
 func (s *Server) handleConnectionTest(w http.ResponseWriter, r *http.Request) {
@@ -1265,6 +1295,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
+			if problems := validateDAGRuntimeStateRequirements(&dagSpec); len(problems) > 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
+				return
+			}
 			runtime := runtimeDAGSpec(&dagSpec, id)
 			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
@@ -1430,6 +1465,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
+			if problems := validateDAGRuntimeStateRequirements(&dagSpec); len(problems) > 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
 				return
 			}
 			runtime := runtimeDAGSpec(&dagSpec, id)
@@ -2811,7 +2851,11 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePluginSchema(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(configSchema())
+	resp := configSchema()
+	resp["runtime"] = map[string]any{
+		"redis_state_configured": state.RedisConfigured(r.Context()),
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // handleNodeTypes returns metadata for all supported DAG NodeKind types.
@@ -3213,14 +3257,14 @@ func pluginMetadata() map[string]any {
 			"postgres":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator"}, "production"),
 			"postgresql":    pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "schema_validator"}, "production"),
 			"kafka":         pluginInfo([]string{"brokers", "topic"}, []string{"stream"}, "production"),
-			"elasticsearch": pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "beta"),
-			"es":            pluginInfo([]string{"hosts", "index"}, []string{"bulk"}, "beta"),
+			"elasticsearch": pluginInfo([]string{"hosts", "index"}, []string{"bulk", "schema_validator", "remote_mapping_preflight"}, "beta"),
+			"es":            pluginInfo([]string{"hosts", "index"}, []string{"bulk", "schema_validator", "remote_mapping_preflight"}, "beta"),
 			"redis":         pluginInfo([]string{"addr"}, []string{"stream"}, "experimental"),
 
 			"doris":      pluginInfo([]string{"host", "database", "table"}, []string{"batch", "stream_load", "insert_fallback", "upsert", "delete", "auto_create", "schema_drift", "schema_validator", "unique_key_replay_safe"}, "production"),
 			"jdbc":       pluginInfo([]string{"dsn", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "generic"}, "experimental"),
-			"maxcompute": pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "partitioned_table", "schema_validator", "partition_preflight", "experimental_contract"}, "experimental"),
-			"odps":       pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "partitioned_table", "schema_validator", "partition_preflight", "experimental_contract"}, "experimental"),
+			"maxcompute": pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "sdk_batch_writer", "partitioned_table", "schema_validator", "remote_preflight", "partition_preflight", "experimental_contract"}, "experimental"),
+			"odps":       pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "sdk_batch_writer", "partitioned_table", "schema_validator", "remote_preflight", "partition_preflight", "experimental_contract"}, "experimental"),
 		},
 		"transforms": map[string]any{
 			"identity":           pluginInfo(nil, []string{"pass_through"}, "production"),

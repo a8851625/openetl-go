@@ -226,12 +226,8 @@ func NewDeduplicatorTransform(config map[string]any) (*DeduplicatorTransform, er
 	}
 	if backend, ok := config["state_backend"].(string); ok && backend != "" {
 		switch strings.ToLower(backend) {
-		case "sqlite":
-			path, _ := config["state_path"].(string)
-			if path == "" {
-				path = "./data/etl-state.db"
-			}
-			store, err := state.NewSQLiteStore(path)
+		case "redis":
+			store, err := state.NewRedisStoreFromConfig(context.Background(), config)
 			if err != nil {
 				return nil, fmt.Errorf("deduplicate: open state store: %w", err)
 			}

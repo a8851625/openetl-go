@@ -186,7 +186,7 @@ openetl-go/
 | P4-11 | preflight sink reachability 是 no-op | 短超时调用 `Open`/`Ping` 或复用 connection test。 |
 | P4-12 | deduplicator transform 无 mutex | 增加互斥保护缓存与游标。 |
 | P4-13 | join inner miss 用 `ErrRecordFiltered` 静默丢记录 | 增加 `on_miss: drop|dlq|error`，inner join 默认进入 DLQ 或报错。 |
-| P4-14 | window 无 watermark，sliding/session 宣称但未实现 | 增加 watermark/allowed lateness，未实现能力要移除或补齐。 |
+| P4-14 | window 无 watermark，sliding/session 不应在 pipeline spec 中宣称 | 增加 watermark/allowed lateness，并拒绝未支持的 sliding/session 配置。 |
 | P4-15 | transform/route 缺逐记录 panic recovery | 每条记录的 Apply/route 周围 recover，失败进入 DLQ 或标记 pipeline failed。 |
 | P4-16 | enricher 吞掉错误且 cache 无界增长 | 返回错误并进入重试/DLQ，增加 cache 清理。 |
 | P4-17 | `mysql_batch` 提前 done 的指控复核为误报 | 无需修改。 |
@@ -248,7 +248,7 @@ openetl-go/
 - **SV-2**：preflight 只构造 sink，不打开连接。修复：短超时 Open/Ping。
 - **TF-6**：deduplicator cache/map 无锁。修复：互斥保护。
 - **TF-7**：join inner miss 被当成正常 filter。修复：可配置 miss 策略。
-- **TF-8**：window 无 watermark，滑动/会话能力未实现。修复：实现或撤回声明。
+- **TF-8**：window 无 watermark，滑动/会话能力不应在 spec 中宣称。修复：保留 tumbling-only，并拒绝未支持的 sliding/session 配置。
 - **TF-10**：transform/route 缺逐记录 panic recovery。修复：每条记录 recover 并转入失败处理。
 - **TF-13**：enricher 吞错误并缓存无界。修复：返回错误、清理过期缓存。
 - **SRC-5**：`mysql_batch` 提前结束是误报，已撤回。

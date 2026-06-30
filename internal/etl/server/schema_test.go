@@ -84,6 +84,34 @@ func TestWindowSchemaOnlyExposesImplementedWindowTypes(t *testing.T) {
 	t.Fatal("window schema missing window_type")
 }
 
+func TestStatefulTransformSchemaOnlyExposesRedisStateBackend(t *testing.T) {
+	schema := configSchema()
+	transforms := schema["transforms"].(map[string][]ConfigField)
+
+	for _, name := range []string{"lookup", "window", "deduplicate", "join"} {
+		fields := transforms[name]
+		found := false
+		for _, field := range fields {
+			if field.Name != "state_backend" {
+				if field.Name == "state_path" {
+					t.Fatalf("%s still exposes state_path for SQL-backed cache state", name)
+				}
+				continue
+			}
+			found = true
+			if len(field.Enum) != 1 || field.Enum[0] != "redis" {
+				t.Fatalf("%s state_backend enum = %#v, want only redis", name, field.Enum)
+			}
+			if !field.RequiresRedisState {
+				t.Fatalf("%s state_backend requires_redis_state = false, want true", name)
+			}
+		}
+		if !found {
+			t.Fatalf("%s schema missing state_backend", name)
+		}
+	}
+}
+
 func TestPluginMetadataUsesEvidenceDrivenMaturity(t *testing.T) {
 	metadata := pluginMetadata()
 	for kind, rawGroup := range metadata {
@@ -232,6 +260,9 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if !contains(clickhouse.Capabilities, "schema_drift") || !contains(clickhouse.Capabilities, "schema_validator") || clickhouse.Maturity != "production" {
 		t.Fatalf("unexpected clickhouse descriptor: %#v", clickhouse)
 	}
+	if clickhouse.Readiness.Status == "" || !readinessGateStatus(clickhouse, "schema_preflight", "pass") || !readinessGateStatus(clickhouse, "replay_absorption", "pass") {
+		t.Fatalf("unexpected clickhouse readiness: %#v", clickhouse.Readiness)
+	}
 	postgresql := findDescriptor(descriptors, "sink", "postgresql")
 	if postgresql == nil {
 		t.Fatal("missing postgresql sink descriptor")
@@ -252,6 +283,20 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	}
 	if odps.Maturity != "experimental" || !odps.Registered || !contains(odps.Capabilities, "schema_validator") {
 		t.Fatalf("unexpected odps descriptor: %#v", odps)
+	}
+	es := findDescriptor(descriptors, "sink", "elasticsearch")
+	if es == nil {
+		t.Fatal("missing elasticsearch sink descriptor")
+	}
+	if !readinessGateStatus(es, "schema_preflight", "pass") || !readinessGateStatus(es, "remote_preflight", "pass") || !readinessGateStatus(es, "e2e_evidence", "pass") {
+		t.Fatalf("unexpected elasticsearch readiness: %#v", es.Readiness)
+	}
+	fileSource := findDescriptor(descriptors, "source", "file")
+	if fileSource == nil {
+		t.Fatal("missing file source descriptor")
+	}
+	if !readinessGateStatus(fileSource, "schema_introspection", "partial") || !readinessGateStatus(fileSource, "checkpoint", "pass") {
+		t.Fatalf("unexpected file source readiness: %#v", fileSource.Readiness)
 	}
 
 	normalize := findDescriptor(descriptors, "transform", "normalize_envelope")
@@ -317,6 +362,9 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if cdcPolicy.Maturity != "beta" || !contains(cdcPolicy.Capabilities, "ddl_guard") || !contains(cdcPolicy.Capabilities, "transform_metrics") || len(cdcPolicy.Fields) == 0 {
 		t.Fatalf("unexpected cdc_policy descriptor: %#v", cdcPolicy)
 	}
+	if !readinessGateStatus(cdcPolicy, "dry_run", "pass") {
+		t.Fatalf("unexpected cdc_policy readiness: %#v", cdcPolicy.Readiness)
+	}
 }
 
 func TestConnectorDescriptorsEndpointIncludesMaturityLevels(t *testing.T) {
@@ -349,6 +397,10 @@ func TestConnectorDescriptorsEndpointIncludesMaturityLevels(t *testing.T) {
 		if body.MaturityLevels[i] != connectorMaturityLevels[i] {
 			t.Fatalf("maturity_levels = %#v, want %#v", body.MaturityLevels, connectorMaturityLevels)
 		}
+	}
+	mysqlSink := findDescriptor(body.Descriptors, "sink", "mysql")
+	if mysqlSink == nil || mysqlSink.Readiness.Status == "" || !readinessGateStatus(mysqlSink, "schema_preflight", "pass") {
+		t.Fatalf("mysql sink readiness missing from descriptor endpoint: %#v", mysqlSink)
 	}
 }
 
@@ -419,6 +471,18 @@ func findDescriptor(items []ConnectorDescriptor, kind, typ string) *ConnectorDes
 		}
 	}
 	return nil
+}
+
+func readinessGateStatus(desc *ConnectorDescriptor, code, status string) bool {
+	if desc == nil {
+		return false
+	}
+	for _, gate := range desc.Readiness.Gates {
+		if gate.Code == code {
+			return gate.Status == status
+		}
+	}
+	return false
 }
 
 func contains(items []string, want string) bool {

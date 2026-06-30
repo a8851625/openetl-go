@@ -156,7 +156,7 @@ curl http://localhost:8000/metrics
 | | `deduplicate`、`validate` | 数据清洗 |
 | | `lua` | Lua 脚本（内联，gopher-lua 纯 Go） |
 | | `normalize_envelope`、`debezium_cdc`、`cdc_policy`、`ddl_guard`、`lookup`、`window` | Kafka envelope/CDC 策略 / 维表 JOIN / tumbling 窗口聚合 |
-| | `join` | 流流 interval JOIN，可选 SQLite 状态恢复；生产级 crash/rebalance 认证仍在 roadmap 中 |
+| | `join` | 流流 interval JOIN，可选 Redis 状态恢复；生产级 crash/rebalance 认证仍在 roadmap 中 |
 | | `router`、`fanout`、`tap` | 条件路由 / 扇出 / 旁路 |
 | | `enricher`、`lookup` | 数据增强 / 维表查找 |
 | | `rate_limiter` | 流量控制 |

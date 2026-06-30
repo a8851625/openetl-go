@@ -52,6 +52,16 @@ etl:
     #   dsn: "user:password@tcp(host:3306)/etl?parseTime=true"
     # postgresql:
     #   dsn: "postgres://user:password@host:5432/etl?sslmode=disable"
+  # Runtime state/cache backend for lookup/enricher cache, deduplicate/window/join
+  # state, and future keyed-state/timer capabilities. This is intentionally
+  # separate from etl.storage: SQLite/MySQL/PostgreSQL are checkpoint/metadata
+  # stores and must not be used as high-frequency cache/state backends.
+  state:
+    redis:
+      addr: ""          # e.g. redis:6379. Env: ETL_STATE_REDIS_ADDR.
+      password: ""      # Env: ETL_STATE_REDIS_PASSWORD.
+      db: 0             # Env: ETL_STATE_REDIS_DB.
+      keyPrefix: "openetl:state"
   alert:
     webhook: ""
 

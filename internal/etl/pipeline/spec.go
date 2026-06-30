@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/a8851625/openetl-go/internal/etl/state"
 
 	"gopkg.in/yaml.v3"
 )
@@ -352,6 +354,7 @@ func ValidateSpec(spec *Spec) error {
 			tr.Config = map[string]any{}
 		}
 	}
+	problems = append(problems, ValidateRuntimeStateRequirements(spec)...)
 	if spec.BatchSize <= 0 {
 		problems = append(problems, "batch_size must be > 0")
 	}
@@ -397,6 +400,134 @@ func ValidateSpec(spec *Spec) error {
 	}
 
 	return nil
+}
+
+func ValidateRuntimeStateRequirements(spec *Spec) []string {
+	if spec == nil {
+		return nil
+	}
+	var problems []string
+	for i := range spec.Transforms {
+		tr := &spec.Transforms[i]
+		problems = append(problems, ValidateTransformRuntimeStateRequirements(i, tr.Type, tr.Config)...)
+	}
+	return problems
+}
+
+func ValidateTransformRuntimeStateRequirements(index int, typ string, config map[string]any) []string {
+	var problems []string
+	ctx := context.Background()
+	transformPath := fmt.Sprintf("transforms[%d]", index)
+	if backend, ok := stringConfig(config, "state_backend"); ok {
+		if !supportsRuntimeStateBackend(typ) {
+			problems = append(problems, fmt.Sprintf("%s.state_backend is only supported by built-in lookup, join, window, and deduplicate transforms; custom keyed state is not part of the pipeline spec", transformPath))
+		}
+		switch strings.ToLower(backend) {
+		case "redis":
+			if !redisConfiguredForTransform(ctx, config) {
+				problems = append(problems, fmt.Sprintf("%s.state_backend=redis requires etl.state.redis.addr or ETL_STATE_REDIS_ADDR; SQLite/MySQL/PostgreSQL storage is only for checkpoint/metadata", transformPath))
+			}
+		case "sqlite", "mysql", "postgres", "postgresql":
+			problems = append(problems, fmt.Sprintf("%s.state_backend=%q is not allowed for runtime state/cache; use Redis and configure etl.state.redis.addr", transformPath, backend))
+		default:
+			problems = append(problems, fmt.Sprintf("%s.state_backend=%q is unsupported; only redis is allowed for runtime state/cache", transformPath, backend))
+		}
+	}
+	if backend, ok := stringConfig(config, "cache_backend"); ok {
+		switch strings.ToLower(backend) {
+		case "redis":
+			if !redisConfiguredForTransform(ctx, config) {
+				problems = append(problems, fmt.Sprintf("%s.cache_backend=redis requires etl.state.redis.addr or ETL_STATE_REDIS_ADDR; SQL storage cannot be used as cache", transformPath))
+			}
+		case "sqlite", "mysql", "postgres", "postgresql":
+			problems = append(problems, fmt.Sprintf("%s.cache_backend=%q is not allowed; cache backends must be Redis-backed", transformPath, backend))
+		default:
+			problems = append(problems, fmt.Sprintf("%s.cache_backend=%q is unsupported; only redis is allowed for runtime cache", transformPath, backend))
+		}
+	}
+	if strings.EqualFold(typ, "enricher") {
+		if ttl, ok := intConfig(config, "cache_ttl_seconds"); ok && ttl > 0 && !redisConfiguredForTransform(ctx, config) {
+			problems = append(problems, fmt.Sprintf("%s.cache_ttl_seconds requires Redis cache configuration; set cache_ttl_seconds=0 or configure etl.state.redis.addr", transformPath))
+		}
+	}
+	if strings.EqualFold(typ, "window") {
+		if windowType, ok := stringConfig(config, "window_type"); ok {
+			switch strings.ToLower(windowType) {
+			case "", "tumbling":
+			case "sliding", "session":
+				problems = append(problems, fmt.Sprintf("%s.window_type=%q is not supported in this build; only tumbling window is part of the production pipeline spec", transformPath, windowType))
+			default:
+				problems = append(problems, fmt.Sprintf("%s.window_type=%q is unsupported", transformPath, windowType))
+			}
+		}
+	}
+	for _, key := range []string{"keyed_state", "uses_keyed_state", "timer", "uses_timer"} {
+		if enabled, ok := boolConfig(config, key); ok && enabled {
+			problems = append(problems, fmt.Sprintf("%s.%s is not part of the pipeline spec; arbitrary keyed state and timers are outside the current ETL runtime boundary", transformPath, key))
+		}
+	}
+	return problems
+}
+
+func supportsRuntimeStateBackend(typ string) bool {
+	switch strings.ToLower(strings.TrimSpace(typ)) {
+	case "lookup", "join", "window", "deduplicate":
+		return true
+	default:
+		return false
+	}
+}
+
+func redisConfiguredForTransform(ctx context.Context, config map[string]any) bool {
+	return strings.TrimSpace(state.RedisConfigFromMap(ctx, config).Addr) != ""
+}
+
+func stringConfig(config map[string]any, key string) (string, bool) {
+	if config == nil {
+		return "", false
+	}
+	v, ok := config[key]
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	s = strings.TrimSpace(s)
+	return s, s != ""
+}
+
+func intConfig(config map[string]any, key string) (int, bool) {
+	if config == nil {
+		return 0, false
+	}
+	switch v := config[key].(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func boolConfig(config map[string]any, key string) (bool, bool) {
+	if config == nil {
+		return false, false
+	}
+	v, ok := config[key]
+	if !ok {
+		return false, false
+	}
+	b, ok := v.(bool)
+	return b, ok
 }
 
 func connectionRef(connection, connectionRef string) string {

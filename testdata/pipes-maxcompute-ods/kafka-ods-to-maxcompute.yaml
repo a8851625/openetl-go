@@ -1,0 +1,63 @@
+name: kafka-ods-to-maxcompute
+
+source:
+  type: kafka
+  config:
+    brokers:
+      - host.docker.internal:19092
+    topic: maxcompute-ods-events
+    group_id: openetl-maxcompute-ods
+    initial_offset: oldest
+    format: json
+
+transforms:
+  - type: project
+    config:
+      fields:
+        - id
+        - amount
+        - event_time
+        - payload
+        - dt
+      keep_unmapped: false
+  - type: type_convert
+    config:
+      conversions:
+        id: int
+        amount: float
+        event_time: timestamp
+
+sink:
+  type: maxcompute
+  config:
+    endpoint: ${MAXCOMPUTE_ENDPOINT}
+    tunnel_endpoint: ${MAXCOMPUTE_TUNNEL_ENDPOINT}
+    project: ${MAXCOMPUTE_PROJECT}
+    table: ${MAXCOMPUTE_TABLE}
+    access_key_id: ${MAXCOMPUTE_ACCESS_KEY_ID}
+    access_key_secret: ${MAXCOMPUTE_ACCESS_KEY_SECRET}
+    quota_name: ${MAXCOMPUTE_QUOTA_NAME}
+    columns:
+      id: BIGINT
+      amount: DOUBLE
+      event_time: TIMESTAMP
+      payload: STRING
+    partition_fields:
+      - dt
+    write_mode: append
+    auto_create_partition: true
+    batch_size: 100
+    max_retries: 3
+    retry_base_ms: 500
+
+batch_size: 10
+checkpoint_interval_sec: 1
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 1
+  initial_interval_ms: 500
+  max_interval_ms: 5000
+
+dlq:
+  enable: true

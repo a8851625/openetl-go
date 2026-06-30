@@ -7,12 +7,14 @@ toolchain go1.24.13
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.23.0
 	github.com/IBM/sarama v1.43.3
+	github.com/aliyun/aliyun-odps-go-sdk v0.4.23
 	github.com/buke/quickjs-go v0.7.7
 	github.com/extism/go-sdk v1.7.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-mysql-org/go-mysql v1.9.1
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gogf/gf/v2 v2.10.0
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/minio/minio-go/v7 v7.0.74
 	github.com/parquet-go/parquet-go v0.30.1
@@ -30,6 +32,9 @@ require (
 	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/ClickHouse/ch-go v0.61.5 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
+	github.com/alibabacloud-go/debug v1.0.1 // indirect
+	github.com/alibabacloud-go/tea v1.2.2 // indirect
+	github.com/aliyun/credentials-go v1.3.10 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clbanning/mxj/v2 v2.7.0 // indirect
@@ -50,7 +55,7 @@ require (
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/flatbuffers v23.5.26+incompatible // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grokify/html-strip-tags-go v0.1.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
@@ -65,6 +70,7 @@ require (
 	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
@@ -72,6 +78,8 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421 // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/olekukonko/errors v1.1.0 // indirect
 	github.com/olekukonko/ll v0.0.9 // indirect
@@ -109,7 +117,9 @@ require (
 	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
+	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
+	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	modernc.org/libc v1.66.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

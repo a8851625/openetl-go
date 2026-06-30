@@ -12,14 +12,15 @@ const (
 )
 
 type ConfigField struct {
-	Name        string    `json:"name"`
-	Type        FieldType `json:"type"`
-	Required    bool      `json:"required"`
-	Default     any       `json:"default,omitempty"`
-	Description string    `json:"description"`
-	Secret      bool      `json:"secret"`
-	Example     any       `json:"example,omitempty"`
-	Enum        []string  `json:"enum,omitempty"`
+	Name               string    `json:"name"`
+	Type               FieldType `json:"type"`
+	Required           bool      `json:"required"`
+	Default            any       `json:"default,omitempty"`
+	Description        string    `json:"description"`
+	Secret             bool      `json:"secret"`
+	Example            any       `json:"example,omitempty"`
+	Enum               []string  `json:"enum,omitempty"`
+	RequiresRedisState bool      `json:"requires_redis_state,omitempty"`
 }
 
 func configSchema() map[string]any {
@@ -42,6 +43,8 @@ func sourceConfigSchemas() map[string][]ConfigField {
 			{Name: "format", Type: FieldString, Required: false, Default: "csv", Description: "File format: csv or json", Enum: []string{"csv", "json"}},
 			{Name: "delimiter", Type: FieldString, Required: false, Default: ",", Description: "CSV delimiter"},
 			{Name: "has_header", Type: FieldBool, Required: false, Default: true, Description: "Whether CSV first row contains column names"},
+			{Name: "schema", Type: FieldMap, Required: false, Description: "Optional preflight schema hint, e.g. [{name,data_type,nullable}] or {field: type}"},
+			{Name: "sample", Type: FieldMap, Required: false, Description: "Optional preflight sample record used to infer schema when the file is not locally readable"},
 		},
 		"http": {
 			{Name: "url", Type: FieldString, Required: true, Description: "Base URL to fetch data from", Example: "http://api.example.com/items"},
@@ -62,6 +65,8 @@ func sourceConfigSchemas() map[string][]ConfigField {
 			{Name: "retry_base_ms", Type: FieldInt, Required: false, Default: 500, Description: "Base retry delay in milliseconds"},
 			{Name: "shard_index", Type: FieldInt, Required: false, Description: "Shard index for page partitioning"},
 			{Name: "shard_total", Type: FieldInt, Required: false, Description: "Total shard count for page partitioning"},
+			{Name: "schema", Type: FieldMap, Required: false, Description: "Optional preflight schema hint, e.g. [{name,data_type,nullable}] or {field: type}"},
+			{Name: "sample", Type: FieldMap, Required: false, Description: "Optional preflight sample response record used to infer schema without calling the remote API"},
 		},
 		"mysql_batch": {
 			{Name: "host", Type: FieldString, Required: true, Description: "MySQL host"},
@@ -121,6 +126,8 @@ func sourceConfigSchemas() map[string][]ConfigField {
 			{Name: "sasl_mechanism", Type: FieldString, Required: false, Description: "SASL mechanism", Enum: []string{"PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}},
 			{Name: "tls", Type: FieldBool, Required: false, Default: false, Description: "Enable TLS for Kafka connection"},
 			{Name: "tls_skip_verify", Type: FieldBool, Required: false, Default: false, Description: "Skip TLS certificate verification"},
+			{Name: "schema", Type: FieldMap, Required: false, Description: "Optional preflight schema hint, e.g. [{name,data_type,nullable}] or {field: type}"},
+			{Name: "sample", Type: FieldMap, Required: false, Description: "Optional preflight sample message used to infer schema without consuming Kafka"},
 		},
 		"postgres_cdc": {
 			{Name: "host", Type: FieldString, Required: true, Description: "PostgreSQL host"},
@@ -243,6 +250,8 @@ func sinkConfigSchemas() map[string][]ConfigField {
 			{Name: "password", Type: FieldString, Required: false, Description: "ES password", Secret: true},
 			{Name: "index", Type: FieldString, Required: true, Description: "Target index name"},
 			{Name: "id_column", Type: FieldString, Required: false, Default: "id", Description: "Column for document ID (enables upsert)"},
+			{Name: "mappings", Type: FieldMap, Required: false, Description: "Optional Elasticsearch mapping used by preflight schema validation"},
+			{Name: "properties", Type: FieldMap, Required: false, Description: "Optional mapping properties shorthand, e.g. {id: {type: long}}"},
 			{Name: "chunk_size", Type: FieldInt, Required: false, Default: 500, Description: "Records per bulk request"},
 			{Name: "max_retries", Type: FieldInt, Required: false, Default: 3, Description: "Retry attempts for bulk writes"},
 			{Name: "retry_base_ms", Type: FieldInt, Required: false, Default: 500, Description: "Base retry delay in milliseconds"},
@@ -288,14 +297,17 @@ func sinkConfigSchemas() map[string][]ConfigField {
 		},
 		"maxcompute": {
 			{Name: "endpoint", Type: FieldString, Required: true, Description: "MaxCompute endpoint URL", Example: "https://service.cn-hangzhou.maxcompute.aliyun.com/api"},
+			{Name: "tunnel_endpoint", Type: FieldString, Required: false, Description: "MaxCompute Tunnel endpoint URL; when omitted the SDK resolves it from the project"},
 			{Name: "project", Type: FieldString, Required: true, Description: "MaxCompute project name"},
 			{Name: "table", Type: FieldString, Required: true, Description: "Target table name"},
 			{Name: "access_key_id", Type: FieldString, Required: true, Description: "Alibaba Cloud access key ID", Secret: true},
 			{Name: "access_key_secret", Type: FieldString, Required: true, Description: "Alibaba Cloud access key secret", Secret: true},
+			{Name: "quota_name", Type: FieldString, Required: false, Description: "MaxCompute quota name for tunnel upload sessions"},
 			{Name: "columns", Type: FieldMap, Required: false, Description: "Target column types, e.g. {id: BIGINT, event_time: TIMESTAMP, payload: STRING}"},
 			{Name: "partition", Type: FieldMap, Required: false, Description: "Static partition spec, e.g. {dt: '2026-06-26'}"},
 			{Name: "partition_fields", Type: FieldStringArray, Required: false, Description: "Record fields used as dynamic partition values, e.g. [dt]"},
 			{Name: "write_mode", Type: FieldString, Required: false, Default: "append", Description: "Write mode. append is at-least-once and can duplicate on replay; partition_overwrite requires an explicit replay plan", Enum: []string{"append", "partition_overwrite"}},
+			{Name: "auto_create_partition", Type: FieldBool, Required: false, Default: true, Description: "Create target partitions during tunnel upload when missing"},
 			{Name: "batch_size", Type: FieldInt, Required: false, Default: 500, Description: "Rows per MaxCompute batch"},
 			{Name: "max_retries", Type: FieldInt, Required: false, Default: 3, Description: "Retry attempts for transient MaxCompute writes"},
 			{Name: "retry_base_ms", Type: FieldInt, Required: false, Default: 500, Description: "Base retry delay in milliseconds"},
@@ -417,7 +429,8 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "query", Type: FieldString, Required: false, Description: "SQL query (mode=sql). Use ? as placeholder."},
 			{Name: "target_field", Type: FieldString, Required: false, Default: "enriched", Description: "Field name to store enrichment result"},
 			{Name: "timeout_seconds", Type: FieldInt, Required: false, Default: 5, Description: "Enrichment request timeout in seconds"},
-			{Name: "cache_ttl_seconds", Type: FieldInt, Required: false, Default: 300, Description: "Cache TTL in seconds (0=off)"},
+			{Name: "cache_backend", Type: FieldString, Required: false, Description: "Optional runtime cache backend; only redis is allowed and requires deployment Redis config", Enum: []string{"redis"}, RequiresRedisState: true},
+			{Name: "cache_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "Redis-backed cache TTL in seconds (0=off)", RequiresRedisState: true},
 			{Name: "on_error", Type: FieldString, Required: false, Default: "pass", Description: "Action when enrichment fails", Enum: []string{"pass", "error"}},
 		},
 		"lookup": {
@@ -430,8 +443,7 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "max_cache_entries", Type: FieldInt, Required: false, Default: 0, Description: "Maximum distinct dimension cache entries (0=unlimited)"},
 			{Name: "on_miss", Type: FieldString, Required: false, Default: "pass", Description: "Action when the dimension row is missing", Enum: []string{"pass", "null", "dlq", "error"}},
 			{Name: "on_refresh_error", Type: FieldString, Required: false, Default: "pass", Description: "Action when dimension cache refresh fails and no usable cache can be loaded", Enum: []string{"pass", "error"}},
-			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional durable lookup cache backend", Enum: []string{"sqlite"}},
-			{Name: "state_path", Type: FieldString, Required: false, Default: "./data/etl-state.db", Description: "SQLite state database path when state_backend=sqlite"},
+			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional runtime lookup cache backend; only redis is allowed and requires deployment Redis config", Enum: []string{"redis"}, RequiresRedisState: true},
 			{Name: "state_pipeline", Type: FieldString, Required: false, Default: "pipeline name", Description: "Pipeline namespace for persisted lookup cache; runtime injects the pipeline name when omitted"},
 			{Name: "state_node", Type: FieldString, Required: false, Default: "transform node id", Description: "Node namespace for persisted lookup cache; runtime injects the transform node id when omitted"},
 			{Name: "state_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "TTL for persisted lookup cache rows in seconds (0 = no expiry)"},
@@ -442,8 +454,7 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "allowed_lateness_seconds", Type: FieldInt, Required: false, Default: 0, Description: "Allowed event-time lateness before records are dropped"},
 			{Name: "group_by", Type: FieldStringArray, Required: false, Description: "Group-by fields"},
 			{Name: "aggregates", Type: FieldMap, Required: true, Description: "Aggregations as map: output_field -> {func, field}. funcs: count, sum, avg, min, max, first, last"},
-			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional durable tumbling-window state backend", Enum: []string{"sqlite"}},
-			{Name: "state_path", Type: FieldString, Required: false, Default: "./data/etl-state.db", Description: "SQLite state database path when state_backend=sqlite"},
+			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional runtime tumbling-window state backend; only redis is allowed and requires deployment Redis config", Enum: []string{"redis"}, RequiresRedisState: true},
 			{Name: "state_pipeline", Type: FieldString, Required: false, Default: "pipeline name", Description: "Pipeline namespace for persisted window state; runtime injects the pipeline name when omitted"},
 			{Name: "state_node", Type: FieldString, Required: false, Default: "transform node id", Description: "Node namespace for persisted window state; runtime injects the transform node id when omitted"},
 			{Name: "state_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "TTL for persisted window state in seconds (0 = no expiry)"},
@@ -451,8 +462,7 @@ func transformConfigSchemas() map[string][]ConfigField {
 		"deduplicate": {
 			{Name: "keys", Type: FieldStringArray, Required: true, Description: "Fields forming the dedup key", Example: []string{"order_id"}},
 			{Name: "window_size", Type: FieldInt, Required: false, Default: 10000, Description: "Dedup window size (max records to remember)"},
-			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional durable state backend", Enum: []string{"sqlite"}},
-			{Name: "state_path", Type: FieldString, Required: false, Default: "./data/etl-state.db", Description: "SQLite state database path when state_backend=sqlite"},
+			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional runtime deduplicate state backend; only redis is allowed and requires deployment Redis config", Enum: []string{"redis"}, RequiresRedisState: true},
 			{Name: "state_pipeline", Type: FieldString, Required: false, Default: "pipeline name", Description: "Pipeline namespace for persisted dedup keys; runtime injects the pipeline name when omitted"},
 			{Name: "state_node", Type: FieldString, Required: false, Default: "transform node id", Description: "Node namespace for persisted dedup keys; runtime injects the transform node id when omitted"},
 			{Name: "state_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "TTL for persisted dedup keys in seconds (0 = no expiry)"},
@@ -473,8 +483,7 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "on_miss", Type: FieldString, Required: false, Default: "drop", Description: "Action when a join match is missing", Enum: []string{"drop", "dlq", "error"}},
 			{Name: "max_buffered_keys", Type: FieldInt, Required: false, Default: 0, Description: "Maximum distinct join keys buffered in memory (0 = unlimited)"},
 			{Name: "max_buffered_records", Type: FieldInt, Required: false, Default: 0, Description: "Maximum total join records buffered in memory (0 = unlimited)"},
-			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional durable join buffer backend", Enum: []string{"sqlite"}},
-			{Name: "state_path", Type: FieldString, Required: false, Default: "./data/etl-state.db", Description: "SQLite state database path when state_backend=sqlite"},
+			{Name: "state_backend", Type: FieldString, Required: false, Description: "Optional runtime join buffer backend; only redis is allowed and requires deployment Redis config", Enum: []string{"redis"}, RequiresRedisState: true},
 			{Name: "state_pipeline", Type: FieldString, Required: false, Default: "pipeline name", Description: "Pipeline namespace for persisted join buffers; runtime injects the pipeline name when omitted"},
 			{Name: "state_node", Type: FieldString, Required: false, Default: "transform node id", Description: "Node namespace for persisted join buffers; runtime injects the transform node id when omitted"},
 			{Name: "state_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "TTL for persisted join buffers in seconds (0 = join window)"},

@@ -480,8 +480,8 @@ paths:
   /connections/{name}/context:
     get:
       tags: [Connections]
-      summary: Get saved connection descriptor, health, recommendations, and source introspection
-      description: Returns masked connection metadata, connector descriptor, recommended batch/checkpoint/schedule settings, and best-effort source metadata such as database/table/columns, Kafka topics/partitions, or file/HTTP sample records.
+      summary: Get saved connection descriptor, health, recommendations, and source/sink introspection
+      description: Returns masked connection metadata, connector descriptor, recommended batch/checkpoint/schedule settings, and best-effort metadata such as source database/table/columns, Kafka topics/partitions, file/HTTP sample records, sink target table/index schema, or File/S3 output targets.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
@@ -508,8 +508,8 @@ paths:
   /connectors/descriptors:
     get:
       tags: [Connectors]
-      summary: List Connector Descriptor v1 records merged from registry, config schema, and maturity metadata
-      description: Maturity levels are production, beta, experimental, and dev-only.
+      summary: List Connector Descriptor v1 records merged from registry, config schema, maturity, and readiness metadata
+      description: Maturity levels are production, beta, experimental, and dev-only. Each descriptor also includes readiness gates for schema/preflight, checkpoint or replay behavior, and e2e evidence.
       responses:
         '200': { description: Connector descriptors for UI forms, preflight, and connector test kits }
 
@@ -539,9 +539,9 @@ paths:
   /specs/validate:
     post:
       tags: [Specs]
-      summary: Validate a pipeline spec (returns warnings)
+      summary: Validate a pipeline spec and return preflight warnings, readiness, and recommendations
       responses:
-        '200': { description: Validation result }
+        '200': { description: Validation result with optional preflight.recommendations config patches }
 
   /specs/reload:
     post:

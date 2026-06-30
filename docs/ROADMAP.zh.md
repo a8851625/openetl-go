@@ -22,9 +22,9 @@ OpenETL-Go 已经具备较宽的能力面：
 - 生产链路通过业务主键、版本列、upsert、ReplacingMergeTree、deduplicate 或显式补偿吸收重放影响。
 - SQLite 是轻量单机入口，不宣称分布式保证。
 - DAG、复杂 join/window、插件生态和部分连接器必须按成熟度标注，不用文案包装成 production-ready。
-- 不追求完整流计算语义：任意/通用 keyed state、通用 processing-time timer、CoProcessFunction、SQL planner、Flink savepoint、复杂 sliding/session window、late side-output、retraction 不进入近期核心；Phase 1 只允许推进明确列出的 Redis-backed、受限 ETL 状态能力。
+- 不追求完整流计算语义：任意/通用 keyed state、通用 processing-time timer、CoProcessFunction、SQL planner、Flink savepoint、复杂 sliding/session window、late side-output、retraction 不进入近期核心。
 - 对 Flink SQL 类同步任务，只迁移其数据流语义：source、解析/展开、lookup 补维、投影转换、sink。不要为了兼容 SQL 语法而引入通用 SQL planner。
-- 状态数据和缓存型运行时能力必须和 metadata/checkpoint 持久层分开：SQLite/MySQL/PostgreSQL 只作为 pipeline spec、checkpoint、DLQ、audit、worker/task 等持久化存储，不适合作为高频 per-key state、维表缓存、window/session state 或 timer state 的缓存后端；如果当前服务未配置 Redis，则相关状态/缓存能力必须在 spec validate/preflight 阶段禁用或报错，不能退化使用 SQLite/MySQL/PostgreSQL 充当缓存。
+- 状态数据和缓存型运行时能力必须和 metadata/checkpoint 持久层分开：SQLite/MySQL/PostgreSQL 只作为 pipeline spec、checkpoint、DLQ、audit、worker/task 等持久化存储，不适合作为维表缓存、deduplicate/window/join 运行时状态等高频缓存后端；如果当前服务未配置 Redis，则相关内置 state/cache 能力必须在 spec validate/preflight 阶段禁用或报错，不能退化使用 SQLite/MySQL/PostgreSQL 充当缓存。
 
 ## 竞品边界
 
@@ -105,7 +105,7 @@ Kafka raw message
 阿里云 ODPS/MaxCompute 常见于维表和数仓落地。它可以进入连接器规划，但定位是 source/lookup/sink connector，不是 Flink SQL 兼容层：
 
 - `odps_lookup` 或 `lookup` 的 ODPS/MaxCompute driver：支持按 key 维表查询或周期性快照缓存。
-- `odps` / `maxcompute` sink：experimental 第一版已注册 connector descriptor、鉴权/endpoint/project/table/partition 配置、schema validator、动态分区字段校验和 writer-disabled preflight；真实批量写入、权限探测、失败重试、DLQ 和集成测试仍待 SDK client 接入。
+- `odps` / `maxcompute` sink：experimental 第一版已注册 connector descriptor、鉴权/endpoint/project/table/partition 配置、schema validator、动态分区字段校验；SDK-backed batch tunnel writer、远端表/分区/权限 preflight、失败分类、sink-local retry/backoff 和 metrics 已接入，真实 MaxCompute 环境的写入/replay/DLQ 集成证据仍待补齐。
 - 首个 sink 目标链路：Kafka ODS JSON -> `project` / `type_convert` / schema validate -> MaxCompute 分区表，支持从记录字段（如 `dt`）生成目标分区。
 - 若 ODPS 维表查询成本或延迟不适合流式逐条 lookup，优先推荐把 ODPS 维表镜像到 MySQL/PostgreSQL/Redis，再用现有 `lookup` 补维。
 
@@ -176,29 +176,14 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 交付项：
 
 - 高优先级增补（置顶 backlog，2026-06-29）：
-  1. Keyed State（按 key 的有状态处理）受限版：
-     - 现状：`StateStore` 仅服务内置 transform（`deduplicate`、`lookup`、`window`），用户自定义 Lua/JS/TS/WASM 逻辑无法显式读写 per-key state。
-     - 目标：为自定义 transform 暴露最小 per-key state API，用于轻量清洗、补维、去重辅助和聚合上下文，不扩展成 Flink/Spark 风格通用 keyed state 计算框架。
-     - 状态后端约束：仅允许 Redis-backed runtime state/cache；未配置 Redis 时，使用该能力的 pipeline 必须 validate/preflight 失败。SQLite/MySQL/PostgreSQL 只能继续作为 checkpoint/metadata 持久层，不能作为 per-key state/cache 后端。
-     - 验收：descriptor/schema 标出 `requires_redis_state=true`；自定义 transform dry-run 能提示 Redis 依赖；e2e 覆盖 Redis 可用、Redis 不可用时启动拦截、重启后 state 恢复或明确失效边界。
-  2. ODPS / MaxCompute Sink 完成实现：
-     - 现状：`odps` / `maxcompute` 已有 experimental descriptor、配置 schema、partition validator 和 writer-disabled preflight，但 SDK-backed batch writer、远端权限/表/分区探测、DLQ/retry e2e 尚未实现。
+  1. ODPS / MaxCompute Sink 完成实现：
+     - 现状：`odps` / `maxcompute` 已有 experimental descriptor、配置 schema、partition validator、SDK-backed batch writer、远端权限/表/分区 preflight、错误分类、sink-local retry/backoff 和 metrics；真实 MaxCompute 环境下的 DLQ/replay/e2e 证据尚未补齐。
      - 目标：优先完成 sink 写入闭环，覆盖 Kafka ODS JSON -> `project` / `type_convert` -> MaxCompute 分区表。
      - 验收：SDK-backed batch writer、schema/partition preflight、权限错误分类、retry/backoff、DLQ/replay、metrics、at-least-once 重放边界文档，以及真实或可替代集成环境 e2e；未有真实写入证据前 maturity 保持 experimental/beta，不提升 production。
-  3. Sliding / Session Window 受限版：
-     - 现状：当前仅支持 tumbling window；sliding 和 session 参数在代码中有预留，但未实现。
-     - 目标：实现轻量 ETL 场景所需 sliding/session window，不引入复杂 trigger、late side-output、retraction/update 聚合语义或通用流计算窗口系统。
-     - 状态后端约束：window/session state 属于缓存型运行时状态，仅允许 Redis；未配置 Redis 时，sliding/session window 必须 validate/preflight 失败。已有 tumbling window 的本地/SQLite StateStore 恢复边界需继续如实标注，不把 SQLite/MySQL/PostgreSQL 扩展成通用窗口缓存。
-     - 验收：sliding/session 配置 schema、watermark/迟到数据边界说明、Redis 依赖校验、重启恢复 e2e、重复消息吸收边界文档。
-  4. 异步 I/O 维表查询增强：
+  2. 异步 I/O 维表查询增强：
      - 现状：`enricher` 和 `lookup` 支持 HTTP/SQL 查询，但缺少并发控制、队列上限、超时、背压和缓存失效策略。
      - 目标：补齐并发度、in-flight 上限、超时、重试、失败分类、背压和 metrics；缓存能力必须显式依赖 Redis，未配置 Redis 时只能使用无缓存查询或直接阻断要求缓存的配置。
      - 验收：配置字段、默认安全值、preflight 校验、lookup miss / timeout / 429 / SQL 临时错误 e2e、缓存命中率和背压指标；SQLite/MySQL/PostgreSQL 不作为维表缓存后端。
-  5. Timer / 定时器机制受限版：
-     - 现状：用户无法注册“N 分钟后触发回调”的定时器。
-     - 目标：只为 ETL 内部需要的延迟触发、session 关闭、超时补偿或有限自定义 transform 回调提供最小 timer 机制，不提供完整 processing-time timer API、CoProcessFunction 或通用事件时间调度框架。
-     - 状态后端约束：timer state 必须使用 Redis；未配置 Redis 时，使用 timer 的 pipeline 必须 validate/preflight 失败。SQLite/MySQL/PostgreSQL 仍只作为 checkpoint/metadata 持久层。
-     - 验收：timer descriptor/schema、Redis 依赖校验、重启恢复或丢失边界、回调失败 DLQ/重试策略和最小 e2e。
 - 首要任务：Doris sink production-ready gate 已关闭。证据和边界：
   - 已补 `hack/e2e-doris.sh` 并纳入 `hack/e2e-all.sh`：使用 Podman 启动官方 Doris FE/BE 2.1.11 镜像，已实跑通过 MySQL batch -> Doris 的 Stream Load JSON、Stream Load CSV、MySQL 协议 insert fallback、auto-create Unique Key、decimal 类型推断和零失败记录断言。
   - 已实现 Doris `SchemaValidator` 和 preflight 接入：校验目标表存在、字段缺失、类型兼容、`pk_columns` 与 Doris Unique Key 模型一致；接入已有非 Unique Key 表时，不允许把 `batch_mode=upsert` 宣称为幂等。
@@ -218,10 +203,10 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - 为三条主路径补齐 e2e：
   - MySQL snapshot/CDC -> ClickHouse，覆盖 schema drift、重启恢复、重复吸收、DLQ/replay。MySQL snapshot+CDC -> ClickHouse 已补 Docker e2e，覆盖 auto-create、DDL/schema drift add-column、CDC update/delete/insert、checkpoint restart、checkpoint reset replay 后 ReplacingMergeTree 吸收重复，以及 ClickHouse 下线 DLQ/replay。
   - MySQL batch/CDC -> MySQL/PostgreSQL，覆盖 upsert/delete、事务批写、checkpoint 恢复。MySQL batch custom-query/JOIN -> PostgreSQL upsert 已补 Docker e2e，覆盖 schema preflight 拦截和 checkpoint reset replay 后 upsert 吸收重复；MySQL CDC -> PostgreSQL 已补 Docker e2e，覆盖 insert/update/delete 和 stop/restart checkpoint 恢复。
-  - Kafka JSON/Debezium -> lookup -> deduplicate -> tumbling window -> ClickHouse，覆盖重复消息、lookup miss、状态恢复、ClickHouse 下线和 replay。wide-table Docker e2e 已覆盖重复吸收、lookup miss DLQ/replay、lookup refresh failure、ClickHouse 下线 DLQ/replay，以及 SIGKILL 后 deduplicate/window SQLite StateStore 恢复；lookup StateStore 已补独立 Docker e2e，覆盖维表查询不可用后从 SQLite cache 恢复。
+  - Kafka JSON/Debezium -> lookup -> deduplicate -> tumbling window -> ClickHouse，覆盖重复消息、lookup miss、状态恢复、ClickHouse 下线和 replay。wide-table Docker e2e 迁移为 Redis StateStore 路径后应继续覆盖重复吸收、lookup miss DLQ/replay、lookup refresh failure、ClickHouse 下线 DLQ/replay，以及 SIGKILL 后 deduplicate/window 恢复；lookup StateStore 独立 Docker e2e 应覆盖维表查询不可用后从 Redis cache 恢复。
 - 增加 Kafka 报文解析到 ODS Kafka 的生产候选链路：
   - Kafka raw message -> parser plugin + `flat_map` / `udtf` -> lookup 维表 -> `project` / `type_convert` -> Kafka JSON sink（Lua parser fixture 和 Docker e2e 已覆盖第一版链路）。
-  - 第一版维表优先使用 MySQL/PostgreSQL 缓存；ODPS/MaxCompute 作为后续 connector 增强。
+  - 第一版维表优先使用 MySQL/PostgreSQL 作为查询源，缓存和状态恢复只允许 Redis；ODPS/MaxCompute 作为后续 connector 增强。
   - 覆盖解析失败进入 DLQ、维表 miss 策略、解析一进多出、Kafka sink 写入失败、offset replay 后幂等/重复边界（当前 e2e 已覆盖解析失败、lookup miss、一进多出和 Kafka append 重复边界；Kafka sink producer 失败注入已由单测覆盖，runner 层已有 DLQ/checkpoint 语义覆盖）。
 - 增加 Debezium Kafka CDC 到 ODS MySQL 的生产候选链路：
   - Kafka Debezium topic -> `debezium_cdc` -> `cdc_policy` -> 模板化 `table_mapping` -> MySQL `batch_mode=upsert`（核心 transform、fixture 和 e2e 脚本已补，且覆盖 MySQL schema 写入失败进入 DLQ、修复后 replay）。
@@ -229,9 +214,9 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
   - 控制面覆盖 start/stop/pause/resume、checkpoint set/reset、按 Kafka partition/offset 回放和 DLQ replay（checkpoint set + start/stop + offset replay 已进入 e2e；DLQ replay 已通过 MySQL schema 失败注入进入 Debezium e2e）。
   - 明确迁移边界：不管理 Debezium connector，不承诺 Kafka transaction exactly-once，不自动执行危险 DDL。
 - 增加 Kafka ODS 到 MaxCompute 的生产候选链路：
-  - Kafka ODS JSON -> `project` / `select_fields` -> `type_convert` -> `odps` / `maxcompute` sink（experimental sink 合约已落地；当前 build 明确拦截未启用 writer 的 pipeline）。
-  - 支持 MaxCompute 表字段映射、`STRING` / `BIGINT` / `DOUBLE` / `TIMESTAMP` 等基础类型转换、按 `dt` 等字段写分区（配置 schema 和 validator 已覆盖；真实写入待接 SDK）。
-  - preflight 校验目标 project/table/partition 权限、字段缺失、类型兼容和分区字段存在性（当前已覆盖本地字段/分区合约和 writer-disabled error；远端权限/表探测待集成环境）。
+  - Kafka ODS JSON -> `project` / `select_fields` -> `type_convert` -> `odps` / `maxcompute` sink（experimental sink 合约和 SDK-backed writer 已落地；真实环境 e2e 仍待凭据和测试表验证）。
+  - 支持 MaxCompute 表字段映射、`STRING` / `BIGINT` / `DOUBLE` / `TIMESTAMP` 等基础类型转换、按 `dt` 等字段写分区（配置 schema、validator 和 SDK tunnel writer 已覆盖）。
+  - preflight 校验目标 project/table/partition 权限、字段缺失、类型兼容和分区字段存在性（本地字段/分区合约与远端表加载已覆盖；真实权限矩阵待集成环境验证）。
   - 明确 at-least-once 重放边界：默认 append 可能重复；推荐事件唯一键、分区 staging + merge/overwrite 或 sink 侧可证明的幂等提交策略。
 - Kafka 链路增加 consumer crash、broker restart、consumer group rebalance、offset replay 测试。
 - StateStore 恢复扩展到 e2e，明确 lookup、deduplicate、window 的恢复边界；lookup、deduplicate、window 均已补 Docker e2e 恢复证据。
@@ -266,7 +251,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
   - Kafka 报文解析：topic sample -> parser/flat_map dry-run（核心 API 已支持多输出 records）-> lookup -> field projection -> Kafka/OLAP sink -> start。
   - 文件/HTTP 落地：input sample -> transform dry-run -> file/S3 output -> manifest/idempotency 提示。
 - 向导生成普通 pipeline/DAG spec，不引入专用执行路径。
-- Schema/sample/DDL preview 使用真实 connector descriptor、source introspection 和 preflight，不依赖静态表单猜测。
+- Schema/sample/DDL preview 使用真实 connector descriptor、source/sink introspection 和 preflight，不依赖静态表单猜测。
 - 错误体验标准化：什么失败、在哪个 pipeline/node/字段失败、原因、修复动作、是否可 replay。
 - Quickstart 保持 5 分钟内可跑通，并覆盖 UI 创建任务路径。
 - AI/LLM DAG 辅助入口只生成普通 DAG spec，必须使用同一套 validate/preflight：
@@ -286,26 +271,26 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 - `web/src/main.tsx` 已补 `FirstTaskWizard`：覆盖数据库同步、Kafka 明细/聚合、Debezium CDC、Kafka 报文解析、文件/HTTP 落地五类固定模板；向导生成普通 linear pipeline spec，不引入专用执行路径。
 - Source/sink/transform 配置区已复用 descriptor/schema 驱动的 `ConfigForm`，带默认值、示例、secret 标记、maturity/capability 摘要；保留 Advanced JSON、transform JSON 和 Generated YAML，支持 YAML -> 表单同步。
-- 向导同屏接入 sample record、transform dry-run、spec validate/preflight、DDL preview、field issue/remediation 和 `/api/v2/docs` 入口；MaxCompute writer-disabled preflight 用于失败/修复路径验证。
+- 向导同屏接入 sample record、transform dry-run、spec validate/preflight、DDL preview、field issue/remediation 和 `/api/v2/docs` 入口；MaxCompute remote preflight 用于 endpoint/project/table/partition/权限失败修复路径验证。
 - `web/src/DagEditorPage.tsx` 已支持 DAG/YAML 与 canvas/form 往返：YAML drawer 可编辑并同步回节点/表单；DAG Editor 内置 Validate + preflight 结果面板，创建前阻断 `valid:false`，并展示错误、warning、preflight issue、field issue 和 remediation。
 - `docs/quickstart.md` / `docs/quickstart.zh.md` 已把 Web UI Wizard 放到首选路径，覆盖 dry-run、Validate + preflight、修复、Create and start，以及 YAML 可见/可同步。
 - `hack/e2e-ui.sh` 已覆盖：五类向导入口可见、schema-driven 表单、docs 入口、preflight 失败、修复后创建启动、向导 YAML -> 表单同步、DAG YAML -> canvas/form 同步、DAG validation 错误定位、DLQ 查看与 replay。验证命令：`E2E_SKIP_BUILD=1 ./hack/e2e-ui.sh`，结果 `88 passed, 0 failed`。
 
 连接上下文闭环证据（2026-06-29）：
 
-- 新增 `/api/v2/connections/{name}/context`：返回保存连接、connector descriptor、推荐 `schedule.type` / `batch_size` / `checkpoint_interval_sec`，以及尽力而为的 source introspection。
-- Source introspection 第一版覆盖：file/HTTP/demo sample 与 schema 推断、MySQL/PostgreSQL database/table/column/primary key 元数据、Kafka topic/partition 元数据；真实启动拦截仍走 spec validate 与 preflight。
-- `web/src/main.tsx` 向导已接入保存连接选择：source/sink 可选择 Connection Catalog，生成 YAML 使用普通 `connection` 引用，展示最近健康状态、schema/sample/topic/table 上下文和推荐参数；推荐 batch/checkpoint 会进入生成 spec。
-- `web/src/DagEditorPage.tsx` 节点属性已复用保存连接 context，DAG/YAML 继续使用普通 `connection` 字段，不引入专用执行路径。
+- `/api/v2/connections/{name}/context`：返回保存连接、connector descriptor、推荐 `schedule.type` / `batch_size` / `checkpoint_interval_sec`，以及尽力而为的 source/sink introspection。
+- Source introspection 第一版覆盖：file/HTTP/demo sample 与 schema 推断、MySQL/PostgreSQL database/table/column/primary key 元数据、Kafka topic/partition 元数据；sink introspection 已补 MySQL/PostgreSQL/ClickHouse/Doris 目标表 schema、Kafka topic/partition 元数据、Elasticsearch/OpenSearch index mapping，以及 File/S3/local-fallback 输出 target、prefix、format、可写/bucket 存在性提示；真实启动拦截仍走 spec validate 与 preflight。
+- `web/src/main.tsx` 向导已接入保存连接选择：source/sink 可选择 Connection Catalog，生成 YAML 使用普通 `connection` 引用，展示最近健康状态、schema/sample/topic/table/target 上下文和推荐参数；选择 saved connection 时默认清空旧 inline config，推荐 batch/checkpoint 会进入生成 spec，`source.config.*` / `sink.config.*` 类推荐可一键应用到表单/YAML。
+- `web/src/DagEditorPage.tsx` 节点属性已复用保存连接 context，DAG/YAML 继续使用普通 `connection` 字段，不引入专用执行路径；选择 saved connection 时清空旧节点 config，节点级 `source.config.*` / `sink.config.*` 推荐可直接应用为当前节点的 inline override。
 - `docs/etl-api.md` / `docs/etl-api.zh.md` / `docs/openapi.yaml` 已补保存连接上下文接口。
 - 本轮已验证：`go test ./internal/etl/server -count=1`、`npm run build`、`./hack/pack.sh`、`./hack/e2e-ui.sh`，UI e2e 结果 `92 passed, 0 failed`。
 
 剩余缺口：
 
 - 复杂 transform chain 的增删、排序和跨 transform 错误定位仍需从 JSON 辅助编辑继续产品化。
-- AI context pack 和每个内置组件的可复用 Markdown 文档仍未完成。
+- Connector/plugin certification test kit、真实 WASM e2e、更多生产候选链路的故障注入证据仍需继续补齐。
 
-### 下一迭代：v0.2.5-beta.1，组件文档与 AI context pack
+### 已交付：v0.2.5，组件文档与 AI context pack
 
 目标：把已经落地的 connector descriptor、schema、dry-run、preflight 和示例 pipeline 收束成可复用事实源，让 UI、静态文档和 AI 辅助生成 DAG 使用同一套组件知识。
 
@@ -335,7 +320,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 当前证据（2026-06-29）：
 
 - 已新增 `internal/etl/server/ai_context.go`：AI context pack 从 connector descriptor、plugin schema、maturity metadata、组件文档、产品边界、DAG 规则、示例和常见错误生成；`/api/v2/ai/context` 暴露该事实源。
-- `/api/v2/ai/generate` 已改为使用 context pack system prompt，不再使用硬编码 “Flink-like” 口径；响应包含 `context_pack_version`、`validation` 和 `review`，其中 review 覆盖缺失字段、secret 确认、非 production maturity、CDC -> append sink、MaxCompute writer-disabled、DDL apply、脚本 transform 和 DLQ disabled 等风险。
+- `/api/v2/ai/generate` 已改为使用 context pack system prompt，不再使用硬编码 “Flink-like” 口径；响应包含 `context_pack_version`、`validation` 和 `review`，其中 review 覆盖缺失字段、secret 确认、非 production maturity、CDC -> append sink、MaxCompute remote preflight/experimental maturity、DDL apply、脚本 transform 和 DLQ disabled 等风险。
 - `web/src/DagEditorPage.tsx` 已将 AI 生成改为“审阅后应用”：展示 validation、缺失字段、风险、确认项、当前 YAML 与生成 YAML，用户点击 Apply 后才写入 canvas。
 - `web/src/main.tsx` 首次任务向导的 transform chain 已支持增删、排序、切换 transform 类型和逐阶段 dry-run，仍然生成普通 `transforms` 数组。
 - `docs/components/` 已补第一批核心组件文档，覆盖 MySQL/Kafka/File/HTTP sources，ClickHouse/MySQL/PostgreSQL/Doris/Kafka/S3/File sinks，以及 lookup/deduplicate/window/flat_map/udtf/project/select_fields/type_convert/debezium_cdc/cdc_policy。
@@ -371,7 +356,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
   - 新增组件如果缺少配置说明、输入输出 record 约定、错误分类和幂等边界，不能标注为 production。
 - ODPS/MaxCompute connector 认证与扩展：
   - sink 写入闭环已提升到 Phase 1 高优先级增补；Phase 3 继续承担 certification test kit、maturity 证据、插件/connector 合约和后续 lookup/source 方向的认证。
-  - connector descriptor、鉴权、endpoint/project/table/partition 配置、schema/partition validator 和 writer-disabled preflight 已定义；批写 client 和远端错误分类待实现。
+  - connector descriptor、鉴权、endpoint/project/table/partition 配置、schema/partition validator、SDK batch writer、远端表加载和错误分类已定义；真实 MaxCompute 写入/replay/DLQ 证据待补。
   - 优先实现 `odps` / `maxcompute` sink，满足 Kafka ODS 落 MaxCompute 分区表；随后实现 `odps_lookup` 或 lookup driver，满足维表补全。
   - sink 必须接入 DLQ、retry/backoff、schema validation、partition preflight、metrics 和重放语义文档。
   - 需要专门的集成测试策略；没有真实环境时只能标注为 `experimental`。
@@ -421,11 +406,11 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - 为了数量新增大量数据库、消息队列或 SaaS connector。
 - Kafka exactly-once transactions。
 - 跨 sink 原子 fanout。
-- 完整流处理引擎：不提供任意 keyed state、通用 processing-time/event-time timer、CoProcessFunction、多流状态计算；仅允许 Phase 1 中明确列出的 Redis-backed、受限 ETL 状态能力。
+- 完整流处理引擎：不提供任意 keyed state、通用 processing-time/event-time timer、CoProcessFunction、多流状态计算。
 - Flink/Spark 兼容 savepoint。
 - 通用 SQL planner 或 Flink SQL 迁移层。
 - 但支持把 Flink SQL 中的数据流拆成 pipeline：Kafka source、UDTF/flat_map、lookup、project、sink。
-- 复杂 trigger、late side-output、retraction/update/delete 聚合语义；sliding/session 仅按 Phase 1 受限版推进，不扩展为完整窗口系统。
+- 复杂 trigger、late side-output、retraction/update/delete 聚合语义；sliding/session window 不进入近期核心。
 - Connector marketplace、插件商店、下载量和评分系统。
 - Kubernetes operator、etcd/Zookeeper 等新的基础设施依赖。
 - AI 自动生成 pipeline 作为核心路径。它可以作为辅助入口，但生成结果必须走同一套 validate/preflight。
@@ -440,18 +425,9 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 ## 下一步清单
 
-1. 置顶推进 Redis-backed 受限状态能力：Keyed State、sliding/session window、timer，以及 lookup/enricher 缓存依赖校验；未配置 Redis 时 validate/preflight 必须阻断相关配置，SQLite/MySQL/PostgreSQL 不得作为缓存后端。
-2. 完成 `odps` / `maxcompute` sink：experimental descriptor/schema/partition 合约和 writer-disabled preflight 已落地；下一步接入 SDK-backed batch writer、远端权限/表/分区 preflight、DLQ/retry、metrics 和 Kafka ODS e2e。
-3. 为异步 I/O 维表查询补并发控制、in-flight 上限、超时、背压、失败分类和 metrics；缓存能力只接 Redis。
-4. 为四条主线建立 milestone：`reliability-baseline`、`first-task-flow`、`extension-contract`、`lightweight-ops`。
-5. 为 production candidate 链路补 e2e 和失败注入测试。
-6. 统一 connector maturity 事实源，并让 UI、descriptor、README、配置文档使用同一数据。
-7. 扩展 `SchemaDescriptor` / `SchemaValidator` 覆盖面，用它驱动 preflight、DDL preview 和 UI 表单。
-8. 扩展 `flat_map` / `udtf`：在已落地的 Lua 第一版 ABI、JS/TS 数组返回 ABI、WASM/plugin 数组返回 ABI、核心多输出 dry-run 和插件 dry-run 多输出响应基础上，补真实 WASM/plugin e2e。
-9. 扩展插件化报文解析链路：第一条 Kafka raw -> Lua `flat_map` -> lookup -> Kafka ODS e2e 已覆盖解析失败、维表 miss、一进多出和 Kafka replay append 重复边界；Kafka sink producer 失败注入、JS/TS transform 数组返回和 dry-run、WASM/plugin 数组返回 ABI、GB32960 Lua parser fixture 已补；下一步补真实 WASM/plugin e2e 和更贴近生产的协议插件样板。
-10. 为已落地的 Debezium Kafka CDC 迁移 preset 继续补更多临时故障类型注入；ODS MySQL upsert、offset replay、broker restart、consumer group rebalance、MySQL lock wait retry、MySQL 值范围失败 data-class DLQ replay、危险 DDL reject 已有 e2e 覆盖。
-11. 改造 UI 配置上下文：descriptor/schema/sample/preflight/dry-run/docs 统一驱动表单、向导和 YAML/DAG 编辑器。
-12. 建立 AI DAG context pack：核心组件 Markdown、使用方法、示例、边界和 maturity 进入可校验事实源。
-13. 为 connector certification test kit 写第一版，先认证 MySQL、ClickHouse、Kafka、S3/File。
-14. 为后端启动参数化补更重的部署 smoke：容器入口命令、standalone/master/worker 三形态启动，以及非法参数在镜像入口中的失败输出。
-15. 建立 source `supported_schedules` / `default_schedule` 事实源，并接入 spec validate、preflight 和 UI schedule 表单。
+1. 补 `odps` / `maxcompute` 真实环境证据：用真实 MaxCompute 凭据跑 Kafka ODS -> `project` / `type_convert` -> MaxCompute 分区表 e2e，补 DLQ/replay、checkpoint reset/restart、权限失败和操作文档；没有真实写入证据前保持 experimental。
+2. 完成异步 I/O 维表查询增强：为 `lookup` / `enricher` 补并发控制、in-flight 上限、超时、背压、失败分类和 metrics；需要缓存时只允许 Redis，未配置 Redis 必须 validate/preflight 阻断。
+3. 补 production candidate 链路的失败注入：优先覆盖 Kafka crash/rebalance/offset replay、Debezium 临时故障、ClickHouse/Doris/ES/S3 目标故障、DLQ replay 和 checkpoint 恢复边界。
+4. 扩展 schema/preflight 覆盖面：优先为 production candidate source/sink 补 `SchemaDescriptor` / `SchemaValidator`、DDL preview 和字段级 remediation，驱动 UI 表单和 preflight。
+5. 建立 connector certification test kit 第一版：先认证 MySQL、ClickHouse、Kafka、S3/File，maturity 必须由测试证据、descriptor、文档和实现共同约束。
+6. 补轻量运行 smoke：容器入口命令、standalone/master/worker 三形态启动、非法参数失败输出，以及升级/回滚/备份恢复 runbook 的最小自动化验证。

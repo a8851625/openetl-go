@@ -19,8 +19,7 @@ transforms:
         - id
         - _version
       window_size: 100000
-      state_backend: sqlite
-      state_path: /app/data/wide-table-state.db
+      state_backend: redis
       state_ttl_seconds: 86400
   - type: lookup
     config:
@@ -40,8 +39,7 @@ transforms:
       window_type: tumbling
       window_size_seconds: 60
       allowed_lateness_seconds: 10
-      state_backend: sqlite
-      state_path: /app/data/wide-table-window-state.db
+      state_backend: redis
       state_ttl_seconds: 86400
       group_by:
         - region

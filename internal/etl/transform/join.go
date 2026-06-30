@@ -37,8 +37,7 @@ func init() {
 //	                "drop" (default, silent — indistinguishable from a filter)
 //	                | "dlq" (route the unmatched record to the DLQ so misses
 //	                are visible — useful for catching schema/data drift)
-//	state_backend: "sqlite" optional durable state backend for buffered records
-//	state_path:    SQLite state database path when state_backend=sqlite
+//	state_backend: "redis" optional Redis-backed state backend for buffered records
 type JoinTransform struct {
 	name       string
 	joinType   string
@@ -176,12 +175,8 @@ func NewJoinTransform(config map[string]any) (*JoinTransform, error) {
 	}
 	if backend, ok := config["state_backend"].(string); ok && backend != "" {
 		switch strings.ToLower(backend) {
-		case "sqlite":
-			path, _ := config["state_path"].(string)
-			if path == "" {
-				path = "./data/etl-state.db"
-			}
-			store, err := state.NewSQLiteStore(path)
+		case "redis":
+			store, err := state.NewRedisStoreFromConfig(context.Background(), config)
 			if err != nil {
 				return nil, fmt.Errorf("join: open state store: %w", err)
 			}

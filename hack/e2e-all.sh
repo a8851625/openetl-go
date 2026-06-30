@@ -25,6 +25,7 @@ TESTS=(
   "e2e-http-source.sh|HTTP source pagination/auth"
   "e2e-kafka.sh|Kafka source/sink (Redpanda)"
   "e2e-kafka-raw-ods.sh|Kafka raw parser/flat_map -> lookup -> Kafka ODS"
+  "e2e-maxcompute.sh|Kafka ODS->MaxCompute partitioned table (env-gated)"
   "e2e-debezium-mysql.sh|Debezium Kafka CDC->MySQL ODS"
   "e2e-lookup-state.sh|Kafka lookup StateStore crash recovery"
   "e2e-wide-table.sh|Kafka lookup/deduplicate/window->ClickHouse + state recovery"

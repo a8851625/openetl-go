@@ -2,12 +2,30 @@ package transform
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/state"
 )
+
+func TestWindowTransformRejectsUnsupportedWindowTypes(t *testing.T) {
+	for _, windowType := range []string{"sliding", "session"} {
+		t.Run(windowType, func(t *testing.T) {
+			_, err := NewWindowTransform(map[string]any{
+				"window_type":         windowType,
+				"window_size_seconds": 60,
+				"aggregates": map[string]any{
+					"order_count": map[string]any{"func": "count"},
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), "only tumbling is supported") {
+				t.Fatalf("NewWindowTransform() error = %v, want unsupported window type rejection", err)
+			}
+		})
+	}
+}
 
 func TestWindowStateStoreRestoresBufferedAggregates(t *testing.T) {
 	ctx := context.Background()

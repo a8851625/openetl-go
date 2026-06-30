@@ -188,6 +188,14 @@ Response:
 }
 ```
 
+When preflight has enough context, the response also includes
+`preflight.recommendations`: operator-reviewed config patches such as
+`sink.config.batch_mode=upsert`, `sink.config.pk_columns=["id"]`,
+`sink.config.schema_drift=add_columns`, `transforms=[{type:type_convert,...}]`,
+`sink.config.prefix=orders/`, `sink.config.key_column=id`,
+`sink.config.auto_create_topic=true`, `batch_size=500`, or `dlq.enable=true`.
+The Web wizard can apply these patches to the draft spec before creation.
+
 ## Connection Test
 
 Build and optionally open one source, sink, or transform config without creating a pipeline.
@@ -212,7 +220,7 @@ Response:
 
 ## Saved Connection Context
 
-Fetch a saved connection together with its descriptor, health, recommended runtime parameters, and best-effort source introspection.
+Fetch a saved connection together with its descriptor, health, recommended runtime parameters, and best-effort source/sink introspection.
 
 ```sh
 curl -H "X-API-Token: $ETL_API_TOKEN" \
@@ -248,7 +256,7 @@ Response:
 }
 ```
 
-Current built-in adapters cover file/HTTP/demo sampling, MySQL and PostgreSQL table/schema metadata, and Kafka topic/partition metadata. Introspection is advisory control-plane context; pipeline startup still relies on `spec validate` and preflight as the enforcement gate.
+Current built-in adapters cover file/HTTP/demo sampling, MySQL and PostgreSQL table/schema metadata, Kafka topic/partition metadata, and sink target metadata for MySQL, PostgreSQL, ClickHouse, Doris, Kafka, Elasticsearch/OpenSearch, File, and S3/local-fallback output targets. File/S3 context returns `introspection.targets` with the resolved directory or bucket, prefix, format, and writability/bucket-existence status. Introspection is advisory control-plane context; pipeline startup still relies on `spec validate` and preflight as the enforcement gate.
 
 ## Transform Dry Run
 

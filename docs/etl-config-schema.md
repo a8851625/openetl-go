@@ -90,6 +90,8 @@ source:
 | `format` | no | `csv` | `json` (JSON Lines) or `csv`. |
 | `delimiter` | no | `,` | CSV delimiter. |
 | `has_header` | no | `true` | Whether CSV first row contains column names. |
+| `schema` | no | | Optional preflight-only schema hint, as `[{name,data_type,nullable}]` or `{field: type}`. |
+| `sample` | no | | Optional preflight-only sample record used to infer schema when the file path is not readable during validation. |
 
 ### `http`
 
@@ -122,6 +124,8 @@ source:
 | `max_pages` | no | `100` | Maximum pages to read. |
 | `result_key` | no | auto | JSON array key. Auto-detects `data`, `items`, `results`. |
 | `auth_token` | no | | Bearer token (**secret**). Prefer env interpolation. |
+| `schema` | no | | Optional preflight-only schema hint, as `[{name,data_type,nullable}]` or `{field: type}`. |
+| `sample` | no | | Optional preflight-only sample response record used to infer schema without calling the remote API. |
 
 ### `mysql_batch`
 
@@ -232,6 +236,8 @@ source:
 | `format` | no | `json` | Message format: `json` or `text`. |
 | `key_column` | no | | Column name for message key. |
 | `value_column` | no | | Column name for raw message value. |
+| `schema` | no | | Optional preflight-only schema hint, as `[{name,data_type,nullable}]` or `{field: type}`. |
+| `sample` | no | | Optional preflight-only sample message used to infer schema without consuming Kafka. |
 
 ### `postgres_cdc`
 
@@ -371,13 +377,14 @@ sink:
 
 ### `maxcompute` / `odps`
 
-Experimental connector contract for Kafka ODS JSON -> MaxCompute partitioned table. The current build registers the sink and validates config/schema/partition fields, but the actual MaxCompute batch writer is intentionally not enabled until an SDK client and integration environment are added.
+Experimental connector for Kafka ODS JSON -> MaxCompute partitioned table. The sink is backed by the Aliyun ODPS SDK batch tunnel writer and validates config/schema/partition fields, but maturity remains experimental until a real MaxCompute integration environment provides repeatable write, replay, and failure-injection evidence.
 
 ```yaml
 sink:
   type: maxcompute
   config:
     endpoint: https://service.cn-hangzhou.maxcompute.aliyun.com/api
+    tunnel_endpoint: https://dt.cn-hangzhou.maxcompute.aliyun.com
     project: warehouse
     table: ods_events
     access_key_id: ${ALIYUN_ACCESS_KEY_ID}
@@ -388,24 +395,28 @@ sink:
       payload: STRING
     partition_fields: [dt]
     write_mode: append
+    auto_create_partition: true
 ```
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `endpoint` | yes | | MaxCompute endpoint URL. |
+| `tunnel_endpoint` | no | | MaxCompute Tunnel endpoint URL. If omitted, the SDK resolves it from the project. |
 | `project` | yes | | MaxCompute project name. |
 | `table` | yes | | Target table name. |
 | `access_key_id` | yes | | Alibaba Cloud access key ID (**secret**). |
 | `access_key_secret` | yes | | Alibaba Cloud access key secret (**secret**). |
+| `quota_name` | no | | MaxCompute quota name used by tunnel upload sessions. |
 | `columns` | no | | Target column type map. Supported first-pass types: `STRING`, `BIGINT`, `DOUBLE`, `DECIMAL`, `BOOLEAN`, `DATETIME`, `TIMESTAMP`. |
 | `partition` | no | | Static partition values, for example `{dt: "2026-06-26"}`. |
 | `partition_fields` | no | | Record fields used as dynamic partition values, for example `[dt]`. |
 | `write_mode` | no | `append` | `append` or `partition_overwrite`. Append is at-least-once and can duplicate on replay. |
+| `auto_create_partition` | no | `true` | Ask the Tunnel SDK to create missing target partitions during upload. |
 | `batch_size` | no | `500` | Rows per batch. |
 | `max_retries` | no | `3` | Retry attempts for transient writes. |
 | `retry_base_ms` | no | `500` | Base retry delay in milliseconds. |
 
-Use `project` / `type_convert` before this sink so the record schema matches the declared MaxCompute `columns` and contains every dynamic `partition_fields` value. Until the writer is implemented, `Open()` returns an explicit experimental error and preflight should treat this connector as design-time only.
+Use `project` / `type_convert` before this sink so the record schema matches the declared MaxCompute `columns` and contains every dynamic `partition_fields` value. Preflight loads the remote table and validates table/partition/permission reachability. `append` is at-least-once and can duplicate after checkpoint reset or replay; use business keys, staging+merge, or controlled `partition_overwrite` flows when duplicates are not acceptable.
 
 ### `kafka`
 
@@ -446,6 +457,14 @@ sink:
 | `password` | no | | ES password (**secret**). |
 | `index` | yes | | Target index name. |
 | `id_column` | no | `id` | Column for document ID (enables upsert). |
+| `mappings` | no | | Optional Elasticsearch mapping used by preflight schema validation. If omitted, preflight reads `/{index}/_mapping` from the target when reachable. |
+| `properties` | no | | Optional mapping properties shorthand, for example `{id: {type: long}, status: {type: keyword}}`. |
+| `chunk_size` | no | `500` | Records per bulk request. |
+| `max_retries` | no | `3` | Retry attempts for transient bulk failures. |
+| `retry_base_ms` | no | `500` | Base retry delay in milliseconds. |
+| `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
+
+Preflight validates source fields against configured or remote mapping properties when available. It reports field-level type mismatches such as string data targeting a `long` mapping before the first bulk write.
 
 ### `doris`
 
@@ -713,8 +732,7 @@ transforms:
       max_cache_entries: 100000
       on_miss: "null"
       on_refresh_error: error
-      state_backend: sqlite
-      state_path: ./data/etl-state.db
+      state_backend: redis
       state_pipeline: orders-wide-table
       state_node: lookup-users
       state_ttl_seconds: 86400
@@ -731,8 +749,7 @@ transforms:
 | `max_cache_entries` | no | `0` | Maximum distinct dimension cache entries, `0` means unlimited. Exceeding the cap fails the refresh/restore and increments `cache_limit_exceeded`. |
 | `on_miss` | no | `pass` | Action when no dimension row is found: `pass` keeps the record unchanged, `null` writes the configured fields with null values, `dlq`/`error` returns an error so the runner routes the record to DLQ. |
 | `on_refresh_error` | no | `pass` | Action when dimension refresh fails and no usable cache can be loaded: `pass` keeps the record unchanged, `error` returns an error so the runner routes the record to DLQ. |
-| `state_backend` | no | | Durable lookup cache backend. Currently supports `sqlite`. |
-| `state_path` | no | `./data/etl-state.db` | SQLite state database path when `state_backend=sqlite`. |
+| `state_backend` | no | | Runtime lookup cache backend. Only `redis` is allowed and it requires deployment Redis config. |
 | `state_pipeline` | no | pipeline name | Pipeline namespace for persisted lookup cache. Runtime injects the pipeline name when omitted. |
 | `state_node` | no | transform node id | Node namespace for persisted lookup cache. Runtime injects the transform node id when omitted. |
 | `state_ttl_seconds` | no | `0` | TTL for persisted lookup rows, `0` means no expiry. |
@@ -751,7 +768,7 @@ refresh failures should stop the current record and enter the normal DLQ path.
 
 Performs a stream-stream interval join by buffering records for `join_window_sec`
 and matching later records on `join_key`. For production-like recovery tests,
-enable the SQLite `StateStore` backend so buffered records can be restored after
+enable the Redis `StateStore` backend so buffered records can be restored after
 process restart.
 
 ```yaml
@@ -764,8 +781,7 @@ transforms:
       join_fields: [amount, status]
       join_prefix: prev_
       on_miss: dlq
-      state_backend: sqlite
-      state_path: ./data/etl-state.db
+      state_backend: redis
       state_pipeline: orders-wide-table
       state_node: join-orders
 ```
@@ -781,8 +797,7 @@ transforms:
 | `on_miss` | no | `drop` | Action for an inner-join miss: `drop`, `dlq`, or `error`. |
 | `max_buffered_keys` | no | `0` | Maximum distinct join keys kept in memory, `0` means unlimited. |
 | `max_buffered_records` | no | `0` | Maximum total join records kept in memory, `0` means unlimited. |
-| `state_backend` | no | | Durable join buffer backend. Currently supports `sqlite`. |
-| `state_path` | no | `./data/etl-state.db` | SQLite state database path when `state_backend=sqlite`. |
+| `state_backend` | no | | Runtime join buffer backend. Only `redis` is allowed and it requires deployment Redis config. |
 | `state_pipeline` | no | pipeline name | Pipeline namespace for persisted join buffers. Runtime injects the pipeline name when omitted. |
 | `state_node` | no | transform node id | Node namespace for persisted join buffers. Runtime injects the transform node id when omitted. |
 | `state_ttl_seconds` | no | `0` | TTL for persisted join buffers. `0` uses `join_window_sec`. |
@@ -800,7 +815,7 @@ through transform metrics.
 
 ### `window`
 
-Windowed aggregation. The production configuration path currently exposes only `tumbling`; `sliding` / `session` remain roadmap items and should not be used in production specs.
+Windowed aggregation. The production configuration path exposes only `tumbling`; `sliding` / `session` are not supported by the pipeline spec.
 
 ```yaml
 transforms:
@@ -816,8 +831,7 @@ transforms:
         total_amount:
           func: sum
           field: amount
-      state_backend: sqlite
-      state_path: ./data/etl-state.db
+      state_backend: redis
       state_pipeline: orders-wide-table
       state_node: window-orders
 ```
@@ -829,8 +843,7 @@ transforms:
 | `allowed_lateness_seconds` | no | `0` | Allowed event-time lateness. |
 | `group_by` | no | | Group-by fields. |
 | `aggregates` | yes | | Aggregation definitions. Supports `count`, `sum`, `avg`, `min`, `max`, `first`, `last`. |
-| `state_backend` | no | | Durable tumbling-window state backend. Currently supports `sqlite`. |
-| `state_path` | no | `./data/etl-state.db` | SQLite state database path when `state_backend=sqlite`. |
+| `state_backend` | no | | Runtime tumbling-window state backend. Only `redis` is allowed and it requires deployment Redis config. |
 | `state_pipeline` | no | pipeline name | Pipeline namespace for persisted window state. Runtime injects the pipeline name when omitted. |
 | `state_node` | no | transform node id | Node namespace for persisted window state. Runtime injects the transform node id when omitted. |
 | `state_ttl_seconds` | no | `0` | TTL for persisted window state, `0` means no expiry. |
@@ -844,7 +857,7 @@ Kafka offsets or downstream sink commits.
 ### `deduplicate`
 
 Drops repeated records by a composite key. By default it keeps the recent key
-set in memory. For crash/restart recovery, enable the SQLite `StateStore`
+set in memory. For crash/restart recovery, enable the Redis `StateStore`
 backend.
 
 ```yaml
@@ -853,8 +866,7 @@ transforms:
     config:
       keys: [order_id]
       window_size: 10000
-      state_backend: sqlite
-      state_path: ./data/etl-state.db
+      state_backend: redis
       state_pipeline: orders-wide-table
       state_node: dedup-orders
       state_ttl_seconds: 86400
@@ -864,8 +876,7 @@ transforms:
 | --- | --- | --- | --- |
 | `keys` | yes | | Fields forming the dedup key. |
 | `window_size` | no | `10000` | Process-local ring size for recently seen keys. |
-| `state_backend` | no | | Durable state backend. Currently supports `sqlite`. |
-| `state_path` | no | `./data/etl-state.db` | SQLite state database path when `state_backend=sqlite`. |
+| `state_backend` | no | | Runtime deduplicate state backend. Only `redis` is allowed and it requires deployment Redis config. |
 | `state_pipeline` | no | pipeline name | Pipeline namespace for persisted dedup keys. Runtime injects the pipeline name when omitted. |
 | `state_node` | no | transform node id | Node namespace for persisted dedup keys. Runtime injects the transform node id when omitted. |
 | `state_ttl_seconds` | no | `0` | TTL for persisted dedup keys, `0` means no expiry. |
@@ -924,7 +935,7 @@ transforms:
 - Validate spec: `POST /api/v2/specs/validate` — returns idempotency warnings for dangerous source/sink combos
 - Connection catalog: `GET/POST /api/v2/connections`, `GET/PUT/DELETE /api/v2/connections/{name}`, `POST /api/v2/connections/{name}/test` — stores reusable source/sink/transform configs, masks secret fields in responses, and records last health status
 - Test ad-hoc connection: `POST /api/v2/connections/test`
-- Connector descriptors: `GET /api/v2/connectors/descriptors` — returns Connector Descriptor v1 records merged from registry, config schema, secret markers, capabilities, and maturity metadata
+- Connector descriptors: `GET /api/v2/connectors/descriptors` — returns Connector Descriptor v1 records merged from registry, config schema, secret markers, capabilities, maturity metadata, and readiness gates
 - Transform dry-run: `POST /api/v2/transforms/dry-run` — returns `records`/`output_count` for multi-output transforms such as `flat_map` / `udtf` / `javascript`
 - Reload specs: `POST /api/v2/specs/reload`
 - Plugin schema: `GET /api/v2/plugins/schema` — returns typed field schemas with secret markers
@@ -934,16 +945,17 @@ transforms:
 Stateful transforms use the `StateStore` v1 contract in `internal/etl/state`. It currently has:
 
 - `MemoryStore` for tests and development.
-- `SQLiteStore` for durable local/standalone state with TTL, snapshot/restore, state size stats, and expired-key cleanup.
+- `RedisStore` for runtime state/cache with TTL, snapshot/restore, and state size stats.
+- `SQLiteStore` remains only as a local test/reference implementation; SQLite/MySQL/PostgreSQL runtime storage is for checkpoint/metadata and must not be configured as state/cache backends.
 - `checkpoint.Envelope` for stateful checkpoint payloads. It groups the source position, per-node state snapshot versions, sink commit metadata, and the documented `at_least_once` delivery mode in one JSON payload while remaining distinguishable from legacy source positions.
 
-`lookup`, `join`, `window`, and `deduplicate` can now use `StateStore` through
-`state_backend: sqlite`. `lookup` persists refreshed dimension-cache rows and
+`lookup`, `join`, `window`, and `deduplicate` can use `StateStore` through
+`state_backend: redis` when `etl.state.redis.addr` or `ETL_STATE_REDIS_ADDR` is configured. `lookup` persists refreshed dimension-cache rows and
 can restore the latest non-expired snapshot when the dimension query fails;
 `join` persists buffered interval-join records by join key; `window` persists
 buffered tumbling-window aggregates; `deduplicate` persists seen keys across
 restarts. Complex window semantics such as sliding/session, side outputs, and
-transactional emission remain roadmap items.
+transactional emission are outside the current ETL runtime boundary.
 
 When a pipeline is built by the linear runner or DAG executor, stateful
 transforms with `state_backend` enabled automatically receive `state_pipeline`
@@ -996,6 +1008,7 @@ and Prometheus counter family.
 - `required` and `secret_fields`
 - `capabilities`
 - evidence-driven `maturity`: `production`, `beta`, `experimental`, or `dev-only`
+- `readiness`: machine-readable gates for registry/config schema, schema/preflight, checkpoint or replay absorption, and e2e evidence. This helps UI/wizard flows explain production gaps without replacing the maturity value.
 
 WASM plugins use Plugin ABI v1 metadata in `internal/etl/plugin/pluginsystem`:
 

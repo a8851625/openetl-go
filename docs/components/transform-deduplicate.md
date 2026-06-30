@@ -6,7 +6,7 @@ Drop duplicate records by configured key fields.
 ## Config Fields
 - `keys` or `key_fields`: composite key fields.
 - `window_size`: memory window.
-- `state_backend`, `state_path`, `state_ttl_seconds`: optional durable state.
+- `state_backend`, `state_ttl_seconds`: optional Redis-backed runtime state. Requires `etl.state.redis.addr` or `ETL_STATE_REDIS_ADDR`.
 
 ## Record Shape
 Passes first-seen records unchanged and filters duplicates.
@@ -26,7 +26,7 @@ transforms:
   - type: deduplicate
     config:
       keys: ["id"]
-      state_backend: sqlite
+      state_backend: redis
 ```
 
 ## Evidence

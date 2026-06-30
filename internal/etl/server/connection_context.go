@@ -9,16 +9,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/IBM/sarama"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
@@ -45,6 +50,7 @@ type connectionIntrospection struct {
 	Databases []string         `json:"databases,omitempty"`
 	Tables    []tableMetadata  `json:"tables,omitempty"`
 	Topics    []topicMetadata  `json:"topics,omitempty"`
+	Targets   []targetMetadata `json:"targets,omitempty"`
 	Schema    []columnMetadata `json:"schema,omitempty"`
 	Sample    []map[string]any `json:"sample,omitempty"`
 	Warnings  []string         `json:"warnings,omitempty"`
@@ -75,6 +81,15 @@ type partitionMetadata struct {
 	OldestOffset int64 `json:"oldest_offset,omitempty"`
 	NewestOffset int64 `json:"newest_offset,omitempty"`
 	Leader       int32 `json:"leader,omitempty"`
+}
+
+type targetMetadata struct {
+	Kind     string `json:"kind"`
+	Location string `json:"location"`
+	Prefix   string `json:"prefix,omitempty"`
+	Format   string `json:"format,omitempty"`
+	Exists   bool   `json:"exists"`
+	Writable bool   `json:"writable"`
 }
 
 func (s *Server) connectionContext(w http.ResponseWriter, r *http.Request, name string) {
@@ -126,27 +141,14 @@ func introspectConnection(ctx context.Context, conn *storage.ConnectionEntry) co
 		Status:    "ok",
 		CheckedAt: time.Now().UTC(),
 	}
-	if conn.Kind != "source" {
-		result.Warnings = append(result.Warnings, "introspection currently focuses on source connections")
-		return result
-	}
 	var err error
-	switch conn.Type {
-	case "demo":
-		result.Schema, result.Sample = introspectDemoSource(conn.Config)
-	case "file":
-		result.Schema, result.Sample, err = introspectFileSource(ctx, conn.Config)
-	case "http":
-		result.Sample, err = introspectHTTPSource(ctx, conn.Config)
-		result.Schema = schemaFromSamples(result.Sample)
-	case "mysql_batch", "mysql_cdc", "mysql_snapshot_cdc":
-		err = introspectMySQLSource(ctx, conn.Config, &result)
-	case "postgres_cdc":
-		err = introspectPostgresSource(ctx, conn.Config, &result)
-	case "kafka":
-		err = introspectKafkaSource(conn.Config, &result)
+	switch conn.Kind {
+	case "source":
+		err = introspectSourceConnection(ctx, conn, &result)
+	case "sink":
+		err = introspectSinkConnection(ctx, conn, &result)
 	default:
-		result.Warnings = append(result.Warnings, "no source-specific introspection adapter is available")
+		result.Warnings = append(result.Warnings, "no connection-specific introspection adapter is available")
 	}
 	if err != nil {
 		result.OK = false
@@ -154,6 +156,55 @@ func introspectConnection(ctx context.Context, conn *storage.ConnectionEntry) co
 		result.Error = err.Error()
 	}
 	return result
+}
+
+func introspectSourceConnection(ctx context.Context, conn *storage.ConnectionEntry, result *connectionIntrospection) error {
+	switch conn.Type {
+	case "demo":
+		result.Schema, result.Sample = introspectDemoSource(conn.Config)
+	case "file":
+		var err error
+		result.Schema, result.Sample, err = introspectFileSource(ctx, conn.Config)
+		return err
+	case "http":
+		var err error
+		result.Sample, err = introspectHTTPSource(ctx, conn.Config)
+		result.Schema = schemaFromSamples(result.Sample)
+		return err
+	case "mysql_batch", "mysql_cdc", "mysql_snapshot_cdc":
+		return introspectMySQLSource(ctx, conn.Config, result)
+	case "postgres_cdc":
+		return introspectPostgresSource(ctx, conn.Config, result)
+	case "kafka":
+		return introspectKafkaSource(conn.Config, result)
+	default:
+		result.Warnings = append(result.Warnings, "no source-specific introspection adapter is available")
+	}
+	return nil
+}
+
+func introspectSinkConnection(ctx context.Context, conn *storage.ConnectionEntry, result *connectionIntrospection) error {
+	switch conn.Type {
+	case "mysql":
+		return introspectMySQLSink(ctx, conn.Config, result)
+	case "postgres", "postgresql":
+		return introspectPostgresSink(ctx, conn.Config, result)
+	case "clickhouse":
+		return introspectClickHouseSink(ctx, conn.Config, result)
+	case "doris":
+		return introspectDorisSink(ctx, conn.Config, result)
+	case "elasticsearch", "es":
+		return introspectElasticsearchSink(ctx, conn.Config, result)
+	case "kafka":
+		return introspectKafkaSink(conn.Config, result)
+	case "file_sink":
+		return introspectFileSink(ctx, conn.Config, result)
+	case "s3":
+		return introspectS3Sink(ctx, conn.Config, result)
+	default:
+		result.Warnings = append(result.Warnings, "no sink-specific introspection adapter is available")
+	}
+	return nil
 }
 
 func recommendationsForConnection(kind, typ string, cfg map[string]any) []connectionRecommendation {
@@ -186,6 +237,24 @@ func recommendationsForConnection(kind, typ string, cfg map[string]any) []connec
 			add("schedule.type", "once", "Demo data is mainly for first-run validation and smoke tests.")
 			add("batch_size", 100, "Small demo batches keep UI-created jobs easy to inspect.")
 			add("checkpoint_interval_sec", 1, "Fast checkpoints make first-run behavior visible immediately.")
+		}
+	}
+	if kind == "sink" {
+		switch typ {
+		case "mysql", "postgres", "postgresql", "doris":
+			add("sink.config.batch_mode", "upsert", "Upsert mode absorbs at-least-once replay when pk_columns/business keys are stable.")
+			add("sink.config.pk_columns", []string{"id"}, "Primary keys make checkpoint reset and DLQ replay safer.")
+		case "clickhouse":
+			add("sink.config.pk_columns", []string{"id"}, "ReplacingMergeTree replay absorption depends on a stable ORDER BY/business key.")
+			add("sink.config.version_column", "_version", "A version column keeps replay/update ordering explicit.")
+		case "elasticsearch", "es":
+			add("sink.config.id_column", strDefault(cfg, "id_column", "id"), "A deterministic document id makes replay overwrite the same document instead of creating duplicates.")
+			add("sink.config.mappings", "review", "Mapping properties let preflight catch field type conflicts before bulk writes.")
+		case "file_sink", "s3":
+			add("sink.idempotency", "append-only", "Append-oriented object/file sinks need downstream deduplication or content-addressed output for replay.")
+		case "kafka":
+			add("sink.config.key_column", strDefault(cfg, "key_column", "id"), "A stable Kafka message key helps downstream compaction/deduplication absorb at-least-once replay.")
+			add("sink.config.auto_create_topic", true, "Enable topic creation for first-run smoke tests, or create the topic explicitly before production use.")
 		}
 	}
 	return out
@@ -465,12 +534,547 @@ func introspectPostgresSource(ctx context.Context, cfg map[string]any, result *c
 	return nil
 }
 
+func introspectMySQLSink(ctx context.Context, cfg map[string]any, result *connectionIntrospection) error {
+	dbName := str(cfg, "database")
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&timeout=5s&readTimeout=10s",
+		str(cfg, "user"), str(cfg, "password"), str(cfg, "host"), intDefault(cfg, "port", 3306), dbName))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		return err
+	}
+	return introspectMySQLLikeSink(ctx, db, dbName, str(cfg, "table"), result)
+}
+
+func introspectDorisSink(ctx context.Context, cfg map[string]any, result *connectionIntrospection) error {
+	dbName := str(cfg, "database")
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&timeout=5s&readTimeout=10s",
+		strDefault(cfg, "user", "root"), str(cfg, "password"), str(cfg, "host"), intDefault(cfg, "port", 9030), dbName))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		return err
+	}
+	return introspectMySQLLikeSink(ctx, db, dbName, str(cfg, "table"), result)
+}
+
+func introspectMySQLLikeSink(ctx context.Context, db *sql.DB, dbName, target string, result *connectionIntrospection) error {
+	result.Databases, _ = querySingleColumn(ctx, db, `SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema','performance_schema','mysql','sys') ORDER BY schema_name LIMIT 100`)
+	tableNames, err := querySingleColumn(ctx, db, `SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type='BASE TABLE' ORDER BY table_name LIMIT 100`, dbName)
+	if err != nil {
+		return err
+	}
+	for _, table := range tableNames {
+		result.Tables = append(result.Tables, tableMetadata{Database: dbName, Name: table})
+	}
+	if target != "" && safeDBIdent(target) {
+		cols, pk, err := mysqlColumns(ctx, db, dbName, target)
+		if err != nil {
+			return err
+		}
+		result.Schema = cols
+		result.Tables = upsertTableMetadata(result.Tables, tableMetadata{Database: dbName, Name: target, Columns: cols, PrimaryKey: pk})
+		result.Sample, _ = sampleSQLTable(ctx, db, "mysql", target)
+	}
+	return nil
+}
+
+func introspectPostgresSink(ctx context.Context, cfg map[string]any, result *connectionIntrospection) error {
+	schemaName := strDefault(cfg, "schema", "public")
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		str(cfg, "user"), str(cfg, "password"), str(cfg, "host"), intDefault(cfg, "port", 5432), str(cfg, "database"), strDefault(cfg, "sslmode", "prefer"))
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		return err
+	}
+	result.Databases, _ = querySingleColumn(ctx, db, `SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname LIMIT 100`)
+	tableNames, err := querySingleColumn(ctx, db, `SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type='BASE TABLE' ORDER BY table_name LIMIT 100`, schemaName)
+	if err != nil {
+		return err
+	}
+	for _, table := range tableNames {
+		result.Tables = append(result.Tables, tableMetadata{Schema: schemaName, Name: table})
+	}
+	target := str(cfg, "table")
+	if target != "" && safeDBIdent(target) {
+		cols, pk, err := postgresColumns(ctx, db, schemaName, target)
+		if err != nil {
+			return err
+		}
+		result.Schema = cols
+		result.Tables = upsertTableMetadata(result.Tables, tableMetadata{Schema: schemaName, Name: target, Columns: cols, PrimaryKey: pk})
+		result.Sample, _ = sampleSQLTable(ctx, db, "postgres", target)
+	}
+	return nil
+}
+
+func introspectClickHouseSink(ctx context.Context, cfg map[string]any, result *connectionIntrospection) error {
+	if strings.EqualFold(str(cfg, "protocol"), "http") || strings.HasPrefix(str(cfg, "host"), "http://") || strings.HasPrefix(str(cfg, "host"), "https://") {
+		return introspectClickHouseHTTPSink(ctx, cfg, result)
+	}
+	dbName := strDefault(cfg, "database", "default")
+	dsn := clickHouseSQLDSN(cfg, dbName)
+	db, err := sql.Open("clickhouse", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		return err
+	}
+	result.Databases, _ = querySingleColumn(ctx, db, `SELECT name FROM system.databases ORDER BY name LIMIT 100`)
+	tableNames, err := querySingleColumn(ctx, db, `SELECT name FROM system.tables WHERE database = ? ORDER BY name LIMIT 100`, dbName)
+	if err != nil {
+		return err
+	}
+	for _, table := range tableNames {
+		result.Tables = append(result.Tables, tableMetadata{Database: dbName, Name: table})
+	}
+	target := str(cfg, "table")
+	if target != "" && safeDBIdent(target) {
+		cols, pk, err := clickHouseColumns(ctx, db, dbName, target)
+		if err != nil {
+			return err
+		}
+		result.Schema = cols
+		result.Tables = upsertTableMetadata(result.Tables, tableMetadata{Database: dbName, Name: target, Columns: cols, PrimaryKey: pk})
+		result.Sample, _ = sampleSQLTable(ctx, db, "clickhouse", target)
+	}
+	return nil
+}
+
+func clickHouseSQLDSN(cfg map[string]any, dbName string) string {
+	host := strDefault(cfg, "host", "localhost")
+	port := intDefault(cfg, "port", 9000)
+	user := strDefault(cfg, "user", "default")
+	values := url.Values{}
+	values.Set("username", user)
+	if password := str(cfg, "password"); password != "" {
+		values.Set("password", password)
+	}
+	if boolDefault(cfg, "tls", false) {
+		values.Set("secure", "true")
+	}
+	if boolDefault(cfg, "tls_skip_verify", false) {
+		values.Set("skip_verify", "true")
+	}
+	return fmt.Sprintf("clickhouse://%s:%d/%s?%s", host, port, dbName, values.Encode())
+}
+
+func introspectClickHouseHTTPSink(ctx context.Context, cfg map[string]any, result *connectionIntrospection) error {
+	dbName := strDefault(cfg, "database", "default")
+	if _, err := clickHouseHTTPQuery(ctx, cfg, dbName, `SELECT 1 AS ok FORMAT JSON`); err != nil {
+		return err
+	}
+	if rows, err := clickHouseHTTPQuery(ctx, cfg, dbName, `SELECT name FROM system.databases ORDER BY name LIMIT 100 FORMAT JSON`); err == nil {
+		for _, row := range rows {
+			if name := strings.TrimSpace(fmt.Sprint(row["name"])); name != "" && name != "<nil>" {
+				result.Databases = append(result.Databases, name)
+			}
+		}
+	}
+	tableRows, err := clickHouseHTTPQuery(ctx, cfg, dbName, fmt.Sprintf("SELECT name FROM system.tables WHERE database = '%s' ORDER BY name LIMIT 100 FORMAT JSON", quoteClickHouseString(dbName)))
+	if err != nil {
+		return err
+	}
+	for _, row := range tableRows {
+		if name := strings.TrimSpace(fmt.Sprint(row["name"])); name != "" && name != "<nil>" {
+			result.Tables = append(result.Tables, tableMetadata{Database: dbName, Name: name})
+		}
+	}
+	target := str(cfg, "table")
+	if target == "" {
+		return nil
+	}
+	if !safeDBIdent(target) {
+		result.Warnings = append(result.Warnings, "sink.config.table is not a safe identifier; target schema introspection skipped")
+		return nil
+	}
+	cols, pk, err := clickHouseHTTPColumns(ctx, cfg, dbName, target)
+	if err != nil {
+		return err
+	}
+	result.Schema = cols
+	result.Tables = upsertTableMetadata(result.Tables, tableMetadata{Database: dbName, Name: target, Columns: cols, PrimaryKey: pk})
+	if sample, err := clickHouseHTTPSample(ctx, cfg, dbName, target); err == nil {
+		result.Sample = sample
+	}
+	return nil
+}
+
+func clickHouseHTTPColumns(ctx context.Context, cfg map[string]any, dbName, target string) ([]columnMetadata, []string, error) {
+	rows, err := clickHouseHTTPQuery(ctx, cfg, dbName, fmt.Sprintf(
+		"SELECT name, type, is_in_primary_key FROM system.columns WHERE database = '%s' AND table = '%s' ORDER BY position FORMAT JSON",
+		quoteClickHouseString(dbName), quoteClickHouseString(stripSchema(target))))
+	if err != nil {
+		return nil, nil, err
+	}
+	cols := make([]columnMetadata, 0, len(rows))
+	var pk []string
+	for _, row := range rows {
+		name := strings.TrimSpace(fmt.Sprint(row["name"]))
+		if name == "" || name == "<nil>" {
+			continue
+		}
+		cols = append(cols, columnMetadata{Name: name, DataType: strings.TrimSpace(fmt.Sprint(row["type"])), Nullable: strings.Contains(strings.ToLower(fmt.Sprint(row["type"])), "nullable")})
+		if isTruthyClickHouseValue(row["is_in_primary_key"]) {
+			pk = append(pk, name)
+		}
+	}
+	return cols, pk, nil
+}
+
+func clickHouseHTTPSample(ctx context.Context, cfg map[string]any, dbName, target string) ([]map[string]any, error) {
+	rows, err := clickHouseHTTPQuery(ctx, cfg, dbName, fmt.Sprintf("SELECT * FROM %s LIMIT 5 FORMAT JSON", quoteTableName("clickhouse", target)))
+	if err != nil {
+		return nil, err
+	}
+	sample := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		data := map[string]any{}
+		for k, v := range row {
+			data[k] = v
+		}
+		sample = append(sample, map[string]any{"operation": "INSERT", "data": data})
+	}
+	return sample, nil
+}
+
+func clickHouseHTTPQuery(ctx context.Context, cfg map[string]any, dbName, query string) ([]map[string]any, error) {
+	endpoint := clickHouseHTTPBaseURL(cfg)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/?database="+url.QueryEscape(dbName), strings.NewReader(query))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	req.Header.Set("X-ClickHouse-User", strDefault(cfg, "user", "default"))
+	if password := str(cfg, "password"); password != "" {
+		req.Header.Set("X-ClickHouse-Key", password)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("clickhouse http status %d: %s", resp.StatusCode, string(body))
+	}
+	var parsed struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Data, nil
+}
+
+func clickHouseHTTPBaseURL(cfg map[string]any) string {
+	host := strDefault(cfg, "host", "localhost")
+	if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
+		return strings.TrimRight(host, "/")
+	}
+	scheme := "http"
+	if boolDefault(cfg, "tls", false) {
+		scheme = "https"
+	}
+	port := intDefault(cfg, "port", 8123)
+	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
+}
+
+func quoteClickHouseString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `\'`)
+	return s
+}
+
+func isTruthyClickHouseValue(v any) bool {
+	switch vv := v.(type) {
+	case bool:
+		return vv
+	case float64:
+		return vv != 0
+	case int:
+		return vv != 0
+	case string:
+		return vv == "1" || strings.EqualFold(vv, "true")
+	default:
+		return false
+	}
+}
+
+func introspectElasticsearchSink(ctx context.Context, cfg map[string]any, result *connectionIntrospection) error {
+	hosts := stringSlice(cfg["hosts"])
+	if host := str(cfg, "host"); host != "" {
+		hosts = append(hosts, host)
+	}
+	if len(hosts) == 0 {
+		hosts = []string{"http://localhost:9200"}
+	}
+	index := str(cfg, "index")
+	client := &http.Client{Timeout: 5 * time.Second}
+	var lastErr error
+	for _, rawHost := range hosts {
+		host := strings.TrimRight(rawHost, "/")
+		healthReq, err := http.NewRequestWithContext(ctx, http.MethodGet, host+"/_cluster/health", nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		applyBasicAuth(healthReq, cfg)
+		healthResp, err := client.Do(healthReq)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(healthResp.Body, 1<<20))
+		healthResp.Body.Close()
+		if healthResp.StatusCode >= 400 {
+			lastErr = fmt.Errorf("elasticsearch health status %d", healthResp.StatusCode)
+			continue
+		}
+		if index == "" {
+			result.Warnings = append(result.Warnings, "sink.config.index is empty; mapping introspection skipped")
+			return nil
+		}
+		mappingReq, err := http.NewRequestWithContext(ctx, http.MethodGet, host+"/"+index+"/_mapping", nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		applyBasicAuth(mappingReq, cfg)
+		mappingResp, err := client.Do(mappingReq)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(mappingResp.Body, 1<<20))
+		mappingResp.Body.Close()
+		if mappingResp.StatusCode == http.StatusNotFound {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("target index %q does not exist yet", index))
+			result.Tables = append(result.Tables, tableMetadata{Name: index})
+			return nil
+		}
+		if mappingResp.StatusCode >= 400 {
+			lastErr = fmt.Errorf("elasticsearch mapping status %d: %s", mappingResp.StatusCode, string(body))
+			continue
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return err
+		}
+		cols := elasticsearchMappingColumns(parsed, index)
+		result.Schema = cols
+		result.Tables = append(result.Tables, tableMetadata{Name: index, Columns: cols})
+		return nil
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return nil
+}
+
+func applyBasicAuth(req *http.Request, cfg map[string]any) {
+	if user := str(cfg, "username"); user != "" {
+		req.SetBasicAuth(user, str(cfg, "password"))
+	}
+}
+
+func elasticsearchMappingColumns(resp map[string]any, index string) []columnMetadata {
+	props := elasticsearchMappingProperties(resp, index)
+	if len(props) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	cols := make([]columnMetadata, 0, len(names))
+	for _, name := range names {
+		cols = append(cols, columnMetadata{Name: name, DataType: props[name], Nullable: true})
+	}
+	return cols
+}
+
+func elasticsearchMappingProperties(resp map[string]any, index string) map[string]string {
+	if raw, ok := resp[index]; ok {
+		if idx, ok := raw.(map[string]any); ok {
+			return elasticsearchPropertiesFromMapping(idx["mappings"])
+		}
+	}
+	for _, raw := range resp {
+		if idx, ok := raw.(map[string]any); ok {
+			if props := elasticsearchPropertiesFromMapping(idx["mappings"]); len(props) > 0 {
+				return props
+			}
+		}
+	}
+	return elasticsearchPropertiesFromMapping(resp)
+}
+
+func elasticsearchPropertiesFromMapping(raw any) map[string]string {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if propsRaw, ok := m["properties"]; ok {
+		return elasticsearchPropertiesFromMapping(propsRaw)
+	}
+	out := map[string]string{}
+	for field, value := range m {
+		if spec, ok := value.(map[string]any); ok {
+			if typ := strings.TrimSpace(fmt.Sprint(spec["type"])); typ != "" && typ != "<nil>" {
+				out[field] = typ
+			}
+		}
+	}
+	return out
+}
+
 func introspectKafkaSource(cfg map[string]any, result *connectionIntrospection) error {
+	return introspectKafkaConnection(cfg, str(cfg, "topic"), result)
+}
+
+func introspectKafkaSink(cfg map[string]any, result *connectionIntrospection) error {
+	return introspectKafkaConnection(cfg, str(cfg, "topic"), result)
+}
+
+func introspectFileSink(ctx context.Context, cfg map[string]any, result *connectionIntrospection) error {
+	outputDir := strDefault(cfg, "output_dir", "/tmp/etl-output")
+	if path := str(cfg, "path"); path != "" {
+		outputDir = filepath.Dir(path)
+	}
+	format := strDefault(cfg, "format", "json")
+	prefix := str(cfg, "prefix")
+	exists, writable, err := checkWritableDirectory(ctx, outputDir)
+	result.Targets = append(result.Targets, targetMetadata{
+		Kind:     "file",
+		Location: outputDir,
+		Prefix:   prefix,
+		Format:   format,
+		Exists:   exists,
+		Writable: writable,
+	})
+	if err != nil {
+		return fmt.Errorf("file sink output directory %q is not writable: %w", outputDir, err)
+	}
+	if prefix == "" {
+		result.Warnings = append(result.Warnings, "sink.config.prefix is empty; preflight can recommend a deterministic prefix to make replay output easier to inspect")
+	}
+	return nil
+}
+
+func introspectS3Sink(ctx context.Context, cfg map[string]any, result *connectionIntrospection) error {
+	endpoint := str(cfg, "endpoint")
+	bucket := str(cfg, "bucket")
+	prefix := str(cfg, "prefix")
+	format := strDefault(cfg, "format", "json")
+	if endpoint == "" || bucket == "" {
+		outputDir := strDefault(cfg, "output_dir", "/tmp/etl-output")
+		exists, writable, err := checkWritableDirectory(ctx, outputDir)
+		result.Targets = append(result.Targets, targetMetadata{
+			Kind:     "file",
+			Location: outputDir,
+			Prefix:   prefix,
+			Format:   format,
+			Exists:   exists,
+			Writable: writable,
+		})
+		result.Warnings = append(result.Warnings, "s3 sink is missing endpoint or bucket; runtime will use local file fallback instead of object storage")
+		if err != nil {
+			return fmt.Errorf("s3 local fallback directory %q is not writable: %w", outputDir, err)
+		}
+		return nil
+	}
+
+	minioEndpoint := strings.TrimPrefix(strings.TrimPrefix(endpoint, "http://"), "https://")
+	client, err := minio.New(minioEndpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(str(cfg, "access_key"), str(cfg, "secret_key"), ""),
+		Secure: strings.HasPrefix(endpoint, "https://"),
+		Region: str(cfg, "region"),
+	})
+	if err != nil {
+		return fmt.Errorf("create s3 client for endpoint %q: %w", endpoint, err)
+	}
+	exists, err := client.BucketExists(ctx, bucket)
+	if err != nil {
+		return fmt.Errorf("check s3 bucket %q at %s: %w", bucket, endpoint, err)
+	}
+	result.Targets = append(result.Targets, targetMetadata{
+		Kind:     "s3",
+		Location: endpoint + "/" + bucket,
+		Prefix:   prefix,
+		Format:   format,
+		Exists:   exists,
+		Writable: exists,
+	})
+	if !exists {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("s3 bucket %q does not exist; sink.Open may try to create it, but production should pre-create buckets and permissions", bucket))
+	} else {
+		result.Warnings = append(result.Warnings, "s3 context verified bucket visibility; PutObject permission is still proven by preflight/smoke writes")
+	}
+	if prefix == "" {
+		result.Warnings = append(result.Warnings, "sink.config.prefix is empty; use a pipeline-specific prefix to separate replay output")
+	}
+	return nil
+}
+
+func checkWritableDirectory(ctx context.Context, dir string) (bool, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, false, err
+	}
+	info, statErr := os.Stat(dir)
+	exists := statErr == nil
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return false, false, statErr
+	}
+	if exists && !info.IsDir() {
+		return true, false, fmt.Errorf("path exists but is not a directory")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return exists, false, err
+	}
+	tmp, err := os.CreateTemp(dir, ".openetl-context-*")
+	if err != nil {
+		return exists, false, err
+	}
+	name := tmp.Name()
+	if _, err := tmp.WriteString("ok"); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return exists, false, err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return exists, false, err
+	}
+	if err := os.Remove(name); err != nil {
+		return exists, false, err
+	}
+	return exists, true, nil
+}
+
+func introspectKafkaConnection(cfg map[string]any, targetTopic string, result *connectionIntrospection) error {
 	brokers := stringSlice(cfg["brokers"])
 	if len(brokers) == 0 {
 		brokers = []string{"localhost:9092"}
 	}
-	admin, err := sarama.NewClusterAdmin(brokers, sarama.NewConfig())
+	adminConfig := sarama.NewConfig()
+	adminConfig.Version = sarama.V1_1_0_0
+	adminConfig.ApiVersionsRequest = false
+	adminConfig.Net.DialTimeout = 2 * time.Second
+	adminConfig.Net.ReadTimeout = 2 * time.Second
+	adminConfig.Net.WriteTimeout = 2 * time.Second
+	admin, err := sarama.NewClusterAdmin(brokers, adminConfig)
 	if err != nil {
 		return err
 	}
@@ -502,7 +1106,22 @@ func introspectKafkaSource(cfg map[string]any, result *connectionIntrospection) 
 		meta := topicMetadata{Name: name, Partitions: partitionByTopic[name]}
 		result.Topics = append(result.Topics, meta)
 	}
+	addKafkaTargetTopicWarning(targetTopic, result)
 	return nil
+}
+
+func addKafkaTargetTopicWarning(targetTopic string, result *connectionIntrospection) {
+	targetTopic = strings.TrimSpace(targetTopic)
+	if targetTopic == "" || result == nil {
+		return
+	}
+	for _, topic := range result.Topics {
+		if topic.Name == targetTopic {
+			return
+		}
+	}
+	result.Warnings = append(result.Warnings, fmt.Sprintf("target topic %q was not found in broker metadata", targetTopic))
+	result.Topics = append(result.Topics, topicMetadata{Name: targetTopic})
 }
 
 func mysqlColumns(ctx context.Context, db *sql.DB, database, table string) ([]columnMetadata, []string, error) {
@@ -556,6 +1175,32 @@ func postgresColumns(ctx context.Context, db *sql.DB, fallbackSchema, table stri
 		}
 		cols = append(cols, columnMetadata{Name: name, DataType: typ, Nullable: strings.EqualFold(nullable, "YES")})
 		if isPK {
+			pk = append(pk, name)
+		}
+	}
+	return cols, pk, rows.Err()
+}
+
+func clickHouseColumns(ctx context.Context, db *sql.DB, database, table string) ([]columnMetadata, []string, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT name, type, is_in_primary_key
+		FROM system.columns
+		WHERE database = ? AND table = ?
+		ORDER BY position`, database, stripSchema(table))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	var cols []columnMetadata
+	var pk []string
+	for rows.Next() {
+		var name, typ string
+		var isPK any
+		if err := rows.Scan(&name, &typ, &isPK); err != nil {
+			return nil, nil, err
+		}
+		cols = append(cols, columnMetadata{Name: name, DataType: typ, Nullable: strings.Contains(strings.ToLower(typ), "nullable")})
+		if isTruthyClickHouseValue(isPK) {
 			pk = append(pk, name)
 		}
 	}

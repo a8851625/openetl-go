@@ -2,11 +2,15 @@ package sink
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
+	"github.com/aliyun/aliyun-odps-go-sdk/odps/datatype"
+	"github.com/aliyun/aliyun-odps-go-sdk/odps/tableschema"
 )
 
 func TestNewMaxComputeSinkValidatesRequiredConfig(t *testing.T) {
@@ -81,17 +85,121 @@ func TestMaxComputeSinkRejectsUnsupportedColumnType(t *testing.T) {
 	}
 }
 
-func TestMaxComputeSinkOpenIsExplicitlyExperimental(t *testing.T) {
+func TestMaxComputeSinkOpenUsesSDKClientFactory(t *testing.T) {
 	s, err := NewMaxComputeSink(validMaxComputeConfig(nil))
 	if err != nil {
 		t.Fatalf("NewMaxComputeSink() = %v", err)
 	}
-	err = s.Open(context.Background())
-	if err == nil {
-		t.Fatal("Open() = nil, want explicit experimental error")
+	fake := &fakeMaxComputeClient{}
+	s.clientFactory = func(*MaxComputeSink) (maxComputeClient, error) {
+		return fake, nil
 	}
-	if !strings.Contains(err.Error(), "experimental") || !strings.Contains(err.Error(), "not enabled") {
-		t.Fatalf("Open() error = %v, want explicit experimental/not enabled message", err)
+
+	if err := s.Open(context.Background()); err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	if !fake.opened {
+		t.Fatal("fake client was not opened")
+	}
+}
+
+func TestMaxComputeSinkWriteGroupsByPartitionAndChunks(t *testing.T) {
+	s, err := NewMaxComputeSink(validMaxComputeConfig(map[string]any{
+		"partition":             map[string]any{},
+		"partition_fields":      []string{"dt"},
+		"batch_size":            2,
+		"max_retries":           0,
+		"retry_base_ms":         1,
+		"auto_create_partition": false,
+	}))
+	if err != nil {
+		t.Fatalf("NewMaxComputeSink() = %v", err)
+	}
+	fake := &fakeMaxComputeClient{}
+	s.client = fake
+
+	records := []core.Record{
+		{Data: map[string]any{"id": 1, "payload": "a", "dt": "2026-06-26"}},
+		{Data: map[string]any{"id": 2, "payload": "b", "dt": "2026-06-27"}},
+		{Data: map[string]any{"id": 3, "payload": "c", "dt": "2026-06-26"}},
+	}
+	if err := s.Write(context.Background(), records); err != nil {
+		t.Fatalf("Write() = %v", err)
+	}
+	if len(fake.writes) != 3 {
+		t.Fatalf("writes = %#v, want 3 partition batches", fake.writes)
+	}
+	if fake.writes[0].partition != "dt='2026-06-26'" || fake.writes[1].partition != "dt='2026-06-27'" || fake.writes[2].partition != "dt='2026-06-26'" {
+		t.Fatalf("write partitions = %#v, want chunk-local partition ordering", fake.writes)
+	}
+	for _, call := range fake.writes {
+		for _, row := range call.rows {
+			if _, ok := row["dt"]; ok {
+				t.Fatalf("row = %#v, dynamic partition field should be removed", row)
+			}
+		}
+	}
+	metrics := s.SinkMetrics()
+	if metrics.RowsWritten != 3 || metrics.BatchesSent != 3 {
+		t.Fatalf("metrics = %#v, want rows=3 batches=3", metrics)
+	}
+}
+
+func TestMaxComputeSinkPartialBatchErrorKeepsSuccessfulPartitionsAccepted(t *testing.T) {
+	s, err := NewMaxComputeSink(validMaxComputeConfig(map[string]any{
+		"partition":        map[string]any{},
+		"partition_fields": []string{"dt"},
+		"max_retries":      0,
+		"retry_base_ms":    1,
+	}))
+	if err != nil {
+		t.Fatalf("NewMaxComputeSink() = %v", err)
+	}
+	fake := &fakeMaxComputeClient{failPartition: "dt='2026-06-27'", failErr: errors.New("i/o timeout")}
+	s.client = fake
+
+	err = s.Write(context.Background(), []core.Record{
+		{Data: map[string]any{"id": 1, "dt": "2026-06-26"}},
+		{Data: map[string]any{"id": 2, "dt": "2026-06-27"}},
+	})
+	if err == nil {
+		t.Fatal("Write() = nil, want partial batch error")
+	}
+	var partial core.PartialBatchError
+	if !errors.As(err, &partial) {
+		t.Fatalf("Write() error = %T %v, want PartialBatchError", err, err)
+	}
+	indices := partial.FailedRecordIndices()
+	if len(indices) != 1 || indices[0] != 1 {
+		t.Fatalf("FailedRecordIndices() = %#v, want [1]", indices)
+	}
+	if got := core.ClassifyError(err); got != core.ErrorClassData {
+		t.Fatalf("ClassifyError(partial) = %s, want non-retryable data wrapper", got)
+	}
+	if got := core.ClassifyError(partial.ErrorForRecord(1)); got != core.ErrorClassTransient {
+		t.Fatalf("ClassifyError(record) = %s, want transient record error", got)
+	}
+}
+
+func TestMaxComputeRecordFromRowConvertsPrimitiveTypes(t *testing.T) {
+	record, err := maxComputeRecordFromRow([]tableschema.Column{
+		{Name: "id", Type: datatype.BigIntType},
+		{Name: "amount", Type: datatype.DoubleType},
+		{Name: "ok", Type: datatype.BooleanType},
+		{Name: "payload", Type: datatype.StringType},
+		{Name: "event_time", Type: datatype.TimestampType},
+	}, map[string]any{
+		"id":         json.Number("42"),
+		"amount":     "12.5",
+		"ok":         "true",
+		"payload":    "hello",
+		"event_time": "2026-06-26T10:11:12Z",
+	})
+	if err != nil {
+		t.Fatalf("maxComputeRecordFromRow() = %v", err)
+	}
+	if record.Len() != 5 {
+		t.Fatalf("record.Len() = %d, want 5", record.Len())
 	}
 }
 
@@ -119,3 +227,39 @@ func validMaxComputeConfig(extra map[string]any) map[string]any {
 	}
 	return cfg
 }
+
+type fakeMaxComputeClient struct {
+	opened        bool
+	openErr       error
+	failPartition string
+	failErr       error
+	writes        []fakeMaxComputeWrite
+}
+
+type fakeMaxComputeWrite struct {
+	partition string
+	rows      []map[string]any
+}
+
+func (f *fakeMaxComputeClient) Open(context.Context) error {
+	f.opened = true
+	return f.openErr
+}
+
+func (f *fakeMaxComputeClient) Write(_ context.Context, partition string, rows []map[string]any) error {
+	if partition == f.failPartition {
+		return f.failErr
+	}
+	copied := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		item := make(map[string]any, len(row))
+		for k, v := range row {
+			item[k] = v
+		}
+		copied = append(copied, item)
+	}
+	f.writes = append(f.writes, fakeMaxComputeWrite{partition: partition, rows: copied})
+	return nil
+}
+
+func (f *fakeMaxComputeClient) Close() error { return nil }

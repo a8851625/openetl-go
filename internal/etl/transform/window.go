@@ -33,7 +33,7 @@ func init() {
 //	transforms:
 //	  - type: window
 //	    config:
-//	      window_type: tumbling      # tumbling | sliding (only tumbling for now)
+//	      window_type: tumbling      # only tumbling is supported
 //	      window_size_seconds: 60
 //	      group_by: [product_id, region]
 //	      aggregates:
@@ -42,7 +42,7 @@ func init() {
 //	        avg_amount: { func: avg, field: amount }
 //	        max_amount: { func: max, field: amount }
 //	        min_amount: { func: min, field: amount }
-//	      state_backend: sqlite       # optional durable tumbling-window state
+//	      state_backend: redis        # optional Redis-backed tumbling-window state
 type WindowTransform struct {
 	windowSize    time.Duration
 	groupByFields []string
@@ -142,7 +142,13 @@ func NewWindowTransform(config map[string]any) (*WindowTransform, error) {
 			wt.allowedLateness = time.Duration(n) * time.Second
 		}
 	}
-	_ = config["window_type"] // sliding/session remain unsupported; accepted for forward-compat
+	if rawType, ok := config["window_type"].(string); ok {
+		switch strings.ToLower(strings.TrimSpace(rawType)) {
+		case "", "tumbling":
+		default:
+			return nil, fmt.Errorf("window: unsupported window_type %q; only tumbling is supported", rawType)
+		}
+	}
 
 	if rawGB, ok := config["group_by"].([]any); ok {
 		for _, g := range rawGB {
@@ -186,12 +192,8 @@ func NewWindowTransform(config map[string]any) (*WindowTransform, error) {
 	}
 	if backend, ok := config["state_backend"].(string); ok && backend != "" {
 		switch strings.ToLower(backend) {
-		case "sqlite":
-			path, _ := config["state_path"].(string)
-			if path == "" {
-				path = "./data/etl-state.db"
-			}
-			store, err := state.NewSQLiteStore(path)
+		case "redis":
+			store, err := state.NewRedisStoreFromConfig(context.Background(), config)
 			if err != nil {
 				return nil, fmt.Errorf("window: open state store: %w", err)
 			}

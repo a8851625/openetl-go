@@ -13,7 +13,7 @@ import (
 )
 
 func TestInjectStateDefaultsUsesPipelineAndNodeWhenBackendEnabled(t *testing.T) {
-	original := map[string]any{"state_backend": "sqlite", "state_path": "state.db"}
+	original := map[string]any{"state_backend": "redis"}
 
 	got := InjectStateDefaults("orders-wide", "window-2", original)
 
@@ -27,7 +27,7 @@ func TestInjectStateDefaultsUsesPipelineAndNodeWhenBackendEnabled(t *testing.T) 
 
 func TestInjectStateDefaultsPreservesExplicitNamespace(t *testing.T) {
 	got := InjectStateDefaults("orders-wide", "window-2", map[string]any{
-		"state_backend":  "sqlite",
+		"state_backend":  "redis",
 		"state_pipeline": "custom-pipe",
 		"state_node":     "custom-node",
 	})
@@ -48,7 +48,7 @@ func TestNewRunnerInjectsStateDefaultsBeforeBuildingTransforms(t *testing.T) {
 	spec := &Spec{
 		Name:                  "runner-state-defaults",
 		Source:                SourceSpec{Type: "demo", Config: map[string]any{"count": 1}},
-		Transforms:            []TransformSpec{{Type: "state_defaults_probe", Config: map[string]any{"state_backend": "sqlite"}}},
+		Transforms:            []TransformSpec{{Type: "state_defaults_probe", Config: map[string]any{"state_backend": "redis"}}},
 		Sink:                  SinkSpec{Type: "file_sink", Config: map[string]any{"path": filepath.Join(tmpDir, "out.jsonl"), "format": "json"}},
 		BatchSize:             1,
 		CheckpointIntervalSec: 1,

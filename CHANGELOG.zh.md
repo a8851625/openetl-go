@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [v0.2.5] — 2026-07-01 — 首次任务闭环、Redis 状态约束与 MaxCompute sink
+
+### 亮点
+- 将 `0.2.5-beta.1` / `0.2.5-beta.2` 的 AI context pack、受控 DAG 生成、组件文档和保存连接上下文能力收敛为正式版。
+- 首次任务向导和 DAG 编辑器继续生成普通 pipeline/DAG spec，不引入专用执行路径；UI 展示 validate/preflight、field issue、readiness、guidance、recommendation 和 DDL preview，并支持对 preflight 推荐配置执行 Apply。
+- 保存连接 context 扩展到 source/sink 双向：file/HTTP/demo sample、MySQL/PostgreSQL schema、Kafka topic/partition、MySQL/PostgreSQL/ClickHouse/Doris/Elasticsearch/Kafka sink 目标元数据，以及 File/S3/local-fallback 输出 target、prefix、format、可写或 bucket 存在性提示。
+- 明确 runtime state/cache 与 SQL metadata storage 分离：Redis 是内置 state/cache 能力的唯一运行时后端；未配置 Redis 时，依赖缓存/状态的 lookup/enricher/deduplicate/window/join 配置会在 validate/preflight 阶段阻断，SQLite/MySQL/PostgreSQL 只作为 checkpoint、DLQ、audit、pipeline spec、worker/task 等持久化存储。
+- MaxCompute/ODPS sink 从 writer-disabled 合约推进到 SDK-backed batch tunnel writer、远端表/分区/权限 preflight、错误分类、sink-local retry/backoff 和 metrics；由于仍缺真实 MaxCompute 环境的 DLQ/replay/e2e 证据，maturity 继续保持 experimental/beta 边界，不提升 production。
+- Connector readiness 和 preflight recommendation 进入 API/UI：用户能在启动前看到 maturity gate、schema/preflight 缺口、幂等与 replay 建议、字段级 remediation 和安全修复动作。
+- 继续清理 roadmap/spec 中偏 Flink 流计算平台的内容，保持项目定位在轻量、自托管、Source -> Transform -> Sink 的 CDC/ETL 同步、清洗和汇聚运行时。
+
+### 验证
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c 'go test ./internal/etl/server -count=1'`
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c 'go test ./internal/etl/... -count=1'`
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c 'go test ./internal/cmd -count=1'`
+- `npm --prefix web run build`
+- `./hack/pack.sh`
+- `CONTAINER_CLI=podman ./hack/e2e-ui.sh` 当前回归已覆盖 93 个通过项；新增跨模板 saved-connection recommendation Apply 断言被撤回，不作为本次 release gate。
+
 ## [v0.2.5-beta.1] — 2026-06-29 — AI context pack 与受控 DAG 生成
 
 ### 亮点

@@ -35,8 +35,7 @@ It targets common pipelines across databases, Kafka, files, HTTP APIs, object st
 ## Principles
 
 - Reliability first: failed records must be visible through DLQ, retryable errors, or explicit audited drop policies.
-- Lightweight first: the default path should run as a single binary/container, with SQLite for standalone use and MySQL/PostgreSQL storage for shared state and master-worker mode.
+- Lightweight first: the default path should run as a single binary/container, with SQLite for standalone use and MySQL/PostgreSQL storage for shared metadata/checkpoints and master-worker mode.
 - Usability first: common tasks should be achievable through UI/API/YAML, with preflight explaining risks, schema issues, and idempotency choices before start.
 - Extensibility first: connectors, transforms, and plugins should share descriptor, schema, preflight, metrics, DLQ, and certification contracts.
 - Honest semantics: the default delivery contract is at-least-once; production pipelines absorb replay with business keys, versions, upserts, ReplacingMergeTree-style sinks, or deduplication.
-

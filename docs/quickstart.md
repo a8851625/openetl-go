@@ -163,7 +163,7 @@ curl http://localhost:8000/metrics
 | | `deduplicate`, `validate` | Data cleansing |
 | | `lua` | Lua scripting (inline, gopher-lua pure Go) |
 | | `normalize_envelope`, `debezium_cdc`, `cdc_policy`, `ddl_guard`, `lookup`, `window` | Kafka envelope/CDC policy / dimension JOIN / tumbling window aggregation |
-| | `join` | Stream-stream interval JOIN with optional SQLite state recovery; production crash/rebalance certification remains on the roadmap |
+| | `join` | Stream-stream interval JOIN with optional Redis state recovery; production crash/rebalance certification remains on the roadmap |
 | | `router`, `fanout`, `tap` | Conditional routing / fan-out / tap |
 | | `enricher`, `lookup` | Data enrichment / dimension lookup |
 | | `rate_limiter` | Rate limiting |

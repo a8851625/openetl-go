@@ -6,13 +6,13 @@ Join streaming records with dimension data from a database or cached state.
 ## Config Fields
 - `dsn`, `query`, `fields`: dimension lookup configuration.
 - `join_key`, `dim_key`: source and dimension key mapping.
-- `state_backend`, `state_path`, `state_ttl_seconds`: optional durable cache.
+- `state_backend`, `state_ttl_seconds`: optional Redis-backed runtime cache. Requires `etl.state.redis.addr` or `ETL_STATE_REDIS_ADDR`.
 
 ## Record Shape
 Reads record `data`, adds configured dimension fields, and preserves metadata.
 
 ## Checkpoint, DLQ, Idempotency
-Lookup misses can be configured to fail into DLQ. SQLite state can restore cached dimension rows after restart; it is not a cross-system exactly-once transaction.
+Lookup misses can be configured to fail into DLQ. Redis state can restore cached dimension rows after restart; it is not a cross-system exactly-once transaction.
 
 ## Fits
 Kafka -> lookup -> OLAP/ODS detail pipelines.

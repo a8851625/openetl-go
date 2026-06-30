@@ -27,8 +27,7 @@ transforms:
       max_cache_entries: 100000
       on_miss: error
       on_refresh_error: error
-      state_backend: sqlite
-      state_path: /app/data/lookup-state.db
+      state_backend: redis
       state_ttl_seconds: 86400
   - type: rename
     config:

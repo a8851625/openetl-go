@@ -12,6 +12,7 @@ IMAGE="openetl-go-etl:dev"
 REDPANDA_CONTAINER="etl-redpanda"
 MYSQL_CONTAINER="etl-mysql-source"
 CH_CONTAINER="etl-clickhouse"
+REDIS_CONTAINER="etl-redis-state"
 APP_CONTAINER="etl-openetl-go-lookup-state"
 APP_PORT="8023"
 PIPELINE="kafka-lookup-state-clickhouse"
@@ -45,6 +46,7 @@ run_lookup_app() {
   "$CONTAINER_CLI" run -d \
     --add-host host.docker.internal:host-gateway \
     --name "$APP_CONTAINER" \
+    -e ETL_STATE_REDIS_ADDR=host.docker.internal:16379 \
     -p "$APP_PORT:8001" \
     -v "$ROOT_DIR/testdata/pipes-lookup-state:/app/pipes:ro" \
     -v "$ROOT_DIR/testdata:/app/testdata:ro" \
@@ -65,6 +67,20 @@ fi
 
 echo "==> Start Redpanda, MySQL, and ClickHouse"
 compose -f docker-compose.dev.yml up -d redpanda mysql-source clickhouse
+
+echo "==> Start Redis state backend"
+"$CONTAINER_CLI" rm -f "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" run -d --name "$REDIS_CONTAINER" -p 16379:6379 docker.io/redis:7-alpine >/dev/null
+i=0
+while [ "$i" -lt 60 ]; do
+  if "$CONTAINER_CLI" exec "$REDIS_CONTAINER" redis-cli ping 2>/dev/null | grep PONG >/dev/null 2>&1; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+"$CONTAINER_CLI" exec "$REDIS_CONTAINER" redis-cli ping | grep PONG >/dev/null
+"$CONTAINER_CLI" exec "$REDIS_CONTAINER" redis-cli FLUSHDB >/dev/null
 
 echo "==> Wait Redpanda"
 i=0

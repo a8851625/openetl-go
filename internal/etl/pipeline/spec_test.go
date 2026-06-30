@@ -111,6 +111,126 @@ func TestValidateSpecChecksScheduleRequiredFields(t *testing.T) {
 	}
 }
 
+func TestValidateSpecRejectsSQLStateBackendsForRuntimeState(t *testing.T) {
+	spec := validStateSpec()
+	spec.Transforms = []TransformSpec{{
+		Type: "deduplicate",
+		Config: map[string]any{
+			"keys":          []any{"id"},
+			"state_backend": "sqlite",
+		},
+	}}
+	err := ValidateSpec(spec)
+	if err == nil || !strings.Contains(err.Error(), "state_backend=\"sqlite\" is not allowed") {
+		t.Fatalf("ValidateSpec() error = %v, want sqlite state backend rejection", err)
+	}
+}
+
+func TestValidateSpecRejectsRedisStateWithoutRedisConfig(t *testing.T) {
+	t.Setenv("ETL_STATE_REDIS_ADDR", "")
+	spec := validStateSpec()
+	spec.Transforms = []TransformSpec{{
+		Type: "deduplicate",
+		Config: map[string]any{
+			"keys":          []any{"id"},
+			"state_backend": "redis",
+		},
+	}}
+	err := ValidateSpec(spec)
+	if err == nil || !strings.Contains(err.Error(), "requires etl.state.redis.addr") {
+		t.Fatalf("ValidateSpec() error = %v, want Redis config rejection", err)
+	}
+}
+
+func TestValidateSpecAllowsRedisStateWithLocalRedisConfig(t *testing.T) {
+	spec := validStateSpec()
+	spec.Transforms = []TransformSpec{{
+		Type: "deduplicate",
+		Config: map[string]any{
+			"keys":             []any{"id"},
+			"state_backend":    "redis",
+			"state_redis_addr": "redis:6379",
+		},
+	}}
+	if err := ValidateSpec(spec); err != nil {
+		t.Fatalf("ValidateSpec() error = %v", err)
+	}
+}
+
+func TestValidateSpecRejectsEnricherCacheWithoutRedisConfig(t *testing.T) {
+	t.Setenv("ETL_STATE_REDIS_ADDR", "")
+	spec := validStateSpec()
+	spec.Transforms = []TransformSpec{{
+		Type: "enricher",
+		Config: map[string]any{
+			"mode":              "http",
+			"url":               "http://example.test/{{.id}}",
+			"cache_ttl_seconds": 60,
+		},
+	}}
+	err := ValidateSpec(spec)
+	if err == nil || !strings.Contains(err.Error(), "cache_ttl_seconds requires Redis") {
+		t.Fatalf("ValidateSpec() error = %v, want Redis cache rejection", err)
+	}
+}
+
+func TestValidateSpecRejectsSlidingWindowAsUnsupportedSpec(t *testing.T) {
+	spec := validStateSpec()
+	spec.Transforms = []TransformSpec{{
+		Type: "window",
+		Config: map[string]any{
+			"window_type":         "sliding",
+			"state_redis_addr":    "redis:6379",
+			"aggregates":          map[string]any{"count": map[string]any{"func": "count"}},
+			"window_size_seconds": 60,
+		},
+	}}
+	err := ValidateSpec(spec)
+	if err == nil || !strings.Contains(err.Error(), "only tumbling window is part of the production pipeline spec") {
+		t.Fatalf("ValidateSpec() error = %v, want sliding window unsupported rejection", err)
+	}
+}
+
+func TestValidateSpecRejectsArbitraryKeyedStateAndTimerFields(t *testing.T) {
+	spec := validStateSpec()
+	spec.Transforms = []TransformSpec{{
+		Type: "lua",
+		Config: map[string]any{
+			"script":           "return record",
+			"keyed_state":      true,
+			"uses_timer":       true,
+			"state_backend":    "redis",
+			"state_redis_addr": "redis:6379",
+		},
+	}}
+	err := ValidateSpec(spec)
+	if err == nil {
+		t.Fatal("ValidateSpec() error = nil, want arbitrary state/timer rejection")
+	}
+	for _, want := range []string{
+		"state_backend is only supported by built-in lookup, join, window, and deduplicate",
+		"keyed_state is not part of the pipeline spec",
+		"uses_timer is not part of the pipeline spec",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("ValidateSpec() error = %v, want %q", err, want)
+		}
+	}
+}
+
+func validStateSpec() *Spec {
+	return &Spec{
+		Name:                  "state-guard",
+		Source:                SourceSpec{Type: "file", Config: map[string]any{"path": "/tmp/in.jsonl", "format": "json"}},
+		Sink:                  SinkSpec{Type: "mysql", Config: map[string]any{}},
+		Schedule:              &ScheduleConfig{Type: ScheduleOnce},
+		BatchSize:             1,
+		CheckpointIntervalSec: 1,
+		BackpressureBuffer:    1,
+		Retry:                 &RetrySpec{MaxAttempts: 1, InitialIntervalMs: 1, MaxIntervalMs: 1},
+	}
+}
+
 func TestLoadSpecAppliesDefaultsAndExpandsEnv(t *testing.T) {
 	t.Setenv("ETL_TEST_FILE", "/tmp/input.jsonl")
 	file, err := os.CreateTemp(t.TempDir(), "spec-*.yaml")

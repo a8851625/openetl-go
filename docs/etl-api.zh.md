@@ -186,6 +186,14 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 }
 ```
 
+当 preflight 有足够上下文时，响应还会包含
+`preflight.recommendations`：需要操作员审阅的配置补丁，例如
+`sink.config.batch_mode=upsert`、`sink.config.pk_columns=["id"]`、
+`sink.config.schema_drift=add_columns`、`transforms=[{type:type_convert,...}]`、
+`sink.config.prefix=orders/`、`sink.config.key_column=id`、
+`sink.config.auto_create_topic=true`、`batch_size=500` 或 `dlq.enable=true`。
+Web 向导可以在创建前把这些补丁应用到草稿 spec。
+
 ## 连接测试
 
 构建并可选择性地打开一个 Source、Sink 或 Transform 配置，而不创建管道。
@@ -210,7 +218,7 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 
 ## 保存连接上下文
 
-读取保存连接，同时返回 descriptor、健康状态、推荐运行参数和尽力而为的 source introspection。
+读取保存连接，同时返回 descriptor、健康状态、推荐运行参数和尽力而为的 source/sink introspection。
 
 ```sh
 curl -H "X-API-Token: $ETL_API_TOKEN" \
@@ -246,7 +254,7 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
 }
 ```
 
-当前内置 adapter 覆盖 file/HTTP/demo 采样、MySQL/PostgreSQL 表和字段元数据、Kafka topic/partition 元数据。Introspection 是控制面提示；真正的启动拦截仍由 `spec validate` 和 preflight 执行。
+当前内置 adapter 覆盖 file/HTTP/demo 采样、MySQL/PostgreSQL 表和字段元数据、Kafka topic/partition 元数据，以及 MySQL、PostgreSQL、ClickHouse、Doris、Kafka、Elasticsearch/OpenSearch、File、S3/local-fallback sink 目标元数据。File/S3 context 会返回 `introspection.targets`，包含解析后的目录或 bucket、prefix、format、可写状态或 bucket 是否存在。Introspection 是控制面提示；真正的启动拦截仍由 `spec validate` 和 preflight 执行。
 
 ## Transform 试运行
 

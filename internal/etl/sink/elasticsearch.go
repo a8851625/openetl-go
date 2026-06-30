@@ -36,6 +36,7 @@ type ElasticsearchSink struct {
 	password      string
 	index         string
 	idColumn      string
+	mappingTypes  map[string]string
 	maxRetries    int
 	retryBaseMs   int
 	chunkSize     int
@@ -92,6 +93,7 @@ func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
 			s.idColumn = vs
 		}
 	}
+	s.mappingTypes = parseESMappingTypes(config)
 	if v, ok := config["max_retries"]; ok {
 		switch mr := v.(type) {
 		case int:
@@ -157,6 +159,173 @@ func (s *ElasticsearchSink) Open(ctx context.Context) error {
 		return nil
 	}
 	return fmt.Errorf("connect elasticsearch: no reachable hosts from %v", s.hosts)
+}
+
+func (s *ElasticsearchSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) error {
+	mappingTypes := s.mappingTypes
+	if len(mappingTypes) == 0 {
+		var err error
+		mappingTypes, err = s.fetchRemoteMappingTypes(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	if len(mappingTypes) == 0 {
+		return nil
+	}
+
+	var incompatible []string
+	for _, col := range schema.Columns {
+		targetType, ok := mappingTypes[col.Name]
+		if !ok {
+			targetType, ok = mappingTypes[strings.ToLower(col.Name)]
+		}
+		if !ok || targetType == "" {
+			continue
+		}
+		if !esTypeCompatible(col.DataType, targetType) {
+			incompatible = append(incompatible, fmt.Sprintf("%s source=%s target=%s", col.Name, col.DataType, targetType))
+		}
+	}
+	if len(incompatible) > 0 {
+		return fmt.Errorf("schema validation failed for target: incompatible target column types [%s]", strings.Join(incompatible, "; "))
+	}
+	return nil
+}
+
+func parseESMappingTypes(config map[string]any) map[string]string {
+	for _, key := range []string{"properties", "mappings", "mapping"} {
+		if raw, ok := config[key]; ok {
+			if props := extractESMappingProperties(raw); len(props) > 0 {
+				return props
+			}
+		}
+	}
+	return nil
+}
+
+func extractESMappingProperties(raw any) map[string]string {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		if ms, ok := raw.(map[string]string); ok {
+			out := make(map[string]string, len(ms))
+			for k, v := range ms {
+				out[k] = strings.ToLower(strings.TrimSpace(v))
+				out[strings.ToLower(k)] = strings.ToLower(strings.TrimSpace(v))
+			}
+			return out
+		}
+		return nil
+	}
+	if propsRaw, ok := m["properties"]; ok {
+		return extractESMappingProperties(propsRaw)
+	}
+	out := map[string]string{}
+	for field, value := range m {
+		switch v := value.(type) {
+		case string:
+			typ := strings.ToLower(strings.TrimSpace(v))
+			if typ != "" {
+				out[field] = typ
+				out[strings.ToLower(field)] = typ
+			}
+		case map[string]any:
+			typ, _ := v["type"].(string)
+			typ = strings.ToLower(strings.TrimSpace(typ))
+			if typ != "" {
+				out[field] = typ
+				out[strings.ToLower(field)] = typ
+			}
+		}
+	}
+	return out
+}
+
+func (s *ElasticsearchSink) fetchRemoteMappingTypes(ctx context.Context) (map[string]string, error) {
+	if s.index == "" {
+		return nil, nil
+	}
+	var lastErr error
+	for _, host := range s.hosts {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, host+"/"+s.index+"/_mapping", nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if s.username != "" {
+			req.SetBasicAuth(s.username, s.password)
+		}
+		resp, err := s.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, nil
+		}
+		if resp.StatusCode >= 400 {
+			lastErr = fmt.Errorf("elasticsearch mapping status %d: %s", resp.StatusCode, responseSnippet(body))
+			continue
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return nil, fmt.Errorf("parse elasticsearch mapping response: %w", err)
+		}
+		if props := propertiesFromESMappingResponse(parsed, s.index); len(props) > 0 {
+			return props, nil
+		}
+		return nil, nil
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("read elasticsearch mapping for index %q: %w", s.index, lastErr)
+	}
+	return nil, nil
+}
+
+func propertiesFromESMappingResponse(resp map[string]any, index string) map[string]string {
+	if len(resp) == 0 {
+		return nil
+	}
+	if raw, ok := resp[index]; ok {
+		if idx, ok := raw.(map[string]any); ok {
+			return extractESMappingProperties(idx["mappings"])
+		}
+	}
+	for _, raw := range resp {
+		if idx, ok := raw.(map[string]any); ok {
+			if props := extractESMappingProperties(idx["mappings"]); len(props) > 0 {
+				return props
+			}
+		}
+	}
+	return extractESMappingProperties(resp)
+}
+
+func esTypeCompatible(sourceType, targetType string) bool {
+	src := strings.ToLower(strings.TrimSpace(sourceType))
+	tgt := strings.ToLower(strings.TrimSpace(targetType))
+	if src == "" || tgt == "" || tgt == "object" || tgt == "nested" {
+		return true
+	}
+	if strings.Contains(src, "(") {
+		src = src[:strings.Index(src, "(")]
+	}
+	switch {
+	case strings.Contains(src, "bool"):
+		return tgt == "boolean"
+	case strings.Contains(src, "int") || strings.Contains(src, "bigint") || strings.Contains(src, "smallint") || strings.Contains(src, "tinyint") || strings.Contains(src, "long"):
+		return tgt == "byte" || tgt == "short" || tgt == "integer" || tgt == "long" || tgt == "unsigned_long" || tgt == "float" || tgt == "half_float" || tgt == "double" || tgt == "scaled_float"
+	case strings.Contains(src, "decimal") || strings.Contains(src, "numeric") || strings.Contains(src, "float") || strings.Contains(src, "double") || strings.Contains(src, "real"):
+		return tgt == "float" || tgt == "half_float" || tgt == "double" || tgt == "scaled_float"
+	case strings.Contains(src, "date") || strings.Contains(src, "time"):
+		return tgt == "date" || tgt == "date_nanos" || tgt == "keyword" || tgt == "text"
+	case strings.Contains(src, "char") || strings.Contains(src, "text") || strings.Contains(src, "string") || strings.Contains(src, "json"):
+		return tgt == "keyword" || tgt == "text" || tgt == "wildcard" || tgt == "constant_keyword" || tgt == "match_only_text" || tgt == "semantic_text"
+	default:
+		return true
+	}
 }
 
 func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (err error) {

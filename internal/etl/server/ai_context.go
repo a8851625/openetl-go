@@ -374,10 +374,10 @@ func reviewGeneratedSpec(ctx context.Context, spec *pipeline.Spec, preflight *Pr
 	}
 	if strings.EqualFold(spec.Sink.Type, "maxcompute") || strings.EqualFold(spec.Sink.Type, "odps") {
 		review.RiskFlags = append(review.RiskFlags, AIRiskFlag{
-			Code:        "maxcompute_writer_disabled",
-			Level:       "error",
-			Message:     "MaxCompute/ODPS is currently an experimental descriptor/schema contract in this build.",
-			Remediation: "Do not start this pipeline until a real SDK-backed writer and e2e evidence are available.",
+			Code:        "maxcompute_requires_remote_preflight",
+			Level:       "warning",
+			Message:     "MaxCompute/ODPS writer is SDK-backed but remains experimental until real write evidence is available.",
+			Remediation: "Run preflight with real endpoint/project/table/partition permissions and keep replay/idempotency guidance explicit before production use.",
 		})
 	}
 	if policy, ok := stringConfig(spec.Sink.Config, "ddl_policy"); ok && strings.EqualFold(policy, "apply") {

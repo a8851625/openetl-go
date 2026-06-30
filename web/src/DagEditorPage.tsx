@@ -45,11 +45,13 @@ type ConnectionContext = {
     error?: string;
     tables?: { name: string; schema?: string; columns?: { name: string; data_type?: string }[] }[];
     topics?: { name: string; partitions?: { id: number }[] }[];
+    targets?: { kind: string; location: string; prefix?: string; format?: string; writable?: boolean }[];
     schema?: { name: string; data_type?: string }[];
     sample?: Record<string, unknown>[];
     warnings?: string[];
   };
 };
+type ConnectionRecommendation = { field: string; value: unknown; reason: string };
 
 function normalizeConnectionEntry(raw: any): ConnectionEntry | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -92,6 +94,16 @@ type ValidateResult = {
     issues?: { level: string; check: string; message: string; remediation?: string }[];
     field_issues?: { level: string; field: string; check: string; message: string; remediation?: string }[];
     ddl_preview?: { dialect: string; table: string; statements?: string[]; warnings?: string[] };
+    guidance?: { level: string; category: string; code: string; message: string; action?: string }[];
+    readiness?: {
+      kind: string;
+      type: string;
+      maturity: string;
+      status: string;
+      summary?: string;
+      gates?: { code: string; label: string; status: string; evidence?: string; remediation?: string }[];
+    }[];
+    recommendations?: { path: string; value: unknown; reason: string; safety?: string }[];
   };
 };
 
@@ -362,6 +374,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [connections, setConnections] = useState<ConnectionEntry[]>([]);
   const [descriptors, setDescriptors] = useState<ConnectorDescriptor[]>([]);
   const [selectedConnectionContext, setSelectedConnectionContext] = useState<ConnectionContext | null>(null);
+  const redisStateConfigured = Boolean(schema?.data?.runtime?.redis_state_configured);
 
   const testNodeConnection = async () => {
     if (!selectedNode) {
@@ -537,6 +550,40 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setNodes((nds) => nds.map((n) => n.id === selectedNodeId ? { ...n, data: { ...n.data, config } } : n));
   };
 
+  const setValueAtPath = (target: Record<string, unknown>, path: string, value: unknown) => {
+    const parts = path.split('.').filter(Boolean);
+    let cursor: Record<string, unknown> = target;
+    parts.forEach((part, index) => {
+      if (index === parts.length - 1) {
+        cursor[part] = value;
+        return;
+      }
+      const next = cursor[part];
+      if (!next || typeof next !== 'object' || Array.isArray(next)) cursor[part] = {};
+      cursor = cursor[part] as Record<string, unknown>;
+    });
+  };
+
+  const configPathForConnectionRecommendation = (rec: ConnectionRecommendation): string | null => {
+    if (!selKind || (selKind !== 'source' && selKind !== 'sink')) return null;
+    if (rec.value === 'review' || rec.value === '') return null;
+    const prefix = `${selKind}.config.`;
+    if (rec.field.startsWith(prefix)) return rec.field.slice(prefix.length);
+    if (selKind === 'source' && !rec.field.includes('.') && !['batch_size', 'checkpoint_interval_sec'].includes(rec.field)) {
+      return rec.field;
+    }
+    return null;
+  };
+
+  const applyConnectionRecommendation = (rec: ConnectionRecommendation) => {
+    if (!selectedNode) return;
+    const configPath = configPathForConnectionRecommendation(rec);
+    if (!configPath) return;
+    const next = { ...(selectedNode.data.config || {}) };
+    setValueAtPath(next, configPath, rec.value);
+    updateNodeConfig(next);
+  };
+
   const updateNodePlugin = (plugin: string) => {
     if (!selectedNodeId) return;
     setNodes((nds) => nds.map((n) => n.id === selectedNodeId ? { ...n, data: { ...n.data, plugin, connection: '', config: {} } } : n));
@@ -558,6 +605,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
           ...n.data,
           connection: connectionName || '',
           plugin: conn?.type || n.data.plugin,
+          config: connectionName ? {} : n.data.config,
         },
       };
     }));
@@ -824,8 +872,15 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         <div className="flex items-center gap-0.5">
           {NODE_PALETTE(t).map((cat) => cat.nodes.map((nd) => {
             const st = KIND_STYLES[nd.kind] || KIND_STYLES.transform;
+            const disabled = nd.kind === 'lookup' && !redisStateConfigured;
             return (
-              <button key={nd.kind} className="btn btn-secondary btn-sm flex items-center gap-1 px-2" title={`${cat.catLabel}: ${nd.label}`} onClick={() => addNode(nd.kind, nd.defaultPlugin)}>
+              <button
+                key={nd.kind}
+                className={`btn btn-secondary btn-sm flex items-center gap-1 px-2 ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+                title={disabled ? `${cat.catLabel}: ${nd.label} requires Redis state/cache` : `${cat.catLabel}: ${nd.label}`}
+                onClick={() => { if (!disabled) addNode(nd.kind, nd.defaultPlugin); }}
+                disabled={disabled}
+              >
                 <span style={{ color: st.color }}>{st.icon}</span>
                 <span className="text-xs">{nd.label}</span>
               </button>
@@ -875,6 +930,30 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
               <div className="font-semibold">{issue.field} · {issue.check}</div>
               <div>{issue.message}</div>
               {issue.remediation && <div className="mt-1 text-slate-600">Fix: {issue.remediation}</div>}
+            </div>
+          ))}
+          {(validateResult?.preflight?.guidance || []).map((item, i) => (
+            <div key={`guidance-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+              <div className="font-semibold">{item.level} · {item.category} · {item.code}</div>
+              <div>{item.message}</div>
+              {item.action && <div className="mt-1 text-slate-600">Action: {item.action}</div>}
+            </div>
+          ))}
+          {(validateResult?.preflight?.recommendations || []).map((rec, i) => (
+            <div key={`recommendation-${rec.path}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+              <div className="font-semibold">{rec.safety || 'review'} · {rec.path}</div>
+              <div>{rec.reason}</div>
+            </div>
+          ))}
+          {(validateResult?.preflight?.readiness || []).map((connector, i) => (
+            <div key={`readiness-${connector.kind}-${connector.type}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+              <div className="font-semibold">{connector.kind} · {connector.type} · {connector.maturity} · {connector.status}</div>
+              {connector.summary && <div>{connector.summary}</div>}
+              {(connector.gates || []).filter((gate) => gate.status === 'missing' || gate.status === 'partial').slice(0, 3).map((gate) => (
+                <div key={gate.code} className="mt-1 text-slate-600">
+                  {gate.status} · {gate.label}{gate.remediation ? ` · ${gate.remediation}` : ''}
+                </div>
+              ))}
             </div>
           ))}
         </div>
@@ -990,7 +1069,24 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                         {selectedConnectionContext.introspection?.error && <div className="mb-1 text-rose-700">{selectedConnectionContext.introspection.error}</div>}
                         {selectedConnectionContext.recommendations?.length ? (
                           <div className="mb-1 flex flex-wrap gap-1">
-                            {selectedConnectionContext.recommendations.slice(0, 3).map((rec) => <span key={rec.field} className="badge badge-blue text-[10px]">{rec.field}: {String(rec.value || 'review')}</span>)}
+                            {selectedConnectionContext.recommendations.slice(0, 3).map((rec) => {
+                              const canApply = Boolean(configPathForConnectionRecommendation(rec));
+                              return (
+                                <span key={rec.field} className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-white/80 px-1.5 py-0.5 text-[10px] text-slate-600">
+                                  <span>{rec.field}: {String(rec.value || 'review')}</span>
+                                  {canApply && (
+                                    <button
+                                      type="button"
+                                      data-testid="connection-recommendation-apply"
+                                      className="font-semibold text-indigo-600 hover:text-indigo-800"
+                                      onClick={() => applyConnectionRecommendation(rec)}
+                                    >
+                                      Apply
+                                    </button>
+                                  )}
+                                </span>
+                              );
+                            })}
                           </div>
                         ) : null}
                         {selectedConnectionContext.introspection?.tables?.length ? (
@@ -998,6 +1094,9 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                         ) : null}
                         {selectedConnectionContext.introspection?.topics?.length ? (
                           <div className="truncate">Topics: {selectedConnectionContext.introspection.topics.slice(0, 4).map((topic) => `${topic.name}${topic.partitions?.length ? `(${topic.partitions.length})` : ''}`).join(', ')}</div>
+                        ) : null}
+                        {selectedConnectionContext.introspection?.targets?.length ? (
+                          <div className="truncate">Targets: {selectedConnectionContext.introspection.targets.slice(0, 4).map((target) => `${target.kind}:${target.location}${target.prefix ? `/${target.prefix}` : ''}${target.writable === false ? ' (not writable)' : ''}`).join(', ')}</div>
                         ) : null}
                         {(selectedConnectionContext.introspection?.schema || selectedConnectionContext.introspection?.tables?.find((table) => table.columns?.length)?.columns || []).slice(0, 6).map((col) => (
                           <span key={col.name} className="mr-1 mt-1 inline-block rounded bg-white/80 px-1.5 py-0.5 font-mono text-[10px]">{col.name}{col.data_type ? ` ${col.data_type}` : ''}</span>

@@ -44,7 +44,7 @@ func init() {
 //	method: "GET"
 //	headers: { Authorization: "Bearer xxx" }
 //	target_field: "user_info"       // JSON response stored under this field
-//	cache_ttl_seconds: 300           // cache results for 5 minutes
+//	cache_ttl_seconds: 0             // Redis-backed cache TTL (0=off)
 //	timeout_seconds: 5
 //
 // Config (SQL mode):
@@ -53,7 +53,7 @@ func init() {
 //	dsn: "user:pass@tcp(host:3306)/db"
 //	query: "SELECT name, email FROM users WHERE id = {{.user_id}}"
 //	target_field: "user"
-//	cache_ttl_seconds: 600
+//	cache_ttl_seconds: 0
 type EnricherTransform struct {
 	mode        string
 	urlTemplate string
@@ -73,14 +73,10 @@ type EnricherTransform struct {
 	// HTTP client
 	client *http.Client
 
-	// Cache: lookupKey → {value, expiry}
-	cache  sync.Map
-	stopCh chan struct{} // stops the background eviction loop (TF-13)
-}
-
-type enricherCacheEntry struct {
-	value  any
-	expiry time.Time
+	// Cache: lookupKey → JSON value in Redis when cache_ttl_seconds > 0.
+	cacheStore state.Store
+	pipeline   string
+	node       string
 }
 
 func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
@@ -88,12 +84,12 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 		mode:        "http",
 		method:      "GET",
 		targetField: "enriched",
-		cacheTTL:    5 * time.Minute,
 		timeout:     5 * time.Second,
 		headers:     make(map[string]string),
 		client:      &http.Client{Timeout: 5 * time.Second},
 		onError:     "pass",
-		stopCh:      make(chan struct{}),
+		pipeline:    "default",
+		node:        "enricher",
 	}
 
 	if v, ok := config["mode"].(string); ok {
@@ -112,8 +108,16 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 		t.timeout = time.Duration(v) * time.Second
 		t.client.Timeout = t.timeout
 	}
-	if v, ok := config["cache_ttl_seconds"].(int); ok && v > 0 {
-		t.cacheTTL = time.Duration(v) * time.Second
+	if v, ok := config["cache_ttl_seconds"]; ok {
+		if n, ok := toInt(v); ok && n >= 0 {
+			t.cacheTTL = time.Duration(n) * time.Second
+		}
+	}
+	if v, ok := config["state_pipeline"].(string); ok && v != "" {
+		t.pipeline = v
+	}
+	if v, ok := config["state_node"].(string); ok && v != "" {
+		t.node = v
 	}
 	if rawHeaders, ok := config["headers"].(map[string]any); ok {
 		for k, v := range rawHeaders {
@@ -157,36 +161,18 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 		}
 	}
 
-	// Background cache eviction (TF-13): without this, expired entries lingered
-	// in the sync.Map forever, unbounded on high-cardinality keys.
-	go t.evictLoop()
+	if t.cacheTTL > 0 {
+		store, err := state.NewRedisStoreFromConfig(context.Background(), config)
+		if err != nil {
+			if t.db != nil {
+				_ = t.db.Close()
+			}
+			return nil, fmt.Errorf("enricher: redis cache requires configured Redis state backend: %w", err)
+		}
+		t.cacheStore = store
+	}
 
 	return t, nil
-}
-
-// evictLoop periodically deletes expired cache entries so the sync.Map doesn't
-// grow without bound on high-cardinality lookup keys. Stops on Close.
-func (t *EnricherTransform) evictLoop() {
-	interval := t.cacheTTL
-	if interval <= 0 || interval > time.Minute {
-		interval = time.Minute
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			now := time.Now()
-			t.cache.Range(func(k, v any) bool {
-				if entry, ok := v.(enricherCacheEntry); ok && !now.Before(entry.expiry) {
-					t.cache.Delete(k)
-				}
-				return true
-			})
-		case <-t.stopCh:
-			return
-		}
-	}
 }
 
 func (t *EnricherTransform) Name() string { return "enricher" }
@@ -202,15 +188,20 @@ func (t *EnricherTransform) Apply(ctx context.Context, rec core.Record) (core.Re
 		return rec, nil
 	}
 
-	// Check cache.
-	if cached, ok := t.cache.Load(lookupKey); ok {
-		entry := cached.(enricherCacheEntry)
-		if time.Now().Before(entry.expiry) {
-			rec.Data[t.targetField] = entry.value
+	// Check Redis-backed cache when explicitly enabled.
+	if t.cacheTTL > 0 && t.cacheStore != nil {
+		cached, ok, err := t.cacheStore.Get(ctx, t.pipeline, t.node, lookupKey)
+		if err != nil {
+			return rec, fmt.Errorf("enricher: cache read failed: %w", err)
+		}
+		if ok {
+			var value any
+			if err := json.Unmarshal(cached, &value); err != nil {
+				return rec, fmt.Errorf("enricher: decode cached value: %w", err)
+			}
+			rec.Data[t.targetField] = value
 			return rec, nil
 		}
-		// Lazy eviction of the expired entry (in addition to the background sweep).
-		t.cache.Delete(lookupKey)
 	}
 
 	// Fetch enrichment data.
@@ -233,10 +224,15 @@ func (t *EnricherTransform) Apply(ctx context.Context, rec core.Record) (core.Re
 	}
 
 	// Cache and apply.
-	t.cache.Store(lookupKey, enricherCacheEntry{
-		value:  result,
-		expiry: time.Now().Add(t.cacheTTL),
-	})
+	if t.cacheTTL > 0 && t.cacheStore != nil {
+		payload, err := json.Marshal(result)
+		if err != nil {
+			return rec, fmt.Errorf("enricher: encode cached value: %w", err)
+		}
+		if err := t.cacheStore.Set(ctx, t.pipeline, t.node, lookupKey, payload, t.cacheTTL); err != nil {
+			return rec, fmt.Errorf("enricher: cache write failed: %w", err)
+		}
+	}
 	rec.Data[t.targetField] = result
 	return rec, nil
 }
@@ -382,7 +378,9 @@ func (t *EnricherTransform) fetchSQL(ctx context.Context, data map[string]any) (
 }
 
 func (t *EnricherTransform) Close() error {
-	close(t.stopCh) // stop the background cache-eviction loop
+	if t.cacheStore != nil {
+		_ = t.cacheStore.Close()
+	}
 	if t.db != nil {
 		return t.db.Close()
 	}
@@ -522,12 +520,8 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 	}
 	if backend, ok := config["state_backend"].(string); ok && backend != "" {
 		switch strings.ToLower(backend) {
-		case "sqlite":
-			path, _ := config["state_path"].(string)
-			if path == "" {
-				path = "./data/etl-state.db"
-			}
-			store, err := state.NewSQLiteStore(path)
+		case "redis":
+			store, err := state.NewRedisStoreFromConfig(context.Background(), config)
 			if err != nil {
 				return nil, fmt.Errorf("lookup: open state store: %w", err)
 			}

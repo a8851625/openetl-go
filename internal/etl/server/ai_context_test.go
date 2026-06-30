@@ -79,8 +79,8 @@ func TestReviewGeneratedSpecFlagsMissingFieldsAndRisks(t *testing.T) {
 		Config: map[string]any{"endpoint": "https://example", "project": "p", "table": "t", "access_key_id": "id", "access_key_secret": "secret"},
 	}
 	review = reviewGeneratedSpec(t.Context(), spec, nil)
-	if !hasRisk(review, "maxcompute_writer_disabled") {
-		t.Fatalf("maxcompute writer-disabled risk not reported: %#v", review.RiskFlags)
+	if !hasRisk(review, "maxcompute_requires_remote_preflight") {
+		t.Fatalf("maxcompute remote-preflight risk not reported: %#v", review.RiskFlags)
 	}
 }
 

@@ -20,6 +20,11 @@ type ConnectorDescriptor = {
   kind: ConnectorKind;
   type: string;
   maturity: string;
+  readiness?: {
+    status: string;
+    summary?: string;
+    gates?: { code: string; label: string; status: string; evidence?: string; remediation?: string }[];
+  };
   required?: string[];
   capabilities?: string[];
   fields?: PluginSchemaField[];
@@ -303,8 +308,22 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
               <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <div className="flex flex-wrap gap-1.5">
                   <span className={`badge ${selectedDescriptor.maturity === 'production' ? 'badge-emerald' : selectedDescriptor.maturity === 'beta' ? 'badge-blue' : 'badge-amber'}`}>{selectedDescriptor.maturity}</span>
+                  {selectedDescriptor.readiness?.status && <span className="badge badge-blue">{selectedDescriptor.readiness.status}</span>}
                   {(selectedDescriptor.capabilities || []).slice(0, 6).map((cap) => <span key={cap} className="badge badge-slate">{cap}</span>)}
                 </div>
+                {selectedDescriptor.readiness && (
+                  <div className="rounded border border-white/70 bg-white/80 p-2 text-xs text-slate-600">
+                    <div className="mb-1 font-medium text-slate-700">Readiness</div>
+                    {selectedDescriptor.readiness.summary && <div className="mb-1">{selectedDescriptor.readiness.summary}</div>}
+                    <div className="flex flex-wrap gap-1">
+                      {(selectedDescriptor.readiness.gates || []).slice(0, 5).map((gate) => (
+                        <span key={gate.code} className={`badge ${gate.status === 'pass' ? 'badge-emerald' : gate.status === 'partial' ? 'badge-blue' : gate.status === 'missing' ? 'badge-rose' : 'badge-slate'}`}>
+                          {gate.label}: {gate.status}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
                   <div>
                     <div className="font-medium text-slate-600">{t('conn.required')}</div>

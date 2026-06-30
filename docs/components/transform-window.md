@@ -7,13 +7,13 @@ Compute lightweight tumbling-window aggregates.
 - `window_sec`: tumbling window size.
 - `group_by`: grouping fields.
 - `aggregates`: aggregate definitions.
-- `state_backend`, `state_path`, `state_ttl_seconds`: optional durable window state.
+- `state_backend`, `state_ttl_seconds`: optional Redis-backed runtime window state. Requires `etl.state.redis.addr` or `ETL_STATE_REDIS_ADDR`.
 
 ## Record Shape
 Consumes event records and emits aggregate records at window boundaries.
 
 ## Checkpoint, DLQ, Idempotency
-SQLite state restores in-progress window state after restart. Sliding/session windows and Flink-style late/retraction semantics are not in the production path.
+Redis state restores in-progress window state after restart. Sliding/session windows and Flink-style late/retraction semantics are not in the production path.
 
 ## Fits
 Small tumbling aggregates in Kafka -> ClickHouse detail/aggregate pipelines.

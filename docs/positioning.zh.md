@@ -35,8 +35,7 @@ OpenETL-Go 的核心定位是：
 ## 产品原则
 
 - 可靠优先：失败记录必须可见，进入 DLQ、返回错误触发 retry，或由显式允许的 drop 策略计数审计。
-- 轻量优先：默认路径应能单二进制或单容器启动，SQLite 单机可用，MySQL/PostgreSQL 存储用于共享状态和 master-worker。
+- 轻量优先：默认路径应能单二进制或单容器启动，SQLite 单机可用，MySQL/PostgreSQL 存储用于共享元数据/checkpoint 和 master-worker。
 - 易用优先：常见任务应通过 UI/API/YAML 快速完成，preflight 应在启动前解释风险、字段问题和幂等策略。
 - 可扩展优先：连接器、transform 和插件共享 descriptor、schema、preflight、metrics、DLQ、测试认证合约。
 - 诚实优先：默认投递语义是 at-least-once；生产依赖业务主键、版本列、upsert、ReplacingMergeTree 或 deduplicate 消除重放影响。
-

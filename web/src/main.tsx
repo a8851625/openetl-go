@@ -115,12 +115,14 @@ type ConnectionContext = {
     databases?: string[];
     tables?: { name: string; database?: string; schema?: string; columns?: { name: string; data_type?: string; nullable?: boolean }[]; primary_key?: string[] }[];
     topics?: { name: string; partitions?: { id: number; oldest_offset?: number; newest_offset?: number; leader?: number }[] }[];
+    targets?: { kind: string; location: string; prefix?: string; format?: string; exists?: boolean; writable?: boolean }[];
     schema?: { name: string; data_type?: string; nullable?: boolean }[];
     sample?: Record<string, unknown>[];
     warnings?: string[];
     checked_at?: string;
   };
 };
+type ConnectionRecommendation = { field: string; value: unknown; reason: string };
 
 function normalizeConnectionEntry(raw: any): ConnectionEntry | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -959,6 +961,16 @@ type ValidateResult = {
     issues?: { level: string; check: string; message: string; remediation?: string }[];
     field_issues?: { level: string; field: string; check: string; message: string; remediation?: string }[];
     ddl_preview?: { dialect: string; table: string; statements?: string[]; warnings?: string[] };
+    guidance?: { level: string; category: string; code: string; message: string; action?: string }[];
+    readiness?: {
+      kind: string;
+      type: string;
+      maturity: string;
+      status: string;
+      summary?: string;
+      gates?: { code: string; label: string; status: string; evidence?: string; remediation?: string }[];
+    }[];
+    recommendations?: { path: string; value: unknown; reason: string; safety?: string }[];
   };
   errors?: string[];
 };
@@ -1001,7 +1013,7 @@ function defaultSinkConfig(type: string): Record<string, unknown> {
     case 's3':
       return { endpoint: 'http://host.docker.internal:9001', bucket: 'openetl', prefix: 'wizard/', access_key: 'minioadmin', secret_key: 'minioadmin', format: 'jsonl' };
     case 'maxcompute':
-      return { endpoint: 'https://service.cn.maxcompute.aliyun.com/api', project: 'demo_project', table: 'wizard_output', access_key_id: 'replace-me', access_key_secret: 'replace-me', columns: { id: 'BIGINT', name: 'STRING', dt: 'STRING' }, partition_fields: ['dt'] };
+      return { endpoint: 'http://127.0.0.1:1/api', project: 'demo_project', table: 'wizard_output', access_key_id: 'replace-me', access_key_secret: 'replace-me', columns: { id: 'BIGINT', name: 'STRING', dt: 'STRING' }, partition_fields: ['dt'] };
     case 'file_sink':
     default:
       return { output_dir: '/app/data/output/ui-wizard', format: 'jsonl', prefix: 'wizard_' };
@@ -1010,6 +1022,10 @@ function defaultSinkConfig(type: string): Record<string, unknown> {
 
 function parseJSONText(text: string, fallback: unknown) {
   try { return JSON.parse(text); } catch { return fallback; }
+}
+
+function sourceSupportsSampleSchemaHint(type: string): boolean {
+  return ['file', 'http', 'kafka'].includes(type);
 }
 
 function parseJSONObject(text: string): Record<string, unknown> {
@@ -1091,7 +1107,11 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   }, [schema?.data]);
 
   const buildSpec = useCallback(() => {
-    const source: Record<string, unknown> = { type: sourceType, config: parseJSONText(sourceConfigText, {}) };
+    const sourceConfigForSpec = parseJSONText(sourceConfigText, {}) as Record<string, unknown>;
+    if (sourceSupportsSampleSchemaHint(sourceType) && !sourceConfigForSpec.schema && !sourceConfigForSpec.sample) {
+      sourceConfigForSpec.sample = parseJSONText(sampleText, template.sample);
+    }
+    const source: Record<string, unknown> = { type: sourceType, config: sourceConfigForSpec };
     const sink: Record<string, unknown> = { type: sinkType, config: parseJSONText(sinkConfigText, {}) };
     if (sourceConnection) source.connection = sourceConnection;
     if (sinkConnection) sink.connection = sinkConnection;
@@ -1107,7 +1127,7 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
       dlq: { enable: true },
       tags: ['ui-wizard', template.id],
     };
-  }, [name, sourceType, sourceConfigText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, recommendedBatchSize, recommendedCheckpointSec, template.id]);
+  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, recommendedBatchSize, recommendedCheckpointSec, template.id, template.sample]);
 
   useEffect(() => {
     refreshConnections();
@@ -1148,13 +1168,15 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     }
     const data = await api<ConnectionContext>(`/api/v2/connections/${encodeURIComponent(name)}/context`);
     if (target === 'source') {
-      setSourceContext(data);
       if (data.connection?.type) setSourceType(data.connection.type);
+      setSourceConfigText(prettyJSON({}));
       const firstSample = data.introspection?.sample?.[0];
       if (firstSample) setSampleText(prettyJSON(firstSample));
+      setSourceContext(data);
     } else {
-      setSinkContext(data);
       if (data.connection?.type) setSinkType(data.connection.type);
+      setSinkConfigText(prettyJSON({}));
+      setSinkContext(data);
     }
   }, []);
 
@@ -1256,6 +1278,82 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     }
   };
 
+  const setValueAtPath = (target: Record<string, unknown>, path: string, value: unknown) => {
+    const parts = path.split('.').filter(Boolean);
+    let cursor: Record<string, unknown> = target;
+    parts.forEach((part, index) => {
+      if (index === parts.length - 1) {
+        cursor[part] = value;
+        return;
+      }
+      const next = cursor[part];
+      if (!next || typeof next !== 'object' || Array.isArray(next)) cursor[part] = {};
+      cursor = cursor[part] as Record<string, unknown>;
+    });
+  };
+
+  const applyPreflightRecommendation = (rec: { path: string; value: unknown; reason: string; safety?: string }) => {
+    try {
+      const spec = (YAML.parse(yamlText) || buildSpec()) as Record<string, unknown>;
+      setValueAtPath(spec, rec.path, rec.value);
+      if (rec.path.startsWith('source.config.')) {
+        const next = parseJSONObject(sourceConfigText);
+        setValueAtPath(next, rec.path.replace('source.config.', ''), rec.value);
+        setSourceConfigText(prettyJSON(next));
+      }
+      if (rec.path.startsWith('sink.config.')) {
+        const next = parseJSONObject(sinkConfigText);
+        setValueAtPath(next, rec.path.replace('sink.config.', ''), rec.value);
+        setSinkConfigText(prettyJSON(next));
+      }
+      if (rec.path === 'transforms') {
+        setTransformsText(prettyJSON(Array.isArray(rec.value) ? rec.value : []));
+      }
+      setYamlText(YAML.stringify(spec));
+      setResult(null);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const configPathForConnectionRecommendation = (title: string, rec: ConnectionRecommendation): string | null => {
+    if (rec.value === 'review' || rec.value === '') return null;
+    const scope = title.toLowerCase() === 'sink' ? 'sink' : 'source';
+    const scopedPrefix = `${scope}.config.`;
+    if (rec.field.startsWith(scopedPrefix)) return rec.field.slice(scopedPrefix.length);
+    if (scope === 'source' && !rec.field.includes('.') && !['batch_size', 'checkpoint_interval_sec'].includes(rec.field)) {
+      return rec.field;
+    }
+    return null;
+  };
+
+  const applyConnectionRecommendation = (title: string, rec: ConnectionRecommendation) => {
+    const configPath = configPathForConnectionRecommendation(title, rec);
+    if (!configPath) return;
+    const scope = title.toLowerCase() === 'sink' ? 'sink' : 'source';
+    const next = title.toLowerCase() === 'sink' ? parseJSONObject(sinkConfigText) : parseJSONObject(sourceConfigText);
+    setValueAtPath(next, configPath, rec.value);
+    try {
+      const spec = (YAML.parse(yamlText) || buildSpec()) as Record<string, unknown>;
+      const endpoint = (spec[scope] && typeof spec[scope] === 'object' ? spec[scope] : {}) as Record<string, unknown>;
+      const endpointConfig = (endpoint.config && typeof endpoint.config === 'object' && !Array.isArray(endpoint.config) ? endpoint.config : {}) as Record<string, unknown>;
+      setValueAtPath(endpointConfig, configPath, rec.value);
+      endpoint.config = endpointConfig;
+      spec[scope] = endpoint;
+      setYamlText(YAML.stringify(spec));
+    } catch {
+      // The form state below remains authoritative if the YAML editor is temporarily invalid.
+    }
+    if (scope === 'sink') {
+      setSinkConfigText(prettyJSON(next));
+    } else {
+      setSourceConfigText(prettyJSON(next));
+    }
+    setResult(null);
+    setError('');
+  };
+
   const renderSchemaSummary = (title: string, fields: PluginSchemaField[], maturity: string, capabilities: string[], missing: string[]) => (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -1324,7 +1422,24 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
         {intro?.error && <div className="mb-2 text-xs text-rose-700">{intro.error}</div>}
         {ctx.recommendations?.length ? (
           <div className="mb-2 flex flex-wrap gap-1">
-            {ctx.recommendations.map((rec) => <span key={rec.field} className="badge badge-blue text-[10px]">{rec.field}: {String(rec.value || 'review')}</span>)}
+            {ctx.recommendations.map((rec) => {
+              const canApply = Boolean(configPathForConnectionRecommendation(title, rec));
+              return (
+                <span key={rec.field} className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-white/80 px-2 py-0.5 text-[10px] text-slate-600">
+                  <span>{rec.field}: {String(rec.value || 'review')}</span>
+                  {canApply && (
+                    <button
+                      type="button"
+                      data-testid="connection-recommendation-apply"
+                      className="font-semibold text-indigo-600 hover:text-indigo-800"
+                      onClick={() => applyConnectionRecommendation(title, rec)}
+                    >
+                      Apply
+                    </button>
+                  )}
+                </span>
+              );
+            })}
           </div>
         ) : null}
         {intro?.tables?.length ? (
@@ -1337,6 +1452,12 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
           <div className="mb-2 text-xs text-slate-600">
             Topics: {intro.topics.slice(0, 6).map((topic) => `${topic.name}${topic.partitions?.length ? `(${topic.partitions.length})` : ''}`).join(', ')}
             {intro.topics.length > 6 ? ` +${intro.topics.length - 6}` : ''}
+          </div>
+        ) : null}
+        {intro?.targets?.length ? (
+          <div className="mb-2 text-xs text-slate-600">
+            Targets: {intro.targets.slice(0, 4).map((target) => `${target.kind}:${target.location}${target.prefix ? `/${target.prefix}` : ''}${target.writable === false ? ' (not writable)' : ''}`).join(', ')}
+            {intro.targets.length > 4 ? ` +${intro.targets.length - 4}` : ''}
           </div>
         ) : null}
         {schemaRows.length ? (
@@ -1538,6 +1659,18 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
             <div data-testid="wizard-preflight-result" className={`rounded-lg border p-3 ${result.valid === false ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
               <div className="mb-2 text-sm font-semibold">{result.valid === false ? 'Preflight failed' : 'Preflight passed'} · {result.preflight?.summary || 'validation complete'}</div>
               {(result.warnings || result.errors || []).map((msg, i) => <div key={i} className="text-xs text-slate-700">{msg}</div>)}
+              {(result.preflight?.recommendations || []).map((rec, i) => (
+                <div key={`recommendation-${rec.path}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-semibold">{rec.safety || 'review'} · {rec.path}</div>
+                      <div>{rec.reason}</div>
+                      <div className="mt-1 font-mono text-slate-500">{prettyJSON(rec.value)}</div>
+                    </div>
+                    <button className="btn btn-secondary btn-sm shrink-0 text-[11px]" onClick={() => applyPreflightRecommendation(rec)}>Apply</button>
+                  </div>
+                </div>
+              ))}
               {(result.preflight?.issues || []).map((issue, i) => (
                 <div key={`issue-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
                   <div className="font-semibold">{issue.level} · {issue.check}</div>
@@ -1550,6 +1683,24 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
                   <div className="font-semibold">{issue.field} · {issue.check}</div>
                   <div>{issue.message}</div>
                   {issue.remediation && <div className="mt-1 text-slate-500">Fix: {issue.remediation}</div>}
+                </div>
+              ))}
+              {(result.preflight?.guidance || []).map((item, i) => (
+                <div key={`guidance-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
+                  <div className="font-semibold">{item.level} · {item.category} · {item.code}</div>
+                  <div>{item.message}</div>
+                  {item.action && <div className="mt-1 text-slate-500">Action: {item.action}</div>}
+                </div>
+              ))}
+              {(result.preflight?.readiness || []).map((connector, i) => (
+                <div key={`readiness-${connector.kind}-${connector.type}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
+                  <div className="font-semibold">{connector.kind} · {connector.type} · {connector.maturity} · {connector.status}</div>
+                  {connector.summary && <div>{connector.summary}</div>}
+                  {(connector.gates || []).filter((gate) => gate.status === 'missing' || gate.status === 'partial').slice(0, 3).map((gate) => (
+                    <div key={gate.code} className="mt-1 text-slate-600">
+                      {gate.status} · {gate.label}{gate.remediation ? ` · ${gate.remediation}` : ''}
+                    </div>
+                  ))}
                 </div>
               ))}
               {result.preflight?.ddl_preview?.statements?.length ? (
