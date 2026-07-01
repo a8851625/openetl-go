@@ -182,6 +182,11 @@ source:
 | `database` | 是 | | 源数据库。 |
 | `tables` | 是 | | 要监听的表名数组。 |
 | `server_id` | 否 | `1001` | 唯一复制 server ID。 |
+| `enable_gtid` | 否 | `false` | 启用基于 GTID 的复制。 |
+| `server_id_base` | 否 | | 分片时使用的复制 server ID 基准值。 |
+| `shard_index` | 否 | | 表分片索引。 |
+| `shard_total` | 否 | | 表分片总数。 |
+| `start_from` | 否 | | CDC 起始点：`timestamp`、`binlog:<file>:<pos>` 或 `gtid:<set>`。 |
 
 需要 MySQL binlog `ROW` 格式和 `FULL` row image。
 
@@ -209,10 +214,15 @@ source:
 | `user` | 是 | | MySQL 用户。 |
 | `password` | 否 | | MySQL 密码（**密钥**）。 |
 | `database` | 是 | | 源数据库。 |
-| `table` | 是 | | 源表（单数）。 |
+| `table` | 否 | | 源表（单数）；未配置 `tables` 时必填。 |
+| `tables` | 否 | | 多表 snapshot+CDC 源表；未配置 `table` 时必填。 |
 | `pk_column` | 否 | `id` | 快照分页的主键列。 |
 | `limit` | 否 | `1000` | 每次快照查询的行数。 |
 | `server_id` | 否 | `1101` | 唯一复制 server ID。 |
+| `server_id_base` | 否 | | 分片时使用的复制 server ID 基准值。 |
+| `consistent_snapshot_lock` | 否 | `true` | 使用表锁保证快照一致性。 |
+| `shard_index` | 否 | | 快照分片索引。 |
+| `shard_total` | 否 | | 快照分片总数。 |
 
 按主键分块快照，记录 binlog 位置，然后切换到 CDC。两个阶段的 checkpoint 都可以在崩溃后恢复。
 
@@ -239,9 +249,14 @@ source:
 | `password` | 否 | | PostgreSQL 密码（**密钥**）。 |
 | `database` | 是 | | 源数据库。 |
 | `slot_name` | 否 | `etl_slot` | 逻辑复制槽名称。 |
-| `tables` | 否 | | 要监听的表。 |
+| `tables` | 否 | | 要监听的表。`enable_snapshot: true` 时必填；仅 CDC 且为空时表示为所有表创建 publication。可以使用未限定表名（`orders`）或 schema 限定表名（`public.orders`）。 |
+| `sslmode` | 否 | `prefer` | PostgreSQL SSL 模式：`disable`、`allow`、`prefer`、`require`、`verify-ca` 或 `verify-full`。 |
+| `enable_snapshot` | 否 | `false` | 先执行表快照，然后切换到逻辑复制。启用时必须配置 `tables`。 |
+| `drop_slot_on_close` | 否 | `false` | Source 关闭时删除复制槽。可重启 CDC 应保持 `false`。 |
 
 使用 pgoutput 逻辑复制协议。如果缺失会自动创建发布和复制槽。
+Preflight 会校验必填连接字段、端口、复制槽名、SSL 模式、快照表列表、
+`wal_level=logical`、replication 权限、publication 就绪性、配置表是否存在以及复制槽是否属于当前 database。
 
 ### `kafka`
 
@@ -329,16 +344,16 @@ sink:
 
 | 字段 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `endpoint` | 否 | | S3 兼容端点 URL（如 MinIO）。 |
+| `endpoint` | 是 | | S3 兼容端点 URL（如 MinIO）。 |
 | `region` | 否 | | S3 区域。 |
 | `bucket` | 是 | | S3 桶名称。 |
 | `access_key` | 否 | | 访问密钥（**密钥**）。 |
 | `secret_key` | 否 | | 秘密密钥（**密钥**）。 |
-| `output_dir` | 否 | `/tmp/etl-output` | 本地回退目录。 |
+| `output_dir` | 否 | `/tmp/etl-output` | 仅用于文件兼容写入的本地暂存/回退目录；明确需要本地输出时请使用 `file_sink`。 |
 | `format` | 否 | `json` | `json`、`jsonl`、`csv` 或 `parquet`。 |
 | `prefix` | 否 | | 对象 key 前缀。 |
 
-使用 MinIO 兼容 API（当配置了 endpoint/bucket 时），否则回退到本地文件。
+使用 MinIO 兼容 API。`endpoint` 和 `bucket` 必填；明确需要本地文件输出时请使用 `file_sink`。
 
 ### `mysql`
 
@@ -368,6 +383,9 @@ sink:
 | `batch_mode` | 否 | `insert` | `insert` 或 `upsert`。 |
 | `pk_columns` | 否 | `["id"]` | Upsert 模式的主键列。 |
 | `auto_create` | 否 | `false` | 自动建表。 |
+| `schema_drift` | 否 | `ignore` | `ignore`、`fail` 或 `add_columns`。 |
+| `ddl_policy` | 否 | `reject` | `reject`、`ignore` 或 `apply`。 |
+| `insert_chunk_size` | 否 | `500` | 每个 INSERT 语句的行数。 |
 
 CDC/snapshot+CDC 幂等性请使用 `batch_mode: upsert`。
 
@@ -392,15 +410,26 @@ sink:
 | 字段 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `host` | 是 | | ClickHouse 主机。 |
-| `port` | 否 | `9000` | ClickHouse 原生端口。 |
+| `port` | 否 | `9000` | ClickHouse 端口（`9000` native，`8123` HTTP）。 |
+| `protocol` | 否 | `native` | `native` 或 `http`。 |
 | `user` | 否 | `default` | ClickHouse 用户。 |
 | `password` | 否 | | ClickHouse 密码（**密钥**）。 |
 | `database` | 是 | | 目标数据库。 |
-| `table` | 是 | | 目标表。 |
-| `pk_columns` | 否 | `["id"]` | 用于自动建表的主键列。 |
+| `table` | 否 | | 目标表；为空时使用 source table 动态落表。 |
+| `pk_columns` | 否 | `["id"]` | 用于 ORDER BY、DELETE 和 UPDATE 条件的主键列。 |
 | `version_column` | 否 | `_version` | ReplacingMergeTree 的版本列。 |
 | `auto_create` | 否 | `false` | 表缺失时自动创建。 |
-| `schema_drift` | 否 | `ignore` | `ignore`、`fail` 或 `add_columns`。 |
+| `schema_drift` | 否 | `ignore` | `ignore`、`fail`、`add_columns` 或 `sync`。 |
+| `ddl_policy` | 否 | `apply` | `reject`、`ignore` 或 `apply`。 |
+| `source_dialect` | 否 | | DDL 翻译的源端 SQL 方言：`mysql`、`postgres`、`postgresql` 或 `clickhouse`。 |
+| `optimize_interval_sec` | 否 | `0` | 周期性 `OPTIMIZE TABLE FINAL` 间隔；`0` 表示禁用。 |
+| `use_final` | 否 | `false` | 内部去重读取时追加 `FINAL`。 |
+| `tls` | 否 | `false` | 启用 ClickHouse TLS 连接。 |
+| `tls_skip_verify` | 否 | `false` | 跳过 TLS 证书校验。 |
+| `compression` | 否 | `LZ4` | `LZ4` 或 `ZSTD`。 |
+| `async_insert` | 否 | `false` | 启用 ClickHouse `async_insert`。 |
+| `async_insert_wait` | 否 | `true` | 等待异步写入完成。 |
+| `ttl` | 否 | | 自动建表时使用的 TTL 表达式。 |
 
 ### `maxcompute` / `odps`
 
@@ -479,7 +508,7 @@ sink:
 
 | 字段 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `hosts` | 是 | `["http://localhost:9200"]` | Elasticsearch/OpenSearch 主机 URL。 |
+| `hosts` | 是 | | Elasticsearch/OpenSearch 主机 URL。 |
 | `username` | 否 | | ES 用户名（**密钥**）。 |
 | `password` | 否 | | ES 密码（**密钥**）。 |
 | `index` | 是 | | 目标索引名称。 |
@@ -516,9 +545,15 @@ sink:
 | `user` | 是 | | PostgreSQL 用户。 |
 | `password` | 否 | | PostgreSQL 密码（**密钥**）。 |
 | `database` | 是 | | 目标数据库。 |
+| `schema` | 否 | `public` | 目标 schema。 |
 | `table` | 是 | | 目标表。 |
 | `batch_mode` | 否 | `insert` | `insert` 或 `upsert`（INSERT … ON CONFLICT）。 |
 | `pk_columns` | 否 | `["id"]` | Upsert 模式的主键列。 |
+| `auto_create` | 否 | `false` | 自动建表。 |
+| `schema_drift` | 否 | `ignore` | `ignore`、`fail` 或 `add_columns`。 |
+| `ddl_policy` | 否 | `reject` | `reject`、`ignore` 或 `apply`。 |
+| `sslmode` | 否 | `prefer` | PostgreSQL SSL 模式：`disable`、`allow`、`prefer`、`require`、`verify-ca` 或 `verify-full`。 |
+| `insert_chunk_size` | 否 | `500` | 每个 INSERT 语句的行数。 |
 
 ### `doris`
 
@@ -556,6 +591,8 @@ sink:
 | `pk_columns` | 否 | | DELETE、自动创建 Unique Key 表和 replay-safe upsert 校验使用的业务主键列。 |
 | `stream_load_format` | 否 | `json` | `json` 或 `csv`。 |
 | `stream_load_scheme` | 否 | `http` | `http` 或 `https`。 |
+| `stream_load_timeout_sec` | 否 | `30` | Stream Load HTTP 超时时间，单位秒。 |
+| `insert_chunk_size` | 否 | `500` | 使用 `write_mode: insert` 时每个 INSERT 语句的行数。 |
 | `tls_skip_verify` | 否 | `false` | 跳过 TLS 证书校验。 |
 | `auto_create` | 否 | `false` | 自动创建 Doris Unique Key 表。未配置 `pk_columns` 时必须存在 `id` 字段。 |
 | `schema_drift` | 否 | `ignore` | `ignore`、`fail` 或 `add_columns`。 |

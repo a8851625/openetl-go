@@ -6,7 +6,7 @@ Write records into MySQL with insert or upsert batch modes.
 ## Config Fields
 - `host`, `user`, `database`, `table`: required target fields.
 - `port`, `password`, `tls`: connection fields.
-- `batch_mode`, `pk_columns`, `auto_create`, `schema_drift`: idempotency and schema controls.
+- `batch_mode`, `pk_columns`, `auto_create`, `schema_drift`, `ddl_policy`: idempotency and schema controls.
 
 ## Record Shape
 Writes record `data` columns. CDC delete/update behavior depends on operation and sink mode.
@@ -35,4 +35,4 @@ sink:
 ```
 
 ## Evidence
-Covered by `hack/e2e-cdc-mysql.sh`, `hack/e2e-debezium-mysql.sh`, and MySQL sink tests.
+Covered by `hack/e2e-cdc-mysql.sh`, `hack/e2e-debezium-mysql.sh`, and MySQL sink tests. Preflight opens the target, validates table metadata when reachable, emits DDL preview, and reports field-level schema issues.

@@ -187,6 +187,25 @@ for _ in $(seq 1 10); do
   sleep 1
 done
 check "D2.1e: Wizard loads connection context and YAML refs" "$context_loaded"
+runtime_recommended="false"
+for _ in $(seq 1 10); do
+  runtime_recommended="$(evaljs "(() => { const y=document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || ''; return document.querySelector('[data-testid=\"wizard-runtime-safety\"]') !== null && document.querySelector('[data-testid=\"wizard-batch-size\"]')?.value === '1000' && document.querySelector('[data-testid=\"wizard-checkpoint-sec\"]')?.value === '30' && y.includes('batch_size: 1000') && y.includes('checkpoint_interval_sec: 30') && y.includes('enable: true'); })()")"
+  if [[ "$runtime_recommended" == "true" ]]; then break; fi
+  sleep 1
+done
+check "D2.1f: Runtime safety applies connection recommendations" "$runtime_recommended"
+playwright-cli fill "[data-testid='wizard-batch-size']" "77" >/dev/null
+playwright-cli fill "[data-testid='wizard-checkpoint-sec']" "5" >/dev/null
+playwright-cli click "[data-testid='wizard-dlq-enabled']" >/dev/null
+runtime_synced="false"
+for _ in $(seq 1 10); do
+  runtime_synced="$(evaljs "(() => { const y=document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || ''; return y.includes('batch_size: 77') && y.includes('checkpoint_interval_sec: 5') && y.includes('enable: false'); })()")"
+  if [[ "$runtime_synced" == "true" ]]; then break; fi
+  sleep 1
+done
+check "D2.1g: Runtime safety controls update generated YAML" "$runtime_synced"
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-dlq-enabled\"]')?.click(); return true; })()" >/dev/null
+sleep 1
 evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Failure demo')?.click(); return true; })()" >/dev/null
 for _ in $(seq 1 10); do
   failure_selected="$(evaljs "(document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || '').includes('type: maxcompute')")"

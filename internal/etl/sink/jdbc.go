@@ -47,7 +47,7 @@ type JDBCSink struct {
 	tlsSkipVerify          bool
 	tlsCAFile              string
 	allowUnsupportedDriver bool
-	sinkCounters // P4-20: per-sink write metrics (SK-4)
+	sinkCounters           // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewJDBCSink(config map[string]any) (*JDBCSink, error) {
@@ -82,15 +82,7 @@ func NewJDBCSink(config map[string]any) (*JDBCSink, error) {
 			s.schema = vs
 		}
 	}
-	if v, ok := config["pk_columns"]; ok {
-		if cols, ok := v.([]interface{}); ok {
-			for _, c := range cols {
-				if cs, ok := c.(string); ok {
-					s.pkColumns = append(s.pkColumns, cs)
-				}
-			}
-		}
-	}
+	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
 	if v, ok := config["batch_mode"]; ok {
 		if vs, ok := v.(string); ok {
 			s.batchMode = vs
@@ -187,7 +179,11 @@ func (s *JDBCSink) Open(ctx context.Context) error {
 }
 
 func (s *JDBCSink) Write(ctx context.Context, records []core.Record) (err error) {
-	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
+	defer func() {
+		if err != nil {
+			s.recordError()
+		}
+	}() // P5-12: count write failures
 	if len(records) == 0 {
 		return nil
 	}

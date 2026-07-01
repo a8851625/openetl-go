@@ -4,9 +4,10 @@
 Write batch or CDC records into ClickHouse tables with optional auto-create and schema drift handling.
 
 ## Config Fields
-- `host`, `database`, `table`: required target fields.
+- `host`, `database`: required target fields. `table` is optional when records carry source table metadata.
 - `port`, `protocol`, `user`/`username`, `password`: connection fields.
-- `auto_create`, `schema_drift`, `batch_mode`, `pk_columns`, `version_column`: schema and replay controls.
+- `auto_create`, `schema_drift`, `ddl_policy`, `source_dialect`, `pk_columns`, `version_column`: schema, DDL, and replay controls.
+- `compression`, `async_insert`, `async_insert_wait`, `optimize_interval_sec`, `use_final`: ClickHouse write/read tuning fields.
 
 ## Record Shape
 Writes record `data` fields as columns; CDC metadata controls update/delete behavior where supported.
@@ -33,4 +34,4 @@ sink:
 ```
 
 ## Evidence
-Covered by `hack/e2e-clickhouse.sh`, `hack/e2e-snapshot-cdc-clickhouse.sh`, and ClickHouse sink tests.
+Covered by `hack/e2e-clickhouse.sh`, `hack/e2e-snapshot-cdc-clickhouse.sh`, and ClickHouse sink tests. Preflight opens the target, validates ClickHouse table metadata when reachable, emits DDL preview, and reports field-level schema issues.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gogf/gf/v2/frame/g"
+	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -88,15 +89,7 @@ func NewPostgresCDCSource(config map[string]any) (*PostgresCDCSource, error) {
 			s.sslmode = vs
 		}
 	}
-	if v, ok := config["tables"]; ok {
-		if tbls, ok := v.([]interface{}); ok {
-			for _, t := range tbls {
-				if ts, ok := t.(string); ok {
-					s.tables = append(s.tables, ts)
-				}
-			}
-		}
-	}
+	s.tables = append(s.tables, readStringSlice(config, "tables")...)
 	if v, ok := config["enable_snapshot"]; ok {
 		if b, ok := v.(bool); ok {
 			s.enableSnapshot = b
@@ -116,10 +109,9 @@ func NewPostgresCDCSource(config map[string]any) (*PostgresCDCSource, error) {
 func (s *PostgresCDCSource) Name() string { return s.name }
 
 func (s *PostgresCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		s.user, s.password, s.host, s.port, s.database, s.sslmode)
+	replConnStr := s.connString(true)
 
-	replConn, err := pgconn.Connect(ctx, connStr)
+	replConn, err := pgconn.Connect(ctx, replConnStr)
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres (host %s:%d, db %s): %w", s.host, s.port, s.database, err) // P5-15: WHERE context
 	}
@@ -151,8 +143,7 @@ func (s *PostgresCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core
 
 	// Open snapshot DB if configured.
 	if s.enableSnapshot && reader.phase != "cdc" {
-		snapConnStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-			s.user, s.password, s.host, s.port, s.database, s.sslmode)
+		snapConnStr := s.connString(false)
 		snapDB, err := sql.Open("pgx", snapConnStr)
 		if err != nil {
 			replConn.Close(context.Background())
@@ -170,6 +161,15 @@ func (s *PostgresCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core
 	return reader, nil
 }
 
+func (s *PostgresCDCSource) connString(replication bool) string {
+	connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		s.user, s.password, s.host, s.port, s.database, s.sslmode)
+	if replication {
+		connStr += "&replication=database"
+	}
+	return connStr
+}
+
 type pgCDCReader struct {
 	source       *PostgresCDCSource
 	replConn     *pgconn.PgConn
@@ -180,6 +180,7 @@ type pgCDCReader struct {
 	committedLsn string
 	catalog      *pgCatalog
 	done         chan struct{}
+	doneOnce     sync.Once
 	phase        string
 	snapshotDB   *sql.DB
 	ctx          context.Context
@@ -234,7 +235,7 @@ func (r *pgCDCReader) run(ctx context.Context) {
 	defer close(r.records)
 	defer close(r.errors)
 	defer r.replConn.Close(ctx)
-	defer close(r.done)
+	defer r.closeDone()
 	if r.snapshotDB != nil {
 		defer r.snapshotDB.Close()
 	}
@@ -252,8 +253,8 @@ func (r *pgCDCReader) run(ctx context.Context) {
 	}
 
 	// Phase 2: CDC.
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		r.source.user, r.source.password, r.source.host, r.source.port, r.source.database, r.source.sslmode)
+	connStr := r.source.connString(false)
+	replConnStr := r.source.connString(true)
 
 	setupConn, err := pgconn.Connect(ctx, connStr)
 	if err != nil {
@@ -281,11 +282,18 @@ func (r *pgCDCReader) run(ctx context.Context) {
 	}
 	r.mu.Unlock()
 
-	startCmd := fmt.Sprintf(
-		"START_REPLICATION SLOT %s LOGICAL %s (proto_version '1', publication_names 'etl_pub')",
-		r.source.slotName, startLSN,
-	)
-	if err := r.replConn.Exec(ctx, startCmd).Close(); err != nil {
+	startLSNValue, err := pglogrepl.ParseLSN(startLSN)
+	if err != nil {
+		r.errors <- fmt.Errorf("parse start lsn %s: %w", startLSN, err)
+		return
+	}
+	if err := pglogrepl.StartReplication(ctx, r.replConn, r.source.slotName, startLSNValue, pglogrepl.StartReplicationOptions{
+		Mode: pglogrepl.LogicalReplication,
+		PluginArgs: []string{
+			"proto_version '1'",
+			"publication_names 'etl_pub'",
+		},
+	}); err != nil {
 		r.errors <- fmt.Errorf("start replication: %w", err)
 		return
 	}
@@ -318,7 +326,7 @@ func (r *pgCDCReader) run(ctx context.Context) {
 			}
 
 			r.replConn.Close(ctx)
-			replConn2, connErr := pgconn.Connect(ctx, connStr)
+			replConn2, connErr := pgconn.Connect(ctx, replConnStr)
 			if connErr != nil {
 				select {
 				case r.errors <- fmt.Errorf("reconnect: %w", connErr):
@@ -334,11 +342,21 @@ func (r *pgCDCReader) run(ctx context.Context) {
 			if resumeLSN == "" {
 				resumeLSN = "0/0"
 			}
-			resumeCmd := fmt.Sprintf(
-				"START_REPLICATION SLOT %s LOGICAL %s (proto_version '1', publication_names 'etl_pub')",
-				r.source.slotName, resumeLSN,
-			)
-			if startErr := r.replConn.Exec(ctx, resumeCmd).Close(); startErr != nil {
+			resumeLSNValue, parseErr := pglogrepl.ParseLSN(resumeLSN)
+			if parseErr != nil {
+				select {
+				case r.errors <- fmt.Errorf("parse resume lsn %s: %w", resumeLSN, parseErr):
+				default:
+				}
+				continue
+			}
+			if startErr := pglogrepl.StartReplication(ctx, r.replConn, r.source.slotName, resumeLSNValue, pglogrepl.StartReplicationOptions{
+				Mode: pglogrepl.LogicalReplication,
+				PluginArgs: []string{
+					"proto_version '1'",
+					"publication_names 'etl_pub'",
+				},
+			}); startErr != nil {
 				select {
 				case r.errors <- fmt.Errorf("resume replication: %w", startErr):
 				default:
@@ -355,9 +373,17 @@ func (r *pgCDCReader) run(ctx context.Context) {
 				continue
 			}
 			switch m.Data[0] {
-			case 'w':
-				r.handleWALData(ctx, m.Data[1:])
-			case 'k':
+			case pglogrepl.XLogDataByteID:
+				xld, err := pglogrepl.ParseXLogData(m.Data[1:])
+				if err != nil {
+					select {
+					case r.errors <- fmt.Errorf("parse xlog data: %w", err):
+					default:
+					}
+					continue
+				}
+				r.handleWALData(ctx, xld.WALData, xld.WALStart.String())
+			case pglogrepl.PrimaryKeepaliveMessageByteID:
 				r.sendStandbyStatus(m.Data[1:])
 			}
 		case *pgproto3.CopyDone:
@@ -373,6 +399,12 @@ func (r *pgCDCReader) isClosedNow() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.isClosed
+}
+
+func (r *pgCDCReader) closeDone() {
+	r.doneOnce.Do(func() {
+		close(r.done)
+	})
 }
 
 func (r *pgCDCReader) setupPublication(ctx context.Context, conn *pgconn.PgConn) error {
@@ -394,12 +426,28 @@ func (r *pgCDCReader) setupPublication(ctx context.Context, conn *pgconn.PgConn)
 		if i > 0 {
 			tableList += ", "
 		}
-		tableList += "public." + t
+		tableList += quotePGQualifiedTable(t)
 	}
 	if len(r.source.tables) > 0 {
 		return conn.Exec(ctx, fmt.Sprintf("CREATE PUBLICATION etl_pub FOR TABLE %s", tableList)).Close()
 	}
 	return conn.Exec(ctx, "CREATE PUBLICATION etl_pub FOR ALL TABLES").Close()
+}
+
+func quotePGQualifiedTable(table string) string {
+	parts := strings.Split(table, ".")
+	if len(parts) == 1 {
+		return quotePGIdent("public") + "." + quotePGIdent(parts[0])
+	}
+	quoted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		quoted = append(quoted, quotePGIdent(part))
+	}
+	return strings.Join(quoted, ".")
+}
+
+func quotePGIdent(ident string) string {
+	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }
 
 func (r *pgCDCReader) setupSlot(ctx context.Context, conn *pgconn.PgConn) error {
@@ -422,20 +470,12 @@ func (r *pgCDCReader) setupSlot(ctx context.Context, conn *pgconn.PgConn) error 
 	)).Close()
 }
 
-func (r *pgCDCReader) handleWALData(ctx context.Context, data []byte) {
-	// XLogData payload (after the outer CopyData 'w' byte is stripped by caller):
-	//   dataStart(8) + dataEnd(8) + timeline(4) + walPayload
-	// The walPayload is a stream of pgoutput messages (B/I/U/D/R/C/...).
-	if len(data) < 20 {
-		return
-	}
-	frameLSN := binary.BigEndian.Uint64(data[0:8])
-	frameLSNStr := fmt.Sprintf("%X/%X", frameLSN>>32, frameLSN&0xFFFFFFFF)
+func (r *pgCDCReader) handleWALData(ctx context.Context, data []byte, frameLSNStr string) {
+	// data is the pgoutput WALData payload: a stream of B/I/U/D/R/C/... messages.
 	r.mu.Lock()
 	r.lsn = frameLSNStr
 	r.mu.Unlock()
 
-	data = data[20:]
 	for len(data) >= 1 {
 		switch data[0] {
 		case 'B':
@@ -621,37 +661,9 @@ func (r *pgCDCReader) parseInsertMsg(data []byte, lsn string) []byte {
 	tableName := r.catalog.tableName(relID)
 	cols := r.catalog.columns(relID)
 
-	dataMap := make(map[string]any, numCols)
-	for i := 0; i < numCols && pos < len(data); i++ {
-		if pos >= len(data) {
-			break
-		}
-		colType := data[pos]
-		pos++
-		if colType == 'n' {
-			if i < len(cols) {
-				dataMap[cols[i].Name] = nil
-			}
-			continue
-		}
-		if pos+4 > len(data) {
-			break
-		}
-		valLen := int32(binary.BigEndian.Uint32(data[pos:]))
-		pos += 4
-		if valLen < 0 || pos+int(valLen) > len(data) {
-			break
-		}
-		val := data[pos : pos+int(valLen)]
-		pos += int(valLen)
-
-		colName := fmt.Sprintf("col_%d", i)
-		var typeOID uint32
-		if i < len(cols) {
-			colName = cols[i].Name
-			typeOID = cols[i].TypeOID
-		}
-		dataMap[colName] = decodeColumnValue(val, typeOID)
+	dataMap, pos, ok := readPGTupleValues(data, pos, numCols, cols, true)
+	if !ok {
+		return data[:0]
 	}
 
 	r.sendRecord(core.Record{
@@ -690,48 +702,35 @@ func (r *pgCDCReader) parseUpdateMsg(data []byte, lsn string) []byte {
 	pos := 0
 	relID := binary.BigEndian.Uint32(data[pos:])
 	pos += 4
-	if pos >= len(data) || (data[pos] != 'K' && data[pos] != 'O') {
+	if pos >= len(data) || (data[pos] != 'K' && data[pos] != 'O' && data[pos] != 'N') {
 		return data[:0]
 	}
 	tupleType := data[pos]
 	pos++
-	if pos+2 > len(data) {
-		return data[:0]
-	}
-	numCols := int(binary.BigEndian.Uint16(data[pos:]))
-	pos += 2
 
 	tableName := r.catalog.tableName(relID)
 	cols := r.catalog.columns(relID)
 
 	var beforeMap map[string]any
-	if tupleType == 'O' {
-		beforeMap = make(map[string]any, numCols)
-		for i := 0; i < numCols && pos < len(data); i++ {
-			if pos >= len(data) {
-				break
-			}
-			colType := data[pos]
-			pos++
-			if colType == 'n' {
-				if i < len(cols) {
-					beforeMap[cols[i].Name] = nil
-				}
-				continue
-			}
-			if pos+4 > len(data) {
-				break
-			}
-			valLen := int32(binary.BigEndian.Uint32(data[pos:]))
-			pos += 4
-			if valLen < 0 || pos+int(valLen) > len(data) {
-				break
-			}
-			val := data[pos : pos+int(valLen)]
-			pos += int(valLen)
+	if tupleType == 'N' {
+		pos--
+	} else if pos+2 > len(data) {
+		return data[:0]
+	} else {
+		numCols := int(binary.BigEndian.Uint16(data[pos:]))
+		pos += 2
 
-			if i < len(cols) {
-				beforeMap[cols[i].Name] = decodeColumnValue(val, cols[i].TypeOID)
+		if tupleType == 'O' {
+			var ok bool
+			beforeMap, pos, ok = readPGTupleValues(data, pos, numCols, cols, true)
+			if !ok {
+				return data[:0]
+			}
+		} else {
+			var ok bool
+			_, pos, ok = readPGTupleValues(data, pos, numCols, cols, false)
+			if !ok {
+				return data[:0]
 			}
 		}
 	}
@@ -741,16 +740,8 @@ func (r *pgCDCReader) parseUpdateMsg(data []byte, lsn string) []byte {
 	}
 	nextTupleType := data[pos]
 	pos++
-	if nextTupleType != 'K' && nextTupleType != 'N' {
-		return data[pos:]
-	}
-	if nextTupleType == 'N' && tupleType == 'K' {
-		rec := core.Record{
-			Operation: core.OpDelete,
-			Metadata:  core.Metadata{Source: r.source.name, Table: tableName, Timestamp: time.Now(), LSN: lsn},
-		}
-		r.sendRecord(rec)
-		return data[pos:]
+	if nextTupleType != 'N' {
+		return data[:0]
 	}
 	if pos+2 > len(data) {
 		return data[:0]
@@ -758,37 +749,9 @@ func (r *pgCDCReader) parseUpdateMsg(data []byte, lsn string) []byte {
 	numNewCols := int(binary.BigEndian.Uint16(data[pos:]))
 	pos += 2
 
-	dataMap := make(map[string]any, numNewCols)
-	for i := 0; i < numNewCols && pos < len(data); i++ {
-		if pos >= len(data) {
-			break
-		}
-		colType := data[pos]
-		pos++
-		if colType == 'n' {
-			if i < len(cols) {
-				dataMap[cols[i].Name] = nil
-			}
-			continue
-		}
-		if pos+4 > len(data) {
-			break
-		}
-		valLen := int32(binary.BigEndian.Uint32(data[pos:]))
-		pos += 4
-		if valLen < 0 || pos+int(valLen) > len(data) {
-			break
-		}
-		val := data[pos : pos+int(valLen)]
-		pos += int(valLen)
-
-		colName := fmt.Sprintf("col_%d", i)
-		var typeOID uint32
-		if i < len(cols) {
-			colName = cols[i].Name
-			typeOID = cols[i].TypeOID
-		}
-		dataMap[colName] = decodeColumnValue(val, typeOID)
+	dataMap, pos, ok := readPGTupleValues(data, pos, numNewCols, cols, true)
+	if !ok {
+		return data[:0]
 	}
 
 	rec := core.Record{
@@ -821,33 +784,9 @@ func (r *pgCDCReader) parseDeleteMsg(data []byte, lsn string) []byte {
 	tableName := r.catalog.tableName(relID)
 	cols := r.catalog.columns(relID)
 
-	dataMap := make(map[string]any, numCols)
-	for i := 0; i < numCols && pos < len(data); i++ {
-		if pos >= len(data) {
-			break
-		}
-		colType := data[pos]
-		pos++
-		if colType == 'n' {
-			if i < len(cols) {
-				dataMap[cols[i].Name] = nil
-			}
-			continue
-		}
-		if pos+4 > len(data) {
-			break
-		}
-		valLen := int32(binary.BigEndian.Uint32(data[pos:]))
-		pos += 4
-		if valLen < 0 || pos+int(valLen) > len(data) {
-			break
-		}
-		val := data[pos : pos+int(valLen)]
-		pos += int(valLen)
-
-		if i < len(cols) {
-			dataMap[cols[i].Name] = decodeColumnValue(val, cols[i].TypeOID)
-		}
+	dataMap, pos, ok := readPGTupleValues(data, pos, numCols, cols, true)
+	if !ok {
+		return data[:0]
 	}
 
 	r.sendRecord(core.Record{
@@ -856,6 +795,51 @@ func (r *pgCDCReader) parseDeleteMsg(data []byte, lsn string) []byte {
 		Metadata:  core.Metadata{Source: r.source.name, Table: tableName, Timestamp: time.Now(), LSN: lsn},
 	})
 	return data[pos:]
+}
+
+func readPGTupleValues(data []byte, pos, numCols int, cols []pgColumnInfo, capture bool) (map[string]any, int, bool) {
+	var dataMap map[string]any
+	if capture {
+		dataMap = make(map[string]any, numCols)
+	}
+	for i := 0; i < numCols && pos < len(data); i++ {
+		colType := data[pos]
+		pos++
+		colName := fmt.Sprintf("col_%d", i)
+		var typeOID uint32
+		if i < len(cols) {
+			colName = cols[i].Name
+			typeOID = cols[i].TypeOID
+		}
+		switch colType {
+		case 'n':
+			if capture {
+				dataMap[colName] = nil
+			}
+		case 'u':
+			// Unchanged TOAST value; there is no value payload to consume.
+		case 't':
+			if pos+4 > len(data) {
+				return dataMap, pos, false
+			}
+			valLen := int32(binary.BigEndian.Uint32(data[pos:]))
+			pos += 4
+			if valLen < 0 || pos+int(valLen) > len(data) {
+				return dataMap, pos, false
+			}
+			val := data[pos : pos+int(valLen)]
+			pos += int(valLen)
+			if capture {
+				dataMap[colName] = decodeColumnValue(val, typeOID)
+			}
+		default:
+			return dataMap, pos, false
+		}
+	}
+	if numCols > 0 && len(dataMap) == 0 && capture {
+		return dataMap, pos, false
+	}
+	return dataMap, pos, true
 }
 
 func decodeColumnValue(raw []byte, typeOID uint32) any {
@@ -1030,7 +1014,8 @@ func parsePGArray(s string) []any {
 }
 
 func (r *pgCDCReader) sendStandbyStatus(data []byte) {
-	if len(data) < 17 {
+	pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(data)
+	if err != nil {
 		return
 	}
 	// Acknowledge only up to the last durably committed LSN (records that
@@ -1043,48 +1028,18 @@ func (r *pgCDCReader) sendStandbyStatus(data []byte) {
 	committed := r.committedLsn
 	r.mu.Unlock()
 
-	var lsnBytes []byte
+	ackLSN := pkm.ServerWALEnd
 	if committed != "" {
-		if b, ok := parseLSNToBytes(committed); ok {
-			lsnBytes = b
+		if parsed, err := pglogrepl.ParseLSN(committed); err == nil {
+			ackLSN = parsed
 		}
 	}
-	if lsnBytes == nil {
-		lsnBytes = data[1:9]
-	}
-
-	status := make([]byte, 25)
-	status[0] = 'r'
-	copy(status[1:9], lsnBytes)   // last WAL byte written
-	copy(status[9:17], lsnBytes)  // last WAL byte flushed
-	copy(status[17:25], lsnBytes) // last WAL byte applied
-	cd := &pgproto3.CopyData{Data: status}
-	encoded, err := cd.Encode(nil)
-	if err != nil {
-		return
-	}
-	_ = r.replConn.Frontend().SendUnbufferedEncodedCopyData(encoded)
-}
-
-// parseLSNToBytes converts a PostgreSQL LSN string "HILO/LOLO" (hex) into an
-// 8-byte big-endian representation. Returns false on parse error.
-func parseLSNToBytes(lsn string) ([]byte, bool) {
-	parts := strings.SplitN(lsn, "/", 2)
-	if len(parts) != 2 {
-		return nil, false
-	}
-	hi, err := strconv.ParseUint(parts[0], 16, 64)
-	if err != nil {
-		return nil, false
-	}
-	lo, err := strconv.ParseUint(parts[1], 16, 64)
-	if err != nil {
-		return nil, false
-	}
-	combined := (hi << 32) | lo
-	b := make([]byte, 8)
-	binary.BigEndian.PutUint64(b, combined)
-	return b, true
+	_ = pglogrepl.SendStandbyStatusUpdate(context.Background(), r.replConn, pglogrepl.StandbyStatusUpdate{
+		WALWritePosition: ackLSN,
+		WALFlushPosition: ackLSN,
+		WALApplyPosition: ackLSN,
+		ReplyRequested:   pkm.ReplyRequested,
+	})
 }
 
 func readNullString(data []byte, off int) (string, int) {
@@ -1105,7 +1060,10 @@ func (r *pgCDCReader) Read(ctx context.Context) (core.Record, error) {
 			return core.Record{}, fmt.Errorf("pg cdc closed")
 		}
 		return rec, nil
-	case err := <-r.errors:
+	case err, ok := <-r.errors:
+		if !ok || err == nil {
+			return core.Record{}, fmt.Errorf("pg cdc closed")
+		}
 		return core.Record{}, err
 	case <-ctx.Done():
 		return core.Record{}, ctx.Err()
@@ -1230,7 +1188,7 @@ func (r *pgCDCReader) Close() error {
 	r.mu.Lock()
 	r.isClosed = true
 	r.mu.Unlock()
-	close(r.done)
+	r.closeDone()
 
 	// Only drop the replication slot when explicitly requested via
 	// `drop_slot_on_close: true`. Dropping unconditionally on every Close

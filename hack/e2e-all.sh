@@ -15,6 +15,7 @@ TESTS=(
   "e2e-mysql-postgres.sh|MySQL batch JOIN->PostgreSQL"
   "e2e-cdc-mysql.sh|MySQL CDC->MySQL"
   "e2e-cdc-postgres.sh|MySQL CDC->PostgreSQL"
+  "e2e-postgres-cdc.sh|PostgreSQL CDC source->MySQL"
   "e2e-clickhouse.sh|MySQL CDC->ClickHouse"
   "e2e-clickhouse-autocreate.sh|ClickHouse auto-create + schema drift"
   "e2e-snapshot-cdc-clickhouse.sh|MySQL snapshot+CDC->ClickHouse"

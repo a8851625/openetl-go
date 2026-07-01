@@ -220,6 +220,9 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if !contains(kafka.SupportedSchedules, "streaming") || kafka.DefaultSchedule != "streaming" {
 		t.Fatalf("kafka schedules = %#v default=%q, want streaming only", kafka.SupportedSchedules, kafka.DefaultSchedule)
 	}
+	if !readinessGateStatus(kafka, "remote_preflight", "partial") {
+		t.Fatalf("kafka readiness = %#v, want remote_preflight partial", kafka.Readiness)
+	}
 
 	mysqlBatch := findDescriptor(descriptors, "source", "mysql_batch")
 	if mysqlBatch == nil {
@@ -239,6 +242,9 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if mysqlBatch.DefaultSchedule != "once" {
 		t.Fatalf("mysql_batch default_schedule = %q, want once", mysqlBatch.DefaultSchedule)
 	}
+	if !readinessGateStatus(mysqlBatch, "remote_preflight", "pass") {
+		t.Fatalf("mysql_batch readiness = %#v, want remote_preflight pass", mysqlBatch.Readiness)
+	}
 	mysqlCDC := findDescriptor(descriptors, "source", "mysql_cdc")
 	if mysqlCDC == nil {
 		t.Fatal("missing mysql_cdc source descriptor")
@@ -252,6 +258,17 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if len(mysqlCDC.SupportedSchedules) != 1 || mysqlCDC.SupportedSchedules[0] != "streaming" || mysqlCDC.DefaultSchedule != "streaming" {
 		t.Fatalf("mysql_cdc schedules = %#v default=%q, want streaming only", mysqlCDC.SupportedSchedules, mysqlCDC.DefaultSchedule)
 	}
+	if !readinessGateStatus(mysqlCDC, "remote_preflight", "pass") {
+		t.Fatalf("mysql_cdc readiness = %#v, want remote_preflight pass", mysqlCDC.Readiness)
+	}
+
+	postgresCDC := findDescriptor(descriptors, "source", "postgres_cdc")
+	if postgresCDC == nil {
+		t.Fatal("missing postgres_cdc source descriptor")
+	}
+	if !readinessGateStatus(postgresCDC, "remote_preflight", "pass") || !readinessGateStatus(postgresCDC, "e2e_evidence", "pass") {
+		t.Fatalf("postgres_cdc readiness = %#v, want remote_preflight and e2e_evidence pass", postgresCDC.Readiness)
+	}
 
 	clickhouse := findDescriptor(descriptors, "sink", "clickhouse")
 	if clickhouse == nil {
@@ -263,12 +280,49 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	if clickhouse.Readiness.Status == "" || !readinessGateStatus(clickhouse, "schema_preflight", "pass") || !readinessGateStatus(clickhouse, "replay_absorption", "pass") {
 		t.Fatalf("unexpected clickhouse readiness: %#v", clickhouse.Readiness)
 	}
+	if !readinessGateStatus(clickhouse, "remote_preflight", "pass") {
+		t.Fatalf("clickhouse readiness = %#v, want remote_preflight pass", clickhouse.Readiness)
+	}
+	mysqlSink := findDescriptor(descriptors, "sink", "mysql")
+	if mysqlSink == nil {
+		t.Fatal("missing mysql sink descriptor")
+	}
+	if !readinessGateStatus(mysqlSink, "remote_preflight", "pass") || !contains(mysqlSink.Capabilities, "remote_preflight") {
+		t.Fatalf("mysql sink readiness/capabilities = %#v/%#v, want remote_preflight pass", mysqlSink.Readiness, mysqlSink.Capabilities)
+	}
 	postgresql := findDescriptor(descriptors, "sink", "postgresql")
 	if postgresql == nil {
 		t.Fatal("missing postgresql sink descriptor")
 	}
 	if postgresql.Maturity != "production" || !contains(postgresql.Capabilities, "upsert") {
 		t.Fatalf("unexpected postgresql descriptor: %#v", postgresql)
+	}
+	if !readinessGateStatus(postgresql, "remote_preflight", "pass") {
+		t.Fatalf("postgresql readiness = %#v, want remote_preflight pass", postgresql.Readiness)
+	}
+	doris := findDescriptor(descriptors, "sink", "doris")
+	if doris == nil {
+		t.Fatal("missing doris sink descriptor")
+	}
+	if !readinessGateStatus(doris, "remote_preflight", "pass") || !contains(doris.Capabilities, "remote_preflight") {
+		t.Fatalf("doris readiness/capabilities = %#v/%#v, want remote_preflight pass", doris.Readiness, doris.Capabilities)
+	}
+	kafkaSink := findDescriptor(descriptors, "sink", "kafka")
+	if kafkaSink == nil {
+		t.Fatal("missing kafka sink descriptor")
+	}
+	if !readinessGateStatus(kafkaSink, "remote_preflight", "pass") {
+		t.Fatalf("kafka sink readiness = %#v, want remote_preflight pass", kafkaSink.Readiness)
+	}
+	s3 := findDescriptor(descriptors, "sink", "s3")
+	if s3 == nil {
+		t.Fatal("missing s3 sink descriptor")
+	}
+	if !contains(s3.Required, "endpoint") || !contains(s3.Required, "bucket") {
+		t.Fatalf("s3 required fields = %#v, want endpoint and bucket", s3.Required)
+	}
+	if !readinessGateStatus(s3, "remote_preflight", "pass") {
+		t.Fatalf("s3 readiness = %#v, want remote_preflight pass", s3.Readiness)
 	}
 	maxcompute := findDescriptor(descriptors, "sink", "maxcompute")
 	if maxcompute == nil {

@@ -1,0 +1,42 @@
+name: "postgres-cdc-to-mysql"
+source:
+  type: postgres_cdc
+  config:
+    host: "host.docker.internal"
+    port: 15435
+    user: "etl"
+    password: "etl123"
+    database: "analytics"
+    tables:
+      - "orders"
+    slot_name: "openetl_pg_cdc_e2e"
+    sslmode: "disable"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: mysql
+  config:
+    host: "host.docker.internal"
+    port: 15436
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_target"
+    table: "orders"
+    batch_mode: "upsert"
+    pk_columns:
+      - "id"
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

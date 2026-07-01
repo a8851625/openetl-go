@@ -89,13 +89,7 @@ func NewMySQLCDCSource(config map[string]any) (*MySQLCDCSource, error) {
 	if v, ok := config["database"]; ok {
 		s.database = v.(string)
 	}
-	if v, ok := config["tables"]; ok {
-		if tbls, ok := v.([]interface{}); ok {
-			for _, t := range tbls {
-				s.tables = append(s.tables, t.(string))
-			}
-		}
-	}
+	s.tables = append(s.tables, readStringSlice(config, "tables")...)
 	if v, ok := config["server_id"]; ok {
 		switch id := v.(type) {
 		case int:

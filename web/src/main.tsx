@@ -1068,6 +1068,9 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   const [sinkConnection, setSinkConnection] = useState('');
   const [sourceContext, setSourceContext] = useState<ConnectionContext | null>(null);
   const [sinkContext, setSinkContext] = useState<ConnectionContext | null>(null);
+  const [batchSize, setBatchSize] = useState(100);
+  const [checkpointIntervalSec, setCheckpointIntervalSec] = useState(1);
+  const [dlqEnabled, setDlqEnabled] = useState(true);
 
   const sourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
   const sinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
@@ -1088,8 +1091,14 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     const rec = sourceContext?.recommendations?.find((item) => item.field === field);
     return typeof rec?.value === 'number' ? rec.value : fallback;
   };
-  const recommendedBatchSize = recommendationValue('batch_size', 100);
-  const recommendedCheckpointSec = recommendationValue('checkpoint_interval_sec', 1);
+  const recommendationNumber = (recommendations: ConnectionRecommendation[] | undefined, field: string, fallback: number) => {
+    const rec = recommendations?.find((item) => item.field === field);
+    return typeof rec?.value === 'number' ? rec.value : fallback;
+  };
+  const positiveIntValue = (value: string, fallback: number) => {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  };
   const refreshConnections = useCallback(() => {
     return api<{ connections?: ConnectionEntry[] }>('/api/v2/connections')
       .then((data) => setConnections((data.connections || []).map(normalizeConnectionEntry).filter((conn): conn is ConnectionEntry => conn !== null)))
@@ -1120,14 +1129,14 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
       source,
       transforms: parseJSONText(transformsText, []),
       sink,
-      batch_size: recommendedBatchSize,
-      checkpoint_interval_sec: recommendedCheckpointSec,
+      batch_size: batchSize,
+      checkpoint_interval_sec: checkpointIntervalSec,
       backpressure_buffer: 100,
       retry: { max_attempts: 3, initial_interval_ms: 100, max_interval_ms: 1000 },
-      dlq: { enable: true },
+      dlq: { enable: dlqEnabled },
       tags: ['ui-wizard', template.id],
     };
-  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, recommendedBatchSize, recommendedCheckpointSec, template.id, template.sample]);
+  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, batchSize, checkpointIntervalSec, dlqEnabled, template.id, template.sample]);
 
   useEffect(() => {
     refreshConnections();
@@ -1147,6 +1156,9 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     setSinkConnection('');
     setSourceContext(null);
     setSinkContext(null);
+    setBatchSize(100);
+    setCheckpointIntervalSec(1);
+    setDlqEnabled(true);
     setTransformsText(prettyJSON(nextTemplate.transforms));
     setSampleText(prettyJSON(nextTemplate.sample));
     setSourceJsonOpen(false);
@@ -1155,6 +1167,12 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     setDryRunResult(null);
     setStageDryRunResult(null);
   }, [templateId, seedSourceConfig, seedSinkConfig]);
+
+  useEffect(() => {
+    if (!sourceContext) return;
+    setBatchSize(recommendationValue('batch_size', batchSize));
+    setCheckpointIntervalSec(recommendationValue('checkpoint_interval_sec', checkpointIntervalSec));
+  }, [sourceContext]);
 
   useEffect(() => {
     setYamlText(YAML.stringify(buildSpec()));
@@ -1172,13 +1190,15 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
       setSourceConfigText(prettyJSON({}));
       const firstSample = data.introspection?.sample?.[0];
       if (firstSample) setSampleText(prettyJSON(firstSample));
+      setBatchSize(recommendationNumber(data.recommendations, 'batch_size', batchSize));
+      setCheckpointIntervalSec(recommendationNumber(data.recommendations, 'checkpoint_interval_sec', checkpointIntervalSec));
       setSourceContext(data);
     } else {
       if (data.connection?.type) setSinkType(data.connection.type);
       setSinkConfigText(prettyJSON({}));
       setSinkContext(data);
     }
-  }, []);
+  }, [batchSize, checkpointIntervalSec]);
 
   const selectSourceConnection = async (connName: string) => {
     setSourceConnection(connName);
@@ -1271,6 +1291,9 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
         setSinkType(spec.sink.type);
         setSinkConfigText(prettyJSON(spec.sink.config || {}));
       }
+      if (typeof spec.batch_size === 'number') setBatchSize(spec.batch_size);
+      if (typeof spec.checkpoint_interval_sec === 'number') setCheckpointIntervalSec(spec.checkpoint_interval_sec);
+      if (typeof spec.dlq?.enable === 'boolean') setDlqEnabled(spec.dlq.enable);
       setTransformsText(prettyJSON(spec.transforms || []));
       setError('');
     } catch (e) {
@@ -1309,6 +1332,15 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
       if (rec.path === 'transforms') {
         setTransformsText(prettyJSON(Array.isArray(rec.value) ? rec.value : []));
       }
+      if (rec.path === 'batch_size' && typeof rec.value === 'number') {
+        setBatchSize(rec.value);
+      }
+      if (rec.path === 'checkpoint_interval_sec' && typeof rec.value === 'number') {
+        setCheckpointIntervalSec(rec.value);
+      }
+      if (rec.path === 'dlq.enable' && typeof rec.value === 'boolean') {
+        setDlqEnabled(rec.value);
+      }
       setYamlText(YAML.stringify(spec));
       setResult(null);
       setError('');
@@ -1328,10 +1360,27 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     return null;
   };
 
+  const canApplyConnectionRecommendation = (title: string, rec: ConnectionRecommendation): boolean => {
+    if (configPathForConnectionRecommendation(title, rec)) return true;
+    return title.toLowerCase() === 'source' && ['batch_size', 'checkpoint_interval_sec'].includes(rec.field) && typeof rec.value === 'number';
+  };
+
   const applyConnectionRecommendation = (title: string, rec: ConnectionRecommendation) => {
     const configPath = configPathForConnectionRecommendation(title, rec);
-    if (!configPath) return;
     const scope = title.toLowerCase() === 'sink' ? 'sink' : 'source';
+    if (!configPath) {
+      if (scope === 'source' && rec.field === 'batch_size' && typeof rec.value === 'number') {
+        setBatchSize(rec.value);
+        setResult(null);
+        setError('');
+      }
+      if (scope === 'source' && rec.field === 'checkpoint_interval_sec' && typeof rec.value === 'number') {
+        setCheckpointIntervalSec(rec.value);
+        setResult(null);
+        setError('');
+      }
+      return;
+    }
     const next = title.toLowerCase() === 'sink' ? parseJSONObject(sinkConfigText) : parseJSONObject(sourceConfigText);
     setValueAtPath(next, configPath, rec.value);
     try {
@@ -1423,7 +1472,7 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
         {ctx.recommendations?.length ? (
           <div className="mb-2 flex flex-wrap gap-1">
             {ctx.recommendations.map((rec) => {
-              const canApply = Boolean(configPathForConnectionRecommendation(title, rec));
+              const canApply = canApplyConnectionRecommendation(title, rec);
               return (
                 <span key={rec.field} className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-white/80 px-2 py-0.5 text-[10px] text-slate-600">
                   <span>{rec.field}: {String(rec.value || 'review')}</span>
@@ -1578,6 +1627,37 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
           <div className="grid gap-3 lg:grid-cols-2">
             {renderConnectionContext('Source', sourceContext)}
             {renderConnectionContext('Sink', sinkContext)}
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid="wizard-runtime-safety">
+            <div className="mb-3 text-xs font-semibold text-slate-600">Runtime safety</div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block text-xs text-slate-500">
+                <span className="mb-1 block font-medium">Batch size</span>
+                <input
+                  data-testid="wizard-batch-size"
+                  className="input w-full"
+                  type="number"
+                  min={1}
+                  value={batchSize}
+                  onChange={(e) => setBatchSize(positiveIntValue(e.target.value, batchSize))}
+                />
+              </label>
+              <label className="block text-xs text-slate-500">
+                <span className="mb-1 block font-medium">Checkpoint sec</span>
+                <input
+                  data-testid="wizard-checkpoint-sec"
+                  className="input w-full"
+                  type="number"
+                  min={1}
+                  value={checkpointIntervalSec}
+                  onChange={(e) => setCheckpointIntervalSec(positiveIntValue(e.target.value, checkpointIntervalSec))}
+                />
+              </label>
+              <label className="flex items-center gap-2 rounded border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
+                <input data-testid="wizard-dlq-enabled" type="checkbox" checked={dlqEnabled} onChange={(e) => setDlqEnabled(e.target.checked)} />
+                DLQ enabled
+              </label>
+            </div>
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
             {renderConfigEditor('Source config', sourceFields, sourceConfig, sourceConfigText, setSourceConfigText, sourceJsonOpen, setSourceJsonOpen, 'wizard-source-config-form')}

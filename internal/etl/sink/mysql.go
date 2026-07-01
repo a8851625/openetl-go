@@ -83,15 +83,7 @@ func NewMySQLSink(config map[string]any) (*MySQLSink, error) {
 	if v, ok := config["table"]; ok {
 		s.table = v.(string)
 	}
-	if v, ok := config["pk_columns"]; ok {
-		if cols, ok := v.([]interface{}); ok {
-			for _, c := range cols {
-				if cs, ok := c.(string); ok {
-					s.pkColumns = append(s.pkColumns, cs)
-				}
-			}
-		}
-	}
+	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
 	if v, ok := config["batch_mode"]; ok {
 		s.batchMode = v.(string)
 	}
@@ -339,6 +331,9 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 }
 
 func (s *MySQLSink) batchInsert(ctx context.Context, tx *sql.Tx, table string, cols []string, rows [][]any, mode string) error {
+	if len(cols) == 0 {
+		return fmt.Errorf("batch insert %s: record has no writable columns", table)
+	}
 	for offset := 0; offset < len(rows); offset += s.insertChunkSize {
 		end := offset + s.insertChunkSize
 		if end > len(rows) {

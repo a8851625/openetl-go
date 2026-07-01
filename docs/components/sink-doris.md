@@ -6,6 +6,7 @@ Write records into Doris through Stream Load with MySQL-protocol fallback for su
 ## Config Fields
 - `host`, `database`, `table`: required target fields.
 - `port`, `http_port`, `user`, `password`: FE/MySQL and HTTP connection fields.
+- `write_mode`, `stream_load_format`, `stream_load_scheme`, `stream_load_timeout_sec`, `insert_chunk_size`: write path and batching controls.
 - `batch_mode`, `pk_columns`, `auto_create`, `schema_drift`, `ddl_policy`: idempotency and schema controls.
 
 ## Record Shape
@@ -35,4 +36,4 @@ sink:
 ```
 
 ## Evidence
-Covered by `hack/e2e-doris.sh` and Doris sink/preflight tests.
+Covered by `hack/e2e-doris.sh` and Doris sink/preflight tests. Preflight opens the Doris MySQL protocol target, validates table/Unique Key metadata when reachable, emits DDL preview, and reports field-level schema issues.

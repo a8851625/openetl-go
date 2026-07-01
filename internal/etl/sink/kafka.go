@@ -70,15 +70,7 @@ func NewKafkaSink(config map[string]any) (*KafkaSink, error) {
 			s.name = vs
 		}
 	}
-	if v, ok := config["brokers"]; ok {
-		if brokers, ok := v.([]interface{}); ok {
-			for _, b := range brokers {
-				if bs, ok := b.(string); ok {
-					s.brokers = append(s.brokers, bs)
-				}
-			}
-		}
-	}
+	s.brokers = append(s.brokers, stringSliceConfig(config, "brokers")...)
 	if v, ok := config["topic"]; ok {
 		if vs, ok := v.(string); ok {
 			s.topic = vs

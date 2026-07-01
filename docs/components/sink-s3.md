@@ -4,8 +4,8 @@
 Write batches to S3-compatible object storage such as MinIO.
 
 ## Config Fields
-- `bucket`: required target bucket.
-- `endpoint`, `region`, `access_key`, `secret_key`: connection fields; keys are secrets.
+- `endpoint`, `bucket`: required target endpoint and bucket.
+- `region`, `access_key`, `secret_key`: connection fields; keys are secrets.
 - `format`, `prefix`, `output_dir`, retry fields: output controls.
 
 ## Record Shape
@@ -32,4 +32,4 @@ sink:
 ```
 
 ## Evidence
-Covered by `hack/e2e-s3-minio.sh` and S3 sink tests.
+Covered by `hack/e2e-s3-minio.sh` and S3 sink tests. Preflight blocks missing `endpoint`/`bucket` and opens the S3-compatible target to check bucket reachability; use `file_sink` for local file output.

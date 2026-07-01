@@ -1,20 +1,31 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/sha512"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/IBM/sarama"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gogf/gf/v2/frame/g"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
+	etlsink "github.com/a8851625/openetl-go/internal/etl/sink"
 )
 
 // PreflightIssue describes a single check failure with remediation.
@@ -105,12 +116,23 @@ func (s *Server) RunPreflight(ctx context.Context, spec *pipeline.Spec) *Preflig
 	s.checkRuntimeStateRequirements(spec, result)
 
 	// Source checks
-	s.checkMySQLCDC(ctx, spec, result)
+	if s.checkStaticSourceConfig(spec, result) {
+		s.checkMySQLCDC(ctx, spec, result)
+		s.checkMySQLBatchSource(ctx, spec, result)
+		s.checkPostgresCDCSource(ctx, spec, result)
+		s.checkFileSource(ctx, spec, result)
+		s.checkHTTPSource(ctx, spec, result)
+		s.checkKafkaSource(ctx, spec, result)
+	}
 
 	// Sink checks
-	if sink, ok := s.checkSinkReachable(ctx, spec, result); ok {
-		defer func() { _ = sink.Close() }()
-		s.checkSchemaCompatibility(ctx, spec, sink, result)
+	s.checkStaticSinkConfig(spec, result)
+	s.checkKafkaSink(ctx, spec, result)
+	if spec == nil || strings.ToLower(spec.Sink.Type) != "kafka" {
+		if sink, ok := s.checkSinkReachable(ctx, spec, result); ok {
+			defer func() { _ = sink.Close() }()
+			s.checkSchemaCompatibility(ctx, spec, sink, result)
+		}
 	}
 
 	addConnectorReadiness(spec, result)
@@ -137,6 +159,923 @@ func (s *Server) checkRuntimeStateRequirements(spec *pipeline.Spec, result *Pref
 		})
 		result.Passed = false
 	}
+}
+
+// ── Source: static config checks ─────────────────────────────────────
+
+func (s *Server) checkStaticSourceConfig(spec *pipeline.Spec, result *PreflightResult) bool {
+	if spec == nil || result == nil {
+		return true
+	}
+	before := len(result.Issues)
+	switch strings.ToLower(spec.Source.Type) {
+	case "mysql_cdc":
+		checkMySQLCDCSourceConfig(spec, result)
+	case "mysql_snapshot_cdc":
+		checkMySQLSnapshotCDCSourceConfig(spec, result)
+	case "postgres_cdc":
+		checkPostgresCDCSourceConfig(spec, result)
+	}
+	return len(result.Issues) == before
+}
+
+func checkMySQLCDCSourceConfig(spec *pipeline.Spec, result *PreflightResult) {
+	cfg := spec.Source.Config
+	for _, field := range []string{"host", "user", "database"} {
+		if strings.TrimSpace(stringField(cfg, field, "")) == "" {
+			addStaticFieldError(result, "mysql-cdc-source-required-config", "source.config."+field,
+				fmt.Sprintf("mysql_cdc source requires source.config.%s", field),
+				fmt.Sprintf("set source.config.%s before starting the CDC pipeline", field))
+		}
+	}
+	if len(trimmedStringSlice(stringSliceField(cfg, "tables"))) == 0 {
+		addStaticFieldError(result, "mysql-cdc-source-tables", "source.config.tables",
+			"mysql_cdc source requires source.config.tables",
+			"set source.config.tables to one or more MySQL tables to watch")
+	}
+	checkMySQLCDCCommonStaticConfig("mysql-cdc", cfg, result)
+	if startFrom := strings.TrimSpace(stringField(cfg, "start_from", "")); startFrom != "" && !isSupportedMySQLCDCStartFrom(startFrom) {
+		addStaticFieldError(result, "mysql-cdc-source-start-from", "source.config.start_from",
+			fmt.Sprintf("mysql_cdc source start_from %q is invalid", startFrom),
+			"set start_from to timestamp, binlog:<file>:<pos>, or gtid:<set>")
+	}
+}
+
+func checkMySQLSnapshotCDCSourceConfig(spec *pipeline.Spec, result *PreflightResult) {
+	cfg := spec.Source.Config
+	for _, field := range []string{"host", "user", "database"} {
+		if strings.TrimSpace(stringField(cfg, field, "")) == "" {
+			addStaticFieldError(result, "mysql-snapshot-cdc-source-required-config", "source.config."+field,
+				fmt.Sprintf("mysql_snapshot_cdc source requires source.config.%s", field),
+				fmt.Sprintf("set source.config.%s before starting the snapshot+CDC pipeline", field))
+		}
+	}
+	if strings.TrimSpace(stringField(cfg, "table", "")) == "" && len(trimmedStringSlice(stringSliceField(cfg, "tables"))) == 0 {
+		addStaticFieldError(result, "mysql-snapshot-cdc-source-tables", "source.config.tables",
+			"mysql_snapshot_cdc source requires source.config.table or source.config.tables",
+			"set source.config.table for one table or source.config.tables for multi-table snapshot+CDC")
+	}
+	if strings.TrimSpace(stringField(cfg, "pk_column", "id")) == "" {
+		addStaticFieldError(result, "mysql-snapshot-cdc-source-pk-column", "source.config.pk_column",
+			"mysql_snapshot_cdc source pk_column cannot be empty",
+			"remove source.config.pk_column to use id, or set a non-empty primary key/cursor column")
+	}
+	if limit := intField(cfg, "limit", 1000); limit <= 0 {
+		addStaticFieldError(result, "mysql-snapshot-cdc-source-limit", "source.config.limit",
+			fmt.Sprintf("mysql_snapshot_cdc source limit must be > 0, got %d", limit),
+			"set source.config.limit to a positive snapshot page size")
+	}
+	checkMySQLCDCCommonStaticConfig("mysql-snapshot-cdc", cfg, result)
+}
+
+func checkMySQLCDCCommonStaticConfig(prefix string, cfg map[string]any, result *PreflightResult) {
+	if port := intField(cfg, "port", 3306); port <= 0 || port > 65535 {
+		addStaticFieldError(result, prefix+"-source-port", "source.config.port",
+			fmt.Sprintf("MySQL CDC source port must be between 1 and 65535, got %d", port),
+			"set source.config.port to the MySQL listener port, usually 3306")
+	}
+	serverID := intField(cfg, "server_id", 0)
+	if _, ok := cfg["server_id"]; ok && (serverID <= 0 || serverID > 4294967295) {
+		addStaticFieldError(result, prefix+"-source-server-id", "source.config.server_id",
+			fmt.Sprintf("MySQL CDC source server_id must be between 1 and 4294967295, got %d", serverID),
+			"remove source.config.server_id to auto-derive one, or set a unique positive replication server ID")
+	}
+	serverIDBase := intField(cfg, "server_id_base", 0)
+	if _, ok := cfg["server_id_base"]; ok && serverIDBase <= 0 {
+		addStaticFieldError(result, prefix+"-source-server-id-base", "source.config.server_id_base",
+			fmt.Sprintf("MySQL CDC source server_id_base must be > 0, got %d", serverIDBase),
+			"set source.config.server_id_base to a positive base ID when using shard_total")
+	}
+	if shardTotal := intField(cfg, "shard_total", 0); shardTotal > 0 {
+		shardIndex := intField(cfg, "shard_index", 0)
+		if shardTotal < 2 || shardIndex < 0 || shardIndex >= shardTotal {
+			addStaticFieldError(result, prefix+"-source-shard", "source.config.shard_index",
+				fmt.Sprintf("MySQL CDC source shard settings are invalid: shard_index=%d shard_total=%d", shardIndex, shardTotal),
+				"set shard_total >= 2 and shard_index between 0 and shard_total-1, or remove both fields")
+		}
+	}
+}
+
+func isSupportedMySQLCDCStartFrom(startFrom string) bool {
+	startFrom = strings.TrimSpace(startFrom)
+	if startFrom == "" || startFrom == "timestamp" {
+		return true
+	}
+	if strings.HasPrefix(startFrom, "gtid:") && strings.TrimSpace(strings.TrimPrefix(startFrom, "gtid:")) != "" {
+		return true
+	}
+	if strings.HasPrefix(startFrom, "binlog:") {
+		parts := strings.Split(startFrom, ":")
+		return len(parts) == 3 && strings.TrimSpace(parts[1]) != "" && strings.TrimSpace(parts[2]) != ""
+	}
+	return false
+}
+
+func trimmedStringSlice(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func checkPostgresCDCSourceConfig(spec *pipeline.Spec, result *PreflightResult) {
+	cfg := spec.Source.Config
+	for _, field := range []string{"host", "user", "database"} {
+		if strings.TrimSpace(stringField(cfg, field, "")) == "" {
+			addStaticFieldError(result, "postgres-cdc-source-required-config", "source.config."+field,
+				fmt.Sprintf("postgres_cdc source requires source.config.%s", field),
+				fmt.Sprintf("set source.config.%s before starting the PostgreSQL CDC pipeline", field))
+		}
+	}
+	if port := intField(cfg, "port", 5432); port <= 0 || port > 65535 {
+		addStaticFieldError(result, "postgres-cdc-source-port", "source.config.port",
+			fmt.Sprintf("postgres_cdc source port must be between 1 and 65535, got %d", port),
+			"set source.config.port to the PostgreSQL listener port, usually 5432")
+	}
+	slotName := strings.TrimSpace(stringField(cfg, "slot_name", "etl_slot"))
+	if slotName == "" {
+		addStaticFieldError(result, "postgres-cdc-source-slot-name", "source.config.slot_name",
+			"postgres_cdc source slot_name cannot be empty",
+			"remove source.config.slot_name to use etl_slot, or set a stable logical replication slot name")
+	} else if strings.ContainsAny(slotName, " \t\r\n") {
+		addStaticFieldError(result, "postgres-cdc-source-slot-name", "source.config.slot_name",
+			fmt.Sprintf("postgres_cdc source slot_name %q cannot contain whitespace", slotName),
+			"set source.config.slot_name to a PostgreSQL replication slot identifier without whitespace")
+	}
+	sslmode := strings.ToLower(strings.TrimSpace(stringField(cfg, "sslmode", "prefer")))
+	if sslmode == "" {
+		sslmode = "prefer"
+	}
+	if !isSupportedPostgresSSLMode(sslmode) {
+		addStaticFieldError(result, "postgres-cdc-source-sslmode", "source.config.sslmode",
+			fmt.Sprintf("postgres_cdc source sslmode %q is invalid", sslmode),
+			"set source.config.sslmode to disable, allow, prefer, require, verify-ca, or verify-full")
+	}
+	tables := trimmedStringSlice(stringSliceField(cfg, "tables"))
+	if boolField(cfg, "enable_snapshot", false) && len(tables) == 0 {
+		addStaticFieldError(result, "postgres-cdc-source-snapshot-tables", "source.config.tables",
+			"postgres_cdc source enable_snapshot requires source.config.tables",
+			"set source.config.tables so the initial snapshot has a bounded table list")
+	}
+	for _, table := range stringSliceField(cfg, "tables") {
+		table = strings.TrimSpace(table)
+		if table == "" {
+			addStaticFieldError(result, "postgres-cdc-source-table", "source.config.tables",
+				"postgres_cdc source tables contains an empty table name",
+				"remove empty entries from source.config.tables")
+			continue
+		}
+		if strings.Contains(table, ".") {
+			parts := strings.SplitN(table, ".", 2)
+			if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+				addStaticFieldError(result, "postgres-cdc-source-table", "source.config.tables",
+					fmt.Sprintf("postgres_cdc source table %q is invalid", table),
+					"use table names like orders or schema-qualified names like public.orders")
+			}
+		}
+	}
+}
+
+// ── Sink: static config checks ───────────────────────────────────────
+
+func (s *Server) checkStaticSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
+	if spec == nil || result == nil {
+		return
+	}
+	switch strings.ToLower(spec.Sink.Type) {
+	case "file_sink", "s3":
+		checkFileLikeSinkConfig(spec, result)
+		if strings.ToLower(spec.Sink.Type) == "s3" {
+			checkS3SinkConfig(spec, result)
+		}
+	case "mysql", "postgres", "postgresql":
+		checkRelationalSinkConfig(spec, result)
+	case "clickhouse":
+		checkClickHouseSinkConfig(spec, result)
+	case "doris":
+		checkDorisSinkConfig(spec, result)
+	case "maxcompute", "odps":
+		checkMaxComputeSinkConfig(spec, result)
+	case "kafka":
+		checkKafkaSinkConfig(spec, result)
+	case "elasticsearch", "es":
+		checkElasticsearchSinkConfig(spec, result)
+	}
+}
+
+func checkFileLikeSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
+	format := strings.ToLower(strings.TrimSpace(stringField(spec.Sink.Config, "format", "json")))
+	if format == "" {
+		format = "json"
+	}
+	if !isSupportedFileLikeSinkFormat(format) {
+		msg := fmt.Sprintf("sink %q format %q is not supported", spec.Sink.Type, format)
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "sink-config-format",
+			Message:     msg,
+			Remediation: "set sink.config.format to json, jsonl, csv, or parquet; unsupported formats can otherwise produce unreadable or empty output",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.format",
+			Check:       "sink-config-format",
+			Message:     msg,
+			Remediation: "choose one of: json, jsonl, csv, parquet",
+		})
+		result.Passed = false
+	}
+	if maxRetries := intField(spec.Sink.Config, "max_retries", 3); maxRetries < 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "sink-config-retry",
+			Message:     fmt.Sprintf("sink %q max_retries must be >= 0, got %d", spec.Sink.Type, maxRetries),
+			Remediation: "set sink.config.max_retries to 0 or a positive retry count",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.max_retries",
+			Check:       "sink-config-retry",
+			Message:     "max_retries must be >= 0",
+			Remediation: "set sink.config.max_retries to 0 or a positive retry count",
+		})
+		result.Passed = false
+	}
+	if retryBase := intField(spec.Sink.Config, "retry_base_ms", 500); retryBase < 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "sink-config-retry",
+			Message:     fmt.Sprintf("sink %q retry_base_ms must be >= 0, got %d", spec.Sink.Type, retryBase),
+			Remediation: "set sink.config.retry_base_ms to 0 or a positive backoff in milliseconds",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.retry_base_ms",
+			Check:       "sink-config-retry",
+			Message:     "retry_base_ms must be >= 0",
+			Remediation: "set sink.config.retry_base_ms to 0 or a positive backoff in milliseconds",
+		})
+		result.Passed = false
+	}
+}
+
+func isSupportedFileLikeSinkFormat(format string) bool {
+	switch format {
+	case "json", "jsonl", "csv", "parquet":
+		return true
+	default:
+		return false
+	}
+}
+
+func checkS3SinkConfig(spec *pipeline.Spec, result *PreflightResult) {
+	if strings.TrimSpace(stringField(spec.Sink.Config, "endpoint", "")) == "" {
+		addStaticSinkFieldError(result, "s3-sink-endpoint", "sink.config.endpoint",
+			"s3 sink requires sink.config.endpoint",
+			"set sink.config.endpoint to the S3-compatible endpoint reachable from the ETL process, for example http://minio:9000")
+	}
+	if strings.TrimSpace(stringField(spec.Sink.Config, "bucket", "")) == "" {
+		addStaticSinkFieldError(result, "s3-sink-bucket", "sink.config.bucket",
+			"s3 sink requires sink.config.bucket",
+			"set sink.config.bucket to the target S3 bucket name")
+	}
+}
+
+func checkKafkaSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
+	if len(stringSliceField(spec.Sink.Config, "brokers")) == 0 {
+		msg := "kafka sink requires sink.config.brokers"
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-sink-brokers",
+			Message:     msg,
+			Remediation: "set sink.config.brokers to the Kafka bootstrap broker addresses reachable from the ETL process",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.brokers",
+			Check:       "kafka-sink-brokers",
+			Message:     msg,
+			Remediation: "provide at least one Kafka broker address",
+		})
+		result.Passed = false
+	}
+	if strings.TrimSpace(stringField(spec.Sink.Config, "topic", "")) == "" {
+		msg := "kafka sink requires sink.config.topic"
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-sink-topic",
+			Message:     msg,
+			Remediation: "set sink.config.topic to the Kafka topic that should receive records",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.topic",
+			Check:       "kafka-sink-topic",
+			Message:     msg,
+			Remediation: "provide a non-empty Kafka topic name",
+		})
+		result.Passed = false
+	}
+	compression := strings.ToLower(strings.TrimSpace(stringField(spec.Sink.Config, "compression", "none")))
+	if compression == "" {
+		compression = "none"
+	}
+	if !isSupportedKafkaCompression(compression) {
+		msg := fmt.Sprintf("kafka sink compression %q is not supported", compression)
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-sink-compression",
+			Message:     msg,
+			Remediation: "set sink.config.compression to none, gzip, snappy, lz4, or zstd",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.compression",
+			Check:       "kafka-sink-compression",
+			Message:     msg,
+			Remediation: "choose one of: none, gzip, snappy, lz4, zstd",
+		})
+		result.Passed = false
+	}
+	if retryBackoff := intField(spec.Sink.Config, "retry_backoff_ms", 0); retryBackoff < 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-sink-retry",
+			Message:     fmt.Sprintf("kafka sink retry_backoff_ms must be >= 0, got %d", retryBackoff),
+			Remediation: "set sink.config.retry_backoff_ms to 0 or a positive backoff in milliseconds",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.retry_backoff_ms",
+			Check:       "kafka-sink-retry",
+			Message:     "retry_backoff_ms must be >= 0",
+			Remediation: "set sink.config.retry_backoff_ms to 0 or a positive backoff in milliseconds",
+		})
+		result.Passed = false
+	}
+}
+
+func (s *Server) checkKafkaSink(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
+	if spec == nil || strings.ToLower(spec.Sink.Type) != "kafka" {
+		return
+	}
+	cfg := spec.Sink.Config
+	brokers := stringSliceField(cfg, "brokers")
+	topic := strings.TrimSpace(stringField(cfg, "topic", ""))
+	if len(brokers) == 0 || topic == "" {
+		return
+	}
+
+	adminConfig, err := kafkaPreflightAdminConfig(cfg)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-sink-config",
+			Message:     fmt.Sprintf("invalid kafka sink client config: %v", err),
+			Remediation: "verify sink.config.sasl_* / tls fields match the Kafka cluster requirements",
+		})
+		result.Passed = false
+		return
+	}
+
+	admin, err := sarama.NewClusterAdmin(brokers, adminConfig)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "kafka-sink-reachable",
+			Message:     fmt.Sprintf("cannot connect to Kafka brokers %v: %v", brokers, err),
+			Remediation: "verify Kafka brokers, network routing, TLS/SASL settings, and firewall rules before starting the pipeline",
+		})
+		return
+	}
+	defer func() { _ = admin.Close() }()
+
+	topics, err := admin.ListTopics()
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "kafka-sink-metadata",
+			Message:     fmt.Sprintf("cannot list Kafka topics from brokers %v: %v", brokers, err),
+			Remediation: "grant the Kafka principal metadata/list permissions or verify broker compatibility before production rollout",
+		})
+		return
+	}
+	detail, ok := topics[topic]
+	if !ok {
+		if boolField(cfg, "auto_create_topic", false) {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "warning",
+				Check:       "kafka-sink-topic-auto-create",
+				Message:     fmt.Sprintf("kafka topic %q was not found and will be created at sink open", topic),
+				Remediation: "verify the Kafka principal has CreateTopics permission, or create the topic explicitly before production",
+			})
+			return
+		}
+		addStaticSinkFieldError(result, "kafka-sink-topic-metadata", "sink.config.topic",
+			fmt.Sprintf("kafka topic %q was not found in broker metadata", topic),
+			"create the Kafka topic before starting the pipeline, set sink.config.auto_create_topic=true for first-run smoke tests, or update sink.config.topic")
+		return
+	}
+	if detail.NumPartitions == 0 {
+		addStaticSinkFieldError(result, "kafka-sink-topic-partitions", "sink.config.topic",
+			fmt.Sprintf("kafka topic %q has no partitions", topic),
+			"create at least one partition for the target topic before starting the pipeline")
+		return
+	}
+	g.Log().Debugf(ctx, "Kafka sink preflight passed: brokers=%v topic=%s partitions=%d", brokers, topic, detail.NumPartitions)
+}
+
+func isSupportedKafkaCompression(compression string) bool {
+	switch compression {
+	case "none", "gzip", "snappy", "lz4", "zstd":
+		return true
+	default:
+		return false
+	}
+}
+
+func checkRelationalSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
+	sinkType := strings.ToLower(spec.Sink.Type)
+	cfg := spec.Sink.Config
+	label := sinkType
+	if label == "postgresql" {
+		label = "postgres"
+	}
+	for _, field := range []string{"host", "user", "database", "table"} {
+		if strings.TrimSpace(stringField(cfg, field, "")) == "" {
+			check := label + "-sink-required-config"
+			addStaticSinkFieldError(result, check, "sink.config."+field,
+				fmt.Sprintf("%s sink requires sink.config.%s", sinkType, field),
+				fmt.Sprintf("set sink.config.%s before starting the pipeline", field))
+		}
+	}
+	defaultPort := 3306
+	if sinkType == "postgres" || sinkType == "postgresql" {
+		defaultPort = 5432
+	}
+	if port := intField(cfg, "port", defaultPort); port <= 0 || port > 65535 {
+		addStaticSinkFieldError(result, label+"-sink-port", "sink.config.port",
+			fmt.Sprintf("%s sink port must be between 1 and 65535, got %d", sinkType, port),
+			"set sink.config.port to a valid database listener port")
+	}
+	batchMode := strings.ToLower(strings.TrimSpace(stringField(cfg, "batch_mode", "insert")))
+	if batchMode == "" {
+		batchMode = "insert"
+	}
+	if batchMode != "insert" && batchMode != "upsert" {
+		addStaticSinkFieldError(result, label+"-sink-batch-mode", "sink.config.batch_mode",
+			fmt.Sprintf("%s sink batch_mode %q is not supported", sinkType, batchMode),
+			"set sink.config.batch_mode to insert or upsert")
+	}
+	if batchMode == "upsert" && len(stringSliceField(cfg, "pk_columns")) == 0 {
+		addStaticSinkFieldError(result, label+"-sink-upsert-keys", "sink.config.pk_columns",
+			fmt.Sprintf("%s sink upsert mode requires sink.config.pk_columns", sinkType),
+			"set sink.config.pk_columns to stable business key columns before relying on replay absorption")
+	}
+	if schemaDrift := strings.ToLower(strings.TrimSpace(stringField(cfg, "schema_drift", "ignore"))); schemaDrift != "" && !isSupportedRelationalSchemaDrift(schemaDrift) {
+		addStaticSinkFieldError(result, label+"-sink-schema-drift", "sink.config.schema_drift",
+			fmt.Sprintf("%s sink schema_drift %q is not supported", sinkType, schemaDrift),
+			"set sink.config.schema_drift to ignore, fail, or add_columns")
+	}
+	if ddlPolicy := strings.ToLower(strings.TrimSpace(stringField(cfg, "ddl_policy", "reject"))); ddlPolicy != "" && !isSupportedDDLPolicy(ddlPolicy) {
+		addStaticSinkFieldError(result, label+"-sink-ddl-policy", "sink.config.ddl_policy",
+			fmt.Sprintf("%s sink ddl_policy %q is not supported", sinkType, ddlPolicy),
+			"set sink.config.ddl_policy to reject, ignore, or apply")
+	}
+	if chunkSize := intField(cfg, "insert_chunk_size", 500); chunkSize <= 0 {
+		addStaticSinkFieldError(result, label+"-sink-insert-chunk-size", "sink.config.insert_chunk_size",
+			fmt.Sprintf("%s sink insert_chunk_size must be > 0, got %d", sinkType, chunkSize),
+			"set sink.config.insert_chunk_size to a positive row count such as 500")
+	}
+	if sinkType == "postgres" || sinkType == "postgresql" {
+		sslmode := strings.ToLower(strings.TrimSpace(stringField(cfg, "sslmode", "prefer")))
+		if sslmode == "" {
+			sslmode = "prefer"
+		}
+		if !isSupportedPostgresSSLMode(sslmode) {
+			addStaticSinkFieldError(result, "postgres-sink-sslmode", "sink.config.sslmode",
+				fmt.Sprintf("postgres sink sslmode %q is invalid", sslmode),
+				"set sink.config.sslmode to disable, allow, prefer, require, verify-ca, or verify-full")
+		}
+	}
+}
+
+func addStaticSinkFieldError(result *PreflightResult, check, field, message, remediation string) {
+	addStaticFieldError(result, check, field, message, remediation)
+}
+
+func addStaticFieldError(result *PreflightResult, check, field, message, remediation string) {
+	result.Issues = append(result.Issues, PreflightIssue{
+		Level:       "error",
+		Check:       check,
+		Message:     message,
+		Remediation: remediation,
+	})
+	result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+		Level:       "error",
+		Field:       field,
+		Check:       check,
+		Message:     message,
+		Remediation: remediation,
+	})
+	result.Passed = false
+}
+
+func isSupportedRelationalSchemaDrift(value string) bool {
+	switch value {
+	case "ignore", "fail", "add_columns":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedDDLPolicy(value string) bool {
+	switch value {
+	case "reject", "ignore", "apply":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedPostgresSSLMode(value string) bool {
+	switch value {
+	case "disable", "allow", "prefer", "require", "verify-ca", "verify-full":
+		return true
+	default:
+		return false
+	}
+}
+
+func checkClickHouseSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
+	cfg := spec.Sink.Config
+	for _, field := range []string{"host", "database"} {
+		if strings.TrimSpace(stringField(cfg, field, "")) == "" {
+			addStaticSinkFieldError(result, "clickhouse-sink-required-config", "sink.config."+field,
+				fmt.Sprintf("clickhouse sink requires sink.config.%s", field),
+				fmt.Sprintf("set sink.config.%s before starting the pipeline", field))
+		}
+	}
+	if port := intField(cfg, "port", 9000); port <= 0 || port > 65535 {
+		addStaticSinkFieldError(result, "clickhouse-sink-port", "sink.config.port",
+			fmt.Sprintf("clickhouse sink port must be between 1 and 65535, got %d", port),
+			"set sink.config.port to 9000 for native protocol or 8123 for HTTP")
+	}
+	protocol := strings.ToLower(strings.TrimSpace(stringField(cfg, "protocol", "native")))
+	if protocol == "" {
+		protocol = "native"
+	}
+	if protocol != "native" && protocol != "http" {
+		addStaticSinkFieldError(result, "clickhouse-sink-protocol", "sink.config.protocol",
+			fmt.Sprintf("clickhouse sink protocol %q is not supported", protocol),
+			"set sink.config.protocol to native or http")
+	}
+	if schemaDrift := strings.ToLower(strings.TrimSpace(stringField(cfg, "schema_drift", "ignore"))); schemaDrift != "" && !isSupportedClickHouseSchemaDrift(schemaDrift) {
+		addStaticSinkFieldError(result, "clickhouse-sink-schema-drift", "sink.config.schema_drift",
+			fmt.Sprintf("clickhouse sink schema_drift %q is not supported", schemaDrift),
+			"set sink.config.schema_drift to ignore, fail, add_columns, or sync")
+	}
+	if ddlPolicy := strings.ToLower(strings.TrimSpace(stringField(cfg, "ddl_policy", "apply"))); ddlPolicy != "" && !isSupportedDDLPolicy(ddlPolicy) {
+		addStaticSinkFieldError(result, "clickhouse-sink-ddl-policy", "sink.config.ddl_policy",
+			fmt.Sprintf("clickhouse sink ddl_policy %q is not supported", ddlPolicy),
+			"set sink.config.ddl_policy to reject, ignore, or apply")
+	}
+	if sourceDialect := strings.ToLower(strings.TrimSpace(stringField(cfg, "source_dialect", ""))); sourceDialect != "" && !isSupportedClickHouseSourceDialect(sourceDialect) {
+		addStaticSinkFieldError(result, "clickhouse-sink-source-dialect", "sink.config.source_dialect",
+			fmt.Sprintf("clickhouse sink source_dialect %q is not supported", sourceDialect),
+			"set sink.config.source_dialect to mysql, postgres, postgresql, or clickhouse")
+	}
+	if optimizeInterval := intField(cfg, "optimize_interval_sec", 0); optimizeInterval < 0 {
+		addStaticSinkFieldError(result, "clickhouse-sink-optimize-interval", "sink.config.optimize_interval_sec",
+			fmt.Sprintf("clickhouse sink optimize_interval_sec must be >= 0, got %d", optimizeInterval),
+			"set sink.config.optimize_interval_sec to 0 to disable periodic OPTIMIZE, or a positive interval in seconds")
+	}
+	compression := strings.ToUpper(strings.TrimSpace(stringField(cfg, "compression", "LZ4")))
+	if compression == "" {
+		compression = "LZ4"
+	}
+	if compression != "LZ4" && compression != "ZSTD" {
+		addStaticSinkFieldError(result, "clickhouse-sink-compression", "sink.config.compression",
+			fmt.Sprintf("clickhouse sink compression %q is not supported", compression),
+			"set sink.config.compression to LZ4 or ZSTD")
+	}
+	if _, ok := cfg["version_column"]; ok && strings.TrimSpace(stringField(cfg, "version_column", "")) == "" {
+		addStaticSinkFieldError(result, "clickhouse-sink-version-column", "sink.config.version_column",
+			"clickhouse sink version_column cannot be empty when configured",
+			"remove sink.config.version_column to use _version, or set a non-empty version column")
+	}
+}
+
+func isSupportedClickHouseSchemaDrift(value string) bool {
+	switch value {
+	case "ignore", "fail", "add_columns", "sync":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedClickHouseSourceDialect(value string) bool {
+	switch value {
+	case "mysql", "postgres", "postgresql", "clickhouse":
+		return true
+	default:
+		return false
+	}
+}
+
+func checkDorisSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
+	cfg := spec.Sink.Config
+	for _, field := range []string{"host", "database", "table"} {
+		if strings.TrimSpace(stringField(cfg, field, "")) == "" {
+			addStaticSinkFieldError(result, "doris-sink-required-config", "sink.config."+field,
+				fmt.Sprintf("doris sink requires sink.config.%s", field),
+				fmt.Sprintf("set sink.config.%s before starting the pipeline", field))
+		}
+	}
+	if port := intField(cfg, "port", 9030); port <= 0 || port > 65535 {
+		addStaticSinkFieldError(result, "doris-sink-port", "sink.config.port",
+			fmt.Sprintf("doris sink port must be between 1 and 65535, got %d", port),
+			"set sink.config.port to the Doris FE MySQL protocol port, usually 9030")
+	}
+	if httpPort := intField(cfg, "http_port", 8030); httpPort <= 0 || httpPort > 65535 {
+		addStaticSinkFieldError(result, "doris-sink-http-port", "sink.config.http_port",
+			fmt.Sprintf("doris sink http_port must be between 1 and 65535, got %d", httpPort),
+			"set sink.config.http_port to the Doris FE Stream Load HTTP port, usually 8030")
+	}
+	writeMode := strings.ToLower(strings.TrimSpace(stringField(cfg, "write_mode", "stream_load")))
+	if writeMode == "" {
+		writeMode = "stream_load"
+	}
+	if writeMode != "stream_load" && writeMode != "insert" {
+		addStaticSinkFieldError(result, "doris-sink-write-mode", "sink.config.write_mode",
+			fmt.Sprintf("doris sink write_mode %q is not supported", writeMode),
+			"set sink.config.write_mode to stream_load or insert")
+	}
+	batchMode := strings.ToLower(strings.TrimSpace(stringField(cfg, "batch_mode", "insert")))
+	if batchMode == "" {
+		batchMode = "insert"
+	}
+	if batchMode != "insert" && batchMode != "upsert" {
+		addStaticSinkFieldError(result, "doris-sink-batch-mode", "sink.config.batch_mode",
+			fmt.Sprintf("doris sink batch_mode %q is not supported", batchMode),
+			"set sink.config.batch_mode to insert or upsert")
+	}
+	if batchMode == "upsert" && len(stringSliceField(cfg, "pk_columns")) == 0 {
+		addStaticSinkFieldError(result, "doris-sink-upsert-keys", "sink.config.pk_columns",
+			"doris sink upsert mode requires sink.config.pk_columns for a stable UNIQUE KEY model",
+			"set sink.config.pk_columns to stable business key columns before relying on replay absorption")
+	}
+	format := strings.ToLower(strings.TrimSpace(stringField(cfg, "stream_load_format", "json")))
+	if format == "" {
+		format = "json"
+	}
+	if format != "json" && format != "csv" {
+		addStaticSinkFieldError(result, "doris-sink-stream-load-format", "sink.config.stream_load_format",
+			fmt.Sprintf("doris sink stream_load_format %q is not supported", format),
+			"set sink.config.stream_load_format to json or csv")
+	}
+	scheme := strings.ToLower(strings.TrimSpace(stringField(cfg, "stream_load_scheme", "http")))
+	if scheme == "" {
+		scheme = "http"
+	}
+	if scheme != "http" && scheme != "https" {
+		addStaticSinkFieldError(result, "doris-sink-stream-load-scheme", "sink.config.stream_load_scheme",
+			fmt.Sprintf("doris sink stream_load_scheme %q is not supported", scheme),
+			"set sink.config.stream_load_scheme to http or https")
+	}
+	if timeout := intField(cfg, "stream_load_timeout_sec", 30); timeout <= 0 {
+		addStaticSinkFieldError(result, "doris-sink-stream-load-timeout", "sink.config.stream_load_timeout_sec",
+			fmt.Sprintf("doris sink stream_load_timeout_sec must be > 0, got %d", timeout),
+			"set sink.config.stream_load_timeout_sec to a positive timeout in seconds")
+	}
+	if chunkSize := intField(cfg, "insert_chunk_size", 500); chunkSize <= 0 {
+		addStaticSinkFieldError(result, "doris-sink-insert-chunk-size", "sink.config.insert_chunk_size",
+			fmt.Sprintf("doris sink insert_chunk_size must be > 0, got %d", chunkSize),
+			"set sink.config.insert_chunk_size to a positive row count such as 500")
+	}
+	if schemaDrift := strings.ToLower(strings.TrimSpace(stringField(cfg, "schema_drift", "ignore"))); schemaDrift != "" && !isSupportedRelationalSchemaDrift(schemaDrift) {
+		addStaticSinkFieldError(result, "doris-sink-schema-drift", "sink.config.schema_drift",
+			fmt.Sprintf("doris sink schema_drift %q is not supported", schemaDrift),
+			"set sink.config.schema_drift to ignore, fail, or add_columns")
+	}
+	if ddlPolicy := strings.ToLower(strings.TrimSpace(stringField(cfg, "ddl_policy", "reject"))); ddlPolicy != "" && !isSupportedDDLPolicy(ddlPolicy) {
+		addStaticSinkFieldError(result, "doris-sink-ddl-policy", "sink.config.ddl_policy",
+			fmt.Sprintf("doris sink ddl_policy %q is not supported", ddlPolicy),
+			"set sink.config.ddl_policy to reject, ignore, or apply")
+	}
+}
+
+func checkMaxComputeSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
+	cfg := spec.Sink.Config
+	for _, field := range []string{"endpoint", "project", "table", "access_key_id", "access_key_secret"} {
+		if strings.TrimSpace(stringField(cfg, field, "")) == "" {
+			addStaticSinkFieldError(result, "maxcompute-sink-required-config", "sink.config."+field,
+				fmt.Sprintf("%s sink requires sink.config.%s", spec.Sink.Type, field),
+				fmt.Sprintf("set sink.config.%s before starting the pipeline", field))
+		}
+	}
+	for _, field := range []string{"endpoint", "tunnel_endpoint"} {
+		raw := strings.TrimSpace(stringField(cfg, field, ""))
+		if raw == "" {
+			continue
+		}
+		if parsed, err := url.Parse(raw); err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			addStaticSinkFieldError(result, "maxcompute-sink-endpoint", "sink.config."+field,
+				fmt.Sprintf("%s sink %s %q is not a valid HTTP(S) URL", spec.Sink.Type, field, raw),
+				fmt.Sprintf("set sink.config.%s to a reachable MaxCompute HTTP(S) endpoint URL", field))
+		}
+	}
+	writeMode := strings.ToLower(strings.TrimSpace(stringField(cfg, "write_mode", "append")))
+	if writeMode == "" {
+		writeMode = "append"
+	}
+	if writeMode != "append" && writeMode != "partition_overwrite" {
+		addStaticSinkFieldError(result, "maxcompute-sink-write-mode", "sink.config.write_mode",
+			fmt.Sprintf("%s sink write_mode %q is not supported", spec.Sink.Type, writeMode),
+			"set sink.config.write_mode to append or partition_overwrite")
+	}
+	if batchSize := intField(cfg, "batch_size", 500); batchSize <= 0 {
+		addStaticSinkFieldError(result, "maxcompute-sink-batch-size", "sink.config.batch_size",
+			fmt.Sprintf("%s sink batch_size must be > 0, got %d", spec.Sink.Type, batchSize),
+			"set sink.config.batch_size to a positive row count such as 500")
+	}
+	if maxRetries := intField(cfg, "max_retries", 3); maxRetries < 0 {
+		addStaticSinkFieldError(result, "maxcompute-sink-retry", "sink.config.max_retries",
+			fmt.Sprintf("%s sink max_retries must be >= 0, got %d", spec.Sink.Type, maxRetries),
+			"set sink.config.max_retries to 0 or a positive retry count")
+	}
+	if retryBase := intField(cfg, "retry_base_ms", 500); retryBase <= 0 {
+		addStaticSinkFieldError(result, "maxcompute-sink-retry", "sink.config.retry_base_ms",
+			fmt.Sprintf("%s sink retry_base_ms must be > 0, got %d", spec.Sink.Type, retryBase),
+			"set sink.config.retry_base_ms to a positive backoff in milliseconds")
+	}
+
+	partitions := stringMapField(cfg, "partition")
+	partitionFields := stringSliceField(cfg, "partition_fields")
+	if len(partitions) == 0 && len(partitionFields) == 0 {
+		addStaticSinkFieldError(result, "maxcompute-sink-partition", "sink.config.partition",
+			fmt.Sprintf("%s sink requires sink.config.partition or sink.config.partition_fields", spec.Sink.Type),
+			"configure a static partition map or dynamic partition_fields for the MaxCompute partitioned table path")
+	}
+	partitionKeys := map[string]bool{}
+	for key := range partitions {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			addStaticSinkFieldError(result, "maxcompute-sink-partition", "sink.config.partition",
+				fmt.Sprintf("%s sink partition contains an empty key", spec.Sink.Type),
+				"remove empty partition keys or set a valid MaxCompute partition column name")
+			continue
+		}
+		partitionKeys[strings.ToLower(trimmed)] = true
+	}
+	for _, field := range partitionFields {
+		trimmed := strings.TrimSpace(field)
+		if trimmed == "" {
+			addStaticSinkFieldError(result, "maxcompute-sink-partition-fields", "sink.config.partition_fields",
+				fmt.Sprintf("%s sink partition_fields contains an empty field", spec.Sink.Type),
+				"remove empty dynamic partition field names")
+			continue
+		}
+		if partitionKeys[strings.ToLower(trimmed)] {
+			addStaticSinkFieldError(result, "maxcompute-sink-partition-conflict", "sink.config.partition_fields",
+				fmt.Sprintf("%s sink partition field %q is configured as both static and dynamic", spec.Sink.Type, trimmed),
+				"use either sink.config.partition for a static value or sink.config.partition_fields for a record-derived value, not both")
+		}
+	}
+	for name, typ := range stringMapField(cfg, "columns") {
+		if strings.TrimSpace(name) == "" {
+			addStaticSinkFieldError(result, "maxcompute-sink-columns", "sink.config.columns",
+				fmt.Sprintf("%s sink columns contains an empty column name", spec.Sink.Type),
+				"remove empty column names from sink.config.columns")
+			continue
+		}
+		if !isSupportedMaxComputeConfigType(typ) {
+			addStaticSinkFieldError(result, "maxcompute-sink-columns", "sink.config.columns",
+				fmt.Sprintf("%s sink column %q uses unsupported type %q", spec.Sink.Type, name, typ),
+				"set MaxCompute column types to STRING, BIGINT, DOUBLE, DECIMAL, BOOLEAN, DATETIME, or TIMESTAMP-compatible types")
+		}
+	}
+}
+
+func isSupportedMaxComputeConfigType(typ string) bool {
+	base := strings.ToUpper(strings.TrimSpace(typ))
+	if base == "" {
+		return false
+	}
+	if idx := strings.IndexAny(base, "( "); idx >= 0 {
+		base = base[:idx]
+	}
+	switch base {
+	case "STRING", "VARCHAR", "CHAR", "BIGINT", "INT", "INTEGER", "DOUBLE", "FLOAT", "DECIMAL", "BOOLEAN", "BOOL", "DATETIME", "TIMESTAMP":
+		return true
+	default:
+		return false
+	}
+}
+
+func checkElasticsearchSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
+	if len(elasticsearchSinkHosts(spec.Sink.Config)) == 0 {
+		msg := "elasticsearch sink requires sink.config.hosts or sink.config.host"
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "elasticsearch-sink-hosts",
+			Message:     msg,
+			Remediation: "set sink.config.hosts to one or more Elasticsearch/OpenSearch HTTP URLs reachable from the ETL process",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.hosts",
+			Check:       "elasticsearch-sink-hosts",
+			Message:     msg,
+			Remediation: "provide at least one host URL, for example http://opensearch:9200",
+		})
+		result.Passed = false
+	}
+	if strings.TrimSpace(stringField(spec.Sink.Config, "index", "")) == "" {
+		msg := "elasticsearch sink requires sink.config.index"
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "elasticsearch-sink-index",
+			Message:     msg,
+			Remediation: "set sink.config.index to the target index name so replay and mapping preflight use a stable destination",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.index",
+			Check:       "elasticsearch-sink-index",
+			Message:     msg,
+			Remediation: "provide a non-empty Elasticsearch/OpenSearch index name",
+		})
+		result.Passed = false
+	}
+	if chunkSize := intField(spec.Sink.Config, "chunk_size", 500); chunkSize <= 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "elasticsearch-sink-bulk",
+			Message:     fmt.Sprintf("elasticsearch sink chunk_size must be > 0, got %d", chunkSize),
+			Remediation: "set sink.config.chunk_size to a positive bulk request size such as 500",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.chunk_size",
+			Check:       "elasticsearch-sink-bulk",
+			Message:     "chunk_size must be > 0",
+			Remediation: "set sink.config.chunk_size to a positive bulk request size",
+		})
+		result.Passed = false
+	}
+	if maxRetries := intField(spec.Sink.Config, "max_retries", 3); maxRetries < 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "elasticsearch-sink-retry",
+			Message:     fmt.Sprintf("elasticsearch sink max_retries must be >= 0, got %d", maxRetries),
+			Remediation: "set sink.config.max_retries to 0 or a positive retry count",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.max_retries",
+			Check:       "elasticsearch-sink-retry",
+			Message:     "max_retries must be >= 0",
+			Remediation: "set sink.config.max_retries to 0 or a positive retry count",
+		})
+		result.Passed = false
+	}
+	if retryBase := intField(spec.Sink.Config, "retry_base_ms", 500); retryBase < 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "elasticsearch-sink-retry",
+			Message:     fmt.Sprintf("elasticsearch sink retry_base_ms must be >= 0, got %d", retryBase),
+			Remediation: "set sink.config.retry_base_ms to 0 or a positive backoff in milliseconds",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "sink.config.retry_base_ms",
+			Check:       "elasticsearch-sink-retry",
+			Message:     "retry_base_ms must be >= 0",
+			Remediation: "set sink.config.retry_base_ms to 0 or a positive backoff in milliseconds",
+		})
+		result.Passed = false
+	}
+}
+
+func elasticsearchSinkHosts(cfg map[string]any) []string {
+	var hosts []string
+	for _, host := range stringSliceField(cfg, "hosts") {
+		host = strings.TrimSpace(host)
+		if host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	if host := strings.TrimSpace(stringField(cfg, "host", "")); host != "" {
+		hosts = append(hosts, host)
+	}
+	return hosts
 }
 
 // ── Source: MySQL CDC checks ─────────────────────────────────────────
@@ -255,6 +1194,1041 @@ func (s *Server) checkMySQLCDC(ctx context.Context, spec *pipeline.Spec, result 
 	if len(result.Issues) == 0 {
 		g.Log().Infof(ctx, "MySQL preflight passed: binlog_format=ROW, binlog_row_image=FULL, grants OK")
 	}
+}
+
+// ── Source: MySQL batch checks ───────────────────────────────────────
+
+var openMySQLBatchPreflightDB = sql.Open
+
+func (s *Server) checkMySQLBatchSource(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
+	if spec == nil || strings.ToLower(spec.Source.Type) != "mysql_batch" {
+		return
+	}
+	cfg := spec.Source.Config
+	if _, err := registry.BuildSource(spec.Source.Type, cfg); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-source-config",
+			Message:     fmt.Sprintf("mysql_batch source configuration error: %v", err),
+			Remediation: "fix source.config table/query, pk_column, cursor_column, columns, and shard settings before starting",
+		})
+		result.Passed = false
+		return
+	}
+
+	host := strings.TrimSpace(stringField(cfg, "host", ""))
+	user := strings.TrimSpace(stringField(cfg, "user", ""))
+	database := strings.TrimSpace(stringField(cfg, "database", ""))
+	table := strings.TrimSpace(stringField(cfg, "table", ""))
+	customQuery := strings.TrimSpace(stringField(cfg, "query", ""))
+	if host == "" || user == "" || database == "" {
+		missing := []string{}
+		if host == "" {
+			missing = append(missing, "host")
+		}
+		if user == "" {
+			missing = append(missing, "user")
+		}
+		if database == "" {
+			missing = append(missing, "database")
+		}
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-required-config",
+			Message:     fmt.Sprintf("mysql_batch source is missing required config: %s", strings.Join(missing, ", ")),
+			Remediation: "set source.config.host, user, and database to the MySQL database that should be read",
+		})
+		result.Passed = false
+		return
+	}
+	if customQuery == "" && table == "" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-source-target",
+			Message:     "mysql_batch source requires source.config.table or source.config.query",
+			Remediation: "set source.config.table for simple table reads, or source.config.query plus cursor_column for custom SQL/JOIN reads",
+		})
+		result.Passed = false
+		return
+	}
+	if limit := intField(cfg, "limit", 5000); limit <= 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-limit",
+			Message:     fmt.Sprintf("mysql_batch source limit must be positive, got %d", limit),
+			Remediation: "set source.config.limit to a positive page size such as 1000 or 5000",
+		})
+		result.Passed = false
+	}
+	if shardTotal := intField(cfg, "shard_total", 0); shardTotal > 0 {
+		shardIndex := intField(cfg, "shard_index", 0)
+		if shardTotal < 2 || shardIndex < 0 || shardIndex >= shardTotal {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "error",
+				Check:       "mysql-batch-shard",
+				Message:     fmt.Sprintf("mysql_batch shard settings are invalid: shard_index=%d shard_total=%d", shardIndex, shardTotal),
+				Remediation: "set shard_total >= 2 and shard_index between 0 and shard_total-1, or remove both fields for a single reader",
+			})
+			result.Passed = false
+		}
+	}
+	if !result.Passed {
+		return
+	}
+
+	port := intField(cfg, "port", 3306)
+	password := stringField(cfg, "password", "")
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&loc=Local&timeout=5s&readTimeout=5s",
+		user, password, host, port, database)
+	db, err := openMySQLBatchPreflightDB("mysql", dsn)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-connect",
+			Message:     fmt.Sprintf("cannot configure MySQL connection for mysql_batch at %s:%d/%s: %v", host, port, database, err),
+			Remediation: "verify MySQL connection fields and driver-compatible DSN settings",
+		})
+		result.Passed = false
+		return
+	}
+	defer db.Close()
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(probeCtx); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-connect",
+			Message:     fmt.Sprintf("cannot ping MySQL for mysql_batch at %s:%d/%s: %v", host, port, database, err),
+			Remediation: "verify the MySQL host/port, credentials, database name, network path, and grants from the ETL process",
+		})
+		result.Passed = false
+		return
+	}
+
+	if customQuery != "" {
+		checkMySQLBatchCustomQuery(probeCtx, db, cfg, customQuery, result)
+		return
+	}
+	checkMySQLBatchTable(probeCtx, db, cfg, database, table, result)
+}
+
+func checkMySQLBatchTable(ctx context.Context, db *sql.DB, cfg map[string]any, database, table string, result *PreflightResult) {
+	schemaName, tableName := mysqlBatchTableTarget(database, table)
+	var count int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+		schemaName, tableName,
+	).Scan(&count); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-table",
+			Message:     fmt.Sprintf("cannot verify source table %s.%s: %v", schemaName, tableName, err),
+			Remediation: "grant SELECT on information_schema.tables or verify source.config.database/table",
+		})
+		result.Passed = false
+		return
+	}
+	if count == 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-table",
+			Message:     fmt.Sprintf("source table %s.%s was not found in MySQL", schemaName, tableName),
+			Remediation: "create the table, pick an existing table from connection context, or update source.config.database/table",
+		})
+		result.Passed = false
+		return
+	}
+
+	requiredColumns := []string{stringField(cfg, "pk_column", "id")}
+	requiredColumns = append(requiredColumns, stringSliceField(cfg, "columns")...)
+	checkMySQLBatchColumns(ctx, db, schemaName, tableName, requiredColumns, "mysql-batch-column", result)
+}
+
+func checkMySQLBatchCustomQuery(ctx context.Context, db *sql.DB, cfg map[string]any, customQuery string, result *PreflightResult) {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT * FROM (%s) AS openetl_preflight_probe LIMIT 0", customQuery))
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-query",
+			Message:     fmt.Sprintf("mysql_batch custom query cannot be described: %v", err),
+			Remediation: "fix source.config.query SQL, referenced tables, aliases, and SELECT privileges before starting",
+		})
+		result.Passed = false
+		return
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-query",
+			Message:     fmt.Sprintf("mysql_batch custom query columns cannot be read: %v", err),
+			Remediation: "verify the custom query returns a normal tabular result set",
+		})
+		result.Passed = false
+		return
+	}
+	if len(columns) == 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-query",
+			Message:     "mysql_batch custom query has no result columns",
+			Remediation: "select the fields that should be emitted by the pipeline",
+		})
+		result.Passed = false
+		return
+	}
+	cursorColumn := stringField(cfg, "cursor_column", stringField(cfg, "pk_column", "id"))
+	if !containsStringFold(columns, cursorColumn) {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "mysql-batch-cursor-column",
+			Message:     fmt.Sprintf("mysql_batch custom query result does not include cursor column %q", cursorColumn),
+			Remediation: "include the cursor column in SELECT output, alias it to match source.config.cursor_column, or update cursor_column/pk_column",
+		})
+		result.Passed = false
+	}
+}
+
+func checkMySQLBatchColumns(ctx context.Context, db *sql.DB, database, table string, requiredColumns []string, check string, result *PreflightResult) {
+	seen := map[string]struct{}{}
+	for _, col := range requiredColumns {
+		col = strings.TrimSpace(col)
+		if col == "" {
+			continue
+		}
+		key := strings.ToLower(col)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		var count int
+		if err := db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name=?",
+			database, table, col,
+		).Scan(&count); err != nil {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "error",
+				Check:       check,
+				Message:     fmt.Sprintf("cannot verify source column %s.%s.%s: %v", database, table, col, err),
+				Remediation: "grant SELECT on information_schema.columns or verify source.config.columns/pk_column",
+			})
+			result.Passed = false
+			continue
+		}
+		if count == 0 {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "error",
+				Check:       check,
+				Message:     fmt.Sprintf("source column %s.%s.%s was not found in MySQL", database, table, col),
+				Remediation: "update source.config.columns/pk_column to existing columns, or adjust the source table schema",
+			})
+			result.Passed = false
+		}
+	}
+}
+
+func mysqlBatchTableTarget(database, table string) (string, string) {
+	if strings.Contains(table, ".") {
+		parts := strings.SplitN(table, ".", 2)
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return database, table
+}
+
+func containsStringFold(values []string, needle string) bool {
+	needle = strings.ToLower(strings.TrimSpace(needle))
+	for _, value := range values {
+		if strings.ToLower(strings.TrimSpace(value)) == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// ── Source: PostgreSQL CDC checks ────────────────────────────────────
+
+var openPostgresCDCPreflightDB = sql.Open
+
+func (s *Server) checkPostgresCDCSource(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
+	if spec == nil || strings.ToLower(spec.Source.Type) != "postgres_cdc" {
+		return
+	}
+	cfg := spec.Source.Config
+	if _, err := registry.BuildSource(spec.Source.Type, cfg); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-source-config",
+			Message:     fmt.Sprintf("postgres_cdc source configuration error: %v", err),
+			Remediation: "fix source.config.host, user, database, slot_name, sslmode, and tables before starting",
+		})
+		result.Passed = false
+		return
+	}
+
+	host := strings.TrimSpace(stringField(cfg, "host", ""))
+	user := strings.TrimSpace(stringField(cfg, "user", ""))
+	database := strings.TrimSpace(stringField(cfg, "database", ""))
+	if host == "" || user == "" || database == "" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-required-config",
+			Message:     "postgres_cdc requires source.config.host, user, and database",
+			Remediation: "set source.config.host, user, and database to the PostgreSQL database that should be replicated",
+		})
+		result.Passed = false
+		return
+	}
+
+	sslmode := strings.ToLower(strings.TrimSpace(stringField(cfg, "sslmode", "prefer")))
+	if sslmode == "" {
+		sslmode = "prefer"
+	}
+	switch sslmode {
+	case "disable", "allow", "prefer", "require", "verify-ca", "verify-full":
+	default:
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-sslmode",
+			Message:     fmt.Sprintf("postgres_cdc sslmode %q is invalid", sslmode),
+			Remediation: "set source.config.sslmode to disable, allow, prefer, require, verify-ca, or verify-full",
+		})
+		result.Passed = false
+		return
+	}
+	slotName := strings.TrimSpace(stringField(cfg, "slot_name", "etl_slot"))
+	if slotName == "" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-slot-name",
+			Message:     "postgres_cdc slot_name cannot be empty",
+			Remediation: "set source.config.slot_name to a stable logical replication slot name",
+		})
+		result.Passed = false
+		return
+	}
+
+	port := intField(cfg, "port", 5432)
+	password := stringField(cfg, "password", "")
+	connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s", user, password, host, port, database, sslmode)
+	db, err := openPostgresCDCPreflightDB("pgx", connStr)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-connect",
+			Message:     fmt.Sprintf("cannot configure PostgreSQL connection for postgres_cdc at %s:%d/%s: %v", host, port, database, err),
+			Remediation: "verify PostgreSQL connection fields and driver-compatible DSN settings",
+		})
+		result.Passed = false
+		return
+	}
+	defer db.Close()
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(probeCtx); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-connect",
+			Message:     fmt.Sprintf("cannot ping PostgreSQL for postgres_cdc at %s:%d/%s: %v", host, port, database, err),
+			Remediation: "verify PostgreSQL host/port, credentials, database name, network path, and pg_hba.conf from the ETL process",
+		})
+		result.Passed = false
+		return
+	}
+
+	checkPostgresCDCWalLevel(probeCtx, db, result)
+	checkPostgresCDCReplicationRole(probeCtx, db, result)
+	checkPostgresCDCTables(probeCtx, db, stringSliceField(cfg, "tables"), result)
+	checkPostgresCDCPublication(probeCtx, db, cfg, result)
+	checkPostgresCDCSlot(probeCtx, db, slotName, database, result)
+}
+
+func checkPostgresCDCWalLevel(ctx context.Context, db *sql.DB, result *PreflightResult) {
+	var walLevel string
+	if err := db.QueryRowContext(ctx, "SHOW wal_level").Scan(&walLevel); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-wal-level",
+			Message:     fmt.Sprintf("cannot read PostgreSQL wal_level: %v", err),
+			Remediation: "grant permission to read server settings or verify the PostgreSQL connection",
+		})
+		result.Passed = false
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(walLevel)) != "logical" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-wal-level",
+			Message:     fmt.Sprintf("PostgreSQL wal_level is %q, must be logical for postgres_cdc", walLevel),
+			Remediation: "set wal_level=logical in postgresql.conf and restart PostgreSQL before starting CDC",
+		})
+		result.Passed = false
+	}
+}
+
+func checkPostgresCDCReplicationRole(ctx context.Context, db *sql.DB, result *PreflightResult) {
+	var canReplicate bool
+	if err := db.QueryRowContext(ctx, "SELECT rolsuper OR rolreplication FROM pg_roles WHERE rolname = current_user").Scan(&canReplicate); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-replication-role",
+			Message:     fmt.Sprintf("cannot verify PostgreSQL replication role: %v", err),
+			Remediation: "grant access to pg_roles or verify the PostgreSQL user before starting CDC",
+		})
+		result.Passed = false
+		return
+	}
+	if !canReplicate {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-replication-role",
+			Message:     "PostgreSQL user does not have replication privilege",
+			Remediation: "run ALTER ROLE <user> WITH REPLICATION, or use a role with replication/superuser privilege",
+		})
+		result.Passed = false
+	}
+}
+
+func checkPostgresCDCTables(ctx context.Context, db *sql.DB, tables []string, result *PreflightResult) {
+	for _, table := range tables {
+		schemaName, tableName := postgresCDCTableTarget(table)
+		if schemaName == "" || tableName == "" {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "error",
+				Check:       "postgres-cdc-table",
+				Message:     fmt.Sprintf("postgres_cdc table %q is invalid", table),
+				Remediation: "use table names like orders or schema-qualified names like public.orders",
+			})
+			result.Passed = false
+			continue
+		}
+		var count int
+		if err := db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=$1 AND table_name=$2",
+			schemaName, tableName,
+		).Scan(&count); err != nil {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "error",
+				Check:       "postgres-cdc-table",
+				Message:     fmt.Sprintf("cannot verify PostgreSQL source table %s.%s: %v", schemaName, tableName, err),
+				Remediation: "grant access to information_schema.tables or verify source.config.tables",
+			})
+			result.Passed = false
+			continue
+		}
+		if count == 0 {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "error",
+				Check:       "postgres-cdc-table",
+				Message:     fmt.Sprintf("PostgreSQL source table %s.%s was not found", schemaName, tableName),
+				Remediation: "create the table, pick an existing table from connection context, or update source.config.tables",
+			})
+			result.Passed = false
+		}
+	}
+}
+
+func checkPostgresCDCPublication(ctx context.Context, db *sql.DB, cfg map[string]any, result *PreflightResult) {
+	var exists bool
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname='etl_pub')").Scan(&exists); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-publication",
+			Message:     fmt.Sprintf("cannot verify PostgreSQL publication etl_pub: %v", err),
+			Remediation: "grant access to pg_publication or create publication etl_pub manually",
+		})
+		result.Passed = false
+		return
+	}
+	if exists {
+		return
+	}
+	var canCreate bool
+	if err := db.QueryRowContext(ctx, "SELECT has_database_privilege(current_database(), 'CREATE')").Scan(&canCreate); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "postgres-cdc-publication",
+			Message:     fmt.Sprintf("publication etl_pub does not exist and CREATE privilege could not be verified: %v", err),
+			Remediation: "create publication etl_pub manually or grant CREATE on the database to the CDC user",
+		})
+		return
+	}
+	if !canCreate {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-publication",
+			Message:     "publication etl_pub does not exist and the PostgreSQL user lacks database CREATE privilege",
+			Remediation: postgresCDCPublicationRemediation(stringSliceField(cfg, "tables")),
+		})
+		result.Passed = false
+	}
+}
+
+func checkPostgresCDCSlot(ctx context.Context, db *sql.DB, slotName, database string, result *PreflightResult) {
+	var exists bool
+	var slotDB sql.NullString
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name=$1)", slotName).Scan(&exists); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-slot",
+			Message:     fmt.Sprintf("cannot verify PostgreSQL replication slot %q: %v", slotName, err),
+			Remediation: "grant access to pg_replication_slots or verify source.config.slot_name",
+		})
+		result.Passed = false
+		return
+	}
+	if !exists {
+		return
+	}
+	if err := db.QueryRowContext(ctx, "SELECT database FROM pg_replication_slots WHERE slot_name=$1", slotName).Scan(&slotDB); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "postgres-cdc-slot",
+			Message:     fmt.Sprintf("replication slot %q exists but its database could not be verified: %v", slotName, err),
+			Remediation: "verify the existing slot belongs to the configured database and uses pgoutput",
+		})
+		return
+	}
+	if slotDB.Valid && slotDB.String != "" && slotDB.String != database {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "postgres-cdc-slot",
+			Message:     fmt.Sprintf("replication slot %q belongs to database %q, not %q", slotName, slotDB.String, database),
+			Remediation: "use a slot owned by the configured database, drop/recreate the slot, or change source.config.slot_name",
+		})
+		result.Passed = false
+	}
+}
+
+func postgresCDCTableTarget(table string) (string, string) {
+	table = strings.TrimSpace(table)
+	if table == "" {
+		return "", ""
+	}
+	if strings.Contains(table, ".") {
+		parts := strings.SplitN(table, ".", 2)
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return "public", table
+}
+
+func postgresCDCPublicationRemediation(tables []string) string {
+	if len(tables) == 0 {
+		return "run CREATE PUBLICATION etl_pub FOR ALL TABLES, or grant CREATE on the database to the CDC user"
+	}
+	return "run CREATE PUBLICATION etl_pub FOR TABLE <tables>, or grant CREATE on the database to the CDC user"
+}
+
+// ── Source: HTTP checks ───────────────────────────────────────────────
+
+func (s *Server) checkHTTPSource(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
+	if spec == nil || strings.ToLower(spec.Source.Type) != "http" {
+		return
+	}
+	cfg := spec.Source.Config
+	if _, err := registry.BuildSource(spec.Source.Type, cfg); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-config",
+			Message:     fmt.Sprintf("http source configuration error: %v", err),
+			Remediation: "fix source.config.url, method, pagination, auth, retry, and shard settings before starting",
+		})
+		result.Passed = false
+		return
+	}
+
+	rawURL := strings.TrimSpace(stringField(cfg, "url", ""))
+	if rawURL == "" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-url",
+			Message:     "http source requires source.config.url",
+			Remediation: "set source.config.url to the API endpoint that returns JSON records",
+		})
+		result.Passed = false
+		return
+	}
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-url",
+			Message:     fmt.Sprintf("http source url %q is invalid", rawURL),
+			Remediation: "use an absolute http:// or https:// URL reachable from the ETL process",
+		})
+		result.Passed = false
+		return
+	}
+
+	method := strings.ToUpper(strings.TrimSpace(stringField(cfg, "method", "GET")))
+	if method == "" {
+		method = "GET"
+	}
+	switch method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch:
+	default:
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-method",
+			Message:     fmt.Sprintf("http source method %q is not supported by preflight", method),
+			Remediation: "use GET, POST, PUT, or PATCH for HTTP source reads",
+		})
+		result.Passed = false
+		return
+	}
+	if pagination := strings.TrimSpace(stringField(cfg, "pagination", "")); pagination != "" && pagination != "page" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-pagination",
+			Message:     fmt.Sprintf("http source pagination %q is unsupported", pagination),
+			Remediation: "set source.config.pagination to page, or remove it for default page pagination",
+		})
+		result.Passed = false
+		return
+	}
+	if pageSize := intField(cfg, "page_size", 100); pageSize <= 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-page-size",
+			Message:     fmt.Sprintf("http source page_size must be positive, got %d", pageSize),
+			Remediation: "set source.config.page_size to a positive page size such as 100",
+		})
+		result.Passed = false
+		return
+	}
+	if maxPages := intField(cfg, "max_pages", 0); maxPages < 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-max-pages",
+			Message:     fmt.Sprintf("http source max_pages must be >= 0, got %d", maxPages),
+			Remediation: "set source.config.max_pages to 0 for no explicit cap, or a positive page limit",
+		})
+		result.Passed = false
+		return
+	}
+	if maxRetries := intField(cfg, "max_retries", 3); maxRetries < 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-retry",
+			Message:     fmt.Sprintf("http source max_retries must be >= 0, got %d", maxRetries),
+			Remediation: "set source.config.max_retries to 0 or a positive retry count",
+		})
+		result.Passed = false
+		return
+	}
+	if retryBase := intField(cfg, "retry_base_ms", 500); retryBase < 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-retry",
+			Message:     fmt.Sprintf("http source retry_base_ms must be >= 0, got %d", retryBase),
+			Remediation: "set source.config.retry_base_ms to 0 or a positive backoff in milliseconds",
+		})
+		result.Passed = false
+		return
+	}
+	if shardTotal := intField(cfg, "shard_total", 0); shardTotal > 0 {
+		shardIndex := intField(cfg, "shard_index", 0)
+		if shardTotal < 2 || shardIndex < 0 || shardIndex >= shardTotal {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "error",
+				Check:       "http-source-shard",
+				Message:     fmt.Sprintf("http source shard settings are invalid: shard_index=%d shard_total=%d", shardIndex, shardTotal),
+				Remediation: "set shard_total >= 2 and shard_index between 0 and shard_total-1, or remove both fields for a single reader",
+			})
+			result.Passed = false
+			return
+		}
+	}
+
+	probeURL := applyHTTPPreflightPageParams(rawURL, cfg)
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := probeHTTPSourceSample(probeCtx, probeURL, method, cfg, result); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "http-source-sample",
+			Message:     fmt.Sprintf("http source sample request failed: %v", err),
+			Remediation: "verify URL, method, headers/auth, body, pagination parameters, result_key, and that the endpoint returns JSON object records",
+		})
+		result.Passed = false
+	}
+}
+
+func applyHTTPPreflightPageParams(rawURL string, cfg map[string]any) string {
+	pageParam := strings.TrimSpace(stringField(cfg, "page_param", ""))
+	sizeParam := strings.TrimSpace(stringField(cfg, "size_param", ""))
+	if pageParam == "" && sizeParam == "" {
+		return rawURL
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	values := parsed.Query()
+	if pageParam != "" {
+		page := 1
+		if shardTotal := intField(cfg, "shard_total", 0); shardTotal > 1 {
+			page = intField(cfg, "shard_index", 0) + 1
+		}
+		values.Set(pageParam, fmt.Sprintf("%d", page))
+	}
+	if sizeParam != "" {
+		values.Set(sizeParam, fmt.Sprintf("%d", intField(cfg, "page_size", 100)))
+	}
+	parsed.RawQuery = values.Encode()
+	return parsed.String()
+}
+
+func probeHTTPSourceSample(ctx context.Context, requestURL, method string, cfg map[string]any, result *PreflightResult) error {
+	var body io.Reader
+	if rawBody := stringField(cfg, "body", ""); rawBody != "" {
+		body = bytes.NewReader([]byte(rawBody))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, body)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	for k, v := range headerMapField(cfg, "headers") {
+		req.Header.Set(k, v)
+	}
+	switch strings.ToLower(strings.TrimSpace(stringField(cfg, "auth_type", ""))) {
+	case "", "bearer":
+		if token := stringField(cfg, "auth_token", ""); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+	case "basic":
+		user := stringField(cfg, "auth_user", "")
+		if user == "" {
+			return fmt.Errorf("basic auth requires auth_user")
+		}
+		req.SetBasicAuth(user, stringField(cfg, "auth_pass", ""))
+	default:
+		return fmt.Errorf("unsupported auth_type %q", stringField(cfg, "auth_type", ""))
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", requestURL, err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("http status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	items, err := extractHTTPPreflightItems(respBody, stringField(cfg, "result_key", ""))
+	if err != nil {
+		return err
+	}
+	objectCount := 0
+	for _, item := range items {
+		if _, ok := item.(map[string]any); ok {
+			objectCount++
+		}
+	}
+	if len(items) == 0 || objectCount == 0 {
+		level := "warning"
+		if strings.TrimSpace(stringField(cfg, "result_key", "")) != "" {
+			level = "error"
+			result.Passed = false
+		}
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       level,
+			Check:       "http-source-empty",
+			Message:     "http source sample response did not contain JSON object records",
+			Remediation: "verify result_key points to an array of objects, or return a top-level array/object list under data/items/results/records/list",
+		})
+	}
+	return nil
+}
+
+func extractHTTPPreflightItems(body []byte, resultKey string) ([]any, error) {
+	var raw any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("json decode: %w", err)
+	}
+	if arr, ok := raw.([]any); ok {
+		return arr, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("response JSON must be an object or array")
+	}
+	if resultKey != "" {
+		cur := any(m)
+		for _, part := range strings.Split(resultKey, ".") {
+			cm, ok := cur.(map[string]any)
+			if !ok {
+				return nil, nil
+			}
+			cur, ok = cm[part]
+			if !ok {
+				return nil, nil
+			}
+		}
+		if arr, ok := cur.([]any); ok {
+			return arr, nil
+		}
+		return nil, nil
+	}
+	for _, k := range []string{"data", "items", "results", "records", "list"} {
+		if arr, ok := m[k].([]any); ok {
+			return arr, nil
+		}
+	}
+	return []any{m}, nil
+}
+
+// ── Source: file checks ───────────────────────────────────────────────
+
+func (s *Server) checkFileSource(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
+	if spec == nil || strings.ToLower(spec.Source.Type) != "file" {
+		return
+	}
+	cfg := spec.Source.Config
+	if _, err := registry.BuildSource(spec.Source.Type, cfg); err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "file-source-config",
+			Message:     fmt.Sprintf("file source configuration error: %v", err),
+			Remediation: "fix source.config.path, format, delimiter, has_header, and batch_size before starting",
+		})
+		result.Passed = false
+		return
+	}
+
+	path := strings.TrimSpace(stringField(cfg, "path", ""))
+	if path == "" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "file-source-path",
+			Message:     "file source requires source.config.path",
+			Remediation: "set source.config.path to a local file path mounted into the ETL process or container",
+		})
+		result.Passed = false
+		return
+	}
+	format := strings.ToLower(strings.TrimSpace(stringField(cfg, "format", "csv")))
+	if format == "" {
+		format = "csv"
+	}
+	if format != "csv" && format != "json" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "file-source-format",
+			Message:     fmt.Sprintf("unsupported file source format %q", format),
+			Remediation: "set source.config.format to csv or json; json means newline-delimited JSON objects",
+		})
+		result.Passed = false
+		return
+	}
+	if batchSize := intField(cfg, "batch_size", 1000); batchSize <= 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "file-source-batch-size",
+			Message:     fmt.Sprintf("file source batch_size must be positive, got %d", batchSize),
+			Remediation: "set source.config.batch_size to a positive value such as 1000",
+		})
+		result.Passed = false
+		return
+	}
+	if delimiter := stringField(cfg, "delimiter", ","); format == "csv" && delimiter == "" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "file-source-delimiter",
+			Message:     "file source csv delimiter cannot be empty",
+			Remediation: "set source.config.delimiter to a one-character delimiter such as comma or tab",
+		})
+		result.Passed = false
+		return
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "file-source-readable",
+			Message:     fmt.Sprintf("file source path %q is not readable: %v", path, err),
+			Remediation: "verify the file exists and is mounted/readable from the ETL process or container",
+		})
+		result.Passed = false
+		return
+	}
+	if info.IsDir() {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "file-source-readable",
+			Message:     fmt.Sprintf("file source path %q is a directory, not a file", path),
+			Remediation: "set source.config.path to a single CSV or JSON Lines file",
+		})
+		result.Passed = false
+		return
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cols, sample, err := introspectFileSource(probeCtx, cfg)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "file-source-sample",
+			Message:     fmt.Sprintf("file source sample could not be read as %s: %v", format, err),
+			Remediation: "verify source.config.format, delimiter, has_header, and that JSON files are newline-delimited JSON objects",
+		})
+		result.Passed = false
+		return
+	}
+	if len(cols) == 0 || len(sample) == 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "file-source-empty",
+			Message:     fmt.Sprintf("file source path %q did not produce sample records during preflight", path),
+			Remediation: "verify the file has at least one data row before expecting the pipeline to write records",
+		})
+	}
+}
+
+// ── Source: Kafka metadata checks ─────────────────────────────────────
+
+func (s *Server) checkKafkaSource(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
+	if spec == nil || strings.ToLower(spec.Source.Type) != "kafka" {
+		return
+	}
+	cfg := spec.Source.Config
+	brokers := stringSliceField(cfg, "brokers")
+	if len(brokers) == 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-source-brokers",
+			Message:     "kafka source has no configured brokers",
+			Remediation: "set source.config.brokers to the Kafka bootstrap broker addresses reachable from the ETL process",
+		})
+		result.Passed = false
+		return
+	}
+
+	topic := strings.TrimSpace(stringField(cfg, "topic", ""))
+	if topic == "" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-source-topic",
+			Message:     "kafka source has no configured topic",
+			Remediation: "set source.config.topic to the Kafka topic that should be consumed",
+		})
+		result.Passed = false
+		return
+	}
+
+	groupID := strings.TrimSpace(stringField(cfg, "group_id", ""))
+	if groupID == "" || groupID == "etl-consumer" {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "kafka-source-group",
+			Message:     "kafka source is using the default consumer group",
+			Remediation: "set source.config.group_id to a pipeline-specific value so multiple jobs do not share offsets accidentally",
+		})
+	}
+
+	adminConfig, err := kafkaPreflightAdminConfig(cfg)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-source-config",
+			Message:     fmt.Sprintf("invalid kafka source client config: %v", err),
+			Remediation: "verify source.config.sasl_* / tls / initial_offset fields match the Kafka cluster requirements",
+		})
+		result.Passed = false
+		return
+	}
+
+	admin, err := sarama.NewClusterAdmin(brokers, adminConfig)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "kafka-source-reachable",
+			Message:     fmt.Sprintf("cannot connect to Kafka brokers %v: %v", brokers, err),
+			Remediation: "verify Kafka brokers, network routing, TLS/SASL settings, and firewall rules before starting the pipeline",
+		})
+		return
+	}
+	defer func() { _ = admin.Close() }()
+
+	topics, err := admin.ListTopics()
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "kafka-source-metadata",
+			Message:     fmt.Sprintf("cannot list Kafka topics from brokers %v: %v", brokers, err),
+			Remediation: "grant the Kafka principal metadata/list permissions or verify broker compatibility",
+		})
+		return
+	}
+	detail, ok := topics[topic]
+	if !ok {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-source-topic",
+			Message:     fmt.Sprintf("kafka topic %q was not found in broker metadata", topic),
+			Remediation: "create the Kafka topic before starting the pipeline, or update source.config.topic to an existing topic",
+		})
+		result.Passed = false
+		return
+	}
+	if detail.NumPartitions == 0 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "kafka-source-topic-partitions",
+			Message:     fmt.Sprintf("kafka topic %q has no partitions", topic),
+			Remediation: "create at least one partition for the source topic before starting the pipeline",
+		})
+		result.Passed = false
+	}
+	g.Log().Debugf(ctx, "Kafka source preflight passed: brokers=%v topic=%s partitions=%d", brokers, topic, detail.NumPartitions)
+}
+
+func kafkaPreflightAdminConfig(cfg map[string]any) (*sarama.Config, error) {
+	adminConfig := sarama.NewConfig()
+	adminConfig.Version = sarama.V1_1_0_0
+	adminConfig.ApiVersionsRequest = false
+	adminConfig.Net.DialTimeout = 2 * time.Second
+	adminConfig.Net.ReadTimeout = 2 * time.Second
+	adminConfig.Net.WriteTimeout = 2 * time.Second
+
+	if initialOffset := strings.ToLower(strings.TrimSpace(stringField(cfg, "initial_offset", ""))); initialOffset != "" && initialOffset != "oldest" && initialOffset != "newest" {
+		return nil, fmt.Errorf("initial_offset must be oldest or newest")
+	}
+	if stringField(cfg, "sasl_user", "") != "" {
+		adminConfig.Net.SASL.Enable = true
+		adminConfig.Net.SASL.User = stringField(cfg, "sasl_user", "")
+		adminConfig.Net.SASL.Password = stringField(cfg, "sasl_password", "")
+		switch strings.ToLower(stringField(cfg, "sasl_mechanism", "")) {
+		case "scram-sha-256":
+			adminConfig.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient {
+				return etlsink.NewSCRAMClient(sha256.New)
+			}
+			adminConfig.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA256
+		case "scram-sha-512":
+			adminConfig.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient {
+				return etlsink.NewSCRAMClient(sha512.New)
+			}
+			adminConfig.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
+		default:
+			adminConfig.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+		}
+	}
+	if boolField(cfg, "tls", false) {
+		adminConfig.Net.TLS.Enable = true
+		adminConfig.Net.TLS.Config = &tls.Config{InsecureSkipVerify: boolField(cfg, "tls_skip_verify", false)}
+	}
+	if err := adminConfig.Validate(); err != nil {
+		return nil, err
+	}
+	return adminConfig, nil
 }
 
 // ── Sink: reachability check ─────────────────────────────────────────
@@ -784,8 +2758,8 @@ func addFirstRunRecommendations(spec *pipeline.Spec, result *PreflightResult) {
 		if len(stringSliceField(spec.Sink.Config, "pk_columns")) == 0 {
 			addPreflightRecommendation(result, PreflightRecommendation{
 				Path:   "sink.config.pk_columns",
-				Value:  []string{"id"},
-				Reason: "Set stable business keys before relying on upsert/replay absorption.",
+				Value:  preferredReplayKeyColumns(spec),
+				Reason: "Set stable business keys before relying on upsert/replay absorption. Preflight prefers source pk/cursor/key hints when available.",
 				Safety: "review",
 			})
 		}
@@ -793,8 +2767,8 @@ func addFirstRunRecommendations(spec *pipeline.Spec, result *PreflightResult) {
 		if len(stringSliceField(spec.Sink.Config, "pk_columns")) == 0 {
 			addPreflightRecommendation(result, PreflightRecommendation{
 				Path:   "sink.config.pk_columns",
-				Value:  []string{"id"},
-				Reason: "ClickHouse replay absorption depends on a stable ORDER BY/business key.",
+				Value:  preferredReplayKeyColumns(spec),
+				Reason: "ClickHouse replay absorption depends on a stable ORDER BY/business key. Preflight prefers source pk/cursor/key hints when available.",
 				Safety: "review",
 			})
 		}
@@ -837,8 +2811,8 @@ func addFirstRunRecommendations(spec *pipeline.Spec, result *PreflightResult) {
 		if strings.TrimSpace(stringField(spec.Sink.Config, "key_column", "")) == "" {
 			addPreflightRecommendation(result, PreflightRecommendation{
 				Path:   "sink.config.key_column",
-				Value:  "id",
-				Reason: "Use a stable Kafka message key so downstream compaction or consumers can absorb at-least-once replay.",
+				Value:  preferredReplayKeyColumn(spec),
+				Reason: "Use a stable Kafka message key so downstream compaction or consumers can absorb at-least-once replay. Preflight prefers source pk/cursor/key hints when available.",
 				Safety: "review",
 			})
 		}
@@ -853,6 +2827,22 @@ func addFirstRunRecommendations(spec *pipeline.Spec, result *PreflightResult) {
 	}
 
 	addSchemaFieldRecommendations(spec, result)
+}
+
+func preferredReplayKeyColumns(spec *pipeline.Spec) []string {
+	return []string{preferredReplayKeyColumn(spec)}
+}
+
+func preferredReplayKeyColumn(spec *pipeline.Spec) string {
+	if spec == nil {
+		return "id"
+	}
+	for _, field := range []string{"pk_column", "cursor_column", "key_column"} {
+		if value := strings.TrimSpace(stringField(spec.Source.Config, field, "")); value != "" {
+			return value
+		}
+	}
+	return "id"
 }
 
 func safeOutputPrefix(name, suffix string) string {
@@ -1635,6 +3625,25 @@ func stringMapField(cfg map[string]any, key string) map[string]string {
 		for k, v := range m {
 			if s, ok := v.(string); ok {
 				result[k] = s
+			}
+		}
+	}
+	return result
+}
+
+func headerMapField(cfg map[string]any, key string) map[string]string {
+	result := map[string]string{}
+	switch m := cfg[key].(type) {
+	case map[string]string:
+		for k, v := range m {
+			if strings.TrimSpace(k) != "" {
+				result[k] = v
+			}
+		}
+	case map[string]any:
+		for k, v := range m {
+			if strings.TrimSpace(k) != "" {
+				result[k] = fmt.Sprint(v)
 			}
 		}
 	}

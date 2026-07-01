@@ -34,8 +34,8 @@ func TestAIContextPackUsesRuntimeFacts(t *testing.T) {
 
 func TestCoreComponentDocsCoverAIContextComponents(t *testing.T) {
 	required := []string{
-		"source-mysql_batch.md", "source-mysql_cdc.md", "source-mysql_snapshot_cdc.md", "source-kafka.md", "source-file.md", "source-http.md",
-		"sink-clickhouse.md", "sink-mysql.md", "sink-postgres.md", "sink-doris.md", "sink-kafka.md", "sink-s3.md", "sink-file_sink.md",
+		"source-mysql_batch.md", "source-mysql_cdc.md", "source-mysql_snapshot_cdc.md", "source-postgres_cdc.md", "source-kafka.md", "source-file.md", "source-http.md",
+		"sink-clickhouse.md", "sink-mysql.md", "sink-postgres.md", "sink-doris.md", "sink-kafka.md", "sink-s3.md", "sink-file_sink.md", "sink-maxcompute.md", "sink-elasticsearch.md",
 		"transform-lookup.md", "transform-deduplicate.md", "transform-window.md", "transform-flat_map.md", "transform-udtf.md",
 		"transform-project.md", "transform-select_fields.md", "transform-type_convert.md", "transform-debezium_cdc.md", "transform-cdc_policy.md",
 	}

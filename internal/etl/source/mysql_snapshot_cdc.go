@@ -109,15 +109,7 @@ func NewMySQLSnapshotCDCSource(config map[string]any) (*MySQLSnapshotCDCSource, 
 			s.table = vs
 		}
 	}
-	if v, ok := config["tables"]; ok {
-		if tables, ok := v.([]interface{}); ok {
-			for _, t := range tables {
-				if ts, ok := t.(string); ok {
-					s.tables = append(s.tables, ts)
-				}
-			}
-		}
-	}
+	s.tables = append(s.tables, readStringSlice(config, "tables")...)
 	// If only "tables" is set, use first table as the default single-table.
 	if s.table == "" && len(s.tables) > 0 {
 		s.table = s.tables[0]

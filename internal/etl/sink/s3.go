@@ -49,12 +49,12 @@ type FileSinkConfig struct {
 }
 
 type FileSink struct {
-	name   string
-	config FileSinkConfig
-	file   *os.File
-	buf    *bytes.Buffer
-	mu     sync.Mutex
-	client *minio.Client
+	name         string
+	config       FileSinkConfig
+	file         *os.File
+	buf          *bytes.Buffer
+	mu           sync.Mutex
+	client       *minio.Client
 	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
@@ -121,6 +121,9 @@ func NewS3Sink(config map[string]any) (*FileSink, error) {
 			cfg.RetryBaseMs = int(rb)
 		}
 	}
+	if err := validateFileSinkConfig("s3", &cfg); err != nil {
+		return nil, err
+	}
 	s := &FileSink{name: "s3", config: cfg, buf: &bytes.Buffer{}}
 	return s, nil
 }
@@ -152,11 +155,49 @@ func NewFileSink(config map[string]any) (*FileSink, error) {
 			cfg.OutputDir = filepath.Dir(vs)
 		}
 	}
+	if v, ok := config["max_retries"]; ok {
+		switch mr := v.(type) {
+		case int:
+			cfg.MaxRetries = mr
+		case float64:
+			cfg.MaxRetries = int(mr)
+		}
+	}
+	if v, ok := config["retry_base_ms"]; ok {
+		switch rb := v.(type) {
+		case int:
+			cfg.RetryBaseMs = rb
+		case float64:
+			cfg.RetryBaseMs = int(rb)
+		}
+	}
+	if err := validateFileSinkConfig("file_sink", &cfg); err != nil {
+		return nil, err
+	}
 	s := &FileSink{name: "file_sink", config: cfg, buf: &bytes.Buffer{}}
 	return s, nil
 }
 
 func (s *FileSink) Name() string { return s.name }
+
+func validateFileSinkConfig(name string, cfg *FileSinkConfig) error {
+	cfg.Format = strings.ToLower(strings.TrimSpace(cfg.Format))
+	if cfg.Format == "" {
+		cfg.Format = "json"
+	}
+	switch cfg.Format {
+	case "json", "jsonl", "csv", "parquet":
+	default:
+		return fmt.Errorf("%s sink format %q is not supported; use json, jsonl, csv, or parquet", name, cfg.Format)
+	}
+	if cfg.MaxRetries < 0 {
+		return fmt.Errorf("%s sink max_retries must be >= 0", name)
+	}
+	if cfg.RetryBaseMs < 0 {
+		return fmt.Errorf("%s sink retry_base_ms must be >= 0", name)
+	}
+	return nil
+}
 
 // SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
 func (s *FileSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
@@ -186,7 +227,11 @@ func (s *FileSink) Open(ctx context.Context) error {
 }
 
 func (s *FileSink) Write(ctx context.Context, records []core.Record) (err error) {
-	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
+	defer func() {
+		if err != nil {
+			s.recordError()
+		}
+	}() // P5-12: count write failures
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -324,6 +369,9 @@ func (s *FileSink) encode(records []core.Record) ([]byte, error) {
 
 	case "parquet":
 		return s.encodeParquet(records)
+
+	default:
+		return nil, fmt.Errorf("%s sink format %q is not supported; use json, jsonl, csv, or parquet", s.name, s.config.Format)
 	}
 
 	return buf.Bytes(), nil

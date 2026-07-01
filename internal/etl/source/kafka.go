@@ -51,13 +51,7 @@ func NewKafkaSource(config map[string]any) (*KafkaSource, error) {
 	if v, ok := config["name"].(string); ok {
 		s.name = v
 	}
-	if v, ok := config["brokers"].([]interface{}); ok {
-		for _, b := range v {
-			if bs, ok := b.(string); ok {
-				s.brokers = append(s.brokers, bs)
-			}
-		}
-	}
+	s.brokers = append(s.brokers, readStringSlice(config, "brokers")...)
 	if v, ok := config["topic"].(string); ok {
 		s.topic = v
 	}

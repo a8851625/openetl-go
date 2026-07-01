@@ -37,6 +37,61 @@ func TestElasticsearchWriteReturnsMarshalErrors(t *testing.T) {
 	}
 }
 
+func TestNewElasticsearchSinkValidatesConfig(t *testing.T) {
+	cases := []struct {
+		name   string
+		config map[string]any
+		want   string
+	}{
+		{
+			name:   "missing hosts",
+			config: map[string]any{"index": "orders"},
+			want:   "hosts are required",
+		},
+		{
+			name:   "missing index",
+			config: map[string]any{"hosts": []string{"http://127.0.0.1:9200"}},
+			want:   "index is required",
+		},
+		{
+			name: "invalid chunk size",
+			config: map[string]any{
+				"hosts":      []string{"http://127.0.0.1:9200"},
+				"index":      "orders",
+				"chunk_size": 0,
+			},
+			want: "chunk_size must be > 0",
+		},
+		{
+			name: "invalid max retries",
+			config: map[string]any{
+				"hosts":       []string{"http://127.0.0.1:9200"},
+				"index":       "orders",
+				"max_retries": -1,
+			},
+			want: "max_retries must be >= 0",
+		},
+		{
+			name: "invalid retry base",
+			config: map[string]any{
+				"hosts":         []string{"http://127.0.0.1:9200"},
+				"index":         "orders",
+				"retry_base_ms": -1,
+			},
+			want: "retry_base_ms must be >= 0",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewElasticsearchSink(tc.config)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("NewElasticsearchSink() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestElasticsearchBulkItemErrorsExposeFailedRecordIndices(t *testing.T) {
 	var bulkCalls int32
 	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -180,6 +180,11 @@ source:
 | `database` | yes | | Source database. |
 | `tables` | yes | | Array of table names to watch. |
 | `server_id` | no | `1001` | Unique replication server ID. |
+| `enable_gtid` | no | `false` | Enable GTID-based replication. |
+| `server_id_base` | no | | Base replication server ID used with sharding. |
+| `shard_index` | no | | Shard index for table partitioning. |
+| `shard_total` | no | | Total shard count for table partitioning. |
+| `start_from` | no | | CDC start point: `timestamp`, `binlog:<file>:<pos>`, or `gtid:<set>`. |
 
 Requires MySQL binlog `ROW` format and `FULL` row image.
 
@@ -207,10 +212,15 @@ source:
 | `user` | yes | | MySQL user. |
 | `password` | no | | MySQL password (**secret**). |
 | `database` | yes | | Source database. |
-| `table` | yes | | Source table (singular). |
+| `table` | no | | Source table (singular). Required when `tables` is not set. |
+| `tables` | no | | Source tables for multi-table snapshot+CDC. Required when `table` is not set. |
 | `pk_column` | no | `id` | Primary key column for snapshot pagination. |
 | `limit` | no | `1000` | Rows per snapshot query page. |
 | `server_id` | no | `1101` | Unique replication server ID. |
+| `server_id_base` | no | | Base replication server ID used with sharding. |
+| `consistent_snapshot_lock` | no | `true` | Use table locks for consistent snapshot capture. |
+| `shard_index` | no | | Shard index for snapshot partitioning. |
+| `shard_total` | no | | Total shard count for snapshot partitioning. |
 
 Snapshots by primary-key chunks, records binlog position, then switches to CDC. Checkpoints survive crash during both phases.
 
@@ -262,9 +272,15 @@ source:
 | `password` | no | | PostgreSQL password (**secret**). |
 | `database` | yes | | Source database. |
 | `slot_name` | no | `etl_slot` | Logical replication slot name. |
-| `tables` | no | | Tables to watch. |
+| `tables` | no | | Tables to watch. Required when `enable_snapshot: true`; empty means publication for all tables in CDC-only mode. Entries may be unqualified (`orders`) or schema-qualified (`public.orders`). |
+| `sslmode` | no | `prefer` | PostgreSQL SSL mode: `disable`, `allow`, `prefer`, `require`, `verify-ca`, or `verify-full`. |
+| `enable_snapshot` | no | `false` | Run an initial table snapshot before switching to logical replication. Requires `tables`. |
+| `drop_slot_on_close` | no | `false` | Drop the replication slot when the source closes. Keep `false` for restartable CDC. |
 
 Uses pgoutput logical replication protocol. Creates publication and slot if missing.
+Preflight validates required connection fields, port, slot name, SSL mode,
+snapshot table list, `wal_level=logical`, replication role, publication
+readiness, configured table existence, and replication slot ownership.
 
 ## Sinks
 
@@ -304,16 +320,16 @@ sink:
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `endpoint` | no | | S3-compatible endpoint URL (e.g., MinIO). |
+| `endpoint` | yes | | S3-compatible endpoint URL (e.g., MinIO). |
 | `region` | no | | S3 region. |
 | `bucket` | yes | | S3 bucket name. |
 | `access_key` | no | | Access key (**secret**). |
 | `secret_key` | no | | Secret key (**secret**). |
-| `output_dir` | no | `/tmp/etl-output` | Local fallback directory. |
+| `output_dir` | no | `/tmp/etl-output` | Local staging/fallback directory used only by file-compatible writes; use `file_sink` for intentional local output. |
 | `format` | no | `json` | `json`, `jsonl`, `csv`, or `parquet`. |
 | `prefix` | no | | Object key prefix. |
 
-Uses MinIO-compatible API when endpoint/bucket are configured, otherwise local file fallback.
+Uses MinIO-compatible API. `endpoint` and `bucket` are required; use `file_sink` for local file output.
 
 ### `mysql`
 
@@ -341,6 +357,10 @@ sink:
 | `table` | yes | | Target table. |
 | `batch_mode` | no | `insert` | `insert` or `upsert`. |
 | `pk_columns` | no | `["id"]` | Primary key columns for upsert mode. |
+| `auto_create` | no | `false` | Auto-create table if missing. |
+| `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
+| `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. |
+| `insert_chunk_size` | no | `500` | Rows per INSERT statement. |
 
 Use `batch_mode: upsert` for CDC/snapshot+CDC idempotency.
 
@@ -365,15 +385,26 @@ sink:
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `host` | yes | | ClickHouse host. |
-| `port` | no | `9000` | ClickHouse native port. |
+| `port` | no | `9000` | ClickHouse port (`9000` native, `8123` HTTP). |
+| `protocol` | no | `native` | `native` or `http`. |
 | `user` | no | `default` | ClickHouse user. |
 | `password` | no | | ClickHouse password (**secret**). |
 | `database` | yes | | Target database. |
-| `table` | yes | | Target table. |
-| `pk_columns` | no | `["id"]` | Primary key columns for auto-create. |
+| `table` | no | | Target table. Empty uses the source table name dynamically. |
+| `pk_columns` | no | `["id"]` | Primary key columns for ORDER BY, DELETE, and UPDATE conditions. |
 | `version_column` | no | `_version` | Version column for ReplacingMergeTree. |
 | `auto_create` | no | `false` | Auto-create table if missing. |
-| `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
+| `schema_drift` | no | `ignore` | `ignore`, `fail`, `add_columns`, or `sync`. |
+| `ddl_policy` | no | `apply` | `reject`, `ignore`, or `apply`. |
+| `source_dialect` | no | | Source SQL dialect for DDL translation: `mysql`, `postgres`, `postgresql`, or `clickhouse`. |
+| `optimize_interval_sec` | no | `0` | Periodic `OPTIMIZE TABLE FINAL` interval; `0` disables it. |
+| `use_final` | no | `false` | Append `FINAL` to internal deduplicated reads. |
+| `tls` | no | `false` | Enable TLS for ClickHouse connection. |
+| `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
+| `compression` | no | `LZ4` | `LZ4` or `ZSTD`. |
+| `async_insert` | no | `false` | Enable ClickHouse `async_insert`. |
+| `async_insert_wait` | no | `true` | Wait for async insert completion. |
+| `ttl` | no | | TTL expression for auto-created tables. |
 
 ### `maxcompute` / `odps`
 
@@ -452,7 +483,7 @@ sink:
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `hosts` | yes | `["http://localhost:9200"]` | Elasticsearch/OpenSearch host URLs. |
+| `hosts` | yes | | Elasticsearch/OpenSearch host URLs. |
 | `username` | no | | ES username (**secret**). |
 | `password` | no | | ES password (**secret**). |
 | `index` | yes | | Target index name. |
@@ -465,6 +496,40 @@ sink:
 | `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
 
 Preflight validates source fields against configured or remote mapping properties when available. It reports field-level type mismatches such as string data targeting a `long` mapping before the first bulk write.
+
+### `postgres`
+
+```yaml
+sink:
+  type: postgres
+  config:
+    host: postgres
+    port: 5432
+    user: sync_user
+    password: ${PG_PASSWORD}
+    database: target
+    schema: public
+    table: customers
+    batch_mode: upsert
+    pk_columns: [id]
+```
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `host` | yes | | PostgreSQL host. |
+| `port` | no | `5432` | PostgreSQL port. |
+| `user` | yes | | PostgreSQL user. |
+| `password` | no | | PostgreSQL password (**secret**). |
+| `database` | yes | | Target database. |
+| `schema` | no | `public` | Target schema. |
+| `table` | yes | | Target table. |
+| `batch_mode` | no | `insert` | `insert` or `upsert` (`INSERT ... ON CONFLICT`). |
+| `pk_columns` | no | `["id"]` | Primary key columns for upsert mode. |
+| `auto_create` | no | `false` | Auto-create table if missing. |
+| `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
+| `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. |
+| `sslmode` | no | `prefer` | PostgreSQL SSL mode: `disable`, `allow`, `prefer`, `require`, `verify-ca`, or `verify-full`. |
+| `insert_chunk_size` | no | `500` | Rows per INSERT statement. |
 
 ### `doris`
 
@@ -502,6 +567,8 @@ sink:
 | `pk_columns` | no | | Key columns for DELETE, auto-created Unique Key tables, and replay-safe upsert validation. |
 | `stream_load_format` | no | `json` | `json` or `csv`. |
 | `stream_load_scheme` | no | `http` | `http` or `https`. |
+| `stream_load_timeout_sec` | no | `30` | Stream Load HTTP timeout in seconds. |
+| `insert_chunk_size` | no | `500` | Rows per INSERT statement when `write_mode: insert` is used. |
 | `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
 | `auto_create` | no | `false` | Auto-create missing Doris Unique Key tables. If no `pk_columns` are set, an `id` column is required. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |

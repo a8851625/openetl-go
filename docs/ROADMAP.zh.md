@@ -232,6 +232,32 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - 失败路径不会静默推进 checkpoint。
 - 文档清楚说明 at-least-once、重复吸收策略和不承诺边界。
 
+### Phase 1 收尾（v0.2.6-beta-1）：connector preflight 全面补齐与连接上下文闭环
+
+目标：把 Phase 1 残留的 preflight 缺口收齐，使全部内置 source/sink 在启动前都有静态字段级 remediation 和真实远端 reachability 检查，连接上下文闭环和 runtime safety 表单控制可用，从而让 Phase 1 可信同步底线达到可声明的收尾状态。
+
+交付项：
+
+- Source 侧独立 preflight：Kafka（broker metadata、topic/partition 存在性）、MySQL CDC / snapshot+CDC（静态字段、shard、`start_from`、远端连接/权限/binlog/表）、MySQL batch（`table|query`、cursor column、表/列存在）、PostgreSQL CDC（静态字段、`wal_level=logical`、replication role、publication/slot）、File（`path`/`format`/CSV delimiter、可解析性）、HTTP（`url`/method/pagination、首个分页 sample、auth、JSON 响应、`result_key`）。
+- Sink 侧字段级 static preflight 和真实远端检查：File/S3、MySQL/PostgreSQL、ClickHouse、Doris、Kafka、Elasticsearch/OpenSearch、MaxCompute/ODPS（远端 table/partition/权限继续走现有 `maxcompute-preflight`）。
+- PostgreSQL CDC source preflight 和 readiness 重写：新增 `hack/e2e-postgres-cdc.sh` 覆盖 insert/update/delete -> MySQL upsert/delete，以及 stop 后通过保留 replication slot 在 restart 后继续消费。
+- Source/Sink runtime 配置补常见数组形态兼容：`brokers`、`tables`、`columns`、`hosts`、`pk_columns` 同时接受 `[]any` 和 `[]string`。
+- 首次任务向导 Runtime safety 表单控制：`batch_size` / `checkpoint_interval_sec` / `dlq.enable` 提升为可见输入，recommendation Apply 状态闭环与 YAML sync 一致。
+- Connector readiness 暴露 source 侧 `remote_preflight` gate 和 sink 侧真实 Open + schema metadata 证据；缺少远端检查的 connector 在 guidance 中显式暴露缺口。
+- 组件文档事实源补 PostgreSQL CDC source、Elasticsearch sink、MaxCompute sink 三页。
+
+明确不做：
+
+- 不新增 connector、不改变 transform 执行语义、不引入通用 SQL planner 或 Flink 兼容层。
+- MaxCompute/ODPS sink 在没有真实环境 DLQ/replay/e2e 证据前 maturity 继续保持 experimental/beta。
+- DAG DLQ replay 当前不支持的行为继续在 API/UI/文档中显式可见。
+
+验证：
+
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c 'go test ./internal/etl/... ./internal/cmd -count=1'`
+- `npm --prefix web run build`
+- `SKIP_UI=1 ./hack/pack.sh`
+
 ## Phase 2：首次任务闭环，6-10 周
 
 目标：让新用户不用先读完整 YAML schema，也能完成常见任务。
@@ -274,16 +300,33 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - 向导同屏接入 sample record、transform dry-run、spec validate/preflight、DDL preview、field issue/remediation 和 `/api/v2/docs` 入口；MaxCompute remote preflight 用于 endpoint/project/table/partition/权限失败修复路径验证。
 - `web/src/DagEditorPage.tsx` 已支持 DAG/YAML 与 canvas/form 往返：YAML drawer 可编辑并同步回节点/表单；DAG Editor 内置 Validate + preflight 结果面板，创建前阻断 `valid:false`，并展示错误、warning、preflight issue、field issue 和 remediation。
 - `docs/quickstart.md` / `docs/quickstart.zh.md` 已把 Web UI Wizard 放到首选路径，覆盖 dry-run、Validate + preflight、修复、Create and start，以及 YAML 可见/可同步。
-- `hack/e2e-ui.sh` 已覆盖：五类向导入口可见、schema-driven 表单、docs 入口、preflight 失败、修复后创建启动、向导 YAML -> 表单同步、DAG YAML -> canvas/form 同步、DAG validation 错误定位、DLQ 查看与 replay。验证命令：`E2E_SKIP_BUILD=1 ./hack/e2e-ui.sh`，结果 `88 passed, 0 failed`。
+- `hack/e2e-ui.sh` 已覆盖：五类向导入口可见、schema-driven 表单、Runtime safety 控制与 YAML 同步、saved-connection 推荐写入 batch/checkpoint、docs 入口、preflight 失败、修复后创建启动、向导 YAML -> 表单同步、DAG YAML -> canvas/form 同步、DAG validation 错误定位、DLQ 查看与 replay。
 
 连接上下文闭环证据（2026-06-29）：
 
 - `/api/v2/connections/{name}/context`：返回保存连接、connector descriptor、推荐 `schedule.type` / `batch_size` / `checkpoint_interval_sec`，以及尽力而为的 source/sink introspection。
 - Source introspection 第一版覆盖：file/HTTP/demo sample 与 schema 推断、MySQL/PostgreSQL database/table/column/primary key 元数据、Kafka topic/partition 元数据；sink introspection 已补 MySQL/PostgreSQL/ClickHouse/Doris 目标表 schema、Kafka topic/partition 元数据、Elasticsearch/OpenSearch index mapping，以及 File/S3/local-fallback 输出 target、prefix、format、可写/bucket 存在性提示；真实启动拦截仍走 spec validate 与 preflight。
+- Kafka source preflight 已补第一版真实 metadata 检查：校验 `brokers` / `topic` 必填，短超时连接 broker，读取 topic metadata，topic 缺失或无 partition 阻断启动，broker/metadata 不可达给 warning，默认 consumer group 给出修复提示；测试用 Sarama MockBroker 覆盖 topic 存在和缺失两条路径。
+- MySQL CDC / snapshot+CDC source static preflight 已补第一版字段级 remediation：校验 `host` / `user` / `database` / `tables|table`、`port`、`server_id` / `server_id_base`、shard 参数、`start_from`、snapshot `pk_column` 和 `limit`；静态配置失败时不再继续远端 MySQL 探测，避免首跑 validate 被连接/binlog错误掩盖真正缺失字段。
+- MySQL batch source preflight 已补第一版独立 source 检查：即使 sink 不支持 schema validator，也会校验 `host` / `user` / `database` / `table|query`、`limit`、分片参数、短超时连接、表存在、`pk_column` / `columns` 存在，以及自定义 query 可描述且包含 cursor column；测试用 SQL mock 覆盖表/列检查和 query cursor 缺失阻断。
+- PostgreSQL CDC source preflight 已补第一版独立 source 检查和字段级 remediation：静态校验 `host` / `user` / `database`、`port`、`sslmode`、`slot_name`、snapshot `tables` 和表名格式，静态失败时不继续远端探测；远端短超时检查覆盖连接、`wal_level=logical`、replication role、配置表存在、`etl_pub` publication 是否存在或可创建，以及 replication slot 是否属于当前 database；测试用 SQL mock 覆盖成功路径、非 logical wal_level、非法静态配置和 snapshot 缺表阻断。新增 `hack/e2e-postgres-cdc.sh` 覆盖 PostgreSQL CDC source insert/update/delete -> MySQL upsert/delete，并验证 stop 后写入可通过保留 replication slot 在 restart 后继续消费。
+- File source preflight 已补第一版独立 source 检查：校验 `path`、`format`、`batch_size`、CSV delimiter、路径可读且不是目录，并复用 file introspection 采样逻辑验证 CSV/JSON Lines 可解析；测试覆盖缺路径和 malformed JSON Lines 阻断。
+- HTTP source preflight 已补第一版独立 source 检查：校验 `url`、method、pagination、page/retry/shard 参数，短超时发起首个分页 sample request，带 headers、Bearer/Basic auth 和 body，阻断 4xx/5xx、非 JSON 响应，以及显式 `result_key` 找不到对象记录的配置；测试覆盖 bearer+分页+result_key 通过和非 JSON 响应阻断。
+- File/S3 sink static preflight 已补第一版字段级 remediation：`sink.config.format` 只允许 `json` / `jsonl` / `csv` / `parquet`，非法值会在 preflight 阶段阻断并返回 `field_issues` 指向 `sink.config.format`；同时校验 retry 参数非负。S3 sink 现在要求显式 `endpoint` / `bucket`，避免用户选择 `s3` 后因缺 endpoint 静默落到本地文件；远端 preflight 会打开 S3-compatible target 检查 bucket reachability，readiness 标为 pass。运行时构造和编码阶段也已拒绝 unsupported format，避免绕过 preflight 时生成不可读或空输出。
+- MySQL/PostgreSQL sink static preflight 已补第一版字段级 remediation：校验 `host` / `user` / `database` / `table`、`port`、`batch_mode`、upsert `pk_columns`、`schema_drift`、`ddl_policy`、`insert_chunk_size` 和 PostgreSQL `sslmode`；descriptor/schema 与文档中的 DDL policy 口径已统一为运行时真实的 `reject` / `ignore` / `apply`。远端 preflight 已标为 pass：preflight 会打开目标连接，目标可达时读取表/列 metadata、生成 DDL preview，并返回字段级 schema issue。
+- ClickHouse sink static preflight 已补第一版字段级 remediation：校验 `host` / `database`、`port`、`protocol`、`schema_drift`、`ddl_policy`、`source_dialect`、`optimize_interval_sec`、`compression` 和 `version_column`；descriptor/schema 与文档中的 `ddl_policy` 口径已统一为运行时真实的 `reject` / `ignore` / `apply`，并明确 `table` 可由 source metadata 动态决定。远端 preflight 已标为 pass：preflight 会打开 ClickHouse 目标，目标可达时读取表/列 metadata、生成 DDL preview，并返回字段级 schema issue。
+- Doris sink static preflight 已补第一版字段级 remediation：校验 `host` / `database` / `table`、`port` / `http_port`、`write_mode`、`batch_mode`、upsert `pk_columns`、Stream Load `format` / `scheme` / `timeout`、`insert_chunk_size`、`schema_drift` 和 `ddl_policy`，避免非法 Doris 配置静默回退默认值后才暴露为运行时行为差异。远端 preflight 已标为 pass：preflight 会打开 Doris MySQL protocol 目标，目标可达时读取表/列和 Unique Key metadata、生成 DDL preview，并返回字段级 schema issue。
+- MaxCompute/ODPS sink static preflight 已补第一版字段级 remediation：校验 endpoint/project/table/access key、HTTP(S) endpoint、`write_mode`、`batch_size`、retry、静态/动态 partition、partition 冲突和 `columns` 类型；真实远端 table/partition/权限仍走现有 `maxcompute-preflight`，组件事实源新增 `docs/components/sink-maxcompute.md`。
+- Kafka sink static/remote preflight 已补字段级 remediation 和真实 topic metadata 检查：校验 `sink.config.brokers` / `sink.config.topic` 必填、`compression` 只允许 `none` / `gzip` / `snappy` / `lz4` / `zstd`，以及 `retry_backoff_ms` 非负；broker metadata 可达时会阻断缺失或无 partition 的目标 topic 并返回 `sink.config.topic` field issue，`auto_create_topic=true` 时降为权限复核 warning；broker 不可达仍保持 warning 以便离线 validate 继续给出其他修复建议。
+- Elasticsearch/OpenSearch sink static preflight 已补第一版字段级 remediation：校验 `sink.config.hosts` / `sink.config.host`、`sink.config.index`、`chunk_size`、`max_retries` 和 `retry_base_ms`，非法配置会在 preflight 阶段阻断并返回对应 `field_issues`；运行时构造也已拒绝空 hosts/index 和无效 bulk/retry 参数，避免隐式回退到 localhost。
+- Source runtime 配置解析已补常见数组形态兼容：Kafka `brokers`、MySQL CDC / snapshot+CDC / PostgreSQL CDC `tables`、MySQL batch `columns` 现在同时接受 YAML/JSON 常见的 `[]any` 和 UI/API/测试常见的 `[]string`，避免 descriptor/schema 推荐出的数组字段在运行时被静默忽略并退回默认值。
+- Sink runtime 配置解析已补常见数组形态兼容：Kafka `brokers`、Elasticsearch `hosts`、MySQL/PostgreSQL/ClickHouse/Doris/JDBC `pk_columns` 现在同时接受 `[]any` 和 `[]string`，避免 UI/API 生成的幂等键、broker/host 列表在运行时被静默忽略。
+- Connector readiness 已补 source 侧 `remote_preflight` gate：MySQL batch/CDC/snapshot+CDC、PostgreSQL CDC 显示真实连接、权限、binlog/wal、表/query/slot/publication 检查证据；PostgreSQL CDC source readiness 现在引用 `hack/e2e-postgres-cdc.sh` 作为 connector-specific e2e evidence；Kafka/File/HTTP 显示 metadata/sample request/sample parse 的 partial gate 和部署环境复核建议；MySQL/PostgreSQL/ClickHouse/Doris sink readiness 现在把真实 Open + target schema metadata preflight 标为 pass，Kafka sink readiness 把 topic metadata preflight 标为 pass，S3 sink readiness 把 endpoint/bucket reachability 标为 pass；缺少远端检查的 connector 会在 readiness guidance 中暴露缺口。
 - `web/src/main.tsx` 向导已接入保存连接选择：source/sink 可选择 Connection Catalog，生成 YAML 使用普通 `connection` 引用，展示最近健康状态、schema/sample/topic/table/target 上下文和推荐参数；选择 saved connection 时默认清空旧 inline config，推荐 batch/checkpoint 会进入生成 spec，`source.config.*` / `sink.config.*` 类推荐可一键应用到表单/YAML。
+- `web/src/main.tsx` 向导已把 `batch_size` / `checkpoint_interval_sec` / `dlq.enable` 提升为可见的 Runtime safety 表单控制，并修正 preflight / saved-connection recommendation Apply 的状态闭环：顶层运行参数现在写入 wizard 状态源，和 YAML sync、生成 spec 保持一致，避免用户点击 Apply 后被后续表单变更重新生成的 YAML 覆盖。
 - `web/src/DagEditorPage.tsx` 节点属性已复用保存连接 context，DAG/YAML 继续使用普通 `connection` 字段，不引入专用执行路径；选择 saved connection 时清空旧节点 config，节点级 `source.config.*` / `sink.config.*` 推荐可直接应用为当前节点的 inline override。
 - `docs/etl-api.md` / `docs/etl-api.zh.md` / `docs/openapi.yaml` 已补保存连接上下文接口。
-- 本轮已验证：`go test ./internal/etl/server -count=1`、`npm run build`、`./hack/pack.sh`、`./hack/e2e-ui.sh`，UI e2e 结果 `92 passed, 0 failed`。
+- 本轮已验证：`go test ./internal/etl/server -count=1`、`npm run build`、`./hack/pack.sh`、`./hack/e2e-ui.sh`，UI e2e 结果 `92 passed, 0 failed`。后续补充验证：`go test ./internal/etl/source ./internal/etl/sink -count=1`、`CONTAINER_CLI=podman ./hack/e2e-postgres-cdc.sh`、`go test ./internal/etl/... -count=1`。
 
 剩余缺口：
 
@@ -323,7 +366,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - `/api/v2/ai/generate` 已改为使用 context pack system prompt，不再使用硬编码 “Flink-like” 口径；响应包含 `context_pack_version`、`validation` 和 `review`，其中 review 覆盖缺失字段、secret 确认、非 production maturity、CDC -> append sink、MaxCompute remote preflight/experimental maturity、DDL apply、脚本 transform 和 DLQ disabled 等风险。
 - `web/src/DagEditorPage.tsx` 已将 AI 生成改为“审阅后应用”：展示 validation、缺失字段、风险、确认项、当前 YAML 与生成 YAML，用户点击 Apply 后才写入 canvas。
 - `web/src/main.tsx` 首次任务向导的 transform chain 已支持增删、排序、切换 transform 类型和逐阶段 dry-run，仍然生成普通 `transforms` 数组。
-- `docs/components/` 已补第一批核心组件文档，覆盖 MySQL/Kafka/File/HTTP sources，ClickHouse/MySQL/PostgreSQL/Doris/Kafka/S3/File sinks，以及 lookup/deduplicate/window/flat_map/udtf/project/select_fields/type_convert/debezium_cdc/cdc_policy。
+- `docs/components/` 已补第一批核心组件文档，覆盖 MySQL/PostgreSQL/Kafka/File/HTTP sources，ClickHouse/MySQL/PostgreSQL/Doris/Kafka/S3/File/MaxCompute/Elasticsearch sinks，以及 lookup/deduplicate/window/flat_map/udtf/project/select_fields/type_convert/debezium_cdc/cdc_policy。
 - `internal/etl/server/ai_context_test.go` 已补 context pack、组件文档覆盖和 AI 风险审阅测试；API/OpenAPI/Quickstart 和中英文 changelog 已同步。
 - 已验证：`npm --prefix web run build` 通过，生成新的 `resource/public`。
 - 已验证：临时 Go toolchain 执行 `go test ./internal/etl/server ./internal/etl/transform -count=1` 通过；Podman 容器路径执行 `go test ./internal/etl/server ./internal/etl/transform -count=1` 通过。

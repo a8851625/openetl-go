@@ -43,6 +43,22 @@ func buildInsertMsg(relID uint32, vals []any) []byte {
 	binary.BigEndian.PutUint32(rid, relID)
 	buf = append(buf, rid...)
 	buf = append(buf, 'N')
+	return appendTupleValues(buf, vals)
+}
+
+func buildUpdateMsg(relID uint32, oldKey, newVals []any) []byte {
+	var buf []byte
+	buf = append(buf, 'U')
+	rid := make([]byte, 4)
+	binary.BigEndian.PutUint32(rid, relID)
+	buf = append(buf, rid...)
+	buf = append(buf, 'K')
+	buf = appendTupleValues(buf, oldKey)
+	buf = append(buf, 'N')
+	return appendTupleValues(buf, newVals)
+}
+
+func appendTupleValues(buf []byte, vals []any) []byte {
 	numCols := make([]byte, 2)
 	binary.BigEndian.PutUint16(numCols, uint16(len(vals)))
 	buf = append(buf, numCols...)
@@ -98,8 +114,7 @@ func buildLogicalMessageMsg(prefix string, content []byte) []byte {
 }
 
 func buildWALDataFrame(payload ...[]byte) []byte {
-	frame := make([]byte, 20)
-	binary.BigEndian.PutUint64(frame[0:8], 0x100000002)
+	var frame []byte
 	for _, p := range payload {
 		frame = append(frame, p...)
 	}
@@ -257,6 +272,36 @@ func TestParseInsertMsgUsesCatalog(t *testing.T) {
 	}
 }
 
+func TestParseUpdateMsgWithOldKeyTuple(t *testing.T) {
+	r := newTestReader()
+	r.catalog.setRelation(1, "users", []pgColumnInfo{
+		{Name: "id", TypeOID: 23},
+		{Name: "name", TypeOID: 25},
+		{Name: "active", TypeOID: 16},
+	})
+
+	msg := buildUpdateMsg(1, []any{42}, []any{42, "alice updated", false})
+	r.parseUpdateMsg(msg[1:], "1/2")
+
+	select {
+	case rec := <-r.records:
+		if rec.Operation != core.OpUpdate {
+			t.Fatalf("operation = %s, want update", rec.Operation)
+		}
+		if got := rec.Data["id"]; got != int32(42) {
+			t.Errorf("id = %v(%T), want int32 42", got, got)
+		}
+		if got := rec.Data["name"]; got != "alice updated" {
+			t.Errorf("name = %v, want alice updated", got)
+		}
+		if got := rec.Data["active"]; got != false {
+			t.Errorf("active = %v, want false", got)
+		}
+	default:
+		t.Fatal("expected record on channel")
+	}
+}
+
 func TestHandleWALDataSkipsNonRowPgoutputMessages(t *testing.T) {
 	r := newTestReader()
 	r.catalog.setRelation(1, "users", []pgColumnInfo{
@@ -270,7 +315,7 @@ func TestHandleWALDataSkipsNonRowPgoutputMessages(t *testing.T) {
 		buildTypeMsg("public", "custom_type"),
 		buildLogicalMessageMsg("audit", []byte("ignored")),
 		buildInsertMsg(1, []any{2, "bob"}),
-	))
+	), "1/2")
 
 	var got []core.Record
 	for i := 0; i < 2; i++ {

@@ -5,7 +5,7 @@ Read MySQL binlog changes for incremental CDC pipelines.
 
 ## Config Fields
 - `host`, `user`, `database`, `tables`: required source fields.
-- `port`, `server_id`, `server_id_base`: replication connection settings.
+- `port`, `server_id`, `server_id_base`, `shard_index`, `shard_total`: replication connection and table-sharding settings.
 - `enable_gtid`, `start_from`: resume and failover controls.
 - `password`: secret.
 

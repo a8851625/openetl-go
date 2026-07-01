@@ -97,13 +97,7 @@ func NewMySQLBatchSource(config map[string]any) (*MySQLBatchSource, error) {
 			s.limit = int(l)
 		}
 	}
-	if v, ok := config["columns"]; ok {
-		if cols, ok := v.([]interface{}); ok {
-			for _, c := range cols {
-				s.columns = append(s.columns, c.(string))
-			}
-		}
-	}
+	s.columns = append(s.columns, readStringSlice(config, "columns")...)
 	if s.pkCol == "" {
 		s.pkCol = "id"
 	}

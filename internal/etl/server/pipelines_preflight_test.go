@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/IBM/sarama"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
@@ -207,6 +211,673 @@ func preflightRecommendation(result *PreflightResult, path string) (PreflightRec
 	return PreflightRecommendation{}, false
 }
 
+func preflightFieldIssueContain(result *PreflightResult, field, check string) bool {
+	if result == nil {
+		return false
+	}
+	for _, issue := range result.FieldIssues {
+		if issue.Field == field && issue.Check == check {
+			return true
+		}
+	}
+	return false
+}
+
+func withMySQLBatchPreflightMock(t *testing.T) (sqlmock.Sqlmock, func()) {
+	t.Helper()
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	previous := openMySQLBatchPreflightDB
+	openMySQLBatchPreflightDB = func(driverName, dataSourceName string) (*sql.DB, error) {
+		if driverName != "mysql" {
+			t.Fatalf("driverName = %q, want mysql", driverName)
+		}
+		return db, nil
+	}
+	return mock, func() {
+		openMySQLBatchPreflightDB = previous
+		_ = db.Close()
+	}
+}
+
+func withPostgresCDCPreflightMock(t *testing.T) (sqlmock.Sqlmock, func()) {
+	t.Helper()
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	previous := openPostgresCDCPreflightDB
+	openPostgresCDCPreflightDB = func(driverName, dataSourceName string) (*sql.DB, error) {
+		if driverName != "pgx" {
+			t.Fatalf("driverName = %q, want pgx", driverName)
+		}
+		return db, nil
+	}
+	return mock, func() {
+		openPostgresCDCPreflightDB = previous
+		_ = db.Close()
+	}
+}
+
+func TestRunPreflightChecksMySQLBatchTableAndColumns(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+	mock, cleanup := withMySQLBatchPreflightMock(t)
+	defer cleanup()
+	mock.ExpectPing()
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema\.tables`).
+		WithArgs("shop", "orders").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema\.columns`).
+		WithArgs("shop", "orders", "id").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema\.columns`).
+		WithArgs("shop", "orders", "amount").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	spec := pipeline.Spec{
+		Name: "mysql-batch-table-preflight",
+		Source: pipeline.SourceSpec{
+			Type: "mysql_batch",
+			Config: map[string]any{
+				"host":     "mysql",
+				"port":     3306,
+				"user":     "sync",
+				"password": "secret",
+				"database": "shop",
+				"table":    "orders",
+				"columns":  []any{"amount"},
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if !result.Passed {
+		t.Fatalf("RunPreflight passed = false, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{"mysql-batch-table", "mysql-batch-column"} {
+		if preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, did not expect %s", result.Issues, check)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestRunPreflightBlocksMySQLBatchQueryMissingCursorColumn(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+	mock, cleanup := withMySQLBatchPreflightMock(t)
+	defer cleanup()
+	mock.ExpectPing()
+	mock.ExpectQuery(`SELECT \* FROM \(SELECT amount FROM orders\) AS openetl_preflight_probe LIMIT 0`).
+		WillReturnRows(sqlmock.NewRows([]string{"amount"}))
+
+	spec := pipeline.Spec{
+		Name: "mysql-batch-query-preflight",
+		Source: pipeline.SourceSpec{
+			Type: "mysql_batch",
+			Config: map[string]any{
+				"host":          "mysql",
+				"port":          3306,
+				"user":          "sync",
+				"password":      "secret",
+				"database":      "shop",
+				"query":         "SELECT amount FROM orders",
+				"cursor_column": "id",
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "mysql-batch-cursor-column") {
+		t.Fatalf("issues = %#v, want mysql-batch-cursor-column", result.Issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestRunPreflightChecksPostgresCDCPrerequisites(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+	mock, cleanup := withPostgresCDCPreflightMock(t)
+	defer cleanup()
+	mock.ExpectPing()
+	mock.ExpectQuery(`SHOW wal_level`).
+		WillReturnRows(sqlmock.NewRows([]string{"wal_level"}).AddRow("logical"))
+	mock.ExpectQuery(`SELECT rolsuper OR rolreplication FROM pg_roles WHERE rolname = current_user`).
+		WillReturnRows(sqlmock.NewRows([]string{"can_replicate"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema\.tables`).
+		WithArgs("public", "orders").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM pg_publication WHERE pubname='etl_pub'\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM pg_replication_slots WHERE slot_name=\$1\)`).
+		WithArgs("etl_slot").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT database FROM pg_replication_slots WHERE slot_name=\$1`).
+		WithArgs("etl_slot").
+		WillReturnRows(sqlmock.NewRows([]string{"database"}).AddRow("app"))
+
+	spec := pipeline.Spec{
+		Name: "postgres-cdc-preflight",
+		Source: pipeline.SourceSpec{
+			Type: "postgres_cdc",
+			Config: map[string]any{
+				"host":      "postgres",
+				"port":      5432,
+				"user":      "sync",
+				"password":  "secret",
+				"database":  "app",
+				"slot_name": "etl_slot",
+				"tables":    []any{"orders"},
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if !result.Passed {
+		t.Fatalf("RunPreflight passed = false, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{"postgres-cdc-wal-level", "postgres-cdc-replication-role", "postgres-cdc-table", "postgres-cdc-publication", "postgres-cdc-slot"} {
+		if preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, did not expect %s", result.Issues, check)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestRunPreflightBlocksPostgresCDCNonLogicalWalLevel(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+	mock, cleanup := withPostgresCDCPreflightMock(t)
+	defer cleanup()
+	mock.ExpectPing()
+	mock.ExpectQuery(`SHOW wal_level`).
+		WillReturnRows(sqlmock.NewRows([]string{"wal_level"}).AddRow("replica"))
+	mock.ExpectQuery(`SELECT rolsuper OR rolreplication FROM pg_roles WHERE rolname = current_user`).
+		WillReturnRows(sqlmock.NewRows([]string{"can_replicate"}).AddRow(true))
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM pg_publication WHERE pubname='etl_pub'\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM pg_replication_slots WHERE slot_name=\$1\)`).
+		WithArgs("etl_slot").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	spec := pipeline.Spec{
+		Name: "postgres-cdc-wal-preflight",
+		Source: pipeline.SourceSpec{
+			Type: "postgres_cdc",
+			Config: map[string]any{
+				"host":     "postgres",
+				"user":     "sync",
+				"password": "secret",
+				"database": "app",
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "postgres-cdc-wal-level") {
+		t.Fatalf("issues = %#v, want postgres-cdc-wal-level", result.Issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestRunPreflightBlocksInvalidPostgresCDCSourceConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-postgres-cdc-source-config",
+		Source: pipeline.SourceSpec{
+			Type: "postgres_cdc",
+			Config: map[string]any{
+				"port":            0,
+				"slot_name":       "bad slot",
+				"sslmode":         "tls",
+				"enable_snapshot": true,
+				"tables":          []string{"", ".orders"},
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   testSchemaPreflightSink,
+			Config: map[string]any{},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{
+		"postgres-cdc-source-required-config",
+		"postgres-cdc-source-port",
+		"postgres-cdc-source-slot-name",
+		"postgres-cdc-source-sslmode",
+		"postgres-cdc-source-table",
+	} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "source.config.host", check: "postgres-cdc-source-required-config"},
+		{field: "source.config.user", check: "postgres-cdc-source-required-config"},
+		{field: "source.config.database", check: "postgres-cdc-source-required-config"},
+		{field: "source.config.port", check: "postgres-cdc-source-port"},
+		{field: "source.config.slot_name", check: "postgres-cdc-source-slot-name"},
+		{field: "source.config.sslmode", check: "postgres-cdc-source-sslmode"},
+		{field: "source.config.tables", check: "postgres-cdc-source-table"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
+	}
+}
+
+func TestRunPreflightBlocksPostgresCDCSnapshotWithoutTables(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-postgres-cdc-snapshot-config",
+		Source: pipeline.SourceSpec{
+			Type: "postgres_cdc",
+			Config: map[string]any{
+				"host":            "postgres",
+				"user":            "sync",
+				"database":        "app",
+				"enable_snapshot": true,
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   testSchemaPreflightSink,
+			Config: map[string]any{},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "postgres-cdc-source-snapshot-tables") {
+		t.Fatalf("issues = %#v, want postgres-cdc-source-snapshot-tables", result.Issues)
+	}
+	if !preflightFieldIssueContain(result, "source.config.tables", "postgres-cdc-source-snapshot-tables") {
+		t.Fatalf("field issues = %#v, want source.config.tables", result.FieldIssues)
+	}
+}
+
+func TestRunPreflightBlocksInvalidMySQLCDCSourceConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-mysql-cdc-source-config",
+		Source: pipeline.SourceSpec{
+			Type: "mysql_cdc",
+			Config: map[string]any{
+				"port":           0,
+				"server_id":      0,
+				"server_id_base": 0,
+				"shard_total":    2,
+				"shard_index":    2,
+				"start_from":     "file:mysql-bin.000001:4",
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   testSchemaPreflightSink,
+			Config: map[string]any{},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{
+		"mysql-cdc-source-required-config",
+		"mysql-cdc-source-tables",
+		"mysql-cdc-source-port",
+		"mysql-cdc-source-server-id",
+		"mysql-cdc-source-server-id-base",
+		"mysql-cdc-source-shard",
+		"mysql-cdc-source-start-from",
+	} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "source.config.host", check: "mysql-cdc-source-required-config"},
+		{field: "source.config.user", check: "mysql-cdc-source-required-config"},
+		{field: "source.config.database", check: "mysql-cdc-source-required-config"},
+		{field: "source.config.tables", check: "mysql-cdc-source-tables"},
+		{field: "source.config.port", check: "mysql-cdc-source-port"},
+		{field: "source.config.server_id", check: "mysql-cdc-source-server-id"},
+		{field: "source.config.server_id_base", check: "mysql-cdc-source-server-id-base"},
+		{field: "source.config.shard_index", check: "mysql-cdc-source-shard"},
+		{field: "source.config.start_from", check: "mysql-cdc-source-start-from"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
+	}
+}
+
+func TestRunPreflightBlocksInvalidMySQLSnapshotCDCSourceConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-mysql-snapshot-cdc-source-config",
+		Source: pipeline.SourceSpec{
+			Type: "mysql_snapshot_cdc",
+			Config: map[string]any{
+				"host":      "mysql",
+				"user":      "sync",
+				"database":  "app",
+				"pk_column": "",
+				"limit":     0,
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   testSchemaPreflightSink,
+			Config: map[string]any{},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{
+		"mysql-snapshot-cdc-source-tables",
+		"mysql-snapshot-cdc-source-pk-column",
+		"mysql-snapshot-cdc-source-limit",
+	} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "source.config.tables", check: "mysql-snapshot-cdc-source-tables"},
+		{field: "source.config.pk_column", check: "mysql-snapshot-cdc-source-pk-column"},
+		{field: "source.config.limit", check: "mysql-snapshot-cdc-source-limit"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
+	}
+}
+
+func TestRunPreflightBlocksMissingFileSourcePath(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "file-source-missing-path",
+		Source: pipeline.SourceSpec{
+			Type:   "file",
+			Config: map[string]any{"format": "json"},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "file-source-path") {
+		t.Fatalf("issues = %#v, want file-source-path", result.Issues)
+	}
+}
+
+func TestRunPreflightBlocksMalformedJSONFileSource(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	path := filepath.Join(t.TempDir(), "bad.jsonl")
+	if err := os.WriteFile(path, []byte("{bad-json}\n"), 0o600); err != nil {
+		t.Fatalf("write sample file: %v", err)
+	}
+	spec := pipeline.Spec{
+		Name: "file-source-malformed-json",
+		Source: pipeline.SourceSpec{
+			Type:   "file",
+			Config: map[string]any{"path": path, "format": "json"},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "file-source-sample") {
+		t.Fatalf("issues = %#v, want file-source-sample", result.Issues)
+	}
+}
+
+func TestRunPreflightChecksHTTPSourceSampleRequest(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
+			t.Fatalf("Authorization = %q, want bearer token", got)
+		}
+		if got := r.URL.Query().Get("page"); got != "1" {
+			t.Fatalf("page = %q, want 1", got)
+		}
+		if got := r.URL.Query().Get("size"); got != "2" {
+			t.Fatalf("size = %q, want 2", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":1,"name":"Alice"}]}`))
+	}))
+	defer api.Close()
+
+	spec := pipeline.Spec{
+		Name: "http-source-sample-preflight",
+		Source: pipeline.SourceSpec{
+			Type: "http",
+			Config: map[string]any{
+				"url":        api.URL + "/items",
+				"auth_type":  "bearer",
+				"auth_token": "secret-token",
+				"page_param": "page",
+				"size_param": "size",
+				"page_size":  2,
+				"result_key": "data",
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if !result.Passed {
+		t.Fatalf("RunPreflight passed = false, issues = %#v", result.Issues)
+	}
+	if preflightIssuesContain(result, "http-source-sample") || preflightIssuesContain(result, "http-source-empty") {
+		t.Fatalf("issues = %#v, did not expect http source sample issues", result.Issues)
+	}
+}
+
+func TestRunPreflightBlocksHTTPSourceNonJSONResponse(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer api.Close()
+
+	spec := pipeline.Spec{
+		Name: "http-source-non-json-preflight",
+		Source: pipeline.SourceSpec{
+			Type:   "http",
+			Config: map[string]any{"url": api.URL + "/items"},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "http-source-sample") {
+		t.Fatalf("issues = %#v, want http-source-sample", result.Issues)
+	}
+}
+
+func TestRunPreflightChecksKafkaSourceTopic(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t),
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()).
+			SetLeader("orders.events", 0, broker.BrokerID()).
+			SetLeader("orders.events", 1, broker.BrokerID()),
+		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
+	})
+
+	spec := pipeline.Spec{
+		Name: "kafka-source-topic-preflight",
+		Source: pipeline.SourceSpec{
+			Type: "kafka",
+			Config: map[string]any{
+				"brokers":  []string{broker.Addr()},
+				"topic":    "orders.events",
+				"group_id": "kafka-source-topic-preflight",
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if !result.Passed {
+		t.Fatalf("RunPreflight passed = false, issues = %#v", result.Issues)
+	}
+	if preflightIssuesContain(result, "kafka-source-topic") {
+		t.Fatalf("issues = %#v, did not expect kafka-source-topic", result.Issues)
+	}
+}
+
+func TestRunPreflightBlocksMissingKafkaSourceTopic(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t),
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()).
+			SetLeader("orders.events", 0, broker.BrokerID()),
+		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
+	})
+
+	spec := pipeline.Spec{
+		Name: "kafka-source-missing-topic-preflight",
+		Source: pipeline.SourceSpec{
+			Type: "kafka",
+			Config: map[string]any{
+				"brokers":  []string{broker.Addr()},
+				"topic":    "orders.missing",
+				"group_id": "kafka-source-missing-topic-preflight",
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "kafka-source-topic") {
+		t.Fatalf("issues = %#v, want kafka-source-topic", result.Issues)
+	}
+}
+
 func TestRunPreflightReportsSinkReachabilityWarning(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()
@@ -320,7 +991,7 @@ func TestRunPreflightRecommendsS3OutputPrefix(t *testing.T) {
 		},
 		Sink: pipeline.SinkSpec{
 			Type:   "s3",
-			Config: map[string]any{"bucket": "openetl", "output_dir": t.TempDir(), "format": "jsonl"},
+			Config: map[string]any{"endpoint": "http://127.0.0.1:1", "bucket": "openetl", "output_dir": t.TempDir(), "format": "jsonl"},
 		},
 	}
 	pipeline.ApplyDefaults(&spec)
@@ -335,6 +1006,67 @@ func TestRunPreflightRecommendsS3OutputPrefix(t *testing.T) {
 	}
 }
 
+func TestRunPreflightBlocksS3WithoutEndpoint(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "s3-missing-endpoint",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "s3",
+			Config: map[string]any{"bucket": "openetl", "format": "jsonl"},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "s3-sink-endpoint") {
+		t.Fatalf("issues = %#v, want s3-sink-endpoint", result.Issues)
+	}
+	if !preflightFieldIssueContain(result, "sink.config.endpoint", "s3-sink-endpoint") {
+		t.Fatalf("field issues = %#v, want sink.config.endpoint s3-sink-endpoint", result.FieldIssues)
+	}
+}
+
+func TestRunPreflightBlocksUnsupportedFileSinkFormat(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "unsupported-file-sink-format",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir(), "format": "xml"},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "sink-config-format") {
+		t.Fatalf("issues = %#v, want sink-config-format", result.Issues)
+	}
+	if len(result.FieldIssues) == 0 {
+		t.Fatalf("field issues = %#v, want sink.config.format", result.FieldIssues)
+	}
+	if got := result.FieldIssues[0]; got.Field != "sink.config.format" || got.Check != "sink-config-format" {
+		t.Fatalf("field issue = %#v, want sink.config.format sink-config-format", got)
+	}
+}
+
 func TestRunPreflightRecommendsKafkaSinkReplayConfig(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()
@@ -343,7 +1075,7 @@ func TestRunPreflightRecommendsKafkaSinkReplayConfig(t *testing.T) {
 		Name: "kafka-sink-recommendations",
 		Source: pipeline.SourceSpec{
 			Type:   testPlainPreflightSource,
-			Config: map[string]any{},
+			Config: map[string]any{"key_column": "order_id"},
 		},
 		Sink: pipeline.SinkSpec{
 			Type: "kafka",
@@ -360,12 +1092,503 @@ func TestRunPreflightRecommendsKafkaSinkReplayConfig(t *testing.T) {
 		t.Fatalf("RunPreflight passed = false, issues = %#v", result.Issues)
 	}
 	key, ok := preflightRecommendation(result, "sink.config.key_column")
-	if !ok || key.Value != "id" || key.Safety != "review" {
-		t.Fatalf("key_column recommendation = %#v, want review id", key)
+	if !ok || key.Value != "order_id" || key.Safety != "review" {
+		t.Fatalf("key_column recommendation = %#v, want review order_id", key)
 	}
 	autoCreate, ok := preflightRecommendation(result, "sink.config.auto_create_topic")
 	if !ok || autoCreate.Value != true || autoCreate.Safety != "review" {
 		t.Fatalf("auto_create_topic recommendation = %#v, want review true", autoCreate)
+	}
+}
+
+func TestRunPreflightChecksKafkaSinkTopic(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t),
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()).
+			SetLeader("ods.orders", 0, broker.BrokerID()).
+			SetLeader("ods.orders", 1, broker.BrokerID()),
+		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
+	})
+
+	spec := pipeline.Spec{
+		Name: "kafka-sink-topic-preflight",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "kafka",
+			Config: map[string]any{
+				"brokers": []string{broker.Addr()},
+				"topic":   "ods.orders",
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if !result.Passed {
+		t.Fatalf("RunPreflight passed = false, issues = %#v", result.Issues)
+	}
+	if preflightIssuesContain(result, "kafka-sink-topic-metadata") {
+		t.Fatalf("issues = %#v, did not expect kafka-sink-topic-metadata", result.Issues)
+	}
+}
+
+func TestRunPreflightBlocksMissingKafkaSinkTopic(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t),
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()).
+			SetLeader("ods.existing", 0, broker.BrokerID()),
+		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
+	})
+
+	spec := pipeline.Spec{
+		Name: "kafka-sink-missing-topic-preflight",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "kafka",
+			Config: map[string]any{
+				"brokers": []string{broker.Addr()},
+				"topic":   "ods.missing",
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "kafka-sink-topic-metadata") {
+		t.Fatalf("issues = %#v, want kafka-sink-topic-metadata", result.Issues)
+	}
+	if !preflightFieldIssueContain(result, "sink.config.topic", "kafka-sink-topic-metadata") {
+		t.Fatalf("field issues = %#v, want sink.config.topic kafka-sink-topic-metadata", result.FieldIssues)
+	}
+}
+
+func TestRunPreflightBlocksInvalidKafkaSinkConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-kafka-sink-config",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "kafka",
+			Config: map[string]any{
+				"brokers":          []string{"127.0.0.1:1"},
+				"compression":      "brotli",
+				"retry_backoff_ms": -1,
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{"kafka-sink-topic", "kafka-sink-compression", "kafka-sink-retry"} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "sink.config.topic", check: "kafka-sink-topic"},
+		{field: "sink.config.compression", check: "kafka-sink-compression"},
+		{field: "sink.config.retry_backoff_ms", check: "kafka-sink-retry"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
+	}
+}
+
+func TestRunPreflightBlocksInvalidElasticsearchSinkConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-elasticsearch-sink-config",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "elasticsearch",
+			Config: map[string]any{
+				"hosts":         []string{"  "},
+				"chunk_size":    0,
+				"max_retries":   -1,
+				"retry_base_ms": -1,
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{"elasticsearch-sink-hosts", "elasticsearch-sink-index", "elasticsearch-sink-bulk", "elasticsearch-sink-retry"} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "sink.config.hosts", check: "elasticsearch-sink-hosts"},
+		{field: "sink.config.index", check: "elasticsearch-sink-index"},
+		{field: "sink.config.chunk_size", check: "elasticsearch-sink-bulk"},
+		{field: "sink.config.max_retries", check: "elasticsearch-sink-retry"},
+		{field: "sink.config.retry_base_ms", check: "elasticsearch-sink-retry"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
+	}
+}
+
+func TestRunPreflightBlocksInvalidMySQLSinkConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-mysql-sink-config",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "mysql",
+			Config: map[string]any{
+				"port":              70000,
+				"batch_mode":        "upsert",
+				"schema_drift":      "sync",
+				"ddl_policy":        "fail",
+				"insert_chunk_size": 0,
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{
+		"mysql-sink-required-config",
+		"mysql-sink-port",
+		"mysql-sink-upsert-keys",
+		"mysql-sink-schema-drift",
+		"mysql-sink-ddl-policy",
+		"mysql-sink-insert-chunk-size",
+	} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "sink.config.host", check: "mysql-sink-required-config"},
+		{field: "sink.config.user", check: "mysql-sink-required-config"},
+		{field: "sink.config.database", check: "mysql-sink-required-config"},
+		{field: "sink.config.table", check: "mysql-sink-required-config"},
+		{field: "sink.config.port", check: "mysql-sink-port"},
+		{field: "sink.config.pk_columns", check: "mysql-sink-upsert-keys"},
+		{field: "sink.config.schema_drift", check: "mysql-sink-schema-drift"},
+		{field: "sink.config.ddl_policy", check: "mysql-sink-ddl-policy"},
+		{field: "sink.config.insert_chunk_size", check: "mysql-sink-insert-chunk-size"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
+	}
+}
+
+func TestRunPreflightBlocksInvalidPostgresSinkConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-postgres-sink-config",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "postgres",
+			Config: map[string]any{
+				"host":       "postgres",
+				"user":       "etl",
+				"database":   "warehouse",
+				"table":      "orders",
+				"batch_mode": "merge",
+				"sslmode":    "tls",
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{"postgres-sink-batch-mode", "postgres-sink-sslmode"} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "sink.config.batch_mode", check: "postgres-sink-batch-mode"},
+		{field: "sink.config.sslmode", check: "postgres-sink-sslmode"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
+	}
+}
+
+func TestRunPreflightBlocksInvalidClickHouseSinkConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-clickhouse-sink-config",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "clickhouse",
+			Config: map[string]any{
+				"port":                  0,
+				"protocol":              "grpc",
+				"schema_drift":          "replace",
+				"ddl_policy":            "fail",
+				"source_dialect":        "oracle",
+				"optimize_interval_sec": -1,
+				"compression":           "brotli",
+				"version_column":        "",
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{
+		"clickhouse-sink-required-config",
+		"clickhouse-sink-port",
+		"clickhouse-sink-protocol",
+		"clickhouse-sink-schema-drift",
+		"clickhouse-sink-ddl-policy",
+		"clickhouse-sink-source-dialect",
+		"clickhouse-sink-optimize-interval",
+		"clickhouse-sink-compression",
+		"clickhouse-sink-version-column",
+	} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "sink.config.host", check: "clickhouse-sink-required-config"},
+		{field: "sink.config.database", check: "clickhouse-sink-required-config"},
+		{field: "sink.config.port", check: "clickhouse-sink-port"},
+		{field: "sink.config.protocol", check: "clickhouse-sink-protocol"},
+		{field: "sink.config.schema_drift", check: "clickhouse-sink-schema-drift"},
+		{field: "sink.config.ddl_policy", check: "clickhouse-sink-ddl-policy"},
+		{field: "sink.config.source_dialect", check: "clickhouse-sink-source-dialect"},
+		{field: "sink.config.optimize_interval_sec", check: "clickhouse-sink-optimize-interval"},
+		{field: "sink.config.compression", check: "clickhouse-sink-compression"},
+		{field: "sink.config.version_column", check: "clickhouse-sink-version-column"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
+	}
+}
+
+func TestRunPreflightBlocksInvalidDorisSinkConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-doris-sink-config",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "doris",
+			Config: map[string]any{
+				"port":                    0,
+				"http_port":               70000,
+				"write_mode":              "copy",
+				"batch_mode":              "upsert",
+				"stream_load_format":      "parquet",
+				"stream_load_scheme":      "ftp",
+				"stream_load_timeout_sec": 0,
+				"insert_chunk_size":       0,
+				"schema_drift":            "sync",
+				"ddl_policy":              "fail",
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{
+		"doris-sink-required-config",
+		"doris-sink-port",
+		"doris-sink-http-port",
+		"doris-sink-write-mode",
+		"doris-sink-upsert-keys",
+		"doris-sink-stream-load-format",
+		"doris-sink-stream-load-scheme",
+		"doris-sink-stream-load-timeout",
+		"doris-sink-insert-chunk-size",
+		"doris-sink-schema-drift",
+		"doris-sink-ddl-policy",
+	} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "sink.config.host", check: "doris-sink-required-config"},
+		{field: "sink.config.database", check: "doris-sink-required-config"},
+		{field: "sink.config.table", check: "doris-sink-required-config"},
+		{field: "sink.config.port", check: "doris-sink-port"},
+		{field: "sink.config.http_port", check: "doris-sink-http-port"},
+		{field: "sink.config.write_mode", check: "doris-sink-write-mode"},
+		{field: "sink.config.pk_columns", check: "doris-sink-upsert-keys"},
+		{field: "sink.config.stream_load_format", check: "doris-sink-stream-load-format"},
+		{field: "sink.config.stream_load_scheme", check: "doris-sink-stream-load-scheme"},
+		{field: "sink.config.stream_load_timeout_sec", check: "doris-sink-stream-load-timeout"},
+		{field: "sink.config.insert_chunk_size", check: "doris-sink-insert-chunk-size"},
+		{field: "sink.config.schema_drift", check: "doris-sink-schema-drift"},
+		{field: "sink.config.ddl_policy", check: "doris-sink-ddl-policy"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
+	}
+}
+
+func TestRunPreflightBlocksInvalidMaxComputeSinkConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "invalid-maxcompute-sink-config",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "maxcompute",
+			Config: map[string]any{
+				"endpoint":          "ftp://service.cn-hangzhou.maxcompute.aliyun.com/api",
+				"project":           "warehouse",
+				"table":             "ods_events",
+				"access_key_id":     "ak",
+				"write_mode":        "merge",
+				"batch_size":        0,
+				"max_retries":       -1,
+				"retry_base_ms":     0,
+				"partition":         map[string]any{"": "bad", "dt": "2026-06-26"},
+				"partition_fields":  []string{"", "dt"},
+				"columns":           map[string]any{"": "STRING", "payload": "ARRAY<STRING>"},
+				"tunnel_endpoint":   "not-a-url",
+				"auto_create_table": true,
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, issues = %#v", result.Issues)
+	}
+	for _, check := range []string{
+		"maxcompute-sink-required-config",
+		"maxcompute-sink-endpoint",
+		"maxcompute-sink-write-mode",
+		"maxcompute-sink-batch-size",
+		"maxcompute-sink-retry",
+		"maxcompute-sink-partition",
+		"maxcompute-sink-partition-fields",
+		"maxcompute-sink-partition-conflict",
+		"maxcompute-sink-columns",
+	} {
+		if !preflightIssuesContain(result, check) {
+			t.Fatalf("issues = %#v, want %s", result.Issues, check)
+		}
+	}
+	for _, item := range []struct {
+		field string
+		check string
+	}{
+		{field: "sink.config.access_key_secret", check: "maxcompute-sink-required-config"},
+		{field: "sink.config.endpoint", check: "maxcompute-sink-endpoint"},
+		{field: "sink.config.tunnel_endpoint", check: "maxcompute-sink-endpoint"},
+		{field: "sink.config.write_mode", check: "maxcompute-sink-write-mode"},
+		{field: "sink.config.batch_size", check: "maxcompute-sink-batch-size"},
+		{field: "sink.config.max_retries", check: "maxcompute-sink-retry"},
+		{field: "sink.config.retry_base_ms", check: "maxcompute-sink-retry"},
+		{field: "sink.config.partition", check: "maxcompute-sink-partition"},
+		{field: "sink.config.partition_fields", check: "maxcompute-sink-partition-fields"},
+		{field: "sink.config.partition_fields", check: "maxcompute-sink-partition-conflict"},
+		{field: "sink.config.columns", check: "maxcompute-sink-columns"},
+	} {
+		if !preflightFieldIssueContain(result, item.field, item.check) {
+			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
+		}
 	}
 }
 
@@ -377,7 +1600,7 @@ func TestRunPreflightRecommendsRelationalReplaySafeSinkConfig(t *testing.T) {
 		Name: "relational-replay-recommendations",
 		Source: pipeline.SourceSpec{
 			Type:   testPlainPreflightSource,
-			Config: map[string]any{},
+			Config: map[string]any{"pk_column": "order_id"},
 		},
 		Sink: pipeline.SinkSpec{
 			Type: "mysql",
@@ -406,8 +1629,8 @@ func TestRunPreflightRecommendsRelationalReplaySafeSinkConfig(t *testing.T) {
 		t.Fatalf("recommendations = %#v, want sink.config.pk_columns", result.Recommendations)
 	}
 	keyValues, ok := keys.Value.([]string)
-	if !ok || len(keyValues) != 1 || keyValues[0] != "id" {
-		t.Fatalf("pk_columns recommendation = %#v, want [id]", keys)
+	if !ok || len(keyValues) != 1 || keyValues[0] != "order_id" {
+		t.Fatalf("pk_columns recommendation = %#v, want [order_id]", keys)
 	}
 }
 

@@ -171,6 +171,7 @@ func connectorReadiness(kind, typ, maturity string, capabilities []string, regis
 			},
 			sourceSchemaGate(typ, capSet),
 			sourceCheckpointGate(typ, capSet),
+			sourceRemotePreflightGate(typ, capSet),
 		)
 	}
 	if kind == "sink" {
@@ -220,6 +221,28 @@ func sourceCheckpointGate(typ string, capSet map[string]bool) ConnectorReadiness
 	return missingGate("checkpoint", "Checkpoint/replay boundary", "implement checkpoint persistence and restart replay tests")
 }
 
+func sourceRemotePreflightGate(typ string, capSet map[string]bool) ConnectorReadinessGate {
+	switch typ {
+	case "mysql_batch":
+		return passGate("remote_preflight", "Remote preflight", "preflight opens MySQL, verifies table/query metadata, and checks cursor/column existence")
+	case "mysql_cdc", "mysql_snapshot_cdc":
+		return passGate("remote_preflight", "Remote preflight", "preflight opens MySQL and checks binlog format, row image, replication grants, server_id, and configured tables")
+	case "postgres_cdc":
+		return passGate("remote_preflight", "Remote preflight", "preflight opens PostgreSQL and checks wal_level, replication role, publication, configured tables, and slot ownership")
+	case "file":
+		return ConnectorReadinessGate{Code: "remote_preflight", Label: "Remote preflight", Status: "partial", Evidence: "preflight checks local file readability and parses a sample", Remediation: "run preflight in the same container/host path layout used for deployment"}
+	case "http":
+		return ConnectorReadinessGate{Code: "remote_preflight", Label: "Remote preflight", Status: "partial", Evidence: "preflight sends a short sample request and validates response JSON/result_key shape", Remediation: "verify production auth headers, rate limits, pagination, and retry policy against the real API"}
+	case "kafka":
+		return ConnectorReadinessGate{Code: "remote_preflight", Label: "Remote preflight", Status: "partial", Evidence: "preflight reads broker topic metadata and blocks missing or empty topics when metadata is reachable", Remediation: "verify broker ACLs, consumer group policy, and topic retention in the target environment"}
+	default:
+		if capSet["remote_preflight"] {
+			return passGate("remote_preflight", "Remote preflight", "metadata declares source remote preflight capability")
+		}
+		return missingGate("remote_preflight", "Remote preflight", "add source reachability, permission, and table/topic/sample checks")
+	}
+}
+
 func sinkSchemaGate(typ string, capSet map[string]bool) ConnectorReadinessGate {
 	switch typ {
 	case "file_sink", "s3", "kafka", "redis":
@@ -258,7 +281,11 @@ func sinkRemotePreflightGate(typ string, capSet map[string]bool) ConnectorReadin
 	switch typ {
 	case "mysql", "postgres", "postgresql", "clickhouse", "doris", "elasticsearch", "es":
 		return ConnectorReadinessGate{Code: "remote_preflight", Label: "Remote preflight", Status: "partial", Evidence: "preflight opens the sink and may validate target schema when reachable", Remediation: "extend connection-specific permission/table checks where needed"}
-	case "file_sink", "s3", "kafka":
+	case "kafka":
+		return passGate("remote_preflight", "Remote preflight", "preflight reads broker topic metadata and blocks missing or empty target topics when metadata is reachable")
+	case "s3":
+		return passGate("remote_preflight", "Remote preflight", "preflight requires endpoint/bucket and opens the S3-compatible target to check bucket reachability")
+	case "file_sink":
 		return ConnectorReadinessGate{Code: "remote_preflight", Label: "Remote preflight", Status: "partial", Evidence: "connection/open checks are available but target-specific schema checks are limited", Remediation: "use connection test and destination-specific smoke runs before production"}
 	default:
 		return missingGate("remote_preflight", "Remote preflight", "add target reachability, permission, and schema checks")
@@ -294,8 +321,8 @@ func connectorEvidence(kind, typ string) string {
 		"source:mysql_batch":        "hack/e2e.sh and hack/e2e-mysql-postgres.sh cover MySQL batch reads",
 		"source:mysql_cdc":          "hack/e2e-cdc-mysql.sh and hack/e2e-cdc-postgres.sh cover MySQL CDC",
 		"source:mysql_snapshot_cdc": "hack/e2e-snapshot-cdc.sh and snapshot+CDC ClickHouse crash tests cover integrated snapshot+CDC",
+		"source:postgres_cdc":       "hack/e2e-postgres-cdc.sh covers PostgreSQL CDC source insert/update/delete and checkpoint restart into MySQL",
 		"source:kafka":              "hack/e2e-kafka.sh, hack/e2e-wide-table.sh, and Debezium Kafka e2e cover Kafka source paths",
-		"source:postgres_cdc":       "hack/e2e-cdc-postgres.sh covers PostgreSQL CDC",
 		"sink:file_sink":            "hack/e2e.sh covers file sink output",
 		"sink:s3":                   "hack/e2e-s3-minio.sh covers MinIO-compatible S3 sink replay behavior",
 		"sink:mysql":                "hack/e2e.sh, hack/e2e-cdc-mysql.sh, and Debezium MySQL e2e cover MySQL sink upsert/replay",

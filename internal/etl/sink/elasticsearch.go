@@ -59,18 +59,18 @@ func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
 			s.name = vs
 		}
 	}
-	if v, ok := config["hosts"]; ok {
-		if hosts, ok := v.([]interface{}); ok {
-			for _, h := range hosts {
-				if hs, ok := h.(string); ok {
-					s.hosts = append(s.hosts, strings.TrimRight(hs, "/"))
-				}
-			}
+	for _, host := range stringSliceConfig(config, "hosts") {
+		host = strings.TrimSpace(host)
+		if host != "" {
+			s.hosts = append(s.hosts, strings.TrimRight(host, "/"))
 		}
 	}
 	if v, ok := config["host"]; ok {
 		if vs, ok := v.(string); ok {
-			s.hosts = append(s.hosts, strings.TrimRight(vs, "/"))
+			vs = strings.TrimSpace(vs)
+			if vs != "" {
+				s.hosts = append(s.hosts, strings.TrimRight(vs, "/"))
+			}
 		}
 	}
 	if v, ok := config["username"]; ok {
@@ -85,7 +85,7 @@ func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
 	}
 	if v, ok := config["index"]; ok {
 		if vs, ok := v.(string); ok {
-			s.index = vs
+			s.index = strings.TrimSpace(vs)
 		}
 	}
 	if v, ok := config["id_column"]; ok {
@@ -118,16 +118,13 @@ func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
 			s.chunkSize = int(cs)
 		}
 	}
-	if s.chunkSize <= 0 {
-		s.chunkSize = 500
-	}
 	if v, ok := config["tls_skip_verify"]; ok {
 		if b, ok := v.(bool); ok {
 			s.tlsSkipVerify = b
 		}
 	}
-	if len(s.hosts) == 0 {
-		s.hosts = []string{"http://localhost:9200"}
+	if err := s.validateConfig(); err != nil {
+		return nil, err
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if s.tlsSkipVerify {
@@ -135,6 +132,25 @@ func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
 	}
 	s.client = &http.Client{Timeout: 30 * time.Second, Transport: transport}
 	return s, nil
+}
+
+func (s *ElasticsearchSink) validateConfig() error {
+	if len(s.hosts) == 0 {
+		return fmt.Errorf("elasticsearch sink hosts are required")
+	}
+	if s.index == "" {
+		return fmt.Errorf("elasticsearch sink index is required")
+	}
+	if s.chunkSize <= 0 {
+		return fmt.Errorf("elasticsearch sink chunk_size must be > 0")
+	}
+	if s.maxRetries < 0 {
+		return fmt.Errorf("elasticsearch sink max_retries must be >= 0")
+	}
+	if s.retryBaseMs < 0 {
+		return fmt.Errorf("elasticsearch sink retry_base_ms must be >= 0")
+	}
+	return nil
 }
 
 func (s *ElasticsearchSink) Name() string { return s.name }

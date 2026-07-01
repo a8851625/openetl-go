@@ -7,7 +7,7 @@ Run an initial MySQL snapshot and continue from binlog CDC without a separate pi
 - `host`, `user`, `database`: required source fields.
 - `table` or `tables`: snapshot and CDC source tables.
 - `pk_column`, `limit`: snapshot pagination.
-- `server_id`, `server_id_base`, `consistent_snapshot_lock`: replication and snapshot controls.
+- `server_id`, `server_id_base`, `shard_index`, `shard_total`, `consistent_snapshot_lock`: replication, sharding, and snapshot controls.
 - `password`: secret.
 
 ## Record Shape

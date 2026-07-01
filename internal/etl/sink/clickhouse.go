@@ -130,13 +130,7 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 	if v, ok := config["table"]; ok {
 		s.table = v.(string)
 	}
-	if v, ok := config["pk_columns"]; ok {
-		if cols, ok := v.([]interface{}); ok {
-			for _, c := range cols {
-				s.pkColumns = append(s.pkColumns, c.(string))
-			}
-		}
-	}
+	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
 	if v, ok := config["version_column"]; ok {
 		s.versionCol = v.(string)
 	}

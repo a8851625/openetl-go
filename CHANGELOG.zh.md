@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [v0.2.6-beta-1] — 2026-07-01 — Phase 1 收尾：connector preflight 全面补齐与连接上下文闭环
+
+### 亮点
+- 把 Phase 1（可信同步与轻量汇聚 MVP）剩余的 preflight 缺口收齐：为全部内置 source/sink 补第一版静态字段级 remediation 和真实远端 reachability 检查，preflight 不再只覆盖 schema validator，避免非法配置静默回退默认值后才在运行时暴露为行为差异。
+- Source 侧补独立 preflight：Kafka（broker metadata、topic/partition 存在性）、MySQL CDC / snapshot+CDC（静态字段、shard、`start_from`、远端连接/权限/binlog/表）、MySQL batch（`table|query`、cursor column、表/列存在）、PostgreSQL CDC（静态字段、`wal_level=logical`、replication role、publication/slot）、File（`path`/`format`/CSV delimiter、可解析性）、HTTP（`url`/method/pagination、首个分页 sample、auth、JSON 响应、`result_key`）。
+- Sink 侧补字段级 static preflight 和真实远端检查：File/S3（`format` 白名单、显式 `endpoint`/`bucket`、retry 非负、bucket reachability）、MySQL/PostgreSQL（`batch_mode`、upsert `pk_columns`、`schema_drift`、`ddl_policy`、`sslmode`、目标表/列 metadata、DDL preview）、ClickHouse（`protocol`、`source_dialect`、`optimize_interval_sec`、`compression`、`version_column`、目标 schema、DDL preview）、Doris（`write_mode`、Stream Load `format`/`scheme`/`timeout`、Unique Key metadata、DDL preview）、Kafka（`compression` 白名单、`retry_backoff_ms`、topic metadata、`auto_create_topic` 降级）、Elasticsearch/OpenSearch（`hosts`/`index`/`chunk_size`/retry 参数，运行时拒绝空值隐式回退 localhost）、MaxCompute/ODPS（endpoint/project/table/access key、partition 冲突、`columns` 类型，真实远端走现有 `maxcompute-preflight`）。
+- PostgreSQL CDC source 重写 preflight 和 readiness：静态失败时不继续远端探测，避免首跑 validate 被连接错误掩盖真正缺失字段；新增 `hack/e2e-postgres-cdc.sh` 覆盖 insert/update/delete -> MySQL upsert/delete，以及 stop 后通过保留 replication slot 在 restart 后继续消费。
+- Source/Sink runtime 配置补常见数组形态兼容：Kafka `brokers`、MySQL/PG CDC `tables`、MySQL batch `columns`、ES `hosts`、各 sink `pk_columns` 现在同时接受 `[]any` 和 `[]string`，避免 UI/API 生成的数组字段被静默忽略。
+- 首次任务向导把 `batch_size` / `checkpoint_interval_sec` / `dlq.enable` 提升为可见的 Runtime safety 表单控制，并修正 preflight / saved-connection recommendation Apply 的状态闭环：顶层运行参数现在写入 wizard 状态源，与 YAML sync 和生成 spec 保持一致。
+- Connector readiness 暴露 source 侧 `remote_preflight` gate 和 sink 侧真实 Open + schema metadata 证据；缺少远端检查的 connector 会在 readiness guidance 中显式暴露缺口，不再隐式标 pass。
+- 组件文档事实源补齐 PostgreSQL CDC source、Elasticsearch sink、MaxCompute sink 三页，覆盖 descriptor/schema/preflight/readiness/maturity 一致性。
+
+### 边界与不做
+- 本迭代只收尾 preflight、连接上下文和 runtime safety 表单，不新增 connector、不改变 transform 执行语义、不引入通用 SQL planner 或 Flink 兼容层。
+- MaxCompute/ODPS sink 在没有真实环境 DLQ/replay/e2e 证据前 maturity 继续保持 experimental/beta，不提升 production。
+- DAG DLQ replay 当前不支持的行为继续在 API/UI/文档中显式可见。
+
+### 验证
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c 'go test ./internal/etl/server -count=1'`
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c 'go test ./internal/etl/source ./internal/etl/sink -count=1'`
+- `podman run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c 'go test ./internal/etl/... ./internal/cmd -count=1'`
+- `npm --prefix web run build`
+- `SKIP_UI=1 ./hack/pack.sh`
+
 ## [v0.2.5] — 2026-07-01 — 首次任务闭环、Redis 状态约束与 MaxCompute sink
 
 ### 亮点

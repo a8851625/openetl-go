@@ -88,15 +88,7 @@ func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
 			s.sslmode = vs
 		}
 	}
-	if v, ok := config["pk_columns"]; ok {
-		if cols, ok := v.([]interface{}); ok {
-			for _, c := range cols {
-				if cs, ok := c.(string); ok {
-					s.pkColumns = append(s.pkColumns, cs)
-				}
-			}
-		}
-	}
+	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
 	if v, ok := config["batch_mode"]; ok {
 		s.batchMode = v.(string)
 	}

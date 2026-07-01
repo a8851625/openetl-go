@@ -817,7 +817,8 @@ func introspectElasticsearchSink(ctx context.Context, cfg map[string]any, result
 		hosts = append(hosts, host)
 	}
 	if len(hosts) == 0 {
-		hosts = []string{"http://localhost:9200"}
+		result.Warnings = append(result.Warnings, "sink.config.hosts is empty; Elasticsearch/OpenSearch introspection skipped")
+		return nil
 	}
 	index := str(cfg, "index")
 	client := &http.Client{Timeout: 5 * time.Second}
