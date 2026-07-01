@@ -59,6 +59,10 @@ type Server struct {
 	standaloneWorker *worker.StandaloneWorker
 	pluginMgr        *pluginsystem.Manager
 	restartAttempts  map[string]int
+	// scheduler drives cron/periodic/dependency triggers for pipelines whose
+	// spec.Schedule is set. Pipelines without a Schedule are started immediately
+	// (streaming/once) by StartAll. Wired in NewServer; started in StartAll.
+	scheduler *orchestrator.Scheduler
 	// distributed enables master-role shard dispatch (A11-redo): parallel
 	// pipelines delegate shard execution to worker processes instead of running
 	// inline. Set via SetDistributed when etl.role=master.
@@ -242,6 +246,10 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 	// Initialize master node and standalone worker (single-process mode)
 	s.masterNode = master.NewMaster(store)
 	s.standaloneWorker = worker.NewStandalone(store, 4)
+	// Scheduler drives cron/periodic/dependency triggers. Initialized here so
+	// both StartAll (DB-loaded specs) and runtime API/reload paths can register
+	// pipelines against it. Run(ctx) is launched in StartAll.
+	s.scheduler = orchestrator.NewScheduler(store)
 	// In standalone mode, shard tasks are already executed by the
 	// ParallelRunner in-process. The worker poll loop's executor is a no-op so
 	// it doesn't double-execute; it just marks claimed tasks completed so they
@@ -422,7 +430,9 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 			continue
 		}
 
-		s.dispatchIfParallel(ctx, runner, runtime)
+		if !isDeferredSchedule(orchestratorSchedule(runtime.Schedule)) {
+			s.dispatchIfParallel(ctx, runner, runtime)
+		}
 
 		s.mu.Lock()
 		s.registerPipelineLocked(row.ID, displayName, runner, &spec, nil)
@@ -502,7 +512,9 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 			continue
 		}
 
-		s.dispatchIfParallel(ctx, runner, runtime)
+		if !isDeferredSchedule(orchestratorSchedule(runtime.Schedule)) {
+			s.dispatchIfParallel(ctx, runner, runtime)
+		}
 
 		// Persist spec to storage (best-effort)
 		if yamlBytes, mErr := pipeline.MarshalSpecYAML(spec); mErr == nil {
@@ -522,6 +534,7 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 
 func (s *Server) StartAll(ctx context.Context) error {
 	s.ctx = ctx
+	s.scheduler.SetContext(ctx)
 	s.mu.RLock()
 	runners := make(map[string]pipeline.RunnerInterface)
 	names := make(map[string]string, len(s.pipelines))
@@ -533,6 +546,20 @@ func (s *Server) StartAll(ctx context.Context) error {
 
 	for id, runner := range runners {
 		name := names[id]
+		// Pipelines with a cron/periodic/dependency schedule are handed to the
+		// scheduler instead of being started immediately. The scheduler starts
+		// them on each tick; nil/streaming/once schedules still start now.
+		orchSched := s.schedulerScheduleFor(id)
+		if isDeferredSchedule(orchSched) {
+			if err := s.scheduler.RegisterExecutor(id, runner, orchSched); err != nil {
+				g.Log().Warningf(ctx, "Failed to schedule pipeline %s (%s): %v", name, id, err)
+				_ = s.store.UpdatePipelineStatus(ctx, id, "failed")
+				continue
+			}
+			g.Log().Infof(ctx, "Registered pipeline %s (%s) with scheduler (type=%s)", name, id, orchSched.Type)
+			_ = s.store.UpdatePipelineStatus(ctx, id, "scheduled")
+			continue
+		}
 		if err := runner.Start(ctx); err != nil {
 			g.Log().Warningf(ctx, "Failed to start pipeline %s (%s): %v", name, id, err)
 			_ = s.store.UpdatePipelineStatus(ctx, id, "failed")
@@ -559,6 +586,11 @@ func (s *Server) StartAll(ctx context.Context) error {
 		}()
 	}
 
+	// Start the cron/periodic/dependency scheduler engine. Blocks until ctx
+	// is cancelled; safe to register more entries after it starts (robfig/cron
+	// spawns its own goroutine on AddFunc).
+	go s.scheduler.Run(ctx)
+
 	// Start the auto-restart reconciler.
 	go s.reconcilerLoop(ctx)
 
@@ -567,6 +599,86 @@ func (s *Server) StartAll(ctx context.Context) error {
 		go s.dlqJanitorLoop(ctx)
 	}
 
+	return nil
+}
+
+// scheduleOf returns the schedule config for a pipeline id, checking both
+// linear (pipeline.Spec.Schedule) and DAG (orchestrator.PipelineSpec.Schedule)
+// forms. Returns nil if no schedule is attached.
+func (s *Server) scheduleOf(id string) any {
+	if dagSpec, ok := s.dagSpecs[id]; ok && dagSpec != nil && dagSpec.Schedule != nil {
+		return dagSpec.Schedule
+	}
+	if spec, ok := s.specs[id]; ok && spec != nil && spec.Schedule != nil {
+		return spec.Schedule
+	}
+	return nil
+}
+
+func (s *Server) schedulerScheduleFor(id string) *orchestrator.ScheduleConfig {
+	sched := orchestratorSchedule(s.scheduleOf(id))
+	if sched == nil {
+		return nil
+	}
+	copy := *sched
+	if copy.Type == orchestrator.ScheduleDependency && len(copy.DependsOn) > 0 {
+		resolved := make([]string, 0, len(copy.DependsOn))
+		s.mu.RLock()
+		for _, dep := range copy.DependsOn {
+			if resolvedID, err := s.resolvePipelineRefLocked(dep); err == nil {
+				resolved = append(resolved, resolvedID)
+			} else {
+				resolved = append(resolved, dep)
+			}
+		}
+		s.mu.RUnlock()
+		copy.DependsOn = resolved
+	}
+	return &copy
+}
+
+// orchestratorSchedule converts a scheduleOf() result (either
+// *orchestrator.ScheduleConfig or *pipeline.ScheduleConfig) into the
+// *orchestrator.ScheduleConfig expected by Scheduler.RegisterExecutor.
+func orchestratorSchedule(sched any) *orchestrator.ScheduleConfig {
+	switch v := sched.(type) {
+	case *orchestrator.ScheduleConfig:
+		if v == nil {
+			return nil
+		}
+		return v
+	case *pipeline.ScheduleConfig:
+		if v == nil {
+			return nil
+		}
+		return &orchestrator.ScheduleConfig{
+			Type:      orchestrator.ScheduleType(v.Type),
+			Cron:      v.Cron,
+			IntervalS: v.IntervalSec,
+			DependsOn: v.DependsOn,
+		}
+	}
+	return nil
+}
+
+func isDeferredSchedule(sched *orchestrator.ScheduleConfig) bool {
+	return sched != nil && sched.Type != "" && sched.Type != orchestrator.ScheduleStreaming && sched.Type != orchestrator.ScheduleOnce
+}
+
+func (s *Server) registerRuntimeSchedule(ctx context.Context, id string, runner pipeline.RunnerInterface) error {
+	if s.scheduler == nil || runner == nil || s.ctx == nil {
+		return nil
+	}
+	sched := s.schedulerScheduleFor(id)
+	if !isDeferredSchedule(sched) {
+		return nil
+	}
+	s.scheduler.Unregister(id)
+	if err := s.scheduler.RegisterExecutor(id, runner, sched); err != nil {
+		_ = s.store.UpdatePipelineStatus(ctx, id, "failed")
+		return err
+	}
+	_ = s.store.UpdatePipelineStatus(ctx, id, "scheduled")
 	return nil
 }
 
@@ -771,6 +883,9 @@ func powFloat(base, exp float64) float64 {
 
 func (s *Server) StopAll() {
 	ctx := context.Background()
+	if s.scheduler != nil {
+		s.scheduler.StopAll()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for id, runner := range s.pipelines {
@@ -1311,6 +1426,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			s.mu.Lock()
 			s.registerPipelineLocked(id, dagSpec.Name, runner, nil, &dagSpec)
 			s.mu.Unlock()
+			if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
 
 			// Persist DAG spec to storage
 			if yamlBytes, mErr := yaml.Marshal(&dagSpec); mErr == nil {
@@ -1373,8 +1493,15 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
 		s.mu.Unlock()
+		if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
 
-		s.dispatchIfParallel(r.Context(), runner, runtime)
+		if !isDeferredSchedule(orchestratorSchedule(spec.Schedule)) {
+			s.dispatchIfParallel(r.Context(), runner, runtime)
+		}
 
 		// Persist spec to storage
 		if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
@@ -1475,6 +1602,9 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			runtime := runtimeDAGSpec(&dagSpec, id)
 
 			// Stop old runner if exists
+			if s.scheduler != nil {
+				s.scheduler.Unregister(id)
+			}
 			s.mu.Lock()
 			if oldRunner, ok := s.pipelines[id]; ok {
 				oldRunner.Stop()
@@ -1495,6 +1625,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			s.mu.Lock()
 			s.registerPipelineLocked(id, dagSpec.Name, runner, nil, &dagSpec)
 			s.mu.Unlock()
+			if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
 
 			if yamlBytes, mErr := yaml.Marshal(&dagSpec); mErr == nil {
 				_ = s.specStore.SaveWithID(r.Context(), id, dagSpec.Name, string(yamlBytes), "updated")
@@ -1577,7 +1712,10 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Stop old runner if exists
+		// Stop old runner/schedule if exists
+		if s.scheduler != nil {
+			s.scheduler.Unregister(id)
+		}
 		s.mu.Lock()
 		if oldRunner, ok := s.pipelines[id]; ok {
 			oldRunner.Stop()
@@ -1599,8 +1737,15 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
 		s.mu.Unlock()
+		if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
 
-		s.dispatchIfParallel(r.Context(), runner, runtime)
+		if !isDeferredSchedule(orchestratorSchedule(spec.Schedule)) {
+			s.dispatchIfParallel(r.Context(), runner, runtime)
+		}
 
 		// Save spec version
 		if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
@@ -1688,6 +1833,7 @@ func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, 
 		s.mu.Lock()
 		spec := s.specs[name]
 		dagSpec := s.dagSpecs[name]
+		runner := s.pipelines[name]
 		if spec == nil && dagSpec == nil {
 			s.mu.Unlock()
 			w.WriteHeader(http.StatusNotFound)
@@ -1710,6 +1856,14 @@ func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, 
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
+		if s.scheduler != nil {
+			s.scheduler.Unregister(name)
+		}
+		if err := s.registerRuntimeSchedule(r.Context(), name, runner); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
 		s.audit(r, "pipeline.schedule.update", name)
 		json.NewEncoder(w).Encode(map[string]any{"id": name, "name": s.pipelineNames[name], "enabled": true, "schedule": req})
 
@@ -1717,6 +1871,7 @@ func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, 
 		s.mu.Lock()
 		spec := s.specs[name]
 		dagSpec := s.dagSpecs[name]
+		runner := s.pipelines[name]
 		if spec == nil && dagSpec == nil {
 			s.mu.Unlock()
 			w.WriteHeader(http.StatusNotFound)
@@ -1734,6 +1889,14 @@ func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, 
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
+		}
+		if s.scheduler != nil {
+			s.scheduler.Unregister(name)
+		}
+		if runner != nil && runner.Status() == pipeline.StatusRunning {
+			_ = s.store.UpdatePipelineStatus(r.Context(), name, "running")
+		} else {
+			_ = s.store.UpdatePipelineStatus(r.Context(), name, "stopped")
 		}
 		s.audit(r, "pipeline.schedule.disable", name)
 		json.NewEncoder(w).Encode(map[string]any{"id": name, "name": s.pipelineNames[name], "enabled": false})
@@ -1975,6 +2138,10 @@ func (s *Server) handlePipelineDelete(w http.ResponseWriter, r *http.Request, na
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]any{"error": "pipeline not found"})
 		return
+	}
+
+	if s.scheduler != nil {
+		s.scheduler.Unregister(name)
 	}
 
 	if hasRunner {
@@ -2316,7 +2483,14 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
 		s.mu.Unlock()
-		s.dispatchIfParallel(r.Context(), runner, runtime)
+		if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		if !isDeferredSchedule(orchestratorSchedule(spec.Schedule)) {
+			s.dispatchIfParallel(r.Context(), runner, runtime)
+		}
 		if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
 			_ = s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "imported")
 		}
@@ -2327,9 +2501,6 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 
 // handlePipelinesPut is a helper to update an existing pipeline (used by spec import).
 func (s *Server) handlePipelinesPut(ctx context.Context, id string, spec *pipeline.Spec) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if err := s.resolvePipelineConnections(ctx, spec); err != nil {
 		return err
 	}
@@ -2337,9 +2508,15 @@ func (s *Server) handlePipelinesPut(ctx context.Context, id string, spec *pipeli
 		return err
 	}
 
+	if s.scheduler != nil {
+		s.scheduler.Unregister(id)
+	}
+
+	s.mu.Lock()
 	if oldRunner, ok := s.pipelines[id]; ok {
 		oldRunner.Stop()
 	}
+	s.mu.Unlock()
 
 	runtime := runtimeSpec(spec, id)
 	runner, err := s.newRunner(runtime)
@@ -2347,8 +2524,15 @@ func (s *Server) handlePipelinesPut(ctx context.Context, id string, spec *pipeli
 		return err
 	}
 
+	s.mu.Lock()
 	s.registerPipelineLocked(id, spec.Name, runner, spec, nil)
-	s.dispatchIfParallel(ctx, runner, runtime)
+	s.mu.Unlock()
+	if err := s.registerRuntimeSchedule(ctx, id, runner); err != nil {
+		return err
+	}
+	if !isDeferredSchedule(orchestratorSchedule(spec.Schedule)) {
+		s.dispatchIfParallel(ctx, runner, runtime)
+	}
 
 	if yamlBytes, mErr := pipeline.MarshalSpecYAML(spec); mErr == nil {
 		_ = s.specStore.SaveWithID(ctx, id, spec.Name, string(yamlBytes), "imported")

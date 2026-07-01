@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [v0.2.6-beta-2] — 2026-07-01 — Wire runtime Scheduler into Server
+
+### Highlights
+- Wired `orchestrator.Scheduler` (cron/periodic/dependency schedule engine) into `Server.StartAll` so deferred-schedule pipelines are no longer started immediately but registered with the scheduler.
+- Added `s.scheduler` field to the Server struct, initialized in `NewServer`, with `StartAll` registering each deferred pipeline and calling `go s.scheduler.Run(ctx)`.
+- All runtime API paths (create, update, import, schedule PUT/DELETE, pipeline delete) now register or unregister the schedule entry on the fly without requiring a restart.
+- Added a `schedulerScheduleFor` helper that resolves pipeline display-name references to stable IDs for dependency schedules.
+- Refactored `Scheduler` to accept `pipeline.RunnerInterface` instead of `*DAGExecutor`, so linear runners, parallel runners, and DAG runners are all schedulable.
+- Added integration tests covering cron schedules not starting immediately on boot, and periodic schedules actually triggering the runner.
+
+### Validation
+- `go test ./internal/etl/... ./internal/cmd -count=1`
+
 ## [v0.2.5-beta.1] — 2026-06-29 — AI context pack and reviewed DAG generation
 
 ### Highlights

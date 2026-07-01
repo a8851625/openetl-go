@@ -198,6 +198,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
   - 已落地每个内置 source descriptor 的 `supported_schedules` 和 `default_schedule`，第一版只使用这两个字段，不引入额外运行分类。
   - `mysql_cdc`、`postgres_cdc`、`mysql_snapshot_cdc`、`kafka` 默认只允许 `streaming`；`mysql_batch`、`file`、`http` 默认允许 `once` / `cron` / `periodic` / `dependency`；`redis` 按现有模式保守声明为 `once`。
   - `spec validate` 和 preflight 已拒绝不在 `supported_schedules` 内的 `schedule.type`；缺省 schedule 会按 source 的 `default_schedule` 回填，并校验 `cron`、`periodic`、`dependency` 的必填字段。
+  - 运行时调度已接入 `Server.StartAll` 与运行时 API：`cron` 使用 robfig/cron v3 with seconds，`periodic` 使用 ticker，`dependency` 在上游完成后触发；有延迟调度的 pipeline 启动时标记为 `scheduled` 且不会立即执行，同一 pipeline 上一轮仍在运行时跳过本次触发。
   - UI 创建/编辑 pipeline 时已按当前 source 支持的 schedule 类型过滤选项，并在切换 source 后重新校验已有 schedule；多 source DAG 使用支持类型交集。
   - 调度校验仍需结合 sink 幂等性给出重跑风险 warning，但第一版不把 sink 风险混入 source capability 字段。
 - 为三条主路径补齐 e2e：

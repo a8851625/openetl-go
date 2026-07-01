@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [v0.2.6-beta-2] — 2026-07-01 — 运行时调度接入 Server
+
+### 亮点
+- 将已存在的 `orchestrator.Scheduler`（cron/periodic/dependency 调度引擎）接入 `Server.StartAll`，使得延迟调度的 pipeline 不再在启动时立即执行，而是注册到调度器，由调度器在指定时间触发。
+- `Server` 结构体新增 `s.scheduler` 字段，在 `NewServer` 中初始化；`StartAll` 遍历所有 pipeline，对有延迟 schedule 的调用 `s.scheduler.RegisterExecutor(id, runner, sched)`，然后 `go s.scheduler.Run(ctx)`。
+- 所有运行时 API 路径（create、update、import、schedule PUT/DELETE、pipeline delete）都会在操作同时注册或注销调度条目，无需重启。
+- 新增 `schedulerScheduleFor` 辅助函数，将 `depends_on` 中的 pipeline 名称解析为稳定 ID，确保依赖调度在内部使用 ID 作为 key 时仍能正确触发。
+- 重构 `Scheduler` 接口从 `*DAGExecutor` 改为 `pipeline.RunnerInterface`，线性 Runner、ParallelRunner、DAGRunnerWrapper 均可被调度。
+- 新增集成测试覆盖：cron schedule 在启动时不立即执行（状态为 `scheduled`）、periodic schedule 真正触发 runner。
+
+### 验证
+- `go test ./internal/etl/... ./internal/cmd -count=1`
+
 ## [v0.2.6-beta-1] — 2026-07-01 — Phase 1 收尾：connector preflight 全面补齐与连接上下文闭环
 
 ### 亮点
