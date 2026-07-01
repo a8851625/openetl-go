@@ -65,7 +65,7 @@ Poor fits:
 Run the bundled MySQL CDC to ClickHouse demo:
 
 ```bash
-CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"
 "$CONTAINER_CLI" compose -f docker-compose.quickstart.yml up -d
 ```
 
@@ -166,7 +166,7 @@ Download a release archive from [Releases](../../releases), or run the container
 image:
 
 ```bash
-CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"
 "$CONTAINER_CLI" run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
   -v "$PWD/pipes:/app/pipes" \
   ghcr.io/a8851625/openetl-go:latest

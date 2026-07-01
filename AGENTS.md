@@ -18,6 +18,15 @@
 - For each completed roadmap item, update evidence rather than only adding new plans: tests run, e2e coverage, docs updated, maturity metadata changed, or known residual gaps.
 - If a task reveals more work than expected, split follow-ups into a bounded backlog section and continue finishing the original deliverable. Avoid repeatedly rewriting acceptance criteria midstream.
 
+- Local Go may be unavailable; use `CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"; "$CONTAINER_CLI" run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c "go test ./..."` for tests.
+
+## Container Runtime Selection
+- `hack/container-cli.sh` is the single source of truth for which container CLI hack scripts, e2e tests, `make image`, and `./hack/pack.sh` use.
+- Default detection order is **docker first, then podman**. Pick the CLI that exists in your current environment: most Linux/CI/macOS-Docker-Desktop setups have `docker`; rootless or daemonless setups (some Linux workstations, CI runners without a Docker daemon) typically have `podman`.
+- Force one explicitly via `export CONTAINER_CLI=docker` or `export CONTAINER_CLI=podman`. This is required when both are installed but you need the non-default one (e.g. Docker Desktop installed alongside podman).
+- Compose subcommand resolution: native `docker compose` / `podman compose` is preferred; `docker-compose` / `podman-compose` fallback is auto-selected when the native plugin is missing.
+- All `hack/e2e-*.sh` scripts, `make image`, `./hack/pack.sh`, and the compose files honor `CONTAINER_CLI`. Document examples default to `docker`; swap to `podman` only when the local environment requires it.
+
 ## Commands
 - `make build` is the safest build path: it installs the GoFrame CLI if missing, then runs `gf build -ew` using `hack/config.yaml`.
 - `main.go` imports generated `github.com/a8851625/openetl-go/internal/packed`, and `hack/config.yaml` packs `resource/` into `internal/packed/packed.go` during GoFrame builds. Plain `go build ./...` works if `internal/packed/packed.go` exists (it is committed as a 15-byte stub).

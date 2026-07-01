@@ -1,14 +1,15 @@
 #!/bin/sh
 
 # Shared container runtime selection for hack scripts.
-# Set CONTAINER_CLI=docker or CONTAINER_CLI=podman to override detection.
+# Default preference: docker first, then podman. Override with
+# CONTAINER_CLI=podman (or CONTAINER_CLI=docker) to force a specific CLI.
 
 has_container_cli() {
   if [ -n "${CONTAINER_CLI:-}" ]; then
     command -v "$CONTAINER_CLI" >/dev/null 2>&1
     return
   fi
-  command -v podman >/dev/null 2>&1 || command -v docker >/dev/null 2>&1
+  command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1
 }
 
 detect_container_cli() {
@@ -19,12 +20,14 @@ detect_container_cli() {
     fi
     return
   fi
-  if command -v podman >/dev/null 2>&1; then
-    CONTAINER_CLI=podman
-    return
-  fi
+  # Default preference: docker first (most common in CI/local), then podman.
+  # Override with CONTAINER_CLI=podman to force podman.
   if command -v docker >/dev/null 2>&1; then
     CONTAINER_CLI=docker
+    return
+  fi
+  if command -v podman >/dev/null 2>&1; then
+    CONTAINER_CLI=podman
     return
   fi
   echo "docker or podman is required" >&2

@@ -16,7 +16,7 @@ git clone <repo-url> openetl-go
 cd openetl-go
 
 # 启动全部依赖（MySQL、ClickHouse、MinIO、Redpanda）+ ETL 服务
-CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"
 "$CONTAINER_CLI" compose -f docker-compose.quickstart.yml up -d
 
 # 验证服务

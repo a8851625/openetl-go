@@ -16,7 +16,7 @@ git clone <repo-url> openetl-go
 cd openetl-go
 
 # Start all dependencies (MySQL, ClickHouse, MinIO, Redpanda) + ETL service
-CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"
 "$CONTAINER_CLI" compose -f docker-compose.quickstart.yml up -d
 
 # Verify

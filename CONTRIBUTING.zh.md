@@ -3,7 +3,7 @@
 ## 环境准备
 
 - Go 1.24+，纯 Go 默认构建（无 CGO，无外部运行时）
-- 可选开发容器：`CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"; "$CONTAINER_CLI" exec -it etl-go-dev bash`（已配置 Go 1.24 + 集成测试容器）
+- 可选开发容器：`CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"; "$CONTAINER_CLI" exec -it etl-go-dev bash`（已配置 Go 1.24 + 集成测试容器）
 
 ## 构建与测试
 
