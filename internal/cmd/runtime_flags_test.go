@@ -17,7 +17,9 @@ func TestRuntimeHelpDocumentsPriorityAndCoreFlags(t *testing.T) {
 		"--api-token TOKEN",
 		"--role ROLE",
 		"--audit-enabled BOOL",
+		"--worker-labels LABELS",
 		"ETL_API_TOKEN",
+		"ETL_WORKER_LABELS",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q:\n%s", want, help)
@@ -36,6 +38,7 @@ func TestParseRuntimeFlags(t *testing.T) {
 		"--role", "master",
 		"--api-token", "secret",
 		"--audit-enabled", "false",
+		"--worker-labels", "gpu=true,zone=us-east-1",
 	}, io.Discard)
 	if err != nil {
 		t.Fatalf("parseRuntimeFlags: %v", err)
@@ -52,7 +55,10 @@ func TestParseRuntimeFlags(t *testing.T) {
 	if opts.auditEnabled != "false" {
 		t.Fatalf("parsed audit-enabled = %q", opts.auditEnabled)
 	}
-	for _, flagName := range []string{"config", "data-dir", "port", "etl-api-port", "storage", "storage-dsn", "role", "api-token", "audit-enabled"} {
+	if opts.workerLabels != "gpu=true,zone=us-east-1" {
+		t.Fatalf("parsed worker-labels = %q", opts.workerLabels)
+	}
+	for _, flagName := range []string{"config", "data-dir", "port", "etl-api-port", "storage", "storage-dsn", "role", "api-token", "audit-enabled", "worker-labels"} {
 		if !opts.seen[flagName] {
 			t.Fatalf("flag %q not marked seen", flagName)
 		}

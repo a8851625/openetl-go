@@ -24,6 +24,7 @@ type Worker struct {
 	Host      string
 	Port      int
 	Slots     int
+	Labels    map[string]string
 	masterURL string
 
 	store     storage.Storage
@@ -62,6 +63,7 @@ type Config struct {
 	Host      string
 	Port      int
 	Slots     int
+	Labels    map[string]string
 	MasterURL string
 	Store     storage.Storage
 }
@@ -79,6 +81,7 @@ func New(cfg Config) *Worker {
 		Host:      cfg.Host,
 		Port:      cfg.Port,
 		Slots:     cfg.Slots,
+		Labels:    cfg.Labels,
 		masterURL: cfg.MasterURL,
 		store:     cfg.Store,
 		executors: map[string]*orchestrator.DAGExecutor{},
@@ -130,10 +133,11 @@ func (w *Worker) Stop() {
 
 func (w *Worker) register(ctx context.Context) error {
 	body := map[string]any{
-		"id":    w.ID,
-		"host":  w.Host,
-		"port":  w.Port,
-		"slots": w.Slots,
+		"id":     w.ID,
+		"host":   w.Host,
+		"port":   w.Port,
+		"slots":  w.Slots,
+		"labels": w.Labels,
 	}
 	bodyJSON, _ := json.Marshal(body)
 	// Use *bytes.Reader (not the custom jsonReader) so the HTTP client sets
@@ -242,13 +246,14 @@ type StandaloneWorker struct {
 }
 
 // NewStandalone creates a worker that runs in the same process as the master.
-func NewStandalone(store storage.Storage, slots int) *StandaloneWorker {
+func NewStandalone(store storage.Storage, slots int, labels map[string]string) *StandaloneWorker {
 	w := New(Config{
-		ID:    "standalone-worker",
-		Host:  "localhost",
-		Port:  0,
-		Slots: slots,
-		Store: store,
+		ID:     "standalone-worker",
+		Host:   "localhost",
+		Port:   0,
+		Slots:  slots,
+		Labels: labels,
+		Store:  store,
 	})
 	return &StandaloneWorker{Worker: w}
 }
@@ -262,10 +267,11 @@ func (s *StandaloneWorker) SetTaskExecutor(fn func(ctx context.Context, task *st
 func (s *StandaloneWorker) Start(ctx context.Context) error {
 	// In standalone mode, we register directly to the store (no HTTP)
 	info := &storage.WorkerInfo{
-		ID:    s.Worker.ID,
-		Host:  s.Worker.Host,
-		Port:  s.Worker.Port,
-		Slots: s.Worker.Slots,
+		ID:     s.Worker.ID,
+		Host:   s.Worker.Host,
+		Port:   s.Worker.Port,
+		Slots:  s.Worker.Slots,
+		Labels: s.Worker.Labels,
 	}
 	if err := s.Worker.store.RegisterWorker(ctx, info); err != nil {
 		return fmt.Errorf("standalone register: %w", err)

@@ -84,3 +84,86 @@ func TestPollLoopRespectsSlotsLimit(t *testing.T) {
 		t.Fatal("timed out waiting for second task to start after release")
 	}
 }
+
+// TestPollTaskFromStoreFiltersByLabels proves the standalone worker poll path
+// honors worker_selector.match_labels: a worker whose registered Labels do not
+// match a task's RequiredLabels cannot claim it, while a matching worker can.
+func TestPollTaskFromStoreFiltersByLabels(t *testing.T) {
+	dir := t.TempDir()
+	store, err := factory.NewStore(context.Background(), "sqlite", filepath.Join(dir, "cp"), filepath.Join(dir, "dlq"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	ctx := context.Background()
+
+	// Two tasks: one label-restricted, one open.
+	if err := store.CreateTask(ctx, &storage.TaskAssignment{
+		TaskID: "gpu-task", Pipeline: "gpu-pipe", Status: "pending",
+		ShardIndex: 0, ShardTotal: 1, RequiredLabels: map[string]string{"gpu": "true"},
+	}); err != nil {
+		t.Fatalf("CreateTask gpu-task: %v", err)
+	}
+	if err := store.CreateTask(ctx, &storage.TaskAssignment{
+		TaskID: "open-task", Pipeline: "open-pipe", Status: "pending",
+		ShardIndex: 0, ShardTotal: 1,
+	}); err != nil {
+		t.Fatalf("CreateTask open-task: %v", err)
+	}
+
+	// cpu-worker (no labels) must skip gpu-task and claim open-task.
+	cpu := New(Config{ID: "cpu-worker", Host: "127.0.0.1", Slots: 2, Store: store})
+	got, err := cpu.pollTaskFromStore(ctx)
+	if err != nil || got == nil {
+		t.Fatalf("cpu-worker should claim open-task, got task=%v err=%v", got, err)
+	}
+	if got.TaskID != "open-task" {
+		t.Errorf("cpu-worker claimed %s, want open-task (should skip gpu-task)", got.TaskID)
+	}
+
+	// gpu-worker (gpu=true) claims the remaining gpu-task.
+	gpu := New(Config{ID: "gpu-worker", Host: "127.0.0.1", Slots: 2,
+		Labels: map[string]string{"gpu": "true"}, Store: store})
+	got2, err := gpu.pollTaskFromStore(ctx)
+	if err != nil || got2 == nil {
+		t.Fatalf("gpu-worker should claim gpu-task, got task=%v err=%v", got2, err)
+	}
+	if got2.TaskID != "gpu-task" {
+		t.Errorf("gpu-worker claimed %s, want gpu-task", got2.TaskID)
+	}
+
+	// gpu-task is now claimed; re-polling with a third unmatched worker yields nil.
+	other := New(Config{ID: "other-worker", Host: "127.0.0.1", Slots: 2,
+		Labels: map[string]string{"zone": "other"}, Store: store})
+	got3, err := other.pollTaskFromStore(ctx)
+	if err != nil {
+		t.Fatalf("poll error: %v", err)
+	}
+	if got3 != nil {
+		t.Errorf("no eligible tasks should remain, but claimed %s", got3.TaskID)
+	}
+}
+
+// TestLabelsSatisfyUnit covers the pure matcher directly.
+func TestLabelsSatisfyUnit(t *testing.T) {
+	cases := []struct {
+		name     string
+		worker   map[string]string
+		required map[string]string
+		want     bool
+	}{
+		{"empty required always matches", map[string]string{"a": "1"}, nil, true},
+		{"exact match", map[string]string{"gpu": "true"}, map[string]string{"gpu": "true"}, true},
+		{"superset worker matches", map[string]string{"gpu": "true", "zone": "x"}, map[string]string{"gpu": "true"}, true},
+		{"missing key fails", map[string]string{"a": "1"}, map[string]string{"gpu": "true"}, false},
+		{"wrong value fails", map[string]string{"gpu": "false"}, map[string]string{"gpu": "true"}, false},
+		{"nil worker with required fails", nil, map[string]string{"gpu": "true"}, false},
+		{"both empty matches", nil, nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := labelsSatisfy(c.worker, c.required); got != c.want {
+				t.Errorf("labelsSatisfy(%v, %v) = %v, want %v", c.worker, c.required, got, c.want)
+			}
+		})
+	}
+}

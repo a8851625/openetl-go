@@ -33,21 +33,24 @@ type ShardSource interface {
 // DispatchShards implements pipeline.ShardDispatcher (A11-redo). It creates
 // task_assignments for each of `count` shards of the named pipeline, each
 // carrying shard metadata (ShardIndex/ShardTotal) so a claiming worker knows
-// which single-shard Runner to build.
-func (d *TaskDispatcher) DispatchShards(ctx context.Context, pipelineName string, count int) error {
+// which single-shard Runner to build. requiredLabels, when non-empty, is
+// persisted on each task so only workers whose registered Labels match all
+// entries may claim them (worker_selector.match_labels enforcement).
+func (d *TaskDispatcher) DispatchShards(ctx context.Context, pipelineName string, count int, requiredLabels map[string]string) error {
 	if count <= 1 {
 		return nil
 	}
-	g.Log().Infof(ctx, "Dispatching %d shards for pipeline %s", count, pipelineName)
+	g.Log().Infof(ctx, "Dispatching %d shards for pipeline %s (labels=%v)", count, pipelineName, requiredLabels)
 
 	for i := 0; i < count; i++ {
 		taskID := fmt.Sprintf("%s-shard-%d", pipelineName, i)
 		task := &storage.TaskAssignment{
-			TaskID:     taskID,
-			Pipeline:   pipelineName,
-			ShardIndex: i, // A11-redo: worker reads these to build the right single-shard Runner
-			ShardTotal: count,
-			Status:     "pending",
+			TaskID:         taskID,
+			Pipeline:       pipelineName,
+			ShardIndex:     i, // A11-redo: worker reads these to build the right single-shard Runner
+			ShardTotal:     count,
+			Status:         "pending",
+			RequiredLabels: requiredLabels,
 		}
 		if err := d.store.CreateTask(ctx, task); err != nil {
 			g.Log().Warningf(ctx, "CreateTask %s: %v", taskID, err)
@@ -58,10 +61,10 @@ func (d *TaskDispatcher) DispatchShards(ctx context.Context, pipelineName string
 
 // DispatchRunnerShards is the ShardSource-based adapter used by the standalone
 // cosmetic-dispatch path (Master.DispatchParallelShards). It delegates to
-// DispatchShards with the count derived from the runner.
+// DispatchShards with the count derived from the runner and forwards the
+// pipeline's worker_selector.match_labels.
 func (d *TaskDispatcher) DispatchRunnerShards(ctx context.Context, pr ShardSource, pipelineName string, labels map[string]string) error {
-	_ = labels // reserved for future worker-selector matching
-	return d.DispatchShards(ctx, pipelineName, pr.InstanceCount())
+	return d.DispatchShards(ctx, pipelineName, pr.InstanceCount(), labels)
 }
 
 // WaitShard implements pipeline.ShardDispatcher. It polls the shared store for
@@ -102,30 +105,75 @@ func (d *TaskDispatcher) WaitShard(ctx context.Context, pipelineName string, idx
 }
 
 // AssignNextTask is called by the worker poll endpoint. It searches for the
-// oldest pending task and assigns it to the given worker.
+// oldest pending task whose RequiredLabels are satisfied by the given worker's
+// registered Labels, and assigns it. A task with no RequiredLabels is claimable
+// by any worker; a task with RequiredLabels requires the worker to match every
+// key/value exactly (worker_selector.match_labels enforcement).
 func (d *TaskDispatcher) AssignNextTask(ctx context.Context, workerID string) (*storage.TaskAssignment, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	workerLabels, err := d.lookupWorkerLabels(ctx, workerID)
+	if err != nil {
+		// Don't fail hard — a worker whose registration row is momentarily
+		// missing should still be able to claim unlabeled tasks (back-compat).
+		g.Log().Warningf(ctx, "AssignNextTask: lookup worker %s labels failed: %v", workerID, err)
+		workerLabels = nil
+	}
 
 	tasks, err := d.store.ListTasks(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}
 	for _, t := range tasks {
-		if t.Status == "pending" {
-			now := time.Now()
-			t.WorkerID = workerID
-			t.Status = "assigned"
-			t.AssignedAt = &now
-			if err := d.store.UpdateTask(ctx, t); err != nil {
-				g.Log().Warningf(ctx, "UpdateTask %s: %v", t.TaskID, err)
-				continue
-			}
-			g.Log().Infof(ctx, "Task %s assigned to worker %s", t.TaskID, workerID)
-			return t, nil
+		if t.Status != "pending" {
+			continue
 		}
+		if !labelsMatch(workerLabels, t.RequiredLabels) {
+			continue
+		}
+		now := time.Now()
+		t.WorkerID = workerID
+		t.Status = "assigned"
+		t.AssignedAt = &now
+		if err := d.store.UpdateTask(ctx, t); err != nil {
+			g.Log().Warningf(ctx, "UpdateTask %s: %v", t.TaskID, err)
+			continue
+		}
+		g.Log().Infof(ctx, "Task %s assigned to worker %s (task labels=%v, worker labels=%v)",
+			t.TaskID, workerID, t.RequiredLabels, workerLabels)
+		return t, nil
 	}
 	return nil, nil
+}
+
+// lookupWorkerLabels returns the Labels registered for the given worker ID.
+// Returns nil (no error) for a worker with no labels.
+func (d *TaskDispatcher) lookupWorkerLabels(ctx context.Context, workerID string) (map[string]string, error) {
+	workers, err := d.store.ListWorkers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, w := range workers {
+		if w.ID == workerID {
+			return w.Labels, nil
+		}
+	}
+	return nil, fmt.Errorf("worker %s not registered", workerID)
+}
+
+// labelsMatch returns true if the worker's labels satisfy every required
+// key/value. Empty required labels always matches (default pool).
+func labelsMatch(workerLabels, required map[string]string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	for k, v := range required {
+		if workerLabels == nil || workerLabels[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // ReportTaskResult updates the task status after execution.

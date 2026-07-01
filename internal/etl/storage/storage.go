@@ -116,13 +116,17 @@ type TaskAssignment struct {
 	// ShardIndex/ShardTotal identify which shard of a parallel pipeline this
 	// task represents, so a worker can build the correct single-shard Runner.
 	// Set once at dispatch time (A11-redo); immutable afterward.
-	ShardIndex int        `json:"shard_index"`
-	ShardTotal int        `json:"shard_total"`
-	WorkerID   string     `json:"worker_id,omitempty"`
-	Status     string     `json:"status"`
-	AssignedAt *time.Time `json:"assigned_at,omitempty"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	ShardIndex int    `json:"shard_index"`
+	ShardTotal int    `json:"shard_total"`
+	WorkerID   string `json:"worker_id,omitempty"`
+	Status     string `json:"status"`
+	// RequiredLabels are the worker_selector.match_labels from the pipeline
+	// spec. A worker may only claim this task if its registered Labels match
+	// every entry here. Empty means any worker may claim it.
+	RequiredLabels map[string]string `json:"required_labels,omitempty"`
+	AssignedAt     *time.Time        `json:"assigned_at,omitempty"`
+	StartedAt      *time.Time        `json:"started_at,omitempty"`
+	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
 }
 
 // PluginEntry records an installed extism plugin.

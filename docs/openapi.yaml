@@ -249,9 +249,13 @@ paths:
               type: object
               required: [type]
               properties:
-                type: { type: string, enum: [streaming, once, cron, periodic] }
-                cron: { type: string }
-                interval_sec: { type: integer }
+                type: { type: string, enum: [streaming, once, cron, periodic, dependency] }
+                cron: { type: string, description: Required when type=cron }
+                interval_sec: { type: integer, description: Required when type=periodic }
+                depends_on:
+                  type: array
+                  items: { type: string }
+                  description: Required when type=dependency; upstream pipeline names/ids this pipeline waits for.
       responses:
         '200': { description: Schedule saved }
     delete:

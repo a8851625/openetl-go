@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -292,6 +293,7 @@ func (a *sApp) startWorkerRole(ctx context.Context, store storage.Storage) {
 		ID:        workerID,
 		Host:      "localhost",
 		Slots:     slots,
+		Labels:    readWorkerRoleLabels(ctx),
 		MasterURL: masterURL,
 		Store:     store,
 	})
@@ -305,7 +307,61 @@ func (a *sApp) startWorkerRole(ctx context.Context, store storage.Storage) {
 		g.Log().Fatalf(ctx, "Worker start failed (master=%s): %v", masterURL, err)
 		return
 	}
-	g.Log().Infof(ctx, "ETL role=worker started: id=%s master=%s slots=%d", workerID, masterURL, slots)
+	g.Log().Infof(ctx, "ETL role=worker started: id=%s master=%s slots=%d labels=%v", workerID, masterURL, slots, w.Labels)
+}
+
+// readWorkerRoleLabels parses worker labels from ETL_WORKER_LABELS env or
+// etl.workerLabels config for the worker role. Accepted formats:
+// "k1=v1,k2=v2" (comma-separated) or a JSON object string.
+func readWorkerRoleLabels(ctx context.Context) map[string]string {
+	raw := strings.TrimSpace(os.Getenv("ETL_WORKER_LABELS"))
+	if raw == "" {
+		v := g.Cfg().MustGet(ctx, "etl.workerLabels", nil)
+		if v != nil {
+			if m := v.Map(); len(m) > 0 {
+				out := make(map[string]string, len(m))
+				for k, val := range m {
+					out[k] = fmt.Sprint(val)
+				}
+				return out
+			}
+			if s := v.String(); s != "" {
+				raw = s
+			}
+		}
+	}
+	if raw == "" {
+		return nil
+	}
+	if strings.HasPrefix(raw, "{") {
+		var m map[string]string
+		if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			return m
+		} else {
+			g.Log().Warningf(ctx, "invalid ETL_WORKER_LABELS JSON %q: %v", raw, err)
+		}
+		return nil
+	}
+	out := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) != 2 {
+			g.Log().Warningf(ctx, "invalid ETL_WORKER_LABELS pair %q (expected key=value)", pair)
+			continue
+		}
+		k := strings.TrimSpace(kv[0])
+		if k != "" {
+			out[k] = strings.TrimSpace(kv[1])
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Stop 优雅停止服务

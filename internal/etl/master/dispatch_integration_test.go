@@ -300,7 +300,7 @@ func TestDistributedDispatchMySQLReal(t *testing.T) {
 	}()
 
 	// Dispatch 4 shards via the master's ShardDispatcher.
-	if err := m.Dispatcher().DispatchShards(ctx, "real-pipe", 4); err != nil {
+	if err := m.Dispatcher().DispatchShards(ctx, "real-pipe", 4, nil); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
@@ -372,7 +372,7 @@ func TestDistributedReassignOnWorkerLossMySQL(t *testing.T) {
 	go m.Run(ctx)
 
 	// 1. Dispatch 2 shards.
-	if err := m.Dispatcher().DispatchShards(ctx, "loss-pipe", 2); err != nil {
+	if err := m.Dispatcher().DispatchShards(ctx, "loss-pipe", 2, nil); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 

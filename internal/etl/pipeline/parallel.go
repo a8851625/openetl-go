@@ -20,7 +20,9 @@ import (
 type ShardDispatcher interface {
 	// DispatchShards creates task_assignments for each of `count` shards of the
 	// named pipeline (carrying shard metadata). Idempotent per pipeline run.
-	DispatchShards(ctx context.Context, pipelineName string, count int) error
+	// requiredLabels, when non-empty, restricts which workers may claim the
+	// shards: a worker's registered Labels must match every entry.
+	DispatchShards(ctx context.Context, pipelineName string, count int, requiredLabels map[string]string) error
 	// WaitShard blocks until shard `idx` of the named pipeline reaches a
 	// terminal state, then returns it. For batch shards that is
 	// StatusCompleted/StatusFailed; for continuous (CDC) shards it returns when
@@ -210,7 +212,14 @@ func (pr *ParallelRunner) Start(ctx context.Context) error {
 //   - any shard failed                → StatusFailed
 //   - all shards StatusCompleted      → StatusCompleted (batch normal)
 func (pr *ParallelRunner) startDistributed(ctx context.Context) error {
-	if err := pr.dispatcher.DispatchShards(ctx, pr.spec.Name, pr.parallelism); err != nil {
+	// Carry the pipeline's worker_selector.match_labels onto each shard task
+	// so the dispatcher/poll only hands them to matching workers. Empty/nil
+	// means any worker may claim them (default pool).
+	var labels map[string]string
+	if pr.spec != nil && pr.spec.WorkerSelector != nil {
+		labels = pr.spec.WorkerSelector.MatchLabels
+	}
+	if err := pr.dispatcher.DispatchShards(ctx, pr.spec.Name, pr.parallelism, labels); err != nil {
 		pr.mu.Lock()
 		pr.status = StatusFailed
 		pr.mu.Unlock()

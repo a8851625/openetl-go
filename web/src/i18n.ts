@@ -311,6 +311,7 @@ const dict: Dict = {
   'sched.once': { en: 'Once', zh: '一次性' },
   'sched.dependency': { en: 'Dependency', zh: '依赖触发' },
   'sched.dependsOn': { en: 'Depends on', zh: '依赖管道' },
+  'sched.dependsOnHint': { en: 'Comma-separated upstream pipeline names; this pipeline triggers once they finish.', zh: '逗号分隔的上游管道名；上游完成后触发本管道。' },
   'sched.manual': { en: 'Manual', zh: '手动' },
   'sched.title': { en: 'Pipeline Schedules', zh: '管道调度' },
   'sched.editor': { en: 'Schedule Editor', zh: '调度编辑' },

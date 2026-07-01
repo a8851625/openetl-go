@@ -163,6 +163,68 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - 把 DAG DLQ replay 当前不支持的行为保持在 API/UI/文档中显式可见。
 - 建立“失败记录必须可见”规则：失败只能进入 DLQ、返回错误触发 retry，或由显式 allow-drop 配置并计数审计。
 
+### Phase 0 伪实现清理 backlog（2026-07-01）
+
+下列条目都是 spec/UI/文档/descriptor 暴露了能力面，但运行时静默丢弃或不生效，属于“用户以为实现了，实际没有”的高风险伪实现。优先级高于新增功能，必须先收口到“显式拒绝或补齐实现”，不允许继续静默成功。已澄清的非伪实现边界（DAG DLQ replay 显式 501、MaxCompute/ODPS 保持 experimental、未带 `-tags=extism` 的 WASM 显式报错）不进入本 backlog。
+
+1. Worker 标签调度伪实现（高风险，最高优先级）——已实现（2026-07-01）：
+   - 现状（修复前）：`worker_selector.match_labels` 在 spec/UI/Settings 暴露，但分发层直接丢弃 labels：`internal/etl/master/dispatch.go:62`；master/worker poll 只抢第一个 pending task：`internal/etl/master/dispatch.go:104`、`internal/etl/worker/poll.go:52`；worker 启动注册也不带 labels：`internal/etl/worker/worker.go:132`。
+   - 影响（修复前）：用户以为有工作负载隔离，实际没有，可能把高敏感任务调度到错误 worker。
+   - 实现内容：
+     - `storage.TaskAssignment` 新增 `RequiredLabels map[string]string`，并加 SQL 迁移 v8 持久化到 `task_assignments.required_labels`（`internal/etl/storage/storage.go`、`internal/etl/storage/sqlstore/store.go`）。
+     - `ShardDispatcher.DispatchShards` 接口签名扩展为携带 `requiredLabels`；`TaskDispatcher.DispatchShards`/`DispatchRunnerShards` 把 labels 写入每个 shard task（`internal/etl/pipeline/parallel.go`、`internal/etl/master/dispatch.go`）。
+     - `TaskDispatcher.AssignNextTask` 查询 worker 注册的 labels，只允许 labels 满足 task.RequiredLabels 的 worker claim；不匹配的 task 保持 pending（`internal/etl/master/dispatch.go`）。
+     - `Worker.pollTaskFromStore`（standalone 路径）同样按 worker labels 过滤 pending tasks（`internal/etl/worker/poll.go`）。
+     - `worker.Config.Labels` / `Worker.Labels` 透传；HTTP register body 与 standalone 注册的 `WorkerInfo.Labels` 现在都携带 labels（`internal/etl/worker/worker.go`）。
+     - 新增 `--worker-labels` CLI flag 与 `ETL_WORKER_LABELS` / `etl.workerLabels` 配置入口，支持 `k=v,k=v` 和 JSON object 形态；standalone server 和 worker role 都从同一事实源读取（`internal/cmd/runtime_flags.go`、`internal/etl/server/server.go`、`internal/logic/app/app.go`）。
+     - spec validate 对 `worker_selector.match_labels` 给出 warning，提示需要注册匹配的 worker，否则 shard 会一直 pending（`internal/etl/server/server.go`）。
+   - 验收（已达成）：新增单测覆盖 `DispatchShards` 持久化 labels、`AssignNextTask` 按 labels 过滤、无匹配 worker 时 task 保持 pending、worker poll standalone 按 labels 过滤、`--worker-labels` flag 解析、`readWorkerLabels` 解析多种形态、spec validate 触发 warning（`internal/etl/master/dispatch_labels_test.go`、`internal/etl/worker/poll_test.go`、`internal/cmd/runtime_flags_test.go`、`internal/etl/server/worker_labels_test.go`）；`go test ./... -count=1` 全绿。
+   - 残留：真实分布式 master+worker HTTP 路径下的 match_labels 端到端 Docker e2e 仍需补强（当前由单测覆盖 standalone store 路径与 AssignNextTask 过滤逻辑）。
+
+2. `/plugins/compile` 对 source/sink 插件安装后不注册：
+   - 现状：UI/OpenAPI 允许编译安装 transform/source/sink 插件，但编译成功路径只注册 transform：`internal/etl/server/server.go:3217`；仅上传 `.wasm` 路径才注册 source/sink：`internal/etl/server/server.go:3147`。
+   - 影响：source/sink 可能返回 `compiled_and_installed` 但当前进程里 `plugin_<name>` 不可用。
+   - 目标：compile 路径对 source/sink 要么显式拒绝并提示用 `.wasm` 上传，要么补齐注册逻辑；API/UI/schema 口径统一。
+   - 验收：compile source/sink 不再静默成功；单测覆盖拒绝或注册路径；OpenAPI/UI 选项与实现一致。
+
+3. tap 的 alerts/metrics 入口大于实现：
+   - 现状：schema 暴露 `alert_on`/`threshold`/`field`/`value`/`webhook`：`internal/etl/server/schema.go:410`，metadata 标了 metrics/alerts：`internal/etl/server/server.go:3475`，但 Apply 只计数和打日志，不按 alert_on/threshold/field/value 触发 alert，也未实现 `TransformMetricsProvider`：`internal/etl/transform/nodes.go:100`。
+   - 影响：配置 webhook/告警条件基本不产生用户期望的告警。
+   - 目标：在未补齐前，schema/descriptor 移除或显式标注 alert_on/threshold/field/value/webhook 为 `unimplemented`；validate 对这些字段 warning；要么补齐 alert 触发和 metrics 暴露。
+   - 验收：用户配置 alert 字段时能收到明确“未实现/被忽略”反馈，或看到真实告警/metrics；schema、metadata、文档与实现一致。
+
+4. dependency schedule 内核支持但 Schedule API/页面不能创建——已实现（2026-07-01）：
+   - 现状（修复前）：调度器支持 dependency：`internal/etl/orchestrator/scheduler.go:123`，文档写 `schedule.depends_on`：`docs/etl-config-schema.md:46`，但运行时 Schedule API request 无 `DependsOn` 字段，校验也拒绝 dependency：`internal/etl/server/server.go:1794`、`internal/etl/server/server.go:1909`；Schedules 页面也只有 cron/periodic/streaming/once：`web/src/SchedulesPage.tsx:230`。
+   - 影响（修复前）：YAML/DAG 路径可用，运行时管理面不可用，用户无法通过 API/UI 创建依赖调度。
+   - 实现内容：
+     - `pipelineScheduleRequest` 新增 `DependsOn []string`；PUT 处理把它写入 `pipeline.ScheduleConfig.DependsOn`（linear）与 `orchestrator.ScheduleConfig.DependsOn`（DAG）（`internal/etl/server/server.go`）。
+     - `validatePipelineSchedule` 新增 `case "dependency"`，要求 `depends_on` 非空，否则返回 `dependency schedule requires depends_on list`（`internal/etl/server/server.go`）。
+     - Schedules 页面新增 dependency 触发类型按钮、`depends_on` 逗号分隔输入框（回填已存 schedule），并显示 dependency badge/description/filter；i18n 补 `sched.dependsOnHint`（`web/src/SchedulesPage.tsx`、`web/src/i18n.ts`）。
+     - OpenAPI schema 把 `dependency` 加入 `type` enum 并文档化 `depends_on` 字段（`docs/openapi.yaml`）。
+   - 验收（已达成）：新增单测覆盖 `validatePipelineSchedule` 接受 dependency、拒绝无 `depends_on`，以及端到端 PUT `/schedule` 创建 dependency 并 GET 回读 `depends_on` 一致、无 `depends_on` 的 PUT 返回 400（`internal/etl/server/schedule_validate_test.go`、`internal/etl/server/schedule_test.go`）；`go test ./internal/etl/server -count=1` 与 `npm --prefix web run build` 通过。
+   - 残留：依赖完成事件在 master 触发上游完成时的实际端到端执行（依赖事件总线）不在本条范围；本条只覆盖 API/UI 入口与校验。
+
+5. Connector descriptor 字段名错配——已实现（2026-07-01）：
+   - 现状（修复前）：Redis source/sink metadata 要求 `addr`，但 schema/实现是 `host`/`port`：`internal/etl/server/server.go:3509`、`internal/etl/server/schema.go:144`、`internal/etl/source/redis.go:57`；`rate_limiter` metadata 要求 `rate`，但 schema/实现是 `rps`：`internal/etl/server/server.go:3551`、`internal/etl/server/schema.go:419`、`internal/etl/transform/nodes.go:165`。
+   - 影响（修复前）：依赖 descriptor 的 UI/AI/向导会生成不存在或无效字段，配置静默失败。
+   - 实现内容：
+     - `pluginMetadata()` 把 Redis source/sink 的 required 从 `["addr"]` 改为 `["host","port"]`，把 `rate_limiter` 的 required 从 `["rate"]` 改为 `["rps"]`，与 `configSchema()` 和实现一致（`internal/etl/server/server.go`）。
+     - 顺带修复同一类别的 `window` transform metadata：required 从 `["window_sec","aggregates"]` 改为 `["window_size_seconds","aggregates"]`，与 schema/实现一致。
+     - 修正 `docs/components/transform-window.md` 的字段名与示例 YAML 从 `window_sec` 改为 `window_size_seconds`（与 roadmap 第 6 项合并，因属同一字段名错配类别）。
+   - 验收（已达成）：新增两条一致性单测作为长期回归护栏——`TestConnectorDescriptorsRequiredFieldsExistInSchema`（每个 descriptor 的 Required 必须出现在其 Fields 名集中）和 `TestMetadataRequiredFieldsExistInSchema`（pluginMetadata 的每个 required 必须出现在对应 configSchema 字段集中）；两条测试在修复前都能复现 Redis `addr`、rate_limiter `rate`、window `window_sec` 错配，修复后通过；`go build ./...` 与 `go test ./internal/etl/server ./internal/cmd -count=1` 全绿。
+   - 残留：无（字段名已与 schema/实现/文档一致，并由单测长期守护）。
+
+6. 组件文档配置名陈旧——已合并至第 5 项实现（2026-07-01）：
+   - 现状（修复前）：`docs/components/transform-window.md` 写 `window_sec`，但实现和主 schema 只认 `window_size_seconds`：`internal/etl/transform/window.go:129`、`internal/etl/server/schema.go:451`。
+   - 影响（修复前）：照组件文档配置会静默走默认 60 秒窗口。
+   - 实现内容：与第 5 项同一字段名错配类别，已合并修复——`window` transform metadata 的 required 改为 `window_size_seconds`；`docs/components/transform-window.md` 字段名与示例 YAML 改为 `window_size_seconds`；新增的 `TestMetadataRequiredFieldsExistInSchema` / `TestConnectorDescriptorsRequiredFieldsExistInSchema` 长期守护字段名一致性。
+
+验收指标（本 backlog 整体）：
+
+- 上述六项每项都进入下列三种状态之一：已补齐实现并有测试证据、已改为显式拒绝/warning 并有单测、或已拆出后续 bounded follow-up 且当前状态对用户可见。
+- spec validate / preflight / OpenAPI / UI / descriptor / 组件文档之间不再出现新的静默字段丢弃。
+- 已有的文档/descriptor 一致性校验扩展到覆盖 connector 字段名、transform 字段名和 schedule 类型。
+
 验收指标：
 
 - README、Quickstart、配置参考、Roadmap 和 `GET /api/v2/connectors/descriptors` 的定位和成熟度口径不冲突。

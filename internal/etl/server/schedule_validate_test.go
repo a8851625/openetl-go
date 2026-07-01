@@ -47,3 +47,22 @@ func TestSpecValidateRejectsUnsupportedSourceSchedule(t *testing.T) {
 		t.Fatalf("response = %#v, want unsupported schedule error", got)
 	}
 }
+
+// TestValidatePipelineScheduleDependency proves the runtime Schedule API now
+// accepts the "dependency" type (previously rejected with "unsupported schedule
+// type"). Also covers the depends_on-required validation.
+func TestValidatePipelineScheduleDependency(t *testing.T) {
+	// dependency WITH depends_on is accepted.
+	if err := validatePipelineSchedule(pipelineScheduleRequest{
+		Type:      "dependency",
+		DependsOn: []string{"upstream-a", "upstream-b"},
+	}); err != nil {
+		t.Fatalf("dependency with depends_on should validate, got: %v", err)
+	}
+
+	// dependency WITHOUT depends_on is rejected.
+	err := validatePipelineSchedule(pipelineScheduleRequest{Type: "dependency"})
+	if err == nil || !strings.Contains(err.Error(), "dependency schedule requires depends_on") {
+		t.Fatalf("dependency without depends_on should fail with requires-message, got: %v", err)
+	}
+}

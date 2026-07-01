@@ -46,28 +46,49 @@ func (w *Worker) pollTask(ctx context.Context) (*storage.TaskAssignment, error) 
 	return result.Task, nil
 }
 
-// pollTaskFromStore finds the first pending task in the shared store and
-// atomically claims it for this worker. Used in standalone mode when the
-// master and worker share a process (and a storage backend).
+// pollTaskFromStore finds the first pending task whose RequiredLabels are
+// satisfied by this worker's registered Labels, and atomically claims it for
+// this worker. Used in standalone mode when the master and worker share a
+// process (and a storage backend).
 func (w *Worker) pollTaskFromStore(ctx context.Context) (*storage.TaskAssignment, error) {
 	tasks, err := w.store.ListTasks(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}
 	for _, t := range tasks {
-		if t.Status == "pending" {
-			now := time.Now()
-			t.WorkerID = w.ID
-			t.Status = "assigned"
-			t.AssignedAt = &now
-			if err := w.store.UpdateTask(ctx, t); err != nil {
-				continue
-			}
-			g.Log().Infof(ctx, "Worker %s claimed task %s from store (standalone)", w.ID, t.TaskID)
-			return t, nil
+		if t.Status != "pending" {
+			continue
 		}
+		// Enforce worker_selector.match_labels: skip tasks whose required
+		// labels this worker does not satisfy.
+		if !labelsSatisfy(w.Labels, t.RequiredLabels) {
+			continue
+		}
+		now := time.Now()
+		t.WorkerID = w.ID
+		t.Status = "assigned"
+		t.AssignedAt = &now
+		if err := w.store.UpdateTask(ctx, t); err != nil {
+			continue
+		}
+		g.Log().Infof(ctx, "Worker %s claimed task %s from store (standalone, labels=%v)", w.ID, t.TaskID, t.RequiredLabels)
+		return t, nil
 	}
 	return nil, nil
+}
+
+// labelsSatisfy returns true if workerLabels matches every key/value in
+// required. Empty required always matches (default pool).
+func labelsSatisfy(workerLabels, required map[string]string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	for k, v := range required {
+		if workerLabels == nil || workerLabels[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // reportTaskDone notifies the master that a task has completed.

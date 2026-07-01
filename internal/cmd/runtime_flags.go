@@ -35,6 +35,7 @@ type runtimeFlags struct {
 	masterURL    string
 	workerID     string
 	workerSlots  string
+	workerLabels string
 	auditEnabled string
 	loggerFormat string
 	printHelp    bool
@@ -91,6 +92,7 @@ func parseRuntimeFlags(args []string, output io.Writer) (*runtimeFlags, error) {
 	fs.StringVar(&opts.masterURL, "master-url", "", "master API URL for worker role")
 	fs.StringVar(&opts.workerID, "worker-id", "", "worker identifier")
 	fs.StringVar(&opts.workerSlots, "worker-slots", "", "worker shard slots")
+	fs.StringVar(&opts.workerLabels, "worker-labels", "", "worker labels (k=v,k=v or JSON object) for worker_selector.match_labels scheduling. Env: ETL_WORKER_LABELS")
 	fs.StringVar(&opts.auditEnabled, "audit-enabled", "", "enable SQL-backed audit logging: true|false")
 	fs.StringVar(&opts.loggerFormat, "logger-format", "", "logger format: text|json")
 	fs.BoolVar(&opts.printHelp, "help", false, "show help")
@@ -135,6 +137,7 @@ func applyRuntimeEnvOverrides(flagSeen map[string]bool) {
 	envString(flagSeen, "master-url", "ETL_MASTER_URL", func(v string) { mustSetConfig("etl.masterURL", v) })
 	envString(flagSeen, "worker-id", "ETL_WORKER_ID", func(v string) { mustSetConfig("etl.workerID", v) })
 	envString(flagSeen, "worker-slots", "ETL_WORKER_SLOTS", func(v string) { mustSetConfig("etl.workerSlots", atoiOrString(v)) })
+	envString(flagSeen, "worker-labels", "ETL_WORKER_LABELS", func(v string) { mustSetConfig("etl.workerLabels", v) })
 	envString(flagSeen, "api-token", "ETL_API_TOKEN", func(v string) { mustSetConfig("etl.apiToken", v) })
 	envString(flagSeen, "tls-cert", "ETL_TLS_CERT", func(v string) { mustSetConfig("etl.tls.cert", v) })
 	envString(flagSeen, "tls-key", "ETL_TLS_KEY", func(v string) { mustSetConfig("etl.tls.key", v) })
@@ -165,6 +168,10 @@ func applyRuntimeFlagOverrides(opts *runtimeFlags) error {
 	setStringFlag(opts, "role", opts.role, "etl.role", "ETL_ROLE")
 	setStringFlag(opts, "master-url", opts.masterURL, "etl.masterURL", "ETL_MASTER_URL")
 	setStringFlag(opts, "worker-id", opts.workerID, "etl.workerID", "ETL_WORKER_ID")
+	if opts.workerLabels != "" {
+		mustSetConfig("etl.workerLabels", opts.workerLabels)
+		_ = os.Setenv("ETL_WORKER_LABELS", opts.workerLabels)
+	}
 	if opts.auditEnabled != "" {
 		mustSetConfig("etl.audit.enabled", atobOrString(opts.auditEnabled))
 		_ = os.Setenv("ETL_AUDIT_ENABLED", opts.auditEnabled)
@@ -363,6 +370,7 @@ func logRuntimeSummary() {
 		"plugins_dir":    g.Cfg().MustGet(ctx, "etl.pluginsDir", "./data/plugins").String(),
 		"tls_enabled":    g.Cfg().MustGet(ctx, "etl.tls.cert", "").String() != "" && g.Cfg().MustGet(ctx, "etl.tls.key", "").String() != "",
 		"api_auth":       g.Cfg().MustGet(ctx, "etl.apiToken", "").String() != "",
+		"worker_labels":  g.Cfg().MustGet(ctx, "etl.workerLabels", "").String(),
 	}
 	g.Log().Infof(ctx, "Runtime config: %+v", summary)
 }
@@ -396,8 +404,9 @@ Flags:
   --role ROLE                standalone, master, or worker. Env: ETL_ROLE
   --master-url URL           Master API URL for worker role. Env: ETL_MASTER_URL
   --worker-id ID             Worker identifier. Env: ETL_WORKER_ID
-  --worker-slots N           Worker shard slots. Env: ETL_WORKER_SLOTS
-  --audit-enabled BOOL       Enable SQL-backed audit logging. Env: ETL_AUDIT_ENABLED
+   --worker-slots N           Worker shard slots. Env: ETL_WORKER_SLOTS
+   --worker-labels LABELS      Worker labels (k=v,k=v or JSON object) for selector scheduling. Env: ETL_WORKER_LABELS
+   --audit-enabled BOOL       Enable SQL-backed audit logging. Env: ETL_AUDIT_ENABLED
   --logger-format FORMAT     text or json. Env: LOGGER_FORMAT
   --help, -h                 Show this help.
 
@@ -405,6 +414,7 @@ Examples:
   openetl-go --config /etc/openetl/config.yaml --port 8080 --etl-api-port 8081
   openetl-go --data-dir /var/lib/openetl --specs-dir /etc/openetl/pipes
   openetl-go --role master --storage mysql --storage-dsn 'user:pass@tcp(db:3306)/etl?parseTime=true'
-  openetl-go --role worker --master-url http://openetl-master:8001 --worker-id worker-a
+   openetl-go --role worker --master-url http://openetl-master:8001 --worker-id worker-a
+   openetl-go --role worker --master-url http://openetl-master:8001 --worker-id worker-a --worker-labels zone=us-east-1,gpu=true
 `
 }

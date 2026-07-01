@@ -245,7 +245,7 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 
 	// Initialize master node and standalone worker (single-process mode)
 	s.masterNode = master.NewMaster(store)
-	s.standaloneWorker = worker.NewStandalone(store, 4)
+	s.standaloneWorker = worker.NewStandalone(store, 4, readWorkerLabels(ctx))
 	// Scheduler drives cron/periodic/dependency triggers. Initialized here so
 	// both StartAll (DB-loaded specs) and runtime API/reload paths can register
 	// pipelines against it. Run(ctx) is launched in StartAll.
@@ -311,6 +311,63 @@ func configBool(ctx context.Context, envName, key string, def bool) bool {
 		return def
 	}
 	return g.Cfg().MustGet(ctx, key, def).Bool()
+}
+
+// readWorkerLabels parses worker labels from ETL_WORKER_LABELS env or
+// etl.workerLabels config. Accepted formats: "k1=v1,k2=v2" (comma-separated)
+// or a JSON object string. Returns nil if unset/empty (means unconstrained).
+func readWorkerLabels(ctx context.Context) map[string]string {
+	raw := strings.TrimSpace(os.Getenv("ETL_WORKER_LABELS"))
+	if raw == "" {
+		// Config key accepts both map and string forms.
+		v := g.Cfg().MustGet(ctx, "etl.workerLabels", nil)
+		if v != nil {
+			if m := v.Map(); len(m) > 0 {
+				out := make(map[string]string, len(m))
+				for k, val := range m {
+					out[k] = fmt.Sprint(val)
+				}
+				return out
+			}
+			if s := v.String(); s != "" {
+				raw = s
+			}
+		}
+	}
+	if raw == "" {
+		return nil
+	}
+	// JSON object form.
+	if strings.HasPrefix(raw, "{") {
+		var m map[string]string
+		if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			return m
+		} else {
+			g.Log().Warningf(ctx, "invalid ETL_WORKER_LABELS JSON %q: %v", raw, err)
+		}
+		return nil
+	}
+	// k=v,k=v form.
+	out := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) != 2 {
+			g.Log().Warningf(ctx, "invalid ETL_WORKER_LABELS pair %q (expected key=value)", pair)
+			continue
+		}
+		k := strings.TrimSpace(kv[0])
+		if k != "" {
+			out[k] = strings.TrimSpace(kv[1])
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (s *Server) RegisterWebhookAlert(url string) {
@@ -1052,6 +1109,17 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 	idempotencyWarnings := pipeline.ValidateIdempotency(&spec)
 	warnings = append(warnings, idempotencyWarnings...)
 
+	// Worker selector: if match_labels is set, the pipeline can only run on
+	// workers whose registered Labels match. Warn so users know to register
+	// matching workers (via --worker-labels / ETL_WORKER_LABELS); otherwise the
+	// pipeline's shards will stay pending indefinitely.
+	if spec.WorkerSelector != nil && len(spec.WorkerSelector.MatchLabels) > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"worker_selector.match_labels=%v requires workers registered with matching labels "+
+				"(--worker-labels k=v or ETL_WORKER_LABELS); without any matching worker the shards will not be claimed.",
+			spec.WorkerSelector.MatchLabels))
+	}
+
 	// Run preflight checks (P4-11, SV-2+SV-3). Error-level issues
 	// indicate a hard misconfiguration (e.g., MySQL binlog format) and
 	// should prevent pipeline creation. Reachability warnings don't.
@@ -1792,9 +1860,10 @@ func (s *Server) handlePipelineSpecGET(w http.ResponseWriter, r *http.Request, n
 }
 
 type pipelineScheduleRequest struct {
-	Type        string `json:"type"`
-	Cron        string `json:"cron,omitempty"`
-	IntervalSec int    `json:"interval_sec,omitempty"`
+	Type        string   `json:"type"`
+	Cron        string   `json:"cron,omitempty"`
+	IntervalSec int      `json:"interval_sec,omitempty"`
+	DependsOn   []string `json:"depends_on,omitempty"`
 }
 
 func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, name string) {
@@ -1845,9 +1914,10 @@ func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, 
 				Type:      orchestrator.ScheduleType(req.Type),
 				Cron:      req.Cron,
 				IntervalS: req.IntervalSec,
+				DependsOn: req.DependsOn,
 			}
 		} else {
-			spec.Schedule = &pipeline.ScheduleConfig{Type: req.Type, Cron: req.Cron, IntervalSec: req.IntervalSec}
+			spec.Schedule = &pipeline.ScheduleConfig{Type: req.Type, Cron: req.Cron, IntervalSec: req.IntervalSec, DependsOn: req.DependsOn}
 		}
 		s.mu.Unlock()
 
@@ -1918,6 +1988,11 @@ func validatePipelineSchedule(req pipelineScheduleRequest) error {
 	case "periodic":
 		if req.IntervalSec <= 0 {
 			return fmt.Errorf("periodic schedule requires interval_sec > 0")
+		}
+		return nil
+	case "dependency":
+		if len(req.DependsOn) == 0 {
+			return fmt.Errorf("dependency schedule requires depends_on list")
 		}
 		return nil
 	default:
@@ -3431,7 +3506,7 @@ func pluginMetadata() map[string]any {
 			"mysql_snapshot_cdc": pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
 			"kafka":              pluginInfo([]string{"brokers", "topic"}, []string{"stream", "checkpoint"}, "production"),
 			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot", "checkpoint"}, "beta"),
-			"redis":              pluginInfo([]string{"addr"}, []string{"stream", "checkpoint"}, "experimental"),
+			"redis":              pluginInfo([]string{"host", "port"}, []string{"stream", "checkpoint"}, "experimental"),
 		},
 		"sinks": map[string]any{
 			"file_sink":     pluginInfo([]string{"output_dir", "format"}, []string{"batch", "local_file"}, "production"),
@@ -3443,7 +3518,7 @@ func pluginMetadata() map[string]any {
 			"kafka":         pluginInfo([]string{"brokers", "topic"}, []string{"stream"}, "production"),
 			"elasticsearch": pluginInfo([]string{"hosts", "index"}, []string{"bulk", "schema_validator", "remote_mapping_preflight"}, "beta"),
 			"es":            pluginInfo([]string{"hosts", "index"}, []string{"bulk", "schema_validator", "remote_mapping_preflight"}, "beta"),
-			"redis":         pluginInfo([]string{"addr"}, []string{"stream"}, "experimental"),
+			"redis":         pluginInfo([]string{"host", "port"}, []string{"stream"}, "experimental"),
 
 			"doris":      pluginInfo([]string{"host", "database", "table"}, []string{"batch", "stream_load", "insert_fallback", "upsert", "delete", "auto_create", "schema_drift", "schema_validator", "remote_preflight", "unique_key_replay_safe"}, "production"),
 			"jdbc":       pluginInfo([]string{"dsn", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "generic"}, "experimental"),
@@ -3473,10 +3548,10 @@ func pluginMetadata() map[string]any {
 			"router":             pluginInfo(nil, []string{"conditional_routing", "flow_control"}, "beta"),
 			"fanout":             pluginInfo(nil, []string{"broadcast", "flow_control"}, "beta"),
 			"tap":                pluginInfo([]string{"log_every"}, []string{"observe", "metrics", "alerts"}, "beta"),
-			"rate_limiter":       pluginInfo([]string{"rate"}, []string{"throttle", "flow_control"}, "beta"),
+			"rate_limiter":       pluginInfo([]string{"rps"}, []string{"throttle", "flow_control"}, "beta"),
 			"enricher":           pluginInfo([]string{"mode", "url"}, []string{"http_enrichment", "sql_enrichment", "cache"}, "beta"),
 			"lookup":             pluginInfo([]string{"dsn", "query", "fields"}, []string{"dimension_join", "stream_table_join"}, "beta"),
-			"window":             pluginInfo([]string{"window_sec", "aggregates"}, []string{"tumbling_window", "aggregation"}, "experimental"),
+			"window":             pluginInfo([]string{"window_size_seconds", "aggregates"}, []string{"tumbling_window", "aggregation"}, "experimental"),
 			"deduplicate":        pluginInfo([]string{"keys"}, []string{"dedup", "lru"}, "beta"),
 			"validate":           pluginInfo([]string{"rules"}, []string{"data_quality", "schema_validation"}, "beta"),
 			"join":               pluginInfo([]string{"join_key", "join_fields"}, []string{"stream_join", "interval_join"}, "beta"),

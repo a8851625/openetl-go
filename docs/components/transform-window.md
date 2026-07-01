@@ -4,7 +4,7 @@
 Compute lightweight tumbling-window aggregates.
 
 ## Config Fields
-- `window_sec`: tumbling window size.
+- `window_size_seconds`: tumbling window size.
 - `group_by`: grouping fields.
 - `aggregates`: aggregate definitions.
 - `state_backend`, `state_ttl_seconds`: optional Redis-backed runtime window state. Requires `etl.state.redis.addr` or `ETL_STATE_REDIS_ADDR`.
@@ -26,7 +26,7 @@ Complex event-time stream processing.
 transforms:
   - type: window
     config:
-      window_sec: 60
+      window_size_seconds: 60
       group_by: ["user_id"]
       aggregates:
         amount_sum: "sum(amount)"

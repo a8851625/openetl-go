@@ -3,7 +3,7 @@ import cronstrue from 'cronstrue';
 import type { TFunc, Lang } from './types';
 
 type Pipeline = { id?: string; name: string; status: string; stats?: Record<string, number> };
-type Schedule = { type: string; cron?: string; interval_sec?: number };
+type Schedule = { type: string; cron?: string; interval_sec?: number; depends_on?: string[] };
 type ScheduleRow = Pipeline & { enabled: boolean; schedule?: Schedule };
 type RunHistory = {
   id: number;
@@ -60,6 +60,10 @@ function describeSchedule(t: TFunc, lang: Lang, schedule?: Schedule) {
     }
   }
   if (schedule.type === 'periodic') return `${schedule.interval_sec || 0}s`;
+  if (schedule.type === 'dependency') {
+    const deps = Array.isArray(schedule.depends_on) ? schedule.depends_on : [];
+    return deps.length > 0 ? deps.join(', ') : t('sched.dependency');
+  }
   return t(`sched.${schedule.type}`);
 }
 
@@ -70,6 +74,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
   const [type, setType] = useState('cron');
   const [cron, setCron] = useState('*/5 * * * *');
   const [intervalSec, setIntervalSec] = useState(300);
+  const [dependsOn, setDependsOn] = useState('');
   const [cronInput, setCronInput] = useState('');
   const [cronDesc, setCronDesc] = useState('');
   const [history, setHistory] = useState<RunHistory[]>([]);
@@ -109,8 +114,9 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
       setType(sched.type || 'cron');
       setCron(sched.cron || '*/5 * * * *');
       setIntervalSec(sched.interval_sec || 300);
+      setDependsOn(Array.isArray(sched.depends_on) ? sched.depends_on.join(', ') : '');
     }
-  }, [selectedRow?.name, selectedRow?.schedule?.type, selectedRow?.schedule?.cron, selectedRow?.schedule?.interval_sec]);
+  }, [selectedRow?.name, selectedRow?.schedule?.type, selectedRow?.schedule?.cron, selectedRow?.schedule?.interval_sec, selectedRow?.schedule?.depends_on]);
 
   useEffect(() => {
     if (!selected) {
@@ -154,6 +160,12 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
       const body: Schedule = { type };
       if (type === 'cron') body.cron = cron;
       if (type === 'periodic') body.interval_sec = Number(intervalSec) || 60;
+      if (type === 'dependency') {
+        body.depends_on = dependsOn
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+      }
       await api(`/api/v2/pipelines/${encodeURIComponent(selected)}/schedule`, { method: 'PUT', body: JSON.stringify(body) });
       setMessage(t('sched.saved'));
       setRefreshKey((n) => n + 1);
@@ -201,6 +213,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
     once: 'badge-emerald',
     periodic: 'badge-blue',
     cron: 'badge-indigo',
+    dependency: 'badge-purple',
     manual: 'badge-slate',
   };
 
@@ -227,8 +240,8 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
                   {rows.map((p) => <option key={pipelineKey(p)} value={pipelineKey(p)}>{p.name}</option>)}
                 </select>
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                {['cron', 'periodic', 'streaming', 'once'].map((tp) => (
+              <div className="grid grid-cols-3 gap-2">
+                {['cron', 'periodic', 'streaming', 'once', 'dependency'].map((tp) => (
                   <button key={tp} className={`btn btn-sm ${type === tp ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setType(tp)}>
                     {t(`sched.${tp}`)}
                   </button>
@@ -244,6 +257,13 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
                 <label className="block">
                   <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{t('common.interval')}</span>
                   <input className="input w-full" type="number" min={1} value={intervalSec} onChange={(e) => setIntervalSec(Number(e.target.value))} />
+                </label>
+              )}
+              {type === 'dependency' && (
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{t('sched.dependsOn')}</span>
+                  <input className="input w-full font-mono" value={dependsOn} onChange={(e) => setDependsOn(e.target.value)} placeholder="upstream-a, upstream-b" />
+                  <span className="mt-1 block text-xs text-slate-400">{t('sched.dependsOnHint')}</span>
                 </label>
               )}
               <div className="grid grid-cols-3 gap-2">
@@ -271,7 +291,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
             <div className="card-header flex items-center justify-between">
               <h2 className="text-sm font-semibold">{t('sched.title')}</h2>
               <div className="flex gap-2">
-                {['all', 'cron', 'periodic', 'streaming', 'manual'].map((f) => (
+                {['all', 'cron', 'periodic', 'streaming', 'dependency', 'manual'].map((f) => (
                   <button key={f} className={`btn btn-sm ${filter === f ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setFilter(f)}>
                     {f === 'all' ? t('common.all') : t(`sched.${f}`)}
                   </button>

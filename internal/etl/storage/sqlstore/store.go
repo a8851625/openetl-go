@@ -221,6 +221,7 @@ func (s *Store) runVersionedMigrations() error {
 		{5, "add pipeline_version to dead_letters", "ALTER TABLE dead_letters ADD COLUMN pipeline_version INTEGER DEFAULT 0"},
 		{6, "add dag_node to dead_letters", "ALTER TABLE dead_letters ADD COLUMN dag_node TEXT"},
 		{7, "add uuid id to pipelines", "ALTER TABLE pipelines ADD COLUMN id TEXT"},
+		{8, "add required_labels to task_assignments", "ALTER TABLE task_assignments ADD COLUMN required_labels TEXT DEFAULT '{}'"},
 	}
 
 	for _, m := range migrations {
@@ -230,7 +231,7 @@ func (s *Store) runVersionedMigrations() error {
 			continue
 		}
 		if _, err := s.db.Exec(m.sql); err != nil {
-			if !(m.version == 7 && strings.Contains(err.Error(), "duplicate column name")) {
+			if !strings.Contains(err.Error(), "duplicate column name") {
 				return fmt.Errorf("versioned migration %d failed: %w", m.version, err)
 			}
 		}
@@ -801,10 +802,16 @@ func (s *Store) DeregisterWorker(ctx context.Context, workerID string) error {
 // ── Task assignments ─────────────────────────────────────────────────
 
 func (s *Store) CreateTask(ctx context.Context, task *storage.TaskAssignment) error {
+	labelsJSON := "{}"
+	if task.RequiredLabels != nil {
+		if b, err := json.Marshal(task.RequiredLabels); err == nil {
+			labelsJSON = string(b)
+		}
+	}
 	_, err := s.exec(ctx,
-		`INSERT INTO task_assignments (task_id, pipeline, worker_id, status, assigned_at, shard_index, shard_total)
-		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
-		task.TaskID, task.Pipeline, task.WorkerID, task.Status, task.ShardIndex, task.ShardTotal)
+		`INSERT INTO task_assignments (task_id, pipeline, worker_id, status, assigned_at, shard_index, shard_total, required_labels)
+		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)`,
+		task.TaskID, task.Pipeline, task.WorkerID, task.Status, task.ShardIndex, task.ShardTotal, labelsJSON)
 	return err
 }
 
@@ -824,6 +831,59 @@ func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.Task
 		// Filter to non-terminal statuses so completed/failed rows don't crowd
 		// out pending ones under the LIMIT (ST-1). The active-task count is
 		// bounded by total in-flight shards, so 1000 is effectively unlimited.
+		rows, err = s.query(ctx,
+			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at, required_labels
+			 FROM task_assignments
+			 WHERE status IN ('pending','assigned','running')
+			 ORDER BY assigned_at DESC LIMIT 1000`)
+	} else {
+		rows, err = s.query(ctx,
+			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at, required_labels
+			 FROM task_assignments WHERE pipeline=? ORDER BY assigned_at DESC LIMIT 1000`, pipeline)
+	}
+	if err != nil {
+		// Fallback for DBs where the migration hasn't been applied yet:
+		// retry without the required_labels column.
+		if strings.Contains(err.Error(), "no such column: required_labels") {
+			return s.listTasksNoLabels(ctx, pipeline)
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*storage.TaskAssignment
+	for rows.Next() {
+		t := &storage.TaskAssignment{}
+		var workerID sql.NullString
+		var assignedAt, startedAt, finishedAt sql.NullTime
+		var labelsStr string
+		if err := rows.Scan(&t.ID, &t.TaskID, &t.Pipeline, &t.ShardIndex, &t.ShardTotal, &workerID, &t.Status, &assignedAt, &startedAt, &finishedAt, &labelsStr); err != nil {
+			return nil, err
+		}
+		t.WorkerID = workerID.String
+		if assignedAt.Valid {
+			t.AssignedAt = &assignedAt.Time
+		}
+		if startedAt.Valid {
+			t.StartedAt = &startedAt.Time
+		}
+		if finishedAt.Valid {
+			t.FinishedAt = &finishedAt.Time
+		}
+		if labelsStr != "" && labelsStr != "{}" {
+			_ = json.Unmarshal([]byte(labelsStr), &t.RequiredLabels)
+		}
+		result = append(result, t)
+	}
+	return result, rows.Err()
+}
+
+// listTasksNoLabels is a fallback for databases that haven't yet applied
+// migration 8 (required_labels). It returns tasks without label info so the
+// dispatcher treats them as unconstrained (backwards-compatible).
+func (s *Store) listTasksNoLabels(ctx context.Context, pipeline string) ([]*storage.TaskAssignment, error) {
+	var rows *sql.Rows
+	var err error
+	if pipeline == "" {
 		rows, err = s.query(ctx,
 			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at
 			 FROM task_assignments

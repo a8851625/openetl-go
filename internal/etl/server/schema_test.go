@@ -421,6 +421,87 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	}
 }
 
+// TestConnectorDescriptorsRequiredFieldsExistInSchema is a regression guard for
+// descriptor field-name mismatches (e.g. the historical bug where Redis
+// metadata listed "addr" while the schema/implementation used "host"/"port",
+// and rate_limiter metadata listed "rate" while the schema used "rps").
+//
+// Every connector descriptor's Required field must name an actual config field
+// exposed in that descriptor's Fields list, otherwise UI/AI/wizard generation
+// produces specs with non-existent fields that silently fail at runtime.
+func TestConnectorDescriptorsRequiredFieldsExistInSchema(t *testing.T) {
+	descriptors := connectorDescriptors()
+	if len(descriptors) == 0 {
+		t.Fatal("connectorDescriptors returned no descriptors")
+	}
+	for _, d := range descriptors {
+		known := map[string]bool{}
+		for _, f := range d.Fields {
+			known[f.Name] = true
+		}
+		for _, req := range d.Required {
+			if !known[req] {
+				t.Errorf("%s/%s: descriptor declares required field %q but it is not in its schema fields %v",
+					d.Kind, d.Type, req, fieldNames(d.Fields))
+			}
+		}
+	}
+}
+
+// TestMetadataRequiredFieldsExistInSchema is a second regression guard aimed at
+// the raw pluginMetadata() required list (the source of the historical bug).
+// Each metadata "required" entry must match a field exposed in configSchema(),
+// so descriptor consumers (UI forms, AI context pack, wizard) never see a
+// required field that the runtime cannot accept.
+func TestMetadataRequiredFieldsExistInSchema(t *testing.T) {
+	schema := configSchema()
+	metadata := pluginMetadata()
+
+	sourcesSchema := schema["sources"].(map[string][]ConfigField)
+	sinksSchema := schema["sinks"].(map[string][]ConfigField)
+	transformsSchema := schema["transforms"].(map[string][]ConfigField)
+
+	check := func(t *testing.T, kind string, metaGroup any, schemas map[string][]ConfigField) {
+		t.Helper()
+		group, ok := metaGroup.(map[string]any)
+		if !ok {
+			t.Fatalf("metadata[%s] has type %T", kind, metaGroup)
+		}
+		for name, raw := range group {
+			info, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			required, _ := info["required"].([]string)
+			if len(required) == 0 {
+				continue
+			}
+			fields := schemas[name]
+			known := map[string]bool{}
+			for _, f := range fields {
+				known[f.Name] = true
+			}
+			for _, req := range required {
+				if !known[req] {
+					t.Errorf("metadata[%s][%s] declares required field %q not present in schema fields %v",
+						kind, name, req, fieldNames(fields))
+				}
+			}
+		}
+	}
+	check(t, "sources", metadata["sources"], sourcesSchema)
+	check(t, "sinks", metadata["sinks"], sinksSchema)
+	check(t, "transforms", metadata["transforms"], transformsSchema)
+}
+
+func fieldNames(fields []ConfigField) []string {
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, f.Name)
+	}
+	return out
+}
+
 func TestConnectorDescriptorsEndpointIncludesMaturityLevels(t *testing.T) {
 	_, ts := newTestHTTPServer(t)
 	defer ts.Close()
