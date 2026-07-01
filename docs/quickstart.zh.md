@@ -16,8 +16,8 @@ git clone <repo-url> openetl-go
 cd openetl-go
 
 # 启动全部依赖（MySQL、ClickHouse、MinIO、Redpanda）+ ETL 服务
-CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"
-"$CONTAINER_CLI" compose -f docker-compose.quickstart.yml up -d
+docker compose -f docker-compose.quickstart.yml up -d
+# podman 用户: 把 docker 换成 podman
 
 # 验证服务
 curl http://localhost:8000/api/v2/health
@@ -34,7 +34,7 @@ export ETL_API_TOKEN=$(openssl rand -hex 16)
 export ETL_SPEC_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
 # 重启服务使配置生效
-"$CONTAINER_CLI" compose -f docker-compose.quickstart.yml restart etl
+docker compose -f docker-compose.quickstart.yml restart etl
 ```
 
 ---

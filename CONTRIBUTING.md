@@ -3,7 +3,7 @@
 ## Environment
 
 - Go 1.24+, pure Go default build (no CGO, no external runtimes)
-- Optional dev container: `CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"; "$CONTAINER_CLI" exec -it etl-go-dev bash` (Go 1.24 + integration test containers pre-configured)
+- Optional dev container: `docker exec -it etl-go-dev bash` (Go 1.24 + integration test containers pre-configured). Podman users: replace `docker` with `podman`.
 
 ## Build & Test
 

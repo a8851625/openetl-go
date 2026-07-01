@@ -43,8 +43,8 @@ OpenETL-Go 的目标不是替代 Flink/Spark 的复杂有状态流计算、Airfl
 启动内置的 MySQL CDC 到 ClickHouse 示例：
 
 ```bash
-CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"
-"$CONTAINER_CLI" compose -f docker-compose.quickstart.yml up -d
+docker compose -f docker-compose.quickstart.yml up -d
+# podman 用户: podman compose -f docker-compose.quickstart.yml up -d
 ```
 
 然后打开：
@@ -128,10 +128,10 @@ Kafka/MySQL CDC 事实流
 可以从 [Releases](../../releases) 下载压缩包，也可以直接运行容器镜像：
 
 ```bash
-CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"
-"$CONTAINER_CLI" run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
+docker run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
   -v "$PWD/pipes:/app/pipes" \
   ghcr.io/a8851625/openetl-go:latest
+# podman 用户: 把 docker 换成 podman
 ```
 
 源码构建：
