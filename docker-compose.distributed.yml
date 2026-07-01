@@ -1,0 +1,147 @@
+# OpenETL-Go — Distributed (master + workers) Compose v2
+#
+# 跨进程共享元数据 + 分布式分片调度：
+#   - 1 个 master：负责任务调度、spec 加载、API/UI
+#   - 2 个 worker：执行分片任务；worker 崩溃后分片自动重分配
+#   - MySQL：共享 storage（pipeline spec / checkpoint / DLQ / worker / task）
+#   - Redis：state/cache backend（lookup / deduplicate / window / join）
+#
+# 线性 spec 才走分布式分发；DAG spec 与 streaming 源在 master 本地执行。
+# 见 docs/quickstart.zh.md「分布式部署如何配置」与 AGENTS.md。
+#
+# 用法：
+#   CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
+#   "$CONTAINER_CLI" compose -f docker-compose.distributed.yml up -d
+#
+# 扩容 worker：
+#   "$CONTAINER_CLI" compose -f docker-compose.distributed.yml up -d --scale worker=4
+
+services:
+  # ── Shared metadata storage (MySQL) ────────────────────────────────
+  mysql:
+    image: docker.io/library/mysql:8.0
+    container_name: openetl-dist-mysql
+    restart: unless-stopped
+    command: >
+      --binlog-format=ROW
+      --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-openetl}
+      MYSQL_USER: ${MYSQL_USER:-openetl}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      TZ: UTC
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysql", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-change-me-root}", "-e", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # ── Shared runtime state/cache (Redis) ─────────────────────────────
+  redis:
+    image: docker.io/library/redis:7-alpine
+    container_name: openetl-dist-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-change-me}"]
+    environment:
+      TZ: UTC
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-change-me}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # ── Master：调度 + API/UI ──────────────────────────────────────────
+  master:
+    image: ${OPENETL_IMAGE:-ghcr.io/a8851625/openetl-go:latest}
+    container_name: openetl-master
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"   # Web UI + 代理后的 /api/v2/* 与 /metrics
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      ETL_API_TOKEN: ${ETL_API_TOKEN:-}
+      ETL_SPEC_ENCRYPTION_KEY: ${ETL_SPEC_ENCRYPTION_KEY:-}
+      ETL_STORAGE_TYPE: mysql
+      ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD:-change-me}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
+      ETL_STATE_REDIS_ADDR: redis:6379
+      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD:-change-me}
+      ETL_AUDIT_ENABLED: "true"
+      LOGGER_FORMAT: json
+      ETL_DLQ_TTL: ${ETL_DLQ_TTL:-168h}
+      ETL_ROLE: master
+    volumes:
+      - openetl-data:/app/data
+      - ./pipes:/app/pipes:ro
+      - master-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/api/v2/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Workers：执行分片任务 ──────────────────────────────────────────
+  # 通过 `--scale worker=N` 扩缩容；每个 worker 用 workerSlots 限制并发分片。
+  worker:
+    image: ${OPENETL_IMAGE:-ghcr.io/a8851625/openetl-go:latest}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      master:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      ETL_API_TOKEN: ${ETL_API_TOKEN:-}
+      # Worker 共享同一份 MySQL storage 才能接收 master 派发的任务
+      ETL_STORAGE_TYPE: mysql
+      ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD:-change-me}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
+      ETL_STATE_REDIS_ADDR: redis:6379
+      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD:-change-me}
+      LOGGER_FORMAT: json
+      ETL_ROLE: worker
+      ETL_MASTER_URL: http://master:8001
+      # 每个 worker 进程最大并发分片任务数
+      ETL_WORKER_SLOTS: ${WORKER_SLOTS:-4}
+      # worker-id 缺省由容器 hostname 派生；`--scale` 时自动唯一
+    volumes:
+      - worker-data:/app/data
+    deploy:
+      resources:
+        limits:
+          cpus: "${WORKER_CPU_LIMIT:-2.0}"
+          memory: ${WORKER_MEM_LIMIT:-2g}
+        reservations:
+          cpus: "0.5"
+          memory: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "5"
+
+volumes:
+  mysql-data:
+  redis-data:
+  openetl-data:
+  master-logs:
+  worker-data:

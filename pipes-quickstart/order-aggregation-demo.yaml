@@ -38,3 +38,5 @@ sink:
     auto_create: true
 
 batch_size: 200
+checkpoint_interval_sec: 10
+backpressure_buffer: 100

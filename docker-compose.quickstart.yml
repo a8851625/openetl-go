@@ -85,6 +85,9 @@ services:
       ETL_API_TOKEN: ""   # Set to enable API auth
     volumes:
       - etl-data:/app/data
+      # 默认加载 pipes-quickstart/ 下的所有 demo spec。
+      # 想跑自定义 spec：把你的 yaml 放到 ./pipes/ 下，改挂载为 - ./pipes:/app/pipes:ro
+      # testdata/pipes-* 是 e2e 夹具，不要照抄，见 testdata/README.md。
       - ./pipes-quickstart:/app/pipes:ro
     # Config is embedded; override via env if needed
 

@@ -1,0 +1,78 @@
+# OpenETL-Go — 生产推荐配置示例
+#
+# 这份文件展示生产部署推荐的最小配置形态。容器部署时更推荐通过环境变量
+# 覆盖（见 docker-compose.yml 的 environment 区）；本文件用于裸机/systemd
+# 部署，或作为高级覆盖挂在容器的 /app/manifest/config/config.yaml。
+#
+# 优先级：CLI flags > 环境变量 > config.yaml > 内置默认值。
+# CLI flags 见 `./openetl-go --help`。
+
+server:
+  address: ":8000"
+  openapiPath: "/api.json"
+  swaggerPath: "/swagger"
+  # 不要设置 serverRoot：UI 资源已通过 gf pack 嵌入二进制
+  # (internal/packed/packed.go → gres)，裸二进制也能直接启动。
+
+# ETL 管道服务
+etl:
+  enabled: true
+  address: ":8001"
+  # 生产必须设置 API token；建议通过 ETL_API_TOKEN 环境变量注入。
+  apiToken: ""
+  tls:
+    cert: ""            # ETL_TLS_CERT / --tls-cert
+    key: ""             # ETL_TLS_KEY / --tls-key
+
+  # 进程角色：standalone | master | worker
+  # master/worker 要求 storage.type 为 mysql/postgresql（跨进程共享元数据）。
+  role: "standalone"
+  masterURL: ""         # role=worker 时必填，指向 master 的 HTTP API
+  workerID: ""          # 可选 worker 标识（默认 worker-<pid>）
+  workerSlots: 4        # 单 worker 最大并发分片任务数
+
+  # Pipeline spec 目录（声明式 YAML 热加载）
+  specsDir: "./pipes"
+  # 运行时数据目录（checkpoint、DLQ、下载的插件、schema 缓存）
+  checkpointDir: "./data/checkpoint"
+  dlqDir: "./data/dlq"
+  pluginsDir: "./data/plugins"
+  schemasDir: "./data/schemas"
+
+  audit:
+    enabled: true       # ETL_AUDIT_ENABLED / --audit-enabled；audit 写入 SQL storage
+
+  # ── 元数据存储（生产推荐 MySQL 或 PostgreSQL）─────────────────────
+  # sqlite 适合小规模单机演示；多实例共享元数据必须用 mysql/postgresql。
+  storage:
+    type: "mysql"       # ETL_STORAGE_TYPE / --storage
+    # ETL_STORAGE_DSN / --storage-dsn 覆盖
+    mysql:
+      dsn: "user:password@tcp(host:3306)/openetl?parseTime=true&loc=UTC"
+    # postgresql:
+    #   dsn: "postgres://user:password@host:5432/openetl?sslmode=disable"
+    # sqlite:
+    #   path: "./data/etl.db"
+
+  # ── 运行时 state/cache backend ────────────────────────────────────
+  # 与 storage 故意分离：lookup/enricher cache、deduplicate/window/join state
+  # 的高频访问不能落到 SQLite/MySQL/PostgreSQL。
+  # 未配置 Redis 时，依赖缓存/状态的 transform 会在 validate/preflight 阻断。
+  state:
+    redis:
+      addr: ""          # ETL_STATE_REDIS_ADDR，例如 redis:6379
+      password: ""      # ETL_STATE_REDIS_PASSWORD
+      db: 0             # ETL_STATE_REDIS_DB
+      keyPrefix: "openetl:state"
+
+  alert:
+    webhook: ""         # 或用 ALERT_DINGTALK_WEBHOOK / ALERT_FEISHU_WEBHOOK / ALERT_SLACK_WEBHOOK
+
+# 结构化日志；通过 LOGGER_FORMAT=json 启用 JSON 输出
+logger:
+  level:   "all"
+  stdout:  true
+  path:    "./logs"
+  file:    "openetl-{Y-m-d}.log"
+  rotate:  "daily"
+  backups: 30

@@ -1,0 +1,43 @@
+name: mysql-cdc-to-mysql-upsert
+tags: [quickstart, cdc, upsert]
+
+# 演示 MySQL CDC -> MySQL 幂等 upsert（生产常见 ODS 同步形态）。
+#
+# 注意：本 demo 需要一个目标 MySQL。可以用同一个 quickstart-mysql 实例，
+# 但表名要不同（下面用 customers_ods）。
+
+source:
+  type: mysql_cdc
+  config:
+    host: quickstart-mysql
+    port: 3306
+    user: root
+    password: root123
+    server_id: 101
+    database: dzh3136_go
+    tables: [customers]
+
+# Sink: MySQL upsert — 用业务主键吸收 CDC 重放和重复推送。
+# DELETE 也会传播到目标表。
+sink:
+  type: mysql
+  config:
+    host: quickstart-mysql
+    port: 3306
+    user: root
+    password: root123
+    database: dzh3136_go
+    table: customers_ods
+    batch_mode: upsert
+    pk_columns: [id]
+    auto_create: true
+
+batch_size: 200
+checkpoint_interval_sec: 5
+backpressure_buffer: 100
+
+restart_policy:
+  mode: on-failure
+  max_restarts: 5
+  initial_delay_ms: 5000
+  max_delay_ms: 60000

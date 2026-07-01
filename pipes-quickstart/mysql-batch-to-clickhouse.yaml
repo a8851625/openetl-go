@@ -1,21 +1,22 @@
-name: mysql-to-clickhouse
-tags: [quickstart, cdc]
+name: mysql-batch-to-clickhouse
+tags: [quickstart, batch]
 
-# Source: MySQL binlog CDC — captures INSERT/UPDATE/DELETE in real time.
+# Source: MySQL batch — one-shot full-table extract.
+# 适合全量回填；CDC 增量同步见 mysql-to-clickhouse.yaml。
 source:
-  type: mysql_cdc
+  type: mysql_batch
   config:
     host: quickstart-mysql
     port: 3306
     user: root
     password: root123
-    server_id: 100
     database: dzh3136_go
-    tables: [customers, orders, products]
+    table: customers
+    pk_column: id            # 用于分片和断点续传
+    batch_size: 500
 
 # Sink: ClickHouse — auto-creates tables with ReplacingMergeTree dedup.
-# protocol: http uses port 8123 (works out-of-the-box with the quickstart
-# ClickHouse image); native (9000) works when the default user has no password.
+# 同一批次重放（如 checkpoint reset）会被 _version 列吸收重复。
 sink:
   type: clickhouse
   config:
@@ -25,6 +26,9 @@ sink:
     user: default
     password: "clickhouse"
     database: dzh3136_go
+    table: customers_batch
+    pk_columns: [id]
+    version_column: _version
     auto_create: true
     batch_size: 500
 
@@ -32,7 +36,6 @@ batch_size: 500
 checkpoint_interval_sec: 10
 backpressure_buffer: 100
 
-# Auto-restart on failure — self-healing.
 restart_policy:
   mode: on-failure
   max_restarts: 5
