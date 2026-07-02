@@ -36,15 +36,17 @@ const (
 // information. Embedded by sink implementations to avoid repeated
 // information_schema queries.
 type SchemaCache struct {
-	mu           sync.RWMutex
-	knownTables  map[string]bool            // tableName → exists
-	knownColumns map[string]map[string]bool // tableName → set of column names
+	mu                sync.RWMutex
+	knownTables       map[string]bool              // tableName → exists
+	knownColumns      map[string]map[string]bool   // tableName → set of column names
+	generatedColumns  map[string]map[string]bool   // tableKey → set of GENERATED column names
 }
 
 func NewSchemaCache() *SchemaCache {
 	return &SchemaCache{
-		knownTables:  make(map[string]bool),
-		knownColumns: make(map[string]map[string]bool),
+		knownTables:      make(map[string]bool),
+		knownColumns:     make(map[string]map[string]bool),
+		generatedColumns: make(map[string]map[string]bool),
 	}
 }
 
@@ -103,6 +105,31 @@ func (c *SchemaCache) InvalidateCache(table string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.knownColumns, table)
+	delete(c.generatedColumns, table)
+}
+
+// GeneratedColumns returns the cached set of GENERATED column names for a
+// table key (caller chooses the key, e.g. "db.table"). Returns false when not
+// cached so the caller can introspect and cache via SetGeneratedColumns.
+func (c *SchemaCache) GeneratedColumns(tableKey string) (map[string]bool, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.generatedColumns[tableKey]
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string]bool, len(v))
+	for k := range v {
+		out[k] = true
+	}
+	return out, true
+}
+
+// SetGeneratedColumns caches the set of GENERATED column names for a table key.
+func (c *SchemaCache) SetGeneratedColumns(tableKey string, genSet map[string]bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.generatedColumns[tableKey] = genSet
 }
 
 // EnsureSchemaGeneric is a reusable helper that implements the common

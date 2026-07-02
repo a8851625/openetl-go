@@ -677,7 +677,119 @@ func connectionRef(connection, connectionRef string) string {
 }
 
 func ValidateIdempotency(spec *Spec) []string {
-	return CheckIdempotencyCompatibility(spec.Source.Type, spec.Sink.Type, spec.Sink.Config)
+	warnings := CheckIdempotencyCompatibility(spec.Source.Type, spec.Sink.Type, spec.Sink.Config)
+	// pre_write idempotency warning (MySQL/PostgreSQL batch sinks)
+	warnings = append(warnings, preWriteWarnings(spec)...)
+	// increment mode is non-idempotent: replay re-adds (MySQL/PostgreSQL sink)
+	warnings = append(warnings, incrementWarnings(spec)...)
+	// dependency-schedule downstream recomputation idempotency warning
+	warnings = append(warnings, dependencyScheduleWarnings(spec)...)
+	return warnings
+}
+
+// incrementWarnings surfaces a strong idempotency warning for batch_mode=increment.
+// Increment accumulates on each write; a checkpoint reset replays the batch and
+// re-adds the same source values, producing inflated totals.
+func incrementWarnings(spec *Spec) []string {
+	if spec == nil {
+		return nil
+	}
+	sinkType := spec.Sink.Type
+	if sinkType != "mysql" && sinkType != "postgres" && sinkType != "postgresql" {
+		return nil
+	}
+	mode, _ := spec.Sink.Config["batch_mode"].(string)
+	if mode != "increment" {
+		return nil
+	}
+	tableName, _ := spec.Sink.Config["table"].(string)
+	if tableName == "" {
+		tableName = "<dynamic>"
+	}
+	return []string{fmt.Sprintf(
+		"%s sink %s uses batch_mode=increment: replay/checkpoint reset will re-add accumulator columns. Only use this mode when the source has a stable dedup key AND checkpoint will not reset, or when downstream reconciliation can detect duplicates; manual reconciliation is required after any reset.",
+		sinkType, tableName)}
+}
+
+// dependencyScheduleWarnings surfaces idempotency risks for pipelines scheduled
+// via `schedule.type: dependency` (Post-Commit Trigger scheme A). When such a
+// downstream pipeline re-runs on every upstream completion, it must be
+// idempotent: rely on upsert + pk_columns to absorb replays.
+func dependencyScheduleWarnings(spec *Spec) []string {
+	if spec == nil || spec.Schedule == nil || spec.Schedule.Type != "dependency" {
+		return nil
+	}
+	sinkType := spec.Sink.Type
+	switch sinkType {
+	case "mysql", "postgres", "postgresql", "doris", "clickhouse":
+		batchMode := ""
+		if v, ok := spec.Sink.Config["batch_mode"]; ok {
+			batchMode, _ = v.(string)
+		}
+		pkCols := stringSliceConfig(spec.Sink.Config, "pk_columns")
+		if (sinkType == "mysql" || sinkType == "postgres" || sinkType == "postgresql") && batchMode != "upsert" {
+			return []string{fmt.Sprintf(
+				"dependency-scheduled pipeline writes to %s with batch_mode=%q; the downstream re-computation re-runs on every upstream completion, so use batch_mode: upsert with pk_columns to absorb replays",
+				sinkType, batchMode)}
+		}
+		if len(pkCols) == 0 && batchMode == "upsert" {
+			return []string{fmt.Sprintf(
+				"dependency-scheduled pipeline uses %s upsert without pk_columns; replays of the downstream re-computation cannot be absorbed",
+				sinkType)}
+		}
+	case "file_sink", "s3", "kafka":
+		return []string{fmt.Sprintf(
+			"dependency-scheduled pipeline writes to append-only sink %s; the downstream re-computation re-runs on every upstream completion and will produce duplicates",
+			sinkType)}
+	}
+	return nil
+}
+
+// preWriteWarnings surfaces idempotency risks for configured pre_write actions.
+// truncate/truncate_partition/delete are explicit "delete-then-rewrite"
+// semantics: on checkpoint reset the pre_write re-runs and the batch is
+// rewritten, which is idempotent for batch pipelines but dangerous for CDC.
+func preWriteWarnings(spec *Spec) []string {
+	if spec == nil {
+		return nil
+	}
+	sinkType := spec.Sink.Type
+	if sinkType != "mysql" && sinkType != "postgres" && sinkType != "postgresql" {
+		return nil
+	}
+	raw, ok := spec.Sink.Config["pre_write"]
+	if !ok || raw == nil {
+		return nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	action, _ := m["action"].(string)
+	if action == "" {
+		return nil
+	}
+	tableName, _ := spec.Sink.Config["table"].(string)
+	if tableName == "" {
+		tableName = "<dynamic>"
+	}
+	switch action {
+	case "delete":
+		cond, _ := m["condition"].(string)
+		return []string{fmt.Sprintf(
+			"pre_write will DELETE FROM %s WHERE %s before each batch; checkpoint reset replays the delete+rewrite (idempotent for batch, not for CDC)",
+			tableName, cond)}
+	case "truncate":
+		return []string{fmt.Sprintf(
+			"pre_write will TRUNCATE TABLE %s before each batch; checkpoint reset replays the truncate+rewrite (idempotent for batch, not for CDC)",
+			tableName)}
+	case "truncate_partition":
+		cond, _ := m["condition"].(string)
+		return []string{fmt.Sprintf(
+			"pre_write will DELETE the target partition of %s (WHERE %s) before each batch; checkpoint reset replays the delete+rewrite (idempotent for batch, not for CDC)",
+			tableName, cond)}
+	}
+	return nil
 }
 
 // ValidateParallelism returns warnings about parallelism / shard_strategy

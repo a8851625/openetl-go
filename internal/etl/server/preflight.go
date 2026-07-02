@@ -626,15 +626,27 @@ func checkRelationalSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 	if batchMode == "" {
 		batchMode = "insert"
 	}
-	if batchMode != "insert" && batchMode != "upsert" {
+	if batchMode != "insert" && batchMode != "upsert" && batchMode != "increment" {
 		addStaticSinkFieldError(result, label+"-sink-batch-mode", "sink.config.batch_mode",
 			fmt.Sprintf("%s sink batch_mode %q is not supported", sinkType, batchMode),
-			"set sink.config.batch_mode to insert or upsert")
+			"set sink.config.batch_mode to insert, upsert, or increment")
 	}
 	if batchMode == "upsert" && len(stringSliceField(cfg, "pk_columns")) == 0 {
 		addStaticSinkFieldError(result, label+"-sink-upsert-keys", "sink.config.pk_columns",
 			fmt.Sprintf("%s sink upsert mode requires sink.config.pk_columns", sinkType),
 			"set sink.config.pk_columns to stable business key columns before relying on replay absorption")
+	}
+	if batchMode == "increment" {
+		if len(stringSliceField(cfg, "pk_columns")) == 0 {
+			addStaticSinkFieldError(result, label+"-sink-increment-keys", "sink.config.pk_columns",
+				fmt.Sprintf("%s sink increment mode requires sink.config.pk_columns", sinkType),
+				"set sink.config.pk_columns to identify the row being accumulated")
+		}
+		if len(stringMapField(cfg, "increment_columns")) == 0 {
+			addStaticSinkFieldError(result, label+"-sink-increment-columns", "sink.config.increment_columns",
+				fmt.Sprintf("%s sink increment mode requires sink.config.increment_columns", sinkType),
+				"set sink.config.increment_columns to {target_col: source_field} for accumulator columns")
+		}
 	}
 	if schemaDrift := strings.ToLower(strings.TrimSpace(stringField(cfg, "schema_drift", "ignore"))); schemaDrift != "" && !isSupportedRelationalSchemaDrift(schemaDrift) {
 		addStaticSinkFieldError(result, label+"-sink-schema-drift", "sink.config.schema_drift",
@@ -650,6 +662,34 @@ func checkRelationalSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 		addStaticSinkFieldError(result, label+"-sink-insert-chunk-size", "sink.config.insert_chunk_size",
 			fmt.Sprintf("%s sink insert_chunk_size must be > 0, got %d", sinkType, chunkSize),
 			"set sink.config.insert_chunk_size to a positive row count such as 500")
+	}
+	// pre_write validation (MySQL/PostgreSQL sink)
+	if rawPW, ok := cfg["pre_write"]; ok && rawPW != nil {
+		pwMap, ok := rawPW.(map[string]any)
+		if !ok {
+			addStaticSinkFieldError(result, label+"-sink-pre-write", "sink.config.pre_write",
+				fmt.Sprintf("%s sink pre_write must be a map, got %T", sinkType, rawPW),
+				"set sink.config.pre_write to a map with action: delete|truncate|truncate_partition")
+		} else {
+			action := strings.ToLower(strings.TrimSpace(stringField(pwMap, "action", "")))
+			switch action {
+			case "delete", "truncate", "truncate_partition":
+			case "":
+				addStaticSinkFieldError(result, label+"-sink-pre-write-action", "sink.config.pre_write.action",
+					fmt.Sprintf("%s sink pre_write.action is required", sinkType),
+					"set sink.config.pre_write.action to delete, truncate, or truncate_partition")
+			default:
+				addStaticSinkFieldError(result, label+"-sink-pre-write-action", "sink.config.pre_write.action",
+					fmt.Sprintf("%s sink pre_write.action %q is not supported", sinkType, action),
+					"set sink.config.pre_write.action to delete, truncate, or truncate_partition")
+			}
+			cond := strings.TrimSpace(stringField(pwMap, "condition", ""))
+			if (action == "delete" || action == "truncate_partition") && cond == "" {
+				addStaticSinkFieldError(result, label+"-sink-pre-write-condition", "sink.config.pre_write.condition",
+					fmt.Sprintf("%s sink pre_write.action=%s requires a non-empty condition", sinkType, action),
+					"set sink.config.pre_write.condition to a WHERE clause (use action=truncate to wipe the whole table)")
+			}
+		}
 	}
 	if sinkType == "postgres" || sinkType == "postgresql" {
 		sslmode := strings.ToLower(strings.TrimSpace(stringField(cfg, "sslmode", "prefer")))
@@ -2651,6 +2691,36 @@ func addOperationalGuidance(spec *pipeline.Spec, result *PreflightResult) {
 
 	if guidance := replayAbsorptionGuidance(spec); guidance.Code != "" {
 		addPreflightGuidance(result, guidance)
+	}
+
+	// pre_write streaming safety warning (MySQL/PostgreSQL sink)
+	if spec.Sink.Type == "mysql" || spec.Sink.Type == "postgres" || spec.Sink.Type == "postgresql" {
+		if rawPW, ok := spec.Sink.Config["pre_write"]; ok && rawPW != nil {
+			if pwMap, ok := rawPW.(map[string]any); ok {
+				action, _ := pwMap["action"].(string)
+				if action == "truncate" || action == "truncate_partition" {
+					level := "warning"
+					if isStreamingOrReplaySource(spec.Source.Type) {
+						level = "error"
+					}
+					tableName, _ := spec.Sink.Config["table"].(string)
+					if tableName == "" {
+						tableName = "<dynamic>"
+					}
+					msg := fmt.Sprintf("pre_write action %q on %s wipes target data before each batch", action, tableName)
+					if isStreamingOrReplaySource(spec.Source.Type) {
+						msg = fmt.Sprintf("pre_write action %q is unsafe for CDC/streaming source %s: it wipes the target on every batch", action, spec.Source.Type)
+					}
+					addPreflightGuidance(result, PreflightGuidance{
+						Level:    level,
+						Category: "pre_write",
+						Code:     "pre-write-idempotency",
+						Message:  msg,
+						Action:   "only use pre_write with once/cron/periodic batch pipelines; rely on upsert+pk_columns for CDC replay absorption",
+					})
+				}
+			}
+		}
 	}
 
 	addPreflightGuidance(result, PreflightGuidance{

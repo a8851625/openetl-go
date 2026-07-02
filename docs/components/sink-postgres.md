@@ -7,6 +7,7 @@ Write records into PostgreSQL with insert or upsert semantics.
 - `host`, `user`, `database`, `table`: required target fields.
 - `port`, `password`, `sslmode`: connection fields.
 - `batch_mode`, `pk_columns`, `auto_create`, `schema_drift`, `ddl_policy`: idempotency and schema controls.
+- `pre_write`: optional pre-write action block `{action, condition, params}`. Runs inside the batch transaction before inserts. Same semantics and CDC safety rules as MySQL sink `pre_write`.
 
 ## Record Shape
 Writes record `data` columns to the target table.

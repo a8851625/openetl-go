@@ -215,6 +215,14 @@ func (s *Scheduler) triggerPipeline(name string, runner pipeline.RunnerInterface
 
 // notifyDependents checks if any pipelines depend on the given name and triggers them.
 func (s *Scheduler) notifyDependents(completedName string) {
+	s.NotifyDependents(completedName)
+}
+
+// NotifyDependents triggers any pipeline whose dependency schedule depends on
+// completedName. This is the public hook used by the server when a streaming
+// or once-scheduled upstream finishes, so that downstream dependency-scheduled
+// pipelines fire.
+func (s *Scheduler) NotifyDependents(completedName string) {
 	s.mu.Lock()
 	for name, ps := range s.schedules {
 		if ps.depCtx == nil {

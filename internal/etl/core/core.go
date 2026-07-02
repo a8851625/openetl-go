@@ -106,9 +106,10 @@ type SchemaInfo struct {
 
 // ColumnInfo describes a single column.
 type ColumnInfo struct {
-	Name     string
-	DataType string // e.g., "INT", "VARCHAR(255)", "DateTime64(3)"
-	Nullable bool
+	Name      string
+	DataType  string // e.g., "INT", "VARCHAR(255)", "DateTime64(3)"
+	Nullable  bool
+	Generated bool // true for MySQL VIRTUAL/STORED or PostgreSQL GENERATED columns; sinks must exclude them from INSERT/UPDATE column sets
 }
 
 // SchemaDescriptor is an optional interface that sources may implement to describe

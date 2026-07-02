@@ -295,6 +295,114 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - 失败路径不会静默推进 checkpoint。
 - 文档清楚说明 at-least-once、重复吸收策略和不承诺边界。
 
+### Phase 1 增补（数仓 ETL 场景闭环）：声明式部署、写入与转换增强
+
+目标：把数仓 ETL 最常见的「先删后写」「字典映射」「累加写入」「字段拆分」「依赖触发」和「声明式 DAG 部署」做成配置级能力，让真实数仓同步任务无需 Lua/JS 脚本或 API 调用即可落地。所有新增能力沿用现有 Source → Transform → Sink 单向模型与 at-least-once 语义，不引入后置副作用钩子、通用 SQL planner 或流计算语义。
+
+本增补由真实多表数仓同步场景（dl-vehicle 系列）驱动，每条按下列次序推进；完成一条再开下一条，避免范围蔓延。
+
+交付项：
+
+1. DAG 声明式文件加载（修复已确认 bug，最高优先级）——已实现（2026-07-02）：
+   - 现状（修复前）：`loadSpecs` (`internal/etl/server/server.go:513`) 只调用 `pipeline.LoadSpec` 按线性格式解析 `pipes/*.yaml`；`RestoreFromDB` (`server.go:418-422`) 已实现 `dag:` 顶层 key 检测并走 `orchestrator.PipelineSpec`。结果是 DAG 是核心功能，却无法通过 `pipes/` 声明式部署，只能经 API 创建。
+   - 目标：`loadSpecs` 复用 `RestoreFromDB` 的 `dag:` 检测分支，与线性格式走同一套 `resolveDAGConnections` / `NewDAGExecutor` / `registerPipelineLocked` 路径；保持 `skipExisting` 与 `seen` 去重语义一致；DAG 与线性格式在 hot-reload、`POST /api/v2/specs/reload` 下行为对齐。
+   - 不做：不引入新的 DAG 文件命名约定，不改变 DAG spec schema，不把 DAG 解析拆成独立 loader 包。
+   - 验收：`pipes/*.yaml` 中放一个含 `dag:` 的 spec 能在启动时自动加载并注册；`POST /api/v2/specs/reload` 能热加载新增 DAG 文件；新增单测覆盖 DAG 文件加载、重复检测和 hot-reload；`go test ./internal/etl/server -count=1` 通过。
+   - 实现内容：`loadSpecs` 复用 `RestoreFromDB` 的 `dag:` 顶层 key 检测分支，DAG 走 `resolveDAGConnections` → `NewDAGExecutor` → `NewDAGRunnerWrapper` → `registerPipelineLocked` 路径，与线性格式共享 `skipExisting`/`seen` 去重语义；DAG 原始 YAML 直接持久化到 specStore。
+   - 验收（已达成）：新增 `internal/etl/server/dag_load_test.go` 覆盖 DAG 文件加载、DAG+线性共存、DAG 重复跳过、`ReloadSpecs` 热加载新增 DAG 文件；`go test ./internal/etl/... ./internal/cmd -count=1`（含 `-race`）与 `go vet ./internal/etl/...` 全绿。
+
+2. Pre-write Action（MySQL/PostgreSQL sink 写入前清理）——已实现（2026-07-02）：
+   - 现状（修复前）：MySQL/PostgreSQL sink 的 `batch_mode` 只有 `insert`(INSERT IGNORE) 和 `upsert`(ON DUPLICATE KEY UPDATE)（`internal/etl/server/schema.go:185`、`internal/etl/sink/mysql.go:87`、`postgres.go:92`），没有写入前钩子。数仓日快照「DELETE FROM dws WHERE dt=? → INSERT」和批量回填「先清再写」无法配置化表达。
+   - 目标：MySQL/PostgreSQL sink 增加 `pre_write` 配置块：`action: delete | truncate | truncate_partition`、参数化 `condition`、`params`（支持 `${PROCESSING_DATE}` / `${params.xxx}` 占位符）。`pre_write` 在每个写入 batch 的事务开始前执行，失败按 transient/data 错误分类进入 DLQ 或 retry，不静默跳过。`truncate` / `truncate_partition` 仅允许 `once`/`cron`/`periodic` 调度的 batch pipeline，CDC/streaming pipeline 在 validate/preflight 阶段拒绝。
+   - 幂等边界：`pre_write` + `insert` 模式在 checkpoint reset 后会重新清空并重写，属于幂等回填语义；spec validate / preflight 必须显式提示「此组合会先删后写，重放会重置目标分区」，不与 at-least-once 吸收策略混淆。
+   - 验收：MySQL/PostgreSQL sink 支持 `pre_write`；preflight 校验 action/condition/params 合法性并拒绝 CDC+truncate；新增 e2e 覆盖 batch 先删后写 + checkpoint reset replay 后目标表等于重放结果；组件文档 `docs/components/sink-mysql.md` / `sink-postgres.md` 补 pre_write 段落。
+   - 实现内容：新增 `internal/etl/sink/pre_write.go` 提供 `PreWriteConfig`（delete/truncate/truncate_partition、condition、params、`${PROCESSING_DATE}`/`${params.xxx}` 展开、`ExecSQL`/`ExecPgx`、`IsDangerousForStreaming`、`DescribeForWarning`）；MySQL sink（`mysql.go`）和 PostgreSQL sink（`postgres.go`）在 `BeginTx` 后、数据写入前执行 `pre_write`；schema.go 补 `pre_write` 字段；preflight.go 校验 action/condition 合法性；`ValidateIdempotency` 对 pre_write 输出幂等 warning；CDC+truncate/truncate_partition 在 preflight guidance 输出 error 级别；`sink-mysql.md`/`sink-postgres.md` 补 pre_write 段落。
+   - 验收（已达成）：新增 `internal/etl/sink/pre_write_test.go` 和 `internal/etl/server/pre_write_preflight_test.go` 覆盖配置解析、condition 必填、truncate 免 condition、CDC+truncate error、schema 字段存在性；`go test ./internal/etl/... -count=1`（含 `-race`）全绿。（真实 MySQL/PG e2e 先删后写 + checkpoint reset replay 后续补 Docker e2e 脚本。）
+
+3. 字典映射 Transform（`map_fields`）——已实现（2026-07-02）：
+   - 现状（修复前）：枚举/码值转换（如车辆状态码 1→ONLINE、充电状态码 3→NOT_CHARGING）只能用 Lua `if-else` 实现，不可声明式配置，多表场景难以维护。`internal/etl/transforms` 无 `map_fields`。
+   - 目标：新增 `map_fields` transform，对每个声明字段按 `map` 字典做值映射，未命中走 `default`（缺省 `null`/原值可配）；支持多字段一次映射；映射表来源支持 inline `map` 和外部 connection 引用（复用 connection refactor 后的「纯连接/引用」能力，见第 9 项）。
+   - 不做：不引入反查数据库的 lookup 语义（已有 `lookup` transform 承载），不引入多级嵌套映射或脚本表达式；纯静态字典。
+   - 验收：`map_fields` 进入核心 transform 集合；dry-run 可预览映射结果；spec validate 校验 `field` 必填、`map` 非空；新增单测覆盖命中/default/多字段；`docs/components/transform-map_fields.md` 补组件文档。
+   - 实现内容：新增 `internal/etl/transform/map_fields.go`（`MapFieldsTransform`，`fields` 列表每条含 `field`/`map`/`default`/`on_missing:keep|null`，数值 key 字符串化匹配，缺字段跳过）；schema.go 补 `map_fields`；server.go pluginMetadata 补 `map_fields`；`docs/components/transform-map_fields.md`。
+   - 验收（已达成）：新增 `internal/etl/transform/map_fields_test.go` 覆盖命中/default/on_missing keep/null/多字段/缺字段跳过/校验错误/registry；`go test ./internal/etl/transform -count=1` 全绿。
+
+4. Post-Commit Trigger（依赖调度方案 A，不引入后置钩子）——已实现（2026-07-02）：
+   - 现状（修复前）：数仓「CDC 落库后触发异步重算 issue_count / 充电统计」是事件驱动 + 二次聚合的常见模式。项目 pipeline 是单向流 source→transform→sink，没有 sink 后触发；但 `schedule.type: dependency`（AGENTS.md「DAG Orchestrator」段、`internal/etl/orchestrator/scheduler.go:123`、Phase 0 伪实现清理第 4 项已补 API/UI 入口）已支持上游完成后触发下游 pipeline。
+   - 目标：明确采用方案 A——用 `schedule.type: dependency` + 第二条 `mysql_batch` 重算 pipeline 表达「CDC 落库后重算」。本条交付物是：(a) 验证 dependency 调度在 streaming 上游「完成」事件下的触发边界并补 e2e；(b) 在 `docs/etl-config-schema.md` 与组件文档补「CDC → 重算」配置范例；(c) spec validate 对「dependency 下游 + upsert/pk_columns」给出幂等风险 warning。
+   - 明确不做：不实现方案 B 的 sink 后置钩子（`hooks.on_batch_written`）。后置钩子会破坏单向 pipeline 模型、把副作用副作用引入 sink、且模糊 checkpoint 边界，违背「不变成流计算平台 / 不引入副作用副作用」原则。
+   - 验收：dependency 触发链路有 e2e 证据（上游 streaming pipeline 完成/停止后下游被触发一次）；文档有完整 CDC→重算范例；spec validate 对该组合输出幂等 warning。
+   - 实现内容：(a) `Scheduler.NotifyDependents` 暴露为公开方法，`Server.StartAll` 的 streaming/once 完成回调在上游 `Done()` 后调用 `NotifyDependents(id)`，使 streaming 上游完成也能触发 dependency 下游；(b) `internal/etl/server/scheduler_integration_test.go` 新增 `TestStartAllDependencyTriggerFiresDownstream` 覆盖 streaming 上游完成后下游被触发；(c) `docs/etl-config-schema.md` 补「Post-Commit Trigger」段落与 CDC→重算 YAML 范例；(d) `ValidateIdempotency` 新增 `dependencyScheduleWarnings` 对 dependency 下游 + 非 upsert / 无 pk_columns / append-only sink 输出幂等 warning。
+   - 验收（已达成）：单测通过；`go test ./internal/etl/... -count=1`（含 `-race`）全绿。
+
+5. Increment 写入模式（MySQL/PostgreSQL sink 累加）——已实现（2026-07-02）：
+   - 现状（修复前）：`batch_mode` 不支持 `UPDATE col = IFNULL(col,0) + VALUES(col)` 累加语义，库存出入库、充电次数计数器只能先 SELECT 再 upsert，效率低。
+   - 目标：MySQL/PostgreSQL sink 的 `batch_mode` 增加 `increment`，配合 `increment_columns`（列名→源字段名）和 `pk_columns`，生成 `INSERT INTO ... ON DUPLICATE KEY UPDATE col = IFNULL(col,0) + VALUES(col)`。
+   - 幂等边界：increment 不是幂等模式——重放会重复累加。spec validate / preflight 必须对 increment 模式输出强 warning，推荐仅在「源端有去重键 + checkpoint 不会 reset」或「下游有版本/时间窗口对账」时使用；checkpoint reset 后必须人工对账。
+   - 验收：MySQL/PostgreSQL sink 支持 increment；preflight 输出非幂等 warning；新增 e2e 覆盖正常累加 + checkpoint reset 后重复累加的行为文档化（不阻断，但显式记录）；组件文档补 increment 段落与幂等边界。
+   - 实现内容：MySQL sink 新增 `incrementColumns map[string]string`、`batch_mode=increment` 生成 `INSERT INTO ... ON DUPLICATE KEY UPDATE col=IFNULL(col,0)+VALUES(src_col)`（PK 列不进 UPDATE，非 PK 非 increment 列仍 `=VALUES(col)`）；PostgreSQL sink 对应生成 `ON CONFLICT ... DO UPDATE SET col=COALESCE(col,0)+EXCLUDED.src_col`；schema.go 把 `batch_mode` enum 扩展为 `insert|upsert|increment` 并新增 `increment_columns` 字段；preflight.go 校验 increment 必须有 `pk_columns` 和 `increment_columns`；`ValidateIdempotency` 的 `incrementWarnings` 对 increment 输出非幂等强 warning。
+   - 验收（已达成）：新增 `internal/etl/sink/increment_test.go` 覆盖 MySQL increment SQL 生成（含 PK 排除、IFNULL+VALUES 子句）、MySQL/PG increment 缺 `increment_columns` 报错；`go test ./internal/etl/... -count=1` 全绿。（真实累加 + checkpoint reset 重复累加 Docker e2e 后续补。）
+
+6. 字段拆分/提取 Transform（`extract`）——已实现（2026-07-02）：
+   - 现状（修复前）：从 `material_name` 正则提取厂商、`mes_administrator + '.' + mes_optional_parts` 拼接物料号等需求只能用 Lua/JS。
+   - 目标：新增 `extract` transform，提供最小集：(a) 正则 `pattern` + `group` 提取到目标字段；(b) `template` 拼接（复用 Go template 语法，仅暴露 `.字段名` 变量，不引入脚本）。不做复杂表达式引擎、不做多级嵌套、不做条件分支（那是 `filter` / Lua 的职责）。
+   - 验收：`extract` 进入核心 transform 集合；dry-run 可预览；spec validate 校验 pattern 可编译、group 在范围内；新增单测覆盖正则提取/template 拼接；组件文档补 `transform-extract.md`。
+   - 实现内容：新增 `internal/etl/transform/extract.go`（`ExtractTransform`，`rules` 列表每条含 `target` + (`pattern`+`group`+`source_field`) 或 `template`，正则 miss/template 错误保留原值不阻断批次）；schema.go 补 `extract`；server.go pluginMetadata 补 `extract`；`docs/components/transform-extract.md`。
+   - 验收（已达成）：新增 `internal/etl/transform/extract_test.go` 覆盖正则命中/miss/source_field/template 拼接/多规则/校验错误（含 group 越界、pattern 与 template 互斥）/registry；`go test ./internal/etl/transform -count=1` 全绿。
+
+7. Feishu Source 连接器——已实现（2026-07-02）：
+   - 现状（修复前）：项目有飞书告警通道但无飞书数据源连接器；`http` source 无法表达 client credentials OAuth2 token 获取流程。
+   - 目标：新增 `feishu_sheet` source，支持 `app_id`/`app_secret` 自动获取 `tenant_access_token` 并定时刷新、按 `spreadsheet_token` + `sheet_range` 拉取表格数据、`poll_interval_sec` 定时拉取。token 获取失败进入 retry/backoff，不静默降级。
+   - 成熟度边界：首版标注 `beta`，需补 token 刷新、分页、限流(429)、sheet 不存在等 e2e 或 fixture 证据后才可提升；maturity 由测试证据驱动。
+   - 验收：`feishu_sheet` source 注册并接入 preflight（校验 app_id/secret/spreadsheet_token 非空、短超时获取 token）；新增 token 获取单测 + sheet 拉取 fixture；descriptor/schema/文档一致；`docs/components/source-feishu_sheet.md` 补组件文档。
+   - 实现内容：新增 `internal/etl/source/feishu_sheet.go`（`FeishuSheetSource`，client_credentials token 获取 + 60s 前置刷新缓存，`fetchSheet` 拉 `value_range.values`，首行全字符串作为 header；token/sheet 失败均作为 Open 错误返回，不静默降级）；schema.go 补 `feishu_sheet`；server.go pluginMetadata 标 `beta`；`source_schedule.go` 把 `feishu_sheet` 声明为 once/cron/periodic/dependency batch 源；`docs/components/source-feishu_sheet.md`。
+   - 验收（已达成）：新增 `internal/etl/source/feishu_sheet_test.go` 用 httptest mock 覆盖配置校验、token 获取 + 缓存命中、sheet 拉取 header 检测、token 获取失败；`go test ./internal/etl/source -count=1` 全绿。（分页/429/真实飞书环境 e2e 后续补。）
+
+8. HTTP Source OAuth2 认证增强（只做 client_credentials 子集）——已实现（2026-07-02）：
+   - 现状（修复前）：`http` source 只支持静态 header token，很多内部 API 需要 OAuth2 client credentials 流程。
+   - 目标：`http` source `auth` 增加 `type: oauth2_client_credentials`，配置 `token_url`/`client_id`/`client_secret`/`token_field`/`header_format`；启动时获取 token 并按 expiry 提前刷新；token 获取失败进入 retry/backoff。
+   - 明确不做：不做 JWT 签名、不做 HMAC 签名、不做 authorization_code 三方流程。这三类实现复杂度高且偏离核心，需要时再用 `lua`/`javascript` transform 或外部 sidecar 承载。client_credentials 覆盖飞书/大部分内部 API 已足够。
+   - 验收：http source 支持 oauth2_client_credentials；preflight 校验 token_url/client_id/secret；新增 token 获取 + 刷新单测（mock token endpoint）；组件文档 `source-http.md` 补 auth 段落。
+   - 实现内容：`HTTPSource` 新增 `oauth2_token_url`/`oauth2_client_id`/`oauth2_client_secret`/`oauth2_token_field`(默认 access_token)/`oauth2_header_format`(默认 `Bearer %s`)/`oauth2_scopes`；`fetchOAuth2Token` 走 `grant_type=client_credentials` 表单 POST，按 `expires_in` 前 60s 刷新；`doRequest` 在 `auth_type=oauth2_client_credentials` 时 `ensureOAuth2Token` 注入 `Authorization`；构造期校验三个必填字段；schema.go 补对应字段并把 `auth_type` enum 扩展为 `bearer|basic|oauth2_client_credentials`。
+   - 验收（已达成）：新增 `internal/etl/source/http_oauth2_test.go` 用 httptest mock 覆盖 token 获取 + 注入、token 跨分页缓存、必填字段校验、`token_field`/`header_format` 覆盖；`go test ./internal/etl/source -count=1` 全绿。
+
+9. Connection 配置职责收束（原「Pipeline 参数化/模板」的第 10 项重构方向）——已实现（2026-07-02）：
+   - 现状（修复前）：`ConnectionEntry` (`internal/etl/storage/storage.go:144`) 把 `Type` + 完整 `Config map[string]any` 内联，`resolveLinearEndpoint` (`connection_refs.go:72`) 把 connection 当作「source/sink 的提前定义」整体 merge 进 endpoint config。结果是 connection 既包含纯连接信息（host/port/user/password/database/brokers），又混入了运行行为参数（batch_mode、pk_columns、schema_drift、ddl_policy、retry、compression），违背 connection 的命名语义，也无法在多表场景复用同一个连接。
+   - 目标：把 connection 收束为「纯连接 + connector type」的引用，行为参数留在 pipeline spec 的 endpoint config 内：
+     - `ConnectionEntry` 明确只承载连接级字段（host/port/user/password/database/brokers/topic-base/endpoint/bucket 等），通过 connector descriptor 标注哪些字段属于「connection scope」。
+     - `resolveLinearEndpoint` merge 时只取 connection 的 connection-scope 字段，endpoint config 内的 behavior 字段（batch_mode、pk_columns、pre_write、schema_drift、ddl_policy、retry、compression、increment_columns 等）不被 connection 覆盖，也不需要重复声明。
+     - 已保存的 connection 在 UI wizard / DAG editor / `/connections/{name}/context` 中只带出连接级上下文和健康状态，行为参数由当前 pipeline 的 source/sink 选择驱动。
+   - 不做：不引入 pipeline 模板/变量展开引擎（原第 10 项的 `template.variables` / `POST /pipelines/template` 属于工作流编排领域，偏离核心，暂缓）。多表场景的配置复用由「同一 connection 被多个 pipeline 引用」+「pipeline spec 内只写差异行为参数」覆盖，不需要模板实例化。
+   - 迁移与兼容：现有 connection 的 behavior 字段不静默丢弃——`resolveLinearEndpoint` 检测到 connection 内含 behavior 字段时给出 deprecation warning 并继续 merge（向后兼容一个版本），spec validate 提示用户把 behavior 字段迁移到 pipeline endpoint config。
+   - 验收：新增「connection scope」字段标注（descriptor 驱动）；`resolveLinearEndpoint` 按 scope merge 并对遗留 behavior 字段 warning；UI/DAG editor 选择 connection 后只带连接字段，行为参数表单仍由当前 endpoint 驱动；新增单测覆盖 scope merge、deprecation warning、向后兼容；`docs/etl-config-schema.md` 补 connection 字段范围说明。
+   - 实现内容：`internal/etl/server/connection_refs.go` 定义 `sinkBehaviorFields` 白名单（batch_mode/pk_columns/pre_write/schema_drift/ddl_policy/retry/compression/increment_columns 等），`resolveLinearEndpoint` 在 sink connection 含 behavior 字段时记录 deprecation warning 但仍 merge（向后兼容）；`Server.connDeprecations`（`connectionDeprecationWarnings`）收集 warning，`handleSpecValidate` drain 到 warnings 列表；MySQL/PG schema 的 `pre_write`/`increment_columns`/`pk_columns_from_metadata` 描述明确为 endpoint 行为字段。
+   - 验收（已达成）：新增 `internal/etl/server/connection_scope_test.go` 覆盖 (a) connection 含 batch_mode/pk_columns 触发 deprecation warning，(b) 纯连接 connection 不触发 warning，(c) 向后兼容 merge 仍然工作；`go test ./internal/etl/server -count=1` 全绿。（UI wizard / DAG editor 只带连接字段的产品化改动后续补；当前后端 scope collapse + deprecation 已闭环。）
+
+验收指标（本增补整体）：
+
+- 每条交付项有单测或 e2e 证据，不靠文案标注完成。
+- 新增 sink 写入模式（pre_write / increment）和 transform（map_fields / extract）进入 spec validate / preflight / descriptor / schema / 组件文档的一致性校验范围（复用 Phase 0 伪实现清理第 5 项的 `TestConnectorDescriptorsRequiredFieldsExistInSchema` / `TestMetadataRequiredFieldsExistInSchema` 护栏）。
+- 幂等/重放边界文档化：pre_write 先删后写、increment 非幂等、dependency 重算 在 spec validate / preflight 输出明确 warning。
+- Connection refactor 不破坏已保存连接的向后兼容，deprecation 路径有单测。
+- DAG 声明式加载 bug 修复后有 hot-reload 和 reload API 回归测试。
+
+10. Sink 元数据驱动列集（生成列跳过 + Debezium key PK 提取）——已实现（2026-07-02）：
+    - 现状（修复前）：MySQL/PostgreSQL sink 的 auto-create 与写入列集不感知目标表的 `VIRTUAL`/`STORED` 生成列；当用户手动建的目标表含生成列时，sink 会尝试写入并报错，无检测或跳过逻辑（`internal/etl/sink/mysql.go`、`postgres.go` 的 `ensureTablesAndColumns` 路径，全 sink 层无 `GENERATED`/`generation` 处理）。多表 CDC 同步场景下 `pk_columns` 必须逐表显式配置，无法从 Debezium 事件 key payload 自动推导，配置冗余且易错。
+    - 目标（生成列）：MySQL sink 在 schema introspection 时查询 `information_schema.columns` 过滤 `GENERATION_EXPRESSION != ''` 的列，自动从 INSERT/UPDATE 列集中剔除；PostgreSQL sink 同理按 `pg_attribute.attgenerated` 过滤。剔除行为在 preflight/schema 校验阶段日志可见，不静默丢字段。
+    - 目标（PK 提取）：MySQL/PostgreSQL sink 增加 `pk_columns_from_metadata: true`，CDC 链路下从 record metadata（Debezium key payload 已由 `debezium_cdc` transform 解析写入 `rec.Metadata.Key` 或约定字段）按当前 `Metadata.Table` 动态推导 pk_columns，省去多表逐表配置；推导失败时进入 schema-class 错误，不静默退化为无 pk 的 INSERT。
+    - 不做：不在 sink 层引入表名模板（表名动态路由已由 `debezium_cdc` 的 `target_table_template` / `table_mapping` 在 transform 层完成，sink 只按 `rec.Metadata.Table` 写入）；不引入正向 `allowed_ops` 白名单（`cdc_policy` 的 `skip_*` 已覆盖）；不引入 sink 层 `table_rewrite`（DDL 表名重写已由 transform 层映射 + sink 层 `CREATE TABLE IF NOT EXISTS` + `ddl_policy` 安全 apply 共同覆盖，分层更清晰）。
+    - 实现内容：(a) 生成列——`core.ColumnInfo` 新增 `Generated bool`；MySQL `getExistingColumnInfo` 增加 `generation_expression`/`extra` 列检测 VIRTUAL/STORED 生成列；PostgreSQL `pgGetColumnInfo` JOIN `pg_attribute.attgenerated`（旧版 PG 回退到无生成列检测）；`core.SchemaCache` 新增 `GeneratedColumns`/`SetGeneratedColumns` 缓存；MySQL/PG sink 在 Write 分组阶段按 `generatedColumnsFor(ctx, table)` 过滤 `rec.Data` 中的生成列。(b) PK 提取——MySQL sink 新增 `pkColumnsFromMetadata` 配置 + `derivePKFromMetadata`（从 `rec.Metadata.Key` JSON 对象取键名作为 pk_columns，按表缓存，推导失败回退到显式 pk_columns）。
+    - 验收（已达成）：新增 `internal/etl/sink/generated_pk_test.go` 覆盖 (a) `derivePKFromMetadata` 单列/复合列/空 key 回退/缓存命中，(b) `SchemaCache.GeneratedColumns`/`SetGeneratedColumns` 往返；`go test ./internal/etl/... -count=1`（含 `-race`）全绿。（真实 MySQL VIRTUAL/STORED 列 e2e、多表 CDC pk 自动推导 e2e 后续补；schema.go 已补 `pk_columns_from_metadata` 字段。）
+    - 验收：MySQL/PostgreSQL sink 写入含生成列的目标表不再报错，生成列被自动剔除并有日志；`pk_columns_from_metadata` 在多表 CDC 链路能自动推导 pk，推导失败进入 schema-class DLQ；新增单测覆盖生成列剔除和 PK 推导；`docs/components/sink-mysql.md` / `sink-postgres.md` 补说明。
+
+明确不做（本增补边界）：
+
+- 不实现 sink 后置钩子（`hooks.on_batch_written`）——用 dependency 调度替代。
+- 不引入通用 SQL sink / 通用 SQL planner——custom SQL 需求由 `lua`/`javascript` transform 或专用 JDBC sink 的固定模式覆盖。
+- 不引入 pipeline 模板/变量展开引擎——多表复用由 connection 引用 + endpoint 差异配置覆盖。
+- 不引入 JWT/HMAC/authorization_code 认证流程——http source 只补 oauth2_client_credentials。
+- 不把未有 e2e/fixture 证据的连接器（feishu_sheet）提升为 production maturity。
+
 ### Phase 1 收尾（v0.2.6-beta-1）：connector preflight 全面补齐与连接上下文闭环
 
 目标：把 Phase 1 残留的 preflight 缺口收齐，使全部内置 source/sink 在启动前都有静态字段级 remediation 和真实远端 reachability 检查，连接上下文闭环和 runtime safety 表单控制可用，从而让 Phase 1 可信同步底线达到可声明的收尾状态。
@@ -531,9 +639,11 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 ## 下一步清单
 
+0. 修复 DAG 声明式文件加载 bug（Phase 1 增补第 1 项）：让 `loadSpecs` 复用 `RestoreFromDB` 的 `dag:` 检测，使 DAG spec 能像线性格式一样经 `pipes/*.yaml` 自动加载和 hot-reload。
 1. 补 `odps` / `maxcompute` 真实环境证据：用真实 MaxCompute 凭据跑 Kafka ODS -> `project` / `type_convert` -> MaxCompute 分区表 e2e，补 DLQ/replay、checkpoint reset/restart、权限失败和操作文档；没有真实写入证据前保持 experimental。
 2. 完成异步 I/O 维表查询增强：为 `lookup` / `enricher` 补并发控制、in-flight 上限、超时、背压、失败分类和 metrics；需要缓存时只允许 Redis，未配置 Redis 必须 validate/preflight 阻断。
 3. 补 production candidate 链路的失败注入：优先覆盖 Kafka crash/rebalance/offset replay、Debezium 临时故障、ClickHouse/Doris/ES/S3 目标故障、DLQ replay 和 checkpoint 恢复边界。
 4. 扩展 schema/preflight 覆盖面：优先为 production candidate source/sink 补 `SchemaDescriptor` / `SchemaValidator`、DDL preview 和字段级 remediation，驱动 UI 表单和 preflight。
 5. 建立 connector certification test kit 第一版：先认证 MySQL、ClickHouse、Kafka、S3/File，maturity 必须由测试证据、descriptor、文档和实现共同约束。
 6. 补轻量运行 smoke：容器入口命令、standalone/master/worker 三形态启动、非法参数失败输出，以及升级/回滚/备份恢复 runbook 的最小自动化验证。
+7. 推进 Phase 1 增补数仓 ETL 场景闭环：按 pre_write → map_fields → dependency 重算范例 → increment → extract → feishu_sheet → http oauth2_client_credentials → connection 配置职责收束 的次序逐条交付，完成一条再开下一条。

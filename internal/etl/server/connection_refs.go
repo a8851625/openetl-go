@@ -4,11 +4,41 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/a8851625/openetl-go/internal/etl/orchestrator"
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
+
+// sinkBehaviorFields are runtime-behavior fields that should live in the
+// pipeline endpoint config, not in a saved connection. The connection catalog
+// is meant for pure connection-scope fields (host/port/user/password/database/
+// brokers/topic-base/endpoint/bucket etc.) so the same connection can be
+// reused across multiple pipelines with different write modes.
+//
+// When a saved connection still contains any of these fields we keep merging
+// them for backward compatibility but surface a deprecation warning via the
+// returned `behaviorDeprecations` list.
+var sinkBehaviorFields = map[string]bool{
+	"batch_mode":           true,
+	"pk_columns":           true,
+	"pre_write":            true,
+	"schema_drift":         true,
+	"ddl_policy":           true,
+	"retry":                true,
+	"compression":          true,
+	"increment_columns":    true,
+	"insert_chunk_size":    true,
+	"allow_mixed_cdc_non_atomic": true,
+	"version_column":       true,
+	"optimize_interval_sec": true,
+	"use_final":            true,
+	"write_mode":           true,
+	"format":               true,
+	"columns":              true,
+	"partition":            true,
+}
 
 func (s *Server) resolvePipelineConnections(ctx context.Context, spec *pipeline.Spec) error {
 	if spec == nil {
@@ -32,6 +62,35 @@ func (s *Server) resolvePipelineConnections(ctx context.Context, spec *pipeline.
 		}
 	}
 	return nil
+}
+
+// connectionDeprecationWarnings is filled by resolvePipelineConnections /
+// resolveDAGConnections when a saved connection contains behavior-scope fields
+// (batch_mode, pk_columns, pre_write, etc.). The pipeline spec validate path
+// surfaces these so users know to migrate behavior fields out of the connection
+// catalog into pipeline endpoint configs.
+type connectionDeprecationWarnings struct {
+	mu       sync.Mutex
+	warnings []string
+}
+
+func (c *connectionDeprecationWarnings) add(msg string) {
+	c.mu.Lock()
+	c.warnings = append(c.warnings, msg)
+	c.mu.Unlock()
+}
+
+func (c *connectionDeprecationWarnings) drain() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.warnings
+	c.warnings = nil
+	return out
+}
+
+// addConnectionDeprecation records a connection-catalog behavior-field warning.
+func (s *Server) addConnectionDeprecation(msg string) {
+	s.connDeprecations.add(msg)
 }
 
 func (s *Server) resolveDAGConnections(ctx context.Context, spec *orchestrator.PipelineSpec) error {
@@ -94,6 +153,17 @@ func (s *Server) resolveLinearEndpoint(ctx context.Context, kind string, typ *st
 		*typ = conn.Type
 	} else if *typ != conn.Type {
 		return fmt.Errorf("%q type %q does not match configured type %q", ref, conn.Type, *typ)
+	}
+	// Detect behavior-scope fields left in the connection catalog. We keep
+	// merging them for backward compatibility but warn the user to migrate.
+	if kind == "sink" {
+		for k := range conn.Config {
+			if sinkBehaviorFields[k] {
+				s.addConnectionDeprecation(fmt.Sprintf(
+					"connection %q (type %s) carries behavior field %q; move it into the pipeline sink config so the connection stays pure connection-scope and reusable. The field is still merged for backward compatibility.",
+					ref, conn.Type, k))
+			}
+		}
 	}
 	*cfg = mergeConnectionConfig(conn, *cfg)
 	return nil

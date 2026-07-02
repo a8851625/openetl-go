@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
@@ -38,11 +39,22 @@ type HTTPSource struct {
 	authToken   string
 	authUser    string
 	authPass    string
+	// OAuth2 client_credentials
+	oauth2TokenURL    string
+	oauth2ClientID    string
+	oauth2ClientSecret string
+	oauth2TokenField  string
+	oauth2HeaderFmt   string
+	oauth2Scopes      string
 	client      *http.Client
 	maxRetries  int
 	retryBaseMs int
 	shardIndex  int
 	shardTotal  int
+	// cached OAuth2 token (managed by the reader on demand)
+	tokenMu     sync.Mutex
+	accessToken string
+	tokenExpiry time.Time
 }
 
 func NewHTTPSource(config map[string]any) (*HTTPSource, error) {
@@ -137,6 +149,36 @@ func NewHTTPSource(config map[string]any) (*HTTPSource, error) {
 			s.authPass = vs
 		}
 	}
+	// OAuth2 client_credentials fields
+	if v, ok := config["oauth2_token_url"]; ok {
+		s.oauth2TokenURL, _ = v.(string)
+	}
+	if v, ok := config["oauth2_client_id"]; ok {
+		s.oauth2ClientID, _ = v.(string)
+	}
+	if v, ok := config["oauth2_client_secret"]; ok {
+		s.oauth2ClientSecret, _ = v.(string)
+	}
+	if v, ok := config["oauth2_token_field"]; ok {
+		s.oauth2TokenField, _ = v.(string)
+	}
+	if v, ok := config["oauth2_header_format"]; ok {
+		s.oauth2HeaderFmt, _ = v.(string)
+	}
+	if v, ok := config["oauth2_scopes"]; ok {
+		s.oauth2Scopes, _ = v.(string)
+	}
+	if s.oauth2TokenField == "" {
+		s.oauth2TokenField = "access_token"
+	}
+	if s.oauth2HeaderFmt == "" {
+		s.oauth2HeaderFmt = "Bearer %s"
+	}
+	if s.authType == "oauth2_client_credentials" {
+		if s.oauth2TokenURL == "" || s.oauth2ClientID == "" || s.oauth2ClientSecret == "" {
+			return nil, fmt.Errorf("http source auth_type=oauth2_client_credentials requires oauth2_token_url, oauth2_client_id, oauth2_client_secret")
+		}
+	}
 	if v, ok := config["max_retries"]; ok {
 		switch mr := v.(type) {
 		case int:
@@ -158,6 +200,72 @@ func NewHTTPSource(config map[string]any) (*HTTPSource, error) {
 }
 
 func (s *HTTPSource) Name() string { return s.name }
+
+// fetchOAuth2Token implements the OAuth2 client_credentials grant:
+// POST {token_url} with form body grant_type=client_credentials&scope=...&client_id=...&client_secret=...
+// Parses the configured `oauth2_token_field` (default access_token) and
+// `expires_in` for proactive refresh.
+func (s *HTTPSource) fetchOAuth2Token(ctx context.Context) error {
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	if s.oauth2Scopes != "" {
+		form.Set("scope", s.oauth2Scopes)
+	}
+	form.Set("client_id", s.oauth2ClientID)
+	form.Set("client_secret", s.oauth2ClientSecret)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.oauth2TokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("create token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("oauth2 token fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("oauth2 token HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return fmt.Errorf("oauth2 token decode: %w", err)
+	}
+	if errStr, ok := parsed["error"].(string); ok && errStr != "" {
+		desc, _ := parsed["error_description"].(string)
+		return fmt.Errorf("oauth2 token error: %s %s", errStr, desc)
+	}
+	token, _ := parsed[s.oauth2TokenField].(string)
+	if token == "" {
+		return fmt.Errorf("oauth2 token: field %q missing in response", s.oauth2TokenField)
+	}
+	expiry := time.Now().Add(time.Hour)
+	if expIn, ok := parsed["expires_in"].(float64); ok && expIn > 0 {
+		expiry = time.Now().Add(time.Duration(expIn)*time.Second - 60*time.Second)
+	}
+	s.tokenMu.Lock()
+	s.accessToken = token
+	s.tokenExpiry = expiry
+	s.tokenMu.Unlock()
+	return nil
+}
+
+// ensureOAuth2Token returns a valid token, refreshing when missing or close to expiry.
+func (s *HTTPSource) ensureOAuth2Token(ctx context.Context) (string, error) {
+	s.tokenMu.Lock()
+	if s.accessToken != "" && time.Now().Before(s.tokenExpiry) {
+		tok := s.accessToken
+		s.tokenMu.Unlock()
+		return tok, nil
+	}
+	s.tokenMu.Unlock()
+	if err := s.fetchOAuth2Token(ctx); err != nil {
+		return "", err
+	}
+	s.tokenMu.Lock()
+	defer s.tokenMu.Unlock()
+	return s.accessToken, nil
+}
 
 func (s *HTTPSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
 	reader := &httpReader{
@@ -326,6 +434,12 @@ func (r *httpReader) doRequest(ctx context.Context, requestURL string) ([]any, b
 		if r.source.authUser != "" {
 			req.SetBasicAuth(r.source.authUser, r.source.authPass)
 		}
+	case "oauth2_client_credentials":
+		tok, err := r.source.ensureOAuth2Token(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf("oauth2 token: %w", err)
+		}
+		req.Header.Set("Authorization", fmt.Sprintf(r.source.oauth2HeaderFmt, tok))
 	}
 
 	resp, err := r.source.client.Do(req)

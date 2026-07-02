@@ -120,6 +120,46 @@ sink:
 
 The saved connection supplies `kind`, `type`, and base `config`. The pipeline endpoint must use a connection with the matching kind (`source`, `sink`, or `transform`). Inline `config` wins over saved config, so shared credentials can live in the catalog while per-pipeline fields such as `table`, `topic`, or `query` remain in the spec.
 
+### Post-Commit Trigger (dependency schedule)
+
+For the common warehouse pattern "after CDC lands into ODS, recompute an aggregate table", use `schedule.type: dependency`. The downstream pipeline is triggered once each time the upstream pipeline completes a run.
+
+```yaml
+# 1) Upstream: CDC continuously lands rows into MySQL ODS
+name: cdc-orders-to-ods
+source:
+  type: mysql_cdc
+  config: {host: mysql, user: sync, password: "${MYSQL_PASSWORD}", database: src, server_id: 100}
+sink:
+  type: mysql
+  config: {host: mysql, user: sync, password: "${MYSQL_PASSWORD}", database: ods, table: orders, batch_mode: upsert, pk_columns: [id]}
+schedule: {type: streaming}
+
+# 2) Downstream: recompute daily issue_count whenever the upstream CDC run finishes
+name: recompute-issue-count
+source:
+  type: mysql_batch
+  config: {host: mysql, user: sync, password: "${MYSQL_PASSWORD}", database: ods, table: orders, query: "SELECT dt, COUNT(*) AS issue_count FROM orders GROUP BY dt"}
+sink:
+  type: mysql
+  config:
+    host: mysql
+    user: sync
+    password: "${MYSQL_PASSWORD}"
+    database: dws
+    table: issue_count_daily
+    batch_mode: upsert
+    pk_columns: [dt]
+    pre_write: {action: delete, condition: "dt IN (SELECT DISTINCT dt FROM ods.orders WHERE updated_at >= NOW() - INTERVAL 1 DAY)"}
+schedule:
+  type: dependency
+  depends_on: [cdc-orders-to-ods]
+```
+
+Notes:
+- The downstream re-computation runs every time the upstream finishes a run, so the downstream sink MUST be idempotent — `batch_mode: upsert` with stable `pk_columns`, or `pre_write: {action: delete, condition: ...}` to scope a delete-then-rewrite. `spec validate` warns when a dependency-scheduled pipeline targets an append-only sink (kafka/file/s3) or a relational sink in non-upsert mode.
+- This scheme replaces sink-side post-commit hooks (`hooks.on_batch_written`); the pipeline model stays single-direction `source -> transform -> sink`.
+
 ## Sources
 
 ### `file`

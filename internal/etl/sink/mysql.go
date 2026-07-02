@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -31,7 +33,15 @@ type MySQLSink struct {
 	database  string
 	table     string
 	pkColumns []string
+	// pkColumnsFromMetadata enables deriving pk_columns per-table from record
+	// metadata (Debezium key payload in Metadata.Key). Used in multi-table CDC
+	// sync to avoid configuring pk_columns for each table manually.
+	pkColumnsFromMetadata bool
 	batchMode string
+	// incrementColumns maps target column -> source field for batch_mode=increment.
+	// Each entry generates `col = IFNULL(col, 0) + VALUES(col)` in the
+	// ON DUPLICATE KEY UPDATE clause.
+	incrementColumns map[string]string
 	db        *sql.DB
 	// insertChunkSize controls how many rows are placed into a single
 	// INSERT statement. MySQL has a max_allowed_packet limit (default 4MB)
@@ -47,6 +57,7 @@ type MySQLSink struct {
 	tlsSkipVerify bool
 	// schemaCache avoids repeated information_schema queries.
 	schemaCache  *core.SchemaCache
+	preWrite     *PreWriteConfig
 	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
@@ -84,8 +95,20 @@ func NewMySQLSink(config map[string]any) (*MySQLSink, error) {
 		s.table = v.(string)
 	}
 	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
+	if v, ok := config["pk_columns_from_metadata"]; ok {
+		if b, ok := v.(bool); ok {
+			s.pkColumnsFromMetadata = b
+		}
+	}
 	if v, ok := config["batch_mode"]; ok {
 		s.batchMode = v.(string)
+	}
+	if inc, ok := config["increment_columns"]; ok {
+		s.incrementColumns = stringMapConfig(config, "increment_columns")
+		_ = inc
+	}
+	if s.batchMode == "increment" && len(s.incrementColumns) == 0 {
+		return nil, fmt.Errorf("mysql sink batch_mode=increment requires non-empty increment_columns (target_col -> source_field)")
 	}
 	if v, ok := config["insert_chunk_size"]; ok {
 		switch cs := v.(type) {
@@ -129,11 +152,30 @@ func NewMySQLSink(config map[string]any) (*MySQLSink, error) {
 			s.tlsSkipVerify = b
 		}
 	}
+	pw, err := ParsePreWriteConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	s.preWrite = pw
 	s.schemaCache = core.NewSchemaCache()
 	return s, nil
 }
 
 func (s *MySQLSink) Name() string { return s.name }
+
+// quotedFQTN returns the fully-qualified, quoted table name for pre_write
+// statements. When the table carries a schema/db prefix it is split and each
+// part is quoted independently.
+func (s *MySQLSink) quotedFQTN(table string) string {
+	parts := strings.SplitN(table, ".", 2)
+	if len(parts) == 2 {
+		return quoteIdentMySQL(parts[0]) + "." + quoteIdentMySQL(parts[1])
+	}
+	if s.database != "" {
+		return quoteIdentMySQL(s.database) + "." + quoteIdentMySQL(table)
+	}
+	return quoteIdentMySQL(table)
+}
 
 // SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
 func (s *MySQLSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
@@ -237,10 +279,36 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 		}
 	}()
 
+	// Execute pre-write action (DELETE/TRUNCATE) before inserting the batch.
+	// This runs inside the same transaction so a later insert failure rolls
+	// back the pre_write too.
+	if s.preWrite.Enabled() {
+		targetTable := s.table
+		if targetTable == "" {
+			// best-effort: use first record's table
+			for _, rec := range records {
+				if rec.Metadata.Table != "" {
+					targetTable = rec.Metadata.Table
+					break
+				}
+			}
+		}
+		if targetTable != "" {
+			if err := s.preWrite.ExecSQL(ctx, tx, s.quotedFQTN(targetTable)); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Compact the batch so multiple events on the same (table, PK) collapse to
 	// the final operation in source order. Without this, grouping by op kind
 	// would reorder DELETE(pk=1)→INSERT(pk=1) into INSERT→DELETE.
 	records = CompactRecordsByPK(records, func(table string) []string {
+		if s.pkColumnsFromMetadata {
+			if pk := s.derivePKFromMetadata(table, records); len(pk) > 0 {
+				return pk
+			}
+		}
 		if len(s.pkColumns) > 0 {
 			return s.pkColumns
 		}
@@ -268,9 +336,14 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 		if rec.Metadata.Table != "" {
 			tableName = rec.Metadata.Table
 		}
+		// Skip GENERATED columns (VIRTUAL/STORED) — they cannot be written.
+		genSet := s.generatedColumnsFor(ctx, tableName)
 		// Sort column names for a deterministic signature.
 		cols := make([]string, 0, len(rec.Data))
 		for k := range rec.Data {
+			if genSet[k] {
+				continue
+			}
 			cols = append(cols, k)
 		}
 		sort.Strings(cols)
@@ -304,11 +377,15 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 		g := groups[key]
 		if len(g.rows) > 0 {
 			mode := s.batchMode
-			// If any op is Update we must use upsert.
-			for _, op := range g.ops {
-				if op == core.OpUpdate {
-					mode = "upsert"
-					break
+			// If any op is Update we must use upsert, unless mode is increment
+			// (increment is intentionally additive and overrides Update handling
+			// for batch accumulator use cases).
+			if mode != "increment" {
+				for _, op := range g.ops {
+					if op == core.OpUpdate {
+						mode = "upsert"
+						break
+					}
 				}
 			}
 			if err := s.batchInsert(ctx, tx, key.table, g.cols, g.rows, mode); err != nil {
@@ -400,7 +477,7 @@ func (s *MySQLSink) buildBatchInsertStatement(table string, cols []string, rowCo
 	qTable := quoteIdentMySQL(table)
 
 	var b strings.Builder
-	if mode == "upsert" {
+	if mode == "upsert" || mode == "increment" {
 		b.WriteString("INSERT INTO ")
 		b.WriteString(qTable)
 		b.WriteString(" (")
@@ -421,6 +498,38 @@ func (s *MySQLSink) buildBatchInsertStatement(table string, cols []string, rowCo
 		updates := make([]string, len(cols))
 		for i, c := range quotedCols {
 			updates[i] = c + "=VALUES(" + c + ")"
+		}
+		b.WriteString(strings.Join(updates, ","))
+	} else if mode == "increment" {
+		b.WriteString(" ON DUPLICATE KEY UPDATE ")
+		// Increment columns: target_col = IFNULL(target_col, 0) + VALUES(source_field_col).
+		// All other non-PK columns are updated to VALUES(col); PK columns are
+		// excluded from the update clause (they identify the row).
+		pkSet := map[string]bool{}
+		for _, pk := range s.pkColumns {
+			pkSet[pk] = true
+		}
+		var updates []string
+		// increment columns first (referenced by source-field column alias)
+		for targetCol, sourceField := range s.incrementColumns {
+			src := sourceField
+			if src == "" {
+				src = targetCol
+			}
+			srcQuoted := quoteIdentMySQL(src)
+			tgtQuoted := quoteIdentMySQL(targetCol)
+			updates = append(updates, tgtQuoted+"=IFNULL("+tgtQuoted+",0)+VALUES("+srcQuoted+")")
+		}
+		// remaining non-PK, non-increment columns: update to VALUES(col)
+		for _, c := range quotedCols {
+			rawName := strings.Trim(c, "`")
+			if pkSet[rawName] {
+				continue
+			}
+			if _, isInc := s.incrementColumns[rawName]; isInc {
+				continue
+			}
+			updates = append(updates, c+"=VALUES("+c+")")
 		}
 		b.WriteString(strings.Join(updates, ","))
 	}
@@ -594,7 +703,7 @@ func (s *MySQLSink) getExistingColumns(ctx context.Context, table string) (map[s
 
 func (s *MySQLSink) getExistingColumnInfo(ctx context.Context, table string) ([]core.ColumnInfo, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT column_name, column_type, is_nullable FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position`,
+		`SELECT column_name, column_type, is_nullable, COALESCE(generation_expression, ''), extra FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position`,
 		s.database, table,
 	)
 	if err != nil {
@@ -603,16 +712,87 @@ func (s *MySQLSink) getExistingColumnInfo(ctx context.Context, table string) ([]
 	defer rows.Close()
 	var cols []core.ColumnInfo
 	for rows.Next() {
-		var name, dataType, nullable string
-		if err := rows.Scan(&name, &dataType, &nullable); err != nil {
+		var name, dataType, nullable, genExpr, extra string
+		if err := rows.Scan(&name, &dataType, &nullable, &genExpr, &extra); err != nil {
 			return nil, err
 		}
-		cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES")})
+		generated := genExpr != "" || strings.Contains(strings.ToUpper(extra), "GENERATED")
+		cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES"), Generated: generated})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return cols, nil
+}
+
+// generatedColumnsFor returns the set of GENERATED (VIRTUAL/STORED) column
+// names for the target table, cached per table for the lifetime of the sink.
+// Generated columns cannot be written to and must be excluded from INSERT/UPDATE
+// column sets. The cache is best-effort: on introspection error an empty set is
+// returned so the write attempt surfaces the real DB error rather than blocking.
+func (s *MySQLSink) generatedColumnsFor(ctx context.Context, table string) map[string]bool {
+	if cached, ok := s.schemaCache.GeneratedColumns(s.database + "." + table); ok {
+		return cached
+	}
+	cols, err := s.getExistingColumnInfo(ctx, table)
+	if err != nil {
+		return map[string]bool{}
+	}
+	genSet := map[string]bool{}
+	for _, c := range cols {
+		if c.Generated {
+			genSet[c.Name] = true
+		}
+	}
+	s.schemaCache.SetGeneratedColumns(s.database+"."+table, genSet)
+	return genSet
+}
+
+// pkFromMetadataCache caches per-table pk_columns derived from Debezium key payloads.
+// Key format expected in rec.Metadata.Key: JSON object like {"id": 123} or
+// {"tenant_id": "x", "seq": 5}. The field names become the pk_columns.
+type pkMetadataCache struct {
+	mu   sync.Mutex
+	pkBy map[string][]string // table -> pk columns
+}
+
+var pkMetaCache = &pkMetadataCache{pkBy: map[string][]string{}}
+
+// derivePKFromMetadata extracts pk_columns for the given table from the first
+// record whose Metadata.Key is a JSON object. Cached per table. Returns nil
+// when no usable key is found (caller falls back to configured pk_columns).
+func (s *MySQLSink) derivePKFromMetadata(table string, records []core.Record) []string {
+	pkMetaCache.mu.Lock()
+	if cached, ok := pkMetaCache.pkBy[table]; ok {
+		pkMetaCache.mu.Unlock()
+		return cached
+	}
+	pkMetaCache.mu.Unlock()
+	for _, rec := range records {
+		if rec.Metadata.Table != table && rec.Metadata.Table != "" {
+			continue
+		}
+		if rec.Metadata.Key == "" {
+			continue
+		}
+		var keyObj map[string]any
+		if err := json.Unmarshal([]byte(rec.Metadata.Key), &keyObj); err != nil {
+			continue
+		}
+		if len(keyObj) == 0 {
+			continue
+		}
+		pk := make([]string, 0, len(keyObj))
+		for k := range keyObj {
+			pk = append(pk, k)
+		}
+		sort.Strings(pk)
+		pkMetaCache.mu.Lock()
+		pkMetaCache.pkBy[table] = pk
+		pkMetaCache.mu.Unlock()
+		return pk
+	}
+	return nil
 }
 
 // createTableFromFields creates a target table with columns inferred from

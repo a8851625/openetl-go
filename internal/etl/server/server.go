@@ -70,6 +70,9 @@ type Server struct {
 	dlqTTL         time.Duration
 	dlqMaxCount    int
 	schemaRegistry *SchemaRegistry
+	// connDeprecations collects behavior-field deprecation warnings emitted
+	// by resolveLinearEndpoint during a single spec validate/load pass.
+	connDeprecations connectionDeprecationWarnings
 }
 
 var errDAGDLQReplayUnsupported = errors.New("dag dlq replay unsupported")
@@ -528,6 +531,70 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 		}
 
 		specPath := filepath.Join(s.specsDir, entry.Name())
+		yamlBytes, rErr := os.ReadFile(specPath)
+		if rErr != nil {
+			result.Errors[entry.Name()] = rErr.Error()
+			g.Log().Warningf(ctx, "Skip spec %s: %v", entry.Name(), rErr)
+			continue
+		}
+
+		// Detect format: DAG specs have a "dag:" top-level key (same logic as RestoreFromDB).
+		var detect struct {
+			DAG *struct{} `yaml:"dag"`
+		}
+		if err := yaml.Unmarshal(yamlBytes, &detect); err == nil && detect.DAG != nil {
+			// DAG format
+			var dagSpec orchestrator.PipelineSpec
+			if err := yaml.Unmarshal(yamlBytes, &dagSpec); err != nil {
+				result.Errors[entry.Name()] = err.Error()
+				g.Log().Warningf(ctx, "Skip spec %s: dag yaml parse error: %v", entry.Name(), err)
+				continue
+			}
+			displayName := pipelineDisplayName(nil, &dagSpec, entry.Name())
+			if err := s.resolveDAGConnections(ctx, &dagSpec); err != nil {
+				result.Errors[entry.Name()] = err.Error()
+				g.Log().Warningf(ctx, "Skip spec %s: %v", entry.Name(), err)
+				continue
+			}
+			if firstFile, ok := seen[displayName]; ok {
+				result.Skipped[entry.Name()] = fmt.Sprintf("duplicate pipeline %s; first defined in %s", displayName, firstFile)
+				g.Log().Warningf(ctx, "Skip duplicate pipeline %s in %s; first defined in %s", displayName, entry.Name(), firstFile)
+				continue
+			}
+			seen[displayName] = entry.Name()
+
+			s.mu.RLock()
+			refs := s.pipelineNameRefs[displayName]
+			exists := len(refs) > 0
+			s.mu.RUnlock()
+			if skipExisting && exists {
+				result.Skipped[entry.Name()] = fmt.Sprintf("pipeline %s already loaded", displayName)
+				continue
+			}
+
+			id := newPipelineInstanceID()
+			runtime := runtimeDAGSpec(&dagSpec, id)
+			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
+			if err != nil {
+				result.Errors[entry.Name()] = err.Error()
+				g.Log().Warningf(ctx, "Skip pipeline %s: %v", displayName, err)
+				continue
+			}
+			runner := orchestrator.NewDAGRunnerWrapper(exec)
+
+			// Persist spec to storage (best-effort)
+			_ = s.specStore.SaveWithID(ctx, id, displayName, string(yamlBytes), "loaded")
+
+			s.mu.Lock()
+			s.registerPipelineLocked(id, displayName, runner, nil, &dagSpec)
+			s.mu.Unlock()
+
+			result.Loaded = append(result.Loaded, id)
+			g.Log().Infof(ctx, "Loaded DAG pipeline: %s (%s)", displayName, id)
+			continue
+		}
+
+		// Linear format
 		spec, err := pipeline.LoadSpec(specPath)
 		if err != nil {
 			result.Errors[entry.Name()] = err.Error()
@@ -640,6 +707,11 @@ func (s *Server) StartAll(ctx context.Context) error {
 			}
 			_ = s.store.UpdatePipelineStatus(bg, id, status)
 			_ = s.store.RecordRunEnd(bg, runID, status, stats.RecordsRead, stats.RecordsWritten, stats.RecordsFailed, stats.RecordsDLQ, dur.Milliseconds())
+			// Fire dependency-scheduled downstream pipelines once this
+			// streaming/once upstream finishes (Post-Commit Trigger, scheme A).
+			if s.scheduler != nil {
+				s.scheduler.NotifyDependents(id)
+			}
 		}()
 	}
 
@@ -1111,6 +1183,9 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 
 	parallelismWarnings := pipeline.ValidateParallelism(&spec)
 	warnings = append(warnings, parallelismWarnings...)
+
+	// Connection-catalog behavior-field deprecation warnings (scope collapse).
+	warnings = append(warnings, s.connDeprecations.drain()...)
 
 	// Worker selector: if match_labels is set, the pipeline can only run on
 	// workers whose registered Labels match. Warn so users know to register
@@ -3512,6 +3587,7 @@ func pluginMetadata() map[string]any {
 			"kafka":              pluginInfo([]string{"brokers", "topic"}, []string{"stream", "checkpoint"}, "production"),
 			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot", "checkpoint"}, "beta"),
 			"redis":              pluginInfo([]string{"host", "port"}, []string{"stream", "checkpoint"}, "experimental"),
+			"feishu_sheet":       pluginInfo([]string{"app_id", "app_secret", "spreadsheet_token"}, []string{"batch", "oauth2_client_credentials", "scheduled_pull"}, "beta"),
 		},
 		"sinks": map[string]any{
 			"file_sink":     pluginInfo([]string{"output_dir", "format"}, []string{"batch", "local_file"}, "production"),
@@ -3535,6 +3611,8 @@ func pluginMetadata() map[string]any {
 			"rename":             pluginInfo([]string{"mappings"}, []string{"schema_mapping"}, "production"),
 			"drop_field":         pluginInfo([]string{"fields"}, []string{"projection"}, "production"),
 			"add_field":          pluginInfo([]string{"field", "value"}, []string{"enrichment"}, "production"),
+			"map_fields":         pluginInfo([]string{"fields"}, []string{"dictionary_mapping"}, "production"),
+			"extract":            pluginInfo([]string{"rules"}, []string{"field_extraction", "template_concat"}, "production"),
 			"project":            pluginInfo(nil, []string{"projection", "schema_mapping", "constant_fields", "time_format"}, "beta"),
 			"select_fields":      pluginInfo(nil, []string{"projection", "schema_mapping", "constant_fields", "time_format"}, "beta"),
 			"type_convert":       pluginInfo([]string{"conversions"}, []string{"type_mapping"}, "production"),

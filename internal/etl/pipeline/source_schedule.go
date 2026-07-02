@@ -36,6 +36,8 @@ var sourceScheduleCapabilities = map[string]SourceScheduleCapability{
 	// keep scheduling conservative until streaming/keyspace notifications exist.
 	"redis": {SupportedSchedules: []string{ScheduleOnce}, DefaultSchedule: ScheduleOnce},
 	"demo":  {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic}, DefaultSchedule: ScheduleOnce},
+	// feishu_sheet is a batch pull source; use periodic for refresh.
+	"feishu_sheet": {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic, ScheduleDependency}, DefaultSchedule: ScheduleOnce},
 }
 
 // SourceScheduleCapabilityFor returns the schedule capability for a source.

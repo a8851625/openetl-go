@@ -7,6 +7,7 @@ Write records into MySQL with insert or upsert batch modes.
 - `host`, `user`, `database`, `table`: required target fields.
 - `port`, `password`, `tls`: connection fields.
 - `batch_mode`, `pk_columns`, `auto_create`, `schema_drift`, `ddl_policy`: idempotency and schema controls.
+- `pre_write`: optional pre-write action block `{action, condition, params}`. Runs inside the batch transaction before inserts. `action`: `delete` (requires `condition`), `truncate`, or `truncate_partition` (requires `condition`). Idempotent for batch (delete-then-rewrite on checkpoint reset), dangerous for CDC/streaming — preflight flags truncate/truncate_partition on CDC sources as error-level.
 
 ## Record Shape
 Writes record `data` columns. CDC delete/update behavior depends on operation and sink mode.

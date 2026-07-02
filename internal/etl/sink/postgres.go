@@ -36,12 +36,14 @@ type PostgresSink struct {
 	sslmode         string
 	pkColumns       []string
 	batchMode       string
+	incrementColumns map[string]string
 	pool            *pgxpool.Pool
 	insertChunkSize int
 	autoCreate      bool
 	schemaDrift     string
 	ddLPolicy       DDLPolicy
 	schemaCache     *core.SchemaCache
+	preWrite        *PreWriteConfig
 	sinkCounters    // P4-20: per-sink write metrics (SK-4)
 }
 
@@ -92,6 +94,13 @@ func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
 	if v, ok := config["batch_mode"]; ok {
 		s.batchMode = v.(string)
 	}
+	if v, ok := config["increment_columns"]; ok {
+		s.incrementColumns = stringMapConfig(config, "increment_columns")
+		_ = v
+	}
+	if s.batchMode == "increment" && len(s.incrementColumns) == 0 {
+		return nil, fmt.Errorf("postgres sink batch_mode=increment requires non-empty increment_columns (target_col -> source_field)")
+	}
 	if v, ok := config["insert_chunk_size"]; ok {
 		switch cs := v.(type) {
 		case int:
@@ -124,11 +133,29 @@ func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
 	if s.ddLPolicy == "" {
 		s.ddLPolicy = DDLPolicyReject
 	}
+	pw, err := ParsePreWriteConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	s.preWrite = pw
 	s.schemaCache = core.NewSchemaCache()
 	return s, nil
 }
 
 func (s *PostgresSink) Name() string { return s.name }
+
+// quotedFQTNPg returns the fully-qualified, PostgreSQL-quoted table name for
+// pre_write statements.
+func (s *PostgresSink) quotedFQTNPg(table string) string {
+	parts := strings.SplitN(table, ".", 2)
+	if len(parts) == 2 {
+		return quoteIdentPg(parts[0]) + "." + quoteIdentPg(parts[1])
+	}
+	if s.schema != "" {
+		return quoteIdentPg(s.schema) + "." + quoteIdentPg(table)
+	}
+	return quoteIdentPg(table)
+}
 
 // SinkMetrics implements core.SinkMetricsProvider (P4-20, SK-4).
 func (s *PostgresSink) SinkMetrics() core.SinkMetrics { return s.metricsFor(s.name) }
@@ -229,6 +256,27 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 		}
 	}()
 
+	// Execute pre-write action (DELETE/TRUNCATE) before inserting the batch.
+	if s.preWrite.Enabled() {
+		targetTable := s.table
+		if targetTable == "" {
+			for _, rec := range records {
+				if rec.Metadata.Table != "" {
+					targetTable = rec.Metadata.Table
+					break
+				}
+			}
+		}
+		if targetTable != "" {
+			if err := s.preWrite.ExecPgx(ctx, func(ctx context.Context, stmt string, _ ...any) error {
+				_, e := tx.Exec(ctx, stmt)
+				return e
+			}, s.quotedFQTNPg(targetTable)); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Compact by (table, PK) in source order to preserve CDC semantics.
 	records = CompactRecordsByPK(records, func(table string) []string {
 		if len(s.pkColumns) > 0 {
@@ -256,7 +304,15 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 		if rec.Metadata.Table != "" {
 			tableName = rec.Metadata.Table
 		}
-		cols := sortedKeys(rec.Data)
+		// Skip GENERATED columns — they cannot be written.
+		genSet := s.generatedColumnsFor(ctx, tableName)
+		var cols []string
+		for _, k := range sortedKeys(rec.Data) {
+			if genSet[k] {
+				continue
+			}
+			cols = append(cols, k)
+		}
 		key := groupKey{table: tableName, cols: strings.Join(cols, ",")}
 
 		g, ok := groups[key]
@@ -376,6 +432,36 @@ func (s *PostgresSink) batchInsert(ctx context.Context, tx pgx.Tx, table string,
 				if !pkSet[k] {
 					updates = append(updates, fmt.Sprintf("%s = EXCLUDED.%s", pgQuote(k), pgQuote(k)))
 				}
+			}
+			if len(updates) == 0 {
+				b.WriteString(" ON CONFLICT (")
+				b.WriteString(strings.Join(conflictCols, ", "))
+				b.WriteString(") DO NOTHING")
+			} else {
+				b.WriteString(" ON CONFLICT (")
+				b.WriteString(strings.Join(conflictCols, ", "))
+				b.WriteString(") DO UPDATE SET ")
+				b.WriteString(strings.Join(updates, ", "))
+			}
+		} else if mode == "increment" {
+			// Increment mode: target_col = COALESCE(target_col, 0) + EXCLUDED.source_field
+			var updates []string
+			for targetCol, sourceField := range s.incrementColumns {
+				src := sourceField
+				if src == "" {
+					src = targetCol
+				}
+				updates = append(updates, fmt.Sprintf("%s = COALESCE(%s, 0) + EXCLUDED.%s", pgQuote(targetCol), pgQuote(targetCol), pgQuote(src)))
+			}
+			// Non-PK, non-increment columns still update to EXCLUDED values.
+			for _, k := range cols {
+				if pkSet[k] {
+					continue
+				}
+				if _, isInc := s.incrementColumns[k]; isInc {
+					continue
+				}
+				updates = append(updates, fmt.Sprintf("%s = EXCLUDED.%s", pgQuote(k), pgQuote(k)))
 			}
 			if len(updates) == 0 {
 				b.WriteString(" ON CONFLICT (")
@@ -585,25 +671,70 @@ func (s *PostgresSink) pgGetColumns(ctx context.Context, table string) (map[stri
 
 func (s *PostgresSink) pgGetColumnInfo(ctx context.Context, table string) ([]core.ColumnInfo, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
+		`SELECT c.column_name, c.data_type, c.is_nullable,
+		        COALESCE(a.attgenerated, '') AS attgenerated
+		 FROM information_schema.columns c
+		 JOIN pg_attribute a ON a.attrelid = (quote_ident($1)||'.'||quote_ident($2))::regclass AND a.attname = c.column_name
+		 WHERE c.table_schema = $1 AND c.table_name = $2
+		 ORDER BY c.ordinal_position`,
 		s.schema, table,
 	)
 	if err != nil {
-		return nil, err
+		// Fallback for older PostgreSQL / permission issues: skip generated detection.
+		rows, ferr := s.pool.Query(ctx,
+			`SELECT column_name, data_type, is_nullable, '' AS attgenerated FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
+			s.schema, table,
+		)
+		if ferr != nil {
+			return nil, ferr
+		}
+		defer rows.Close()
+		var cols []core.ColumnInfo
+		for rows.Next() {
+			var name, dataType, nullable, gen string
+			if err := rows.Scan(&name, &dataType, &nullable, &gen); err != nil {
+				return nil, err
+			}
+			cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES"), Generated: gen != ""})
+		}
+		return cols, rows.Err()
 	}
 	defer rows.Close()
 	var cols []core.ColumnInfo
 	for rows.Next() {
-		var name, dataType, nullable string
-		if err := rows.Scan(&name, &dataType, &nullable); err != nil {
+		var name, dataType, nullable, gen string
+		if err := rows.Scan(&name, &dataType, &nullable, &gen); err != nil {
 			return nil, err
 		}
-		cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES")})
+		cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES"), Generated: gen != ""})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return cols, nil
+}
+
+// generatedColumnsFor returns the set of GENERATED column names for the target
+// table, cached per table for the sink lifetime. Generated columns cannot be
+// written and must be excluded from INSERT/UPDATE column sets. Best-effort: on
+// introspection error an empty set is returned so the write surfaces the DB error.
+func (s *PostgresSink) generatedColumnsFor(ctx context.Context, table string) map[string]bool {
+	tableKey := s.schema + "." + table
+	if cached, ok := s.schemaCache.GeneratedColumns(tableKey); ok {
+		return cached
+	}
+	cols, err := s.pgGetColumnInfo(ctx, table)
+	if err != nil {
+		return map[string]bool{}
+	}
+	genSet := map[string]bool{}
+	for _, c := range cols {
+		if c.Generated {
+			genSet[c.Name] = true
+		}
+	}
+	s.schemaCache.SetGeneratedColumns(tableKey, genSet)
+	return genSet
 }
 
 func (s *PostgresSink) pgCreateTable(ctx context.Context, table string, columns []string, fieldValues map[string]any) error {

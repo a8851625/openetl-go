@@ -166,3 +166,49 @@ func TestStartAllPeriodicScheduleTriggersRunner(t *testing.T) {
 		}
 	}
 }
+
+func TestStartAllDependencyTriggerFiresDownstream(t *testing.T) {
+	s := newSchedulerTestServer(t)
+
+	upstream := newTestScheduledRunner()
+	upstreamSpec := &pipeline.Spec{
+		Name: "dep-upstream",
+		Source: pipeline.SourceSpec{Type: "file", Config: map[string]any{"path": "u.jsonl", "format": "json"}},
+		Sink:   pipeline.SinkSpec{Type: "file_sink", Config: map[string]any{"output_dir": "./out", "format": "jsonl"}},
+	}
+	s.mu.Lock()
+	s.registerPipelineLocked("pipe-upstream", upstreamSpec.Name, upstream, upstreamSpec, nil)
+	s.mu.Unlock()
+	if err := s.store.SavePipeline(context.Background(), &storage.PipelineRow{ID: "pipe-upstream", Name: upstreamSpec.Name, SpecYAML: "name: dep-upstream", Status: "created"}); err != nil {
+		t.Fatalf("SavePipeline: %v", err)
+	}
+
+	downstream := newTestScheduledRunner()
+	downstreamSpec := &pipeline.Spec{
+		Name: "dep-downstream",
+		Schedule: &pipeline.ScheduleConfig{Type: "dependency", DependsOn: []string{"pipe-upstream"}},
+		Source: pipeline.SourceSpec{Type: "file", Config: map[string]any{"path": "d.jsonl", "format": "json"}},
+		Sink:   pipeline.SinkSpec{Type: "file_sink", Config: map[string]any{"output_dir": "./out", "format": "jsonl"}},
+	}
+	s.mu.Lock()
+	s.registerPipelineLocked("pipe-downstream", downstreamSpec.Name, downstream, downstreamSpec, nil)
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.StartAll(ctx); err != nil {
+		t.Fatalf("StartAll: %v", err)
+	}
+	t.Cleanup(func() { s.StopAll() })
+
+	deadline := time.After(3 * time.Second)
+	for downstream.starts.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatalf("dependency schedule did not trigger downstream within 3s (starts=%d)", downstream.starts.Load())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+
