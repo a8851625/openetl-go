@@ -204,7 +204,7 @@ func (s *Server) SetDistributed(b bool) { s.distributed = b }
 // pipelines use NewDistributedPipeline so shards execute on workers; everything
 // else (single-shard specs, standalone role) uses inline NewPipeline unchanged.
 func (s *Server) newRunner(spec *pipeline.Spec) (pipeline.RunnerInterface, error) {
-	if s.distributed && spec.Parallelism != nil && spec.Parallelism.Count > 1 && s.masterNode != nil {
+	if s.distributed && spec.Parallelism != nil && spec.Parallelism.LogicalShardCount() > 1 && s.masterNode != nil {
 		return pipeline.NewDistributedPipeline(spec, s.cpAdapter, s.dlqWriter, s.alertManager, s.masterNode.Dispatcher())
 	}
 	// Non-distributed path: single-shard specs run inline via NewRunner; multi-shard
@@ -1109,6 +1109,9 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 	idempotencyWarnings := pipeline.ValidateIdempotency(&spec)
 	warnings = append(warnings, idempotencyWarnings...)
 
+	parallelismWarnings := pipeline.ValidateParallelism(&spec)
+	warnings = append(warnings, parallelismWarnings...)
+
 	// Worker selector: if match_labels is set, the pipeline can only run on
 	// workers whose registered Labels match. Warn so users know to register
 	// matching workers (via --worker-labels / ETL_WORKER_LABELS); otherwise the
@@ -1409,8 +1412,10 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				"dag":    dagSpec != nil,
 			}
 			if spec != nil && spec.Parallelism != nil {
-				info["parallelism"] = spec.Parallelism.Count
-				info["shard_strategy"] = spec.Parallelism.ShardStrategy
+				spec.Parallelism.ApplyDefaults()
+				info["parallelism"] = spec.Parallelism.MaxActiveShardCount()
+				info["logical_shards"] = spec.Parallelism.LogicalShardCount()
+				info["shard_strategy"] = spec.Parallelism.Strategy()
 			}
 			if spec != nil {
 				info["tags"] = spec.Tags
@@ -4220,7 +4225,13 @@ func (s *Server) Storage() storage.Storage {
 // dispatchIfParallel notifies the master dispatcher about shards when a
 // ParallelRunner is created, so workers can claim shard tasks via poll.
 func (s *Server) dispatchIfParallel(ctx context.Context, runner pipeline.RunnerInterface, spec *pipeline.Spec) {
-	if spec.Parallelism == nil || spec.Parallelism.Count <= 1 {
+	if s.distributed {
+		// Distributed ParallelRunner.Start dispatches shard tasks and then waits
+		// for worker completion. This standalone notification path would create
+		// duplicate task rows before Start() and race worker claims.
+		return
+	}
+	if spec.Parallelism == nil || spec.Parallelism.LogicalShardCount() <= 1 {
 		return
 	}
 	pr, ok := runner.(*pipeline.ParallelRunner)

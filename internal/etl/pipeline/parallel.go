@@ -51,12 +51,14 @@ type ShardDispatcher interface {
 // set, Start() does NOT run instances inline — it creates task_assignments and
 // waits for worker processes to execute them. See NewDistributedPipeline.
 type ParallelRunner struct {
-	spec        *Spec
-	cpStore     core.CheckpointStore
-	dlqWriter   DLQWriter
-	alertMgr    *alert.Manager
-	parallelism int
-	logBuf      *LogBuffer
+	spec            *Spec
+	cpStore         core.CheckpointStore
+	dlqWriter       DLQWriter
+	alertMgr        *alert.Manager
+	parallelism     int
+	logicalShards   int
+	maxActiveShards int
+	logBuf          *LogBuffer
 
 	// distributed, when true with a non-nil dispatcher, makes Start() delegate
 	// shard execution to worker processes instead of running instances inline
@@ -83,25 +85,35 @@ func NewParallelRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter,
 		cfg = &ParallelismConfig{Count: 1}
 	}
 	cfg.ApplyDefaults()
+	logicalShards := cfg.LogicalShardCount()
+	maxActive := cfg.MaxActiveShardCount()
 
 	pr := &ParallelRunner{
-		spec:        spec,
-		cpStore:     cpStore,
-		dlqWriter:   dlqW,
-		alertMgr:    am,
-		parallelism: cfg.Count,
-		logBuf:      NewLogBuffer(500),
-		status:      StatusStopped,
-		done:        make(chan struct{}),
-		instances:   make([]*Runner, cfg.Count),
+		spec:            spec,
+		cpStore:         cpStore,
+		dlqWriter:       dlqW,
+		alertMgr:        am,
+		parallelism:     logicalShards,
+		logicalShards:   logicalShards,
+		maxActiveShards: maxActive,
+		logBuf:          NewLogBuffer(500),
+		status:          StatusStopped,
+		done:            make(chan struct{}),
+		instances:       make([]*Runner, logicalShards),
 	}
 
-	for i := 0; i < cfg.Count; i++ {
-		runner, err := BuildShardRunner(spec, cpStore, dlqW, am, i, cfg.Count)
+	for i := 0; i < logicalShards; i++ {
+		runner, err := BuildShardRunner(spec, cpStore, dlqW, am, i, logicalShards)
 		if err != nil {
 			return nil, err
 		}
 		pr.instances[i] = runner
+	}
+	if sinkConcurrency := cfg.SinkConcurrencyLimit(); sinkConcurrency > 0 {
+		limiter := make(chan struct{}, sinkConcurrency)
+		for _, runner := range pr.instances {
+			runner.setSinkWriteLimiter(limiter)
+		}
 	}
 
 	return pr, nil
@@ -124,14 +136,17 @@ func cloneConfig(original map[string]any) map[string]any {
 // InjectShardConfig returns a copy of config with shard_index / shard_total / shard_strategy injected.
 // Exported so a distributed worker can build a single-shard source config identical to what
 // ParallelRunner produces inline (A11-redo), keeping sharding consistent across the fleet.
-func InjectShardConfig(original map[string]any, shardIdx, shardTotal int, strategy string) map[string]any {
-	out := make(map[string]any, len(original)+2)
+func InjectShardConfig(original map[string]any, shardIdx, shardTotal int, strategy, shardKey string) map[string]any {
+	out := make(map[string]any, len(original)+4)
 	for k, v := range original {
 		out[k] = v
 	}
 	out["shard_index"] = shardIdx
 	out["shard_total"] = shardTotal
 	out["shard_strategy"] = strategy
+	if shardKey != "" {
+		out["shard_key"] = shardKey
+	}
 	return out
 }
 
@@ -175,6 +190,11 @@ func (pr *ParallelRunner) Start(ctx context.Context) error {
 		return pr.startDistributed(ctx)
 	}
 
+	if pr.maxActiveShards > 0 && pr.maxActiveShards < len(pr.instances) {
+		pr.startInlineBounded(ctx)
+		return nil
+	}
+
 	for i, inst := range pr.instances {
 		if err := inst.Start(ctx); err != nil {
 			pr.stopAll()
@@ -196,6 +216,61 @@ func (pr *ParallelRunner) Start(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (pr *ParallelRunner) startInlineBounded(ctx context.Context) {
+	go func() {
+		sem := make(chan struct{}, pr.maxActiveShards)
+		var wg sync.WaitGroup
+		var failed bool
+		var failedMu sync.Mutex
+
+	launchLoop:
+		for i, inst := range pr.instances {
+			select {
+			case <-ctx.Done():
+				break launchLoop
+			case sem <- struct{}{}:
+			}
+			wg.Add(1)
+			go func(idx int, runner *Runner) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				if err := runner.Start(ctx); err != nil {
+					failedMu.Lock()
+					failed = true
+					failedMu.Unlock()
+					pr.logBuf.Errorf("shard-%d start: %v", idx, err)
+					if pr.cancel != nil {
+						pr.cancel()
+					}
+					return
+				}
+				runner.Wait()
+				if runner.Status() == StatusFailed {
+					failedMu.Lock()
+					failed = true
+					failedMu.Unlock()
+				}
+			}(i, inst)
+		}
+		wg.Wait()
+
+		pr.mu.Lock()
+		if pr.status == StatusRunning {
+			pr.freezeDurationLocked()
+			switch {
+			case ctx.Err() != nil:
+				pr.status = StatusStopped
+			case failed:
+				pr.status = StatusFailed
+			default:
+				pr.status = StatusCompleted
+			}
+		}
+		pr.mu.Unlock()
+		close(pr.done)
+	}()
 }
 
 // startDistributed is the distributed-mode entry point (A11-redo). It creates
@@ -291,10 +366,11 @@ func (pr *ParallelRunner) stopAll() {
 	}
 }
 
-func (pr *ParallelRunner) Wait()                 { <-pr.done }
-func (pr *ParallelRunner) Done() <-chan struct{} { return pr.done }
-func (pr *ParallelRunner) Status() Status        { pr.mu.RLock(); defer pr.mu.RUnlock(); return pr.status }
-func (pr *ParallelRunner) InstanceCount() int    { return pr.parallelism }
+func (pr *ParallelRunner) Wait()                    { <-pr.done }
+func (pr *ParallelRunner) Done() <-chan struct{}    { return pr.done }
+func (pr *ParallelRunner) Status() Status           { pr.mu.RLock(); defer pr.mu.RUnlock(); return pr.status }
+func (pr *ParallelRunner) InstanceCount() int       { return pr.logicalShards }
+func (pr *ParallelRunner) MaxActiveShardCount() int { return pr.maxActiveShards }
 
 func (pr *ParallelRunner) freezeDurationLocked() {
 	if pr.startedAt.IsZero() {

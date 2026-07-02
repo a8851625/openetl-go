@@ -17,8 +17,11 @@ sink:
     path: /app/data/output/parallel-shard-${SHARD_INDEX}.jsonl
     format: json
 parallelism:
-  count: 2
-  shard_strategy: pk_mod
-  shard_key: id
+  sharding:
+    strategy: pk_mod
+    key: id
+    logical_shards: 2
+  execution:
+    max_active_shards: 2
 batch_size: 100
 checkpoint_interval_sec: 5

@@ -176,47 +176,183 @@ type TableRegexPattern struct {
 // N workers each run an independent instance of the pipeline, each with
 // its own checkpoint scoped to a shard/partition.
 type ParallelismConfig struct {
-	// Count is the number of parallel instances (goroutines).
+	// Count is the legacy number of parallel instances (goroutines).
 	// For Kafka: should match or be ≤ partition count.
 	// For MySQL batch: N ID-range shards are created.
 	// Default 1 (no parallelism).
+	//
+	// Deprecated: use Sharding.LogicalShards + Execution.MaxActiveShards.
 	Count int `yaml:"count" json:"count"`
 
 	// ShardStrategy defines how data is split across parallel instances.
 	// Supported: "partition" (Kafka), "id_range" (MySQL batch), "round_robin".
+	//
+	// Deprecated: use Sharding.Strategy.
 	ShardStrategy string `yaml:"shard_strategy" json:"shard_strategy"`
 
 	// ShardKey is the field used for sharding (e.g., "id" for id_range).
+	//
+	// Deprecated: use Sharding.Key.
 	ShardKey string `yaml:"shard_key,omitempty" json:"shard_key,omitempty"`
 
 	// ShardTotal is the total number of shards when using id_range.
 	// If 0, Count is used. Example: ShardTotal=100, Count=4 → each gets 25 IDs.
+	//
+	// Deprecated: use Sharding.LogicalShards.
 	ShardTotal int `yaml:"shard_total,omitempty" json:"shard_total,omitempty"`
+
+	// Sharding describes stable data ownership. Its LogicalShards value is
+	// part of the checkpoint namespace contract and should not be changed just
+	// to tune runtime concurrency.
+	Sharding *ShardingConfig `yaml:"sharding,omitempty" json:"sharding,omitempty"`
+
+	// Execution describes how many logical shards may run concurrently in this
+	// process. SinkConcurrency is enforced across standalone shard runners;
+	// TransformWorkers applies to batch-local stateless transform work.
+	// SourceConcurrency is parsed for forward compatibility but is not active.
+	Execution *ParallelExecutionConfig `yaml:"execution,omitempty" json:"execution,omitempty"`
+}
+
+// ShardingConfig controls stable data ownership across restarts and workers.
+type ShardingConfig struct {
+	Strategy      string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	Key           string `yaml:"key,omitempty" json:"key,omitempty"`
+	LogicalShards int    `yaml:"logical_shards,omitempty" json:"logical_shards,omitempty"`
+}
+
+// ParallelExecutionConfig controls current runtime concurrency.
+type ParallelExecutionConfig struct {
+	MaxActiveShards   int `yaml:"max_active_shards,omitempty" json:"max_active_shards,omitempty"`
+	SourceConcurrency int `yaml:"source_concurrency,omitempty" json:"source_concurrency,omitempty"`
+	TransformWorkers  int `yaml:"transform_workers,omitempty" json:"transform_workers,omitempty"`
+	SinkConcurrency   int `yaml:"sink_concurrency,omitempty" json:"sink_concurrency,omitempty"`
 }
 
 // ApplyDefaults sets default values for parallelism config.
 func (p *ParallelismConfig) ApplyDefaults() {
-	if p.Count <= 0 {
-		p.Count = 1
+	if p == nil {
+		return
 	}
-	if p.ShardStrategy == "" {
-		p.ShardStrategy = "round_robin"
+	legacyCount := p.Count
+	if legacyCount <= 0 {
+		legacyCount = 1
 	}
+
+	if p.Sharding == nil {
+		p.Sharding = &ShardingConfig{
+			Strategy:      p.ShardStrategy,
+			Key:           p.ShardKey,
+			LogicalShards: p.ShardTotal,
+		}
+	}
+	if p.Sharding.Strategy == "" {
+		p.Sharding.Strategy = p.ShardStrategy
+	}
+	if p.Sharding.Strategy == "" {
+		p.Sharding.Strategy = "round_robin"
+	}
+	if p.Sharding.Key == "" {
+		p.Sharding.Key = p.ShardKey
+	}
+	if p.Sharding.LogicalShards <= 0 {
+		if p.ShardTotal > 0 {
+			p.Sharding.LogicalShards = p.ShardTotal
+		} else {
+			p.Sharding.LogicalShards = legacyCount
+		}
+	}
+	if p.Sharding.LogicalShards <= 0 {
+		p.Sharding.LogicalShards = 1
+	}
+
+	if p.Execution == nil {
+		p.Execution = &ParallelExecutionConfig{MaxActiveShards: legacyCount}
+	}
+	if p.Execution.MaxActiveShards <= 0 {
+		p.Execution.MaxActiveShards = legacyCount
+	}
+	if p.Execution.MaxActiveShards <= 0 {
+		p.Execution.MaxActiveShards = 1
+	}
+
+	// Keep legacy fields populated for existing UI/API code and tests.
+	p.Count = p.Execution.MaxActiveShards
+	p.ShardStrategy = p.Sharding.Strategy
+	p.ShardKey = p.Sharding.Key
+	p.ShardTotal = p.Sharding.LogicalShards
 }
 
-// ShardRange returns the [start, end) range for a given shard index (0-based)
-// when using id_range strategy. Returns 0, 0 if not applicable.
+// ShardRange returns the stable logical-shard token range [start, end) for a
+// given logical shard index. Runtime concurrency (max_active_shards) must not
+// affect this range, otherwise changing execution capacity would change data
+// ownership and checkpoint meaning.
 func (p *ParallelismConfig) ShardRange(shardIndex int) (int64, int64) {
-	if p.Count <= 1 || p.ShardTotal <= 0 {
+	if p == nil {
 		return 0, 0
 	}
-	shardSize := int64(p.ShardTotal / p.Count)
-	start := int64(shardIndex) * shardSize
-	end := start + shardSize
-	if shardIndex == p.Count-1 {
-		end = int64(p.ShardTotal)
+	p.ApplyDefaults()
+	if p.Sharding.LogicalShards <= 1 || shardIndex < 0 || shardIndex >= p.Sharding.LogicalShards {
+		return 0, 0
 	}
-	return start, end
+	start := int64(shardIndex)
+	return start, start + 1
+}
+
+func (p *ParallelismConfig) LogicalShardCount() int {
+	if p == nil {
+		return 1
+	}
+	p.ApplyDefaults()
+	return p.Sharding.LogicalShards
+}
+
+func (p *ParallelismConfig) MaxActiveShardCount() int {
+	if p == nil {
+		return 1
+	}
+	p.ApplyDefaults()
+	if p.Execution.MaxActiveShards > p.Sharding.LogicalShards {
+		return p.Sharding.LogicalShards
+	}
+	return p.Execution.MaxActiveShards
+}
+
+func (p *ParallelismConfig) SinkConcurrencyLimit() int {
+	if p == nil {
+		return 0
+	}
+	p.ApplyDefaults()
+	if p.Execution == nil || p.Execution.SinkConcurrency <= 0 {
+		return 0
+	}
+	return p.Execution.SinkConcurrency
+}
+
+func (p *ParallelismConfig) TransformWorkerCount() int {
+	if p == nil {
+		return 1
+	}
+	p.ApplyDefaults()
+	if p.Execution == nil || p.Execution.TransformWorkers <= 1 {
+		return 1
+	}
+	return p.Execution.TransformWorkers
+}
+
+func (p *ParallelismConfig) Strategy() string {
+	if p == nil {
+		return "round_robin"
+	}
+	p.ApplyDefaults()
+	return p.Sharding.Strategy
+}
+
+func (p *ParallelismConfig) Key() string {
+	if p == nil {
+		return ""
+	}
+	p.ApplyDefaults()
+	return p.Sharding.Key
 }
 
 // MapTable resolves a source table name to its target table name.
@@ -317,6 +453,9 @@ func ApplyDefaults(spec *Spec) {
 			InitialIntervalMs: 1000,
 			MaxIntervalMs:     30000,
 		}
+	}
+	if spec.Parallelism != nil {
+		spec.Parallelism.ApplyDefaults()
 	}
 	ApplyDefaultSchedule(spec)
 }
@@ -539,6 +678,110 @@ func connectionRef(connection, connectionRef string) string {
 
 func ValidateIdempotency(spec *Spec) []string {
 	return CheckIdempotencyCompatibility(spec.Source.Type, spec.Sink.Type, spec.Sink.Config)
+}
+
+// ValidateParallelism returns warnings about parallelism / shard_strategy
+// misconfigurations. These do not block pipeline creation but surface common
+// pitfalls before runtime.
+//
+// Known footguns covered:
+//   - kafka source with logical_shards > 1: Kafka shards share one
+//     group_id and rely on the consumer-group protocol to distribute topic
+//     partitions. If the topic has fewer partitions than logical_shards, the extra
+//     shard instances stay idle. shard_strategy is ignored for kafka.
+func ValidateParallelism(spec *Spec) []string {
+	if spec == nil || spec.Parallelism == nil {
+		return nil
+	}
+	spec.Parallelism.ApplyDefaults()
+	logicalShards := spec.Parallelism.LogicalShardCount()
+	maxActive := spec.Parallelism.MaxActiveShardCount()
+	strategy := spec.Parallelism.Strategy()
+	var warnings []string
+	if spec.Parallelism.Execution != nil {
+		if spec.Parallelism.Execution.SourceConcurrency > 1 {
+			warnings = append(warnings,
+				"parallelism.execution.source_concurrency is reserved for the staged execution engine and is not active yet; current source concurrency is driven by logical_shards and max_active_shards.")
+		}
+	}
+	if logicalShards <= 1 {
+		return warnings
+	}
+	switch spec.Source.Type {
+	case "kafka":
+		warnings = append(warnings, fmt.Sprintf(
+			"source type %q with logical_shards=%d: shards share the same group_id and Kafka's "+
+				"consumer-group protocol assigns topic partitions to them. Ensure the Kafka topic has at "+
+				"least %d partitions, otherwise the extra shards will stay idle. shard_strategy is ignored "+
+				"for kafka sources.",
+			spec.Source.Type, logicalShards, logicalShards))
+	case "postgres_cdc":
+		warnings = append(warnings,
+			"source type \"postgres_cdc\" does not implement sharding; parallel logical shards may duplicate the same replication stream. Keep logical_shards=1 until postgres_cdc exposes a partition-safe strategy.")
+	case "mysql_cdc":
+		tables := stringSliceConfig(spec.Source.Config, "tables")
+		if len(tables) <= 1 {
+			warnings = append(warnings,
+				"source type \"mysql_cdc\" only shards by table list; a single-table CDC pipeline will not gain data parallelism from logical_shards>1.")
+		}
+	case "file":
+		warnings = append(warnings,
+			"source type \"file\" currently uses framework-level line modulo sharding; checkpoint resume for non-native sharding should be treated as at-least-once with possible replay until stable global-position sharding is enabled.")
+	case "redis":
+		if strategy == "round_robin" || strategy == "line_modulo" {
+			warnings = append(warnings,
+				"source type \"redis\" should use sharding.strategy: hash_modulo with sharding.key: _key or @key; round_robin/line_modulo does not match Redis key ownership semantics.")
+		}
+	case "mysql_batch":
+		if strategy != "id_range" && strategy != "pk_mod" && strategy != "round_robin" {
+			warnings = append(warnings, fmt.Sprintf(
+				"source type \"mysql_batch\" ignores sharding.strategy=%q semantics and applies MOD(pk, shard_total)=shard_index; prefer strategy: pk_mod for clarity.", strategy))
+		}
+	}
+	if maxActive < logicalShards && isStreamingSource(spec.Source.Type) {
+		warnings = append(warnings, fmt.Sprintf(
+			"execution.max_active_shards=%d is lower than sharding.logical_shards=%d for streaming source %q; inactive shards will not consume until a shard lease scheduler is active.",
+			maxActive, logicalShards, spec.Source.Type))
+	}
+	return warnings
+}
+
+func stringSliceConfig(config map[string]any, key string) []string {
+	if config == nil {
+		return nil
+	}
+	v, ok := config[key]
+	if !ok {
+		return nil
+	}
+	switch vv := v.(type) {
+	case []string:
+		return append([]string(nil), vv...)
+	case []any:
+		out := make([]string, 0, len(vv))
+		for _, item := range vv {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if strings.TrimSpace(vv) == "" {
+			return nil
+		}
+		return []string{vv}
+	default:
+		return nil
+	}
+}
+
+func isStreamingSource(sourceType string) bool {
+	switch sourceType {
+	case "mysql_cdc", "mysql_snapshot_cdc", "postgres_cdc", "kafka", "redis":
+		return true
+	default:
+		return false
+	}
 }
 
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)

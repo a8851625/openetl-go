@@ -12,8 +12,11 @@ sink:
     path: /tmp/parallel-demo-${SHARD}.jsonl
     format: json
 parallelism:
-  count: 3
-  shard_strategy: round_robin
+  sharding:
+    strategy: round_robin
+    logical_shards: 3
+  execution:
+    max_active_shards: 3
 batch_size: 10
 checkpoint_interval_sec: 1
 max_records: 30

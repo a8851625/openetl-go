@@ -28,8 +28,11 @@ sink:
     version_column: "_version"
 
 parallelism:
-  count: 4
-  shard_strategy: "partition"
+  sharding:
+    strategy: partition
+    logical_shards: 4
+  execution:
+    max_active_shards: 4
 
 batch_size: 100
 checkpoint_interval_sec: 5

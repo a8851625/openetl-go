@@ -362,6 +362,9 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [aiError, setAiError] = useState('');
   const [aiResult, setAiResult] = useState<AIGenerationResp | null>(null);
   const [parallelism, setParallelism] = useState(1);
+  const [maxActiveShards, setMaxActiveShards] = useState(1);
+  const [transformWorkers, setTransformWorkers] = useState(1);
+  const [sinkConcurrency, setSinkConcurrency] = useState(0);
   const [shardStrategy, setShardStrategy] = useState('round_robin');
   const [shardKey, setShardKey] = useState('');
   const [batchSize, setBatchSize] = useState(1000);
@@ -424,6 +427,17 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setPipelineName(spec.name || 'my-pipeline');
     setTags(Array.isArray(spec.tags) ? spec.tags.join(', ') : '');
     if (spec.schedule?.type) setSchedule(spec.schedule);
+    const parallelismSpec = spec.parallelism || {};
+    const shardingSpec = parallelismSpec.sharding || {};
+    const executionSpec = parallelismSpec.execution || {};
+    const logicalShards = Math.max(1, Number(shardingSpec.logical_shards || parallelismSpec.shard_total || parallelismSpec.count) || 1);
+    const activeShards = Math.max(1, Number(executionSpec.max_active_shards || parallelismSpec.count || logicalShards) || logicalShards);
+    setParallelism(logicalShards);
+    setMaxActiveShards(Math.min(activeShards, logicalShards));
+    setTransformWorkers(Math.max(1, Number(executionSpec.transform_workers) || 1));
+    setSinkConcurrency(Math.max(0, Number(executionSpec.sink_concurrency) || 0));
+    setShardStrategy(shardingSpec.strategy || parallelismSpec.shard_strategy || 'round_robin');
+    setShardKey(shardingSpec.key || parallelismSpec.shard_key || '');
     if (spec.execution) {
       setBatchSize(Number(spec.execution.batch_size) || batchSize);
       setFlushIntervalMs(Number(spec.execution.flush_interval_ms) || flushIntervalMs);
@@ -671,7 +685,18 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       schedule: schedule.type !== 'streaming' ? schedule : undefined,
       tags: tagList.length > 0 ? tagList : undefined,
       worker_selector: Object.keys(matchLabels).length > 0 ? { match_labels: matchLabels } : undefined,
-      parallelism: parallelism > 1 ? { count: parallelism, shard_strategy: shardStrategy, shard_key: shardKey || undefined } : undefined,
+      parallelism: parallelism > 1 ? {
+        sharding: {
+          strategy: shardStrategy,
+          key: shardKey || undefined,
+          logical_shards: parallelism,
+        },
+        execution: {
+          max_active_shards: Math.min(maxActiveShards, parallelism),
+          transform_workers: transformWorkers > 1 ? transformWorkers : undefined,
+          sink_concurrency: sinkConcurrency > 0 ? sinkConcurrency : undefined,
+        },
+      } : undefined,
       batch_size: batchSize,
       flush_interval_ms: flushIntervalMs,
       checkpoint_interval_sec: checkpointIntervalSec,
@@ -1196,11 +1221,40 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                 <div className="space-y-4">
                   {/* Parallelism */}
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-500">⚡ Parallelism</label>
-                    <div className="flex gap-1">
-                      <input type="number" className="input w-16 text-sm" min={1} max={64} value={parallelism} onChange={(e) => setParallelism(Math.max(1, parseInt(e.target.value) || 1))} />
+                    <label className="mb-1 block text-xs font-medium text-slate-500">Parallelism</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-medium text-slate-400">Logical Shards</label>
+                        <input
+                          type="number"
+                          className="input w-full text-sm"
+                          min={1}
+                          max={256}
+                          value={parallelism}
+                          onChange={(e) => {
+                            const next = Math.max(1, parseInt(e.target.value) || 1);
+                            setParallelism(next);
+                            setMaxActiveShards((cur) => Math.min(Math.max(1, cur), next));
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[11px] font-medium text-slate-400">Active Shards</label>
+                        <input
+                          type="number"
+                          className="input w-full text-sm"
+                          min={1}
+                          max={parallelism}
+                          value={Math.min(maxActiveShards, parallelism)}
+                          onChange={(e) => setMaxActiveShards(Math.min(parallelism, Math.max(1, parseInt(e.target.value) || 1)))}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-2 flex gap-1">
                       <select className="input flex-1 text-sm" value={shardStrategy} onChange={(e) => setShardStrategy(e.target.value)}>
                         <option value="round_robin">round_robin</option>
+                        <option value="pk_mod">pk_mod (MySQL)</option>
+                        <option value="hash_modulo">hash_modulo</option>
                         <option value="partition">partition (Kafka)</option>
                         <option value="id_range">id_range (MySQL)</option>
                         <option value="table">table (CDC)</option>
@@ -1209,6 +1263,28 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                     {parallelism > 1 && (
                       <input className="input mt-1 w-full text-sm" value={shardKey} onChange={(e) => setShardKey(e.target.value)} placeholder="shard key field (optional)" />
                     )}
+                    <div className="mt-2">
+                      <label className="mb-1 block text-[11px] font-medium text-slate-400">Transform Workers</label>
+                      <input
+                        type="number"
+                        className="input w-full text-sm"
+                        min={1}
+                        max={256}
+                        value={transformWorkers}
+                        onChange={(e) => setTransformWorkers(Math.max(1, parseInt(e.target.value) || 1))}
+                      />
+                    </div>
+                    <div className="mt-2">
+                      <label className="mb-1 block text-[11px] font-medium text-slate-400">Sink Concurrency</label>
+                      <input
+                        type="number"
+                        className="input w-full text-sm"
+                        min={0}
+                        max={256}
+                        value={sinkConcurrency}
+                        onChange={(e) => setSinkConcurrency(Math.max(0, parseInt(e.target.value) || 0))}
+                      />
+                    </div>
                     <p className="mt-1 text-xs text-slate-400">{t('dag.parallelInstances').replace('{n}', String(parallelism))}</p>
                   </div>
                   <hr className="border-slate-100" />

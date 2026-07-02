@@ -178,8 +178,10 @@ curl http://localhost:8000/metrics
 | `flush_interval_ms` | 1000 | Batch flush interval (ms) |
 | `checkpoint_interval_sec` | 30 | Checkpoint save interval (seconds) |
 | `backpressure_buffer` | 100 | Source↔Sink channel buffer size |
-| `parallelism.count` | 1 | Number of parallel shard instances |
-| `parallelism.shard_strategy` | round_robin | Shard strategy |
+| `parallelism.sharding.logical_shards` | 1 | Stable shard namespace |
+| `parallelism.execution.max_active_shards` | logical shards | Standalone active shard concurrency |
+| `parallelism.execution.transform_workers` | 1 | Batch-local workers for stateless per-record transforms |
+| `parallelism.execution.sink_concurrency` | unlimited | Standalone concurrent sink writes across shards |
 | `retry.max_attempts` | 3 | Max retry attempts |
 | `retry.initial_interval_ms` | 1000 | Initial retry interval |
 | `retry.max_interval_ms` | 30000 | Max retry interval |

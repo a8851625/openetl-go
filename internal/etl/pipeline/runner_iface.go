@@ -200,7 +200,7 @@ func (pr *ParallelRunner) TransformMetrics() []core.TransformMetrics {
 
 // NewPipeline creates a single or parallel runner based on spec.
 func NewPipeline(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *alert.Manager) (RunnerInterface, error) {
-	if spec.Parallelism != nil && spec.Parallelism.Count > 1 {
+	if spec.Parallelism != nil && spec.Parallelism.LogicalShardCount() > 1 {
 		return NewParallelRunner(spec, cpStore, dlqW, am)
 	}
 	return NewRunner(spec, cpStore, dlqW, am)
@@ -213,7 +213,7 @@ func NewPipeline(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *a
 // back to an inline Runner — distributed dispatch only applies to parallel
 // pipelines.
 func NewDistributedPipeline(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *alert.Manager, dispatcher ShardDispatcher) (RunnerInterface, error) {
-	if spec.Parallelism == nil || spec.Parallelism.Count <= 1 {
+	if spec.Parallelism == nil || spec.Parallelism.LogicalShardCount() <= 1 {
 		// No sharding to distribute — run inline.
 		return NewRunner(spec, cpStore, dlqW, am)
 	}

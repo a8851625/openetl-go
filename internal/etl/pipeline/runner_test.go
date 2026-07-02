@@ -137,6 +137,33 @@ func (r checkpointTestReader) CheckpointForRecord(_ context.Context, rec core.Re
 	return core.Checkpoint{Source: "checkpoint-test", Position: pos}, nil
 }
 
+type batchCountingReader struct {
+	mu         sync.Mutex
+	batches    [][]core.Record
+	readCalls  int32
+	batchCalls int32
+}
+
+func (r *batchCountingReader) Read(context.Context) (core.Record, error) {
+	atomic.AddInt32(&r.readCalls, 1)
+	return core.Record{}, io.EOF
+}
+func (r *batchCountingReader) ReadBatch(_ context.Context, _ int) ([]core.Record, error) {
+	atomic.AddInt32(&r.batchCalls, 1)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.batches) == 0 {
+		return nil, io.EOF
+	}
+	out := r.batches[0]
+	r.batches = r.batches[1:]
+	return out, nil
+}
+func (r *batchCountingReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (r *batchCountingReader) Close() error { return nil }
+
 type filterAllTransform struct{}
 
 func (t filterAllTransform) Name() string { return "filter-all" }
@@ -189,6 +216,39 @@ func (t stateSnapshotTransform) Apply(_ context.Context, rec core.Record) (core.
 }
 func (t stateSnapshotTransform) SnapshotState(context.Context) (string, string, bool, error) {
 	return t.node, t.version, true, nil
+}
+
+type concurrencyProbeTransform struct {
+	inFlight    int64
+	maxInFlight int64
+	delay       time.Duration
+}
+
+func (t *concurrencyProbeTransform) Name() string { return "concurrency-probe" }
+func (t *concurrencyProbeTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
+	cur := atomic.AddInt64(&t.inFlight, 1)
+	for {
+		max := atomic.LoadInt64(&t.maxInFlight)
+		if cur <= max || atomic.CompareAndSwapInt64(&t.maxInFlight, max, cur) {
+			break
+		}
+	}
+	select {
+	case <-time.After(t.delay):
+	case <-ctx.Done():
+		atomic.AddInt64(&t.inFlight, -1)
+		return rec, ctx.Err()
+	}
+	atomic.AddInt64(&t.inFlight, -1)
+	return rec, nil
+}
+
+type statefulConcurrencyProbeTransform struct {
+	concurrencyProbeTransform
+}
+
+func (t *statefulConcurrencyProbeTransform) SnapshotState(context.Context) (string, string, bool, error) {
+	return "stateful-probe", "v1", true, nil
 }
 
 type failingStateSnapshotTransform struct{}
@@ -412,6 +472,61 @@ func TestRunnerUsesPartialTransformErrorForDLQAttribution(t *testing.T) {
 	}
 	if !checkpointSaved(t, store, r.spec.Name) {
 		t.Fatal("checkpoint did not advance after survivor write and failed record DLQ")
+	}
+}
+
+func TestRunnerTransformWorkersParallelizeStatelessRecordsInOrder(t *testing.T) {
+	probe := &concurrencyProbeTransform{delay: 30 * time.Millisecond}
+	r := &Runner{
+		transforms:       core.TransformChain{probe},
+		transformWorkers: 4,
+	}
+	batch := []core.Record{
+		{Data: map[string]any{"id": 1}},
+		{Data: map[string]any{"id": 2}},
+		{Data: map[string]any{"id": 3}},
+		{Data: map[string]any{"id": 4}},
+	}
+
+	got, filtered, failed := r.applyRecordTransforms(context.Background(), batch)
+
+	if filtered != 0 || failed != 0 {
+		t.Fatalf("filtered=%d failed=%d, want 0/0", filtered, failed)
+	}
+	if max := atomic.LoadInt64(&probe.maxInFlight); max < 2 {
+		t.Fatalf("transform_workers did not parallelize stateless transform: max in-flight=%d", max)
+	}
+	if len(got) != len(batch) {
+		t.Fatalf("got %d records, want %d", len(got), len(batch))
+	}
+	for i := range got {
+		if got[i].Data["id"] != batch[i].Data["id"] {
+			t.Fatalf("record order changed at %d: got %v want %v", i, got[i].Data["id"], batch[i].Data["id"])
+		}
+	}
+}
+
+func TestRunnerTransformWorkersKeepStatefulTransformsSerial(t *testing.T) {
+	probe := &statefulConcurrencyProbeTransform{
+		concurrencyProbeTransform: concurrencyProbeTransform{delay: 10 * time.Millisecond},
+	}
+	r := &Runner{
+		transforms:       core.TransformChain{probe},
+		transformWorkers: 4,
+	}
+	batch := []core.Record{
+		{Data: map[string]any{"id": 1}},
+		{Data: map[string]any{"id": 2}},
+		{Data: map[string]any{"id": 3}},
+	}
+
+	got, filtered, failed := r.applyRecordTransforms(context.Background(), batch)
+
+	if filtered != 0 || failed != 0 || len(got) != len(batch) {
+		t.Fatalf("got len=%d filtered=%d failed=%d, want len=%d filtered=0 failed=0", len(got), filtered, failed, len(batch))
+	}
+	if max := atomic.LoadInt64(&probe.maxInFlight); max != 1 {
+		t.Fatalf("stateful transform ran concurrently: max in-flight=%d, want 1", max)
 	}
 }
 
@@ -714,3 +829,189 @@ func TestRunnerStopIsIdempotent(t *testing.T) {
 	_ = r.Stop()
 	_ = r.Stop()
 }
+
+func TestRunnerUsesSourceReadBatchForMySQLBatch(t *testing.T) {
+	reader := &batchCountingReader{batches: [][]core.Record{{
+		{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 1}},
+		{Data: map[string]any{"id": 2}, Metadata: core.Metadata{Offset: 2}},
+		{Data: map[string]any{"id": 3}, Metadata: core.Metadata{Offset: 3}},
+		{Data: map[string]any{"id": 4}, Metadata: core.Metadata{Offset: 4}},
+		{Data: map[string]any{"id": 5}, Metadata: core.Metadata{Offset: 5}},
+	}}}
+	sink := &recordingSink{}
+	am := alert.NewManager()
+	t.Cleanup(am.Close)
+	done := make(chan struct{})
+	r := &Runner{
+		spec:               &Spec{Name: "batch-read", Source: SourceSpec{Type: "mysql_batch"}},
+		reader:             reader,
+		sink:               sink,
+		transforms:         core.TransformChain{},
+		batchSize:          3,
+		flushInterval:      time.Hour,
+		backpressureBuffer: 10,
+		alertManager:       am,
+		logBuf:             NewLogBuffer(20),
+		done:               done,
+		inflightBatch:      newInflightBatchTracker(),
+	}
+	r.retryConfig.MaxAttempts = 1
+
+	r.runLoop(context.Background(), done)
+
+	if got := atomic.LoadInt32(&reader.readCalls); got != 0 {
+		t.Fatalf("Read() calls = %d, want 0", got)
+	}
+	if got := atomic.LoadInt32(&reader.batchCalls); got == 0 {
+		t.Fatal("ReadBatch() was not called")
+	}
+	if got := atomic.LoadInt32(&sink.calls); got != 2 {
+		t.Fatalf("sink Write calls = %d, want 2 batches (3 + final 2)", got)
+	}
+}
+
+// slowSink blocks each Write call until releaseCh is closed or receives a
+// value, then records the observed ctx error (if any). It is used to verify
+// that Stop() during an in-flight writeBatch does not cancel the commit ctx
+// passed to sink.Write / dlqWriter.WriteDLQ / checkpointStore.Save.
+type slowSink struct {
+	entered  chan struct{}
+	release  chan struct{}
+	writeErr atomic.Value // string — observed ctx.Err() string ("nil" if nil)
+}
+
+func newSlowSink() *slowSink {
+	return &slowSink{
+		entered: make(chan struct{}, 16),
+		release: make(chan struct{}),
+	}
+}
+func (s *slowSink) Name() string               { return "slow" }
+func (s *slowSink) Open(context.Context) error { return nil }
+func (s *slowSink) Close() error               { return nil }
+func (s *slowSink) Write(ctx context.Context, _ []core.Record) error {
+	s.entered <- struct{}{}
+	<-s.release
+	err := ctx.Err()
+	if err == nil {
+		s.writeErr.Store("nil")
+	} else {
+		s.writeErr.Store(err.Error())
+	}
+	return nil
+}
+
+// TestRunnerStopDuringWriteBatchDoesNotCancelCommit verifies that calling
+// Stop() while a writeBatch is in progress does not cancel the context
+// observed by the in-flight sink write. This is the regression test for the
+// shutdown race that surfaced as spurious "context canceled" errors from
+// sink.Write / dlqWriter.WriteDLQ / checkpointStore.Save during pipeline stop.
+func TestRunnerStopDuringWriteBatchDoesNotCancelCommit(t *testing.T) {
+	spec, _ := makeRunnerSpec(t, 2)
+	store := newMemoryCPStore()
+	r, err := NewRunner(spec, store, noopDLQ{}, alert.NewManager())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	slow := newSlowSink()
+	r.sink = slow
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Wait until the sink is mid-Write, then Stop() while it is still
+	// blocked. The commit ctx passed to Write must NOT be cancelled.
+	select {
+	case <-slow.entered:
+	case <-time.After(3 * time.Second):
+		_ = r.Stop()
+		t.Fatal("sink.Write was never called within timeout")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		_ = r.Stop()
+		close(stopDone)
+	}()
+
+	// Give Stop() a moment to observe the inflight batch, then release the
+	// sink and confirm the write observed a non-cancelled ctx.
+	time.Sleep(100 * time.Millisecond)
+	close(slow.release)
+
+	select {
+	case <-stopDone:
+	case <-time.After(40 * time.Second):
+		t.Fatal("Stop() did not return within 40s")
+	}
+
+	got, _ := slow.writeErr.Load().(string)
+	if got != "nil" {
+		t.Fatalf("sink.Write observed ctx.Err() = %q, want nil — Stop() must not cancel the in-flight commit ctx", got)
+	}
+}
+
+// TestRunnerStopDuringDLQWriteDoesNotCancelCommit verifies the same guarantee
+// for the DLQ writer path: an in-flight DLQ write during Stop() must observe
+// an uncancelled commit ctx, so the at-least-once DLQ delivery is preserved.
+func TestRunnerStopDuringDLQWriteDoesNotCancelCommit(t *testing.T) {
+	store := newMemoryCPStore()
+	// Construct a runner that routes every record through a failing sink
+	// straight into the DLQ. We avoid Start() and instead invoke writeBatch
+	// directly to deterministically exercise the DLQ path while "stopping".
+	r := newCheckpointWriteBatchRunner(t, nil, store, nil)
+	// Replace the DLQ writer with a capture+slow variant.
+	slow := &slowCaptureDLQ{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	r.dlqWriter = slow
+	// Make the sink always fail so records go to DLQ.
+	r.sink = &recordingSink{alwaysFail: true}
+	// retry.Config zero-value would make retry.Do attempt 0 times and return
+	// nil; configure a single attempt so the sink error surfaces to the DLQ
+	// routing path.
+	r.retryConfig.MaxAttempts = 1
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopDone := make(chan error, 1)
+	go func() {
+		r.writeBatch(ctx, checkpointTestBatch())
+		stopDone <- nil
+	}()
+
+	select {
+	case <-slow.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("DLQ write was never entered")
+	}
+	// Simulate Stop()'s cancellation of the loop ctx while the DLQ write
+	// is blocked. writeBatch's commit ctx is derived from Background() so
+	// the DLQ writer must not observe a cancellation.
+	cancel()
+	close(slow.release)
+	<-stopDone
+
+	if got := slow.observedErr.Load(); got != nil && got != "nil" {
+		t.Fatalf("DLQ WriteDLQ observed ctx.Err() = %v, want nil", got)
+	}
+}
+
+type slowCaptureDLQ struct {
+	entered     chan struct{}
+	release     chan struct{}
+	observedErr atomic.Value // string
+}
+
+func (d *slowCaptureDLQ) WriteDLQ(ctx context.Context, _ DLQEntry) error {
+	d.entered <- struct{}{}
+	<-d.release
+	err := ctx.Err()
+	if err == nil {
+		d.observedErr.Store("nil")
+	} else {
+		d.observedErr.Store(err.Error())
+	}
+	return nil
+}
+func (d *slowCaptureDLQ) Close() error { return nil }

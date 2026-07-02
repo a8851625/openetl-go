@@ -95,6 +95,7 @@ type Runner struct {
 	flushInterval      time.Duration
 	batchSize          int
 	backpressureBuffer int
+	transformWorkers   int
 
 	// recordsCh holds a reference to the backpressure channel for metrics.
 	recordsCh chan core.Record
@@ -112,6 +113,92 @@ type Runner struct {
 	alertChecker *AlertRuleChecker
 	// lastRecordAt tracks when the last record was read (for stall detection).
 	lastRecordAt time.Time
+	// sinkWriteLimiter optionally limits concurrent sink.Write calls across
+	// shard runners that share a ParallelRunner in the same process.
+	sinkWriteLimiter chan struct{}
+
+	// inflightBatch tracks writeBatch invocations in progress so that
+	// Stop() can wait for the commit (sink write + DLQ + checkpoint) to
+	// finish before tearing down the runner. Without this, Stop() races
+	// with an in-flight writeBatch: it cancels the loop ctx mid-commit,
+	// surfacing as spurious "context canceled" errors from sink.Write /
+	// DLQ writer / checkpoint store (see runActive/stopCh shutdown flow).
+	//
+	// We deliberately avoid sync.WaitGroup here: its Wait must not be
+	// called concurrently from multiple goroutines, but Stop() is
+	// documented as idempotent and may be invoked repeatedly. The custom
+	// tracker below supports concurrent waiters safely.
+	inflightBatch inflightBatchTracker
+}
+
+// inflightBatchTracker is a counter guarded by a mutex plus a signaling
+// channel that is closed/recreated each time the count drops to zero. It
+// supports any number of concurrent Wait() callers (unlike sync.WaitGroup).
+type inflightBatchTracker struct {
+	mu   sync.Mutex
+	n    int
+	zero chan struct{}
+}
+
+func newInflightBatchTracker() inflightBatchTracker {
+	return inflightBatchTracker{zero: make(chan struct{})}
+}
+
+func (t *inflightBatchTracker) add() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.zero == nil {
+		t.zero = make(chan struct{})
+	}
+	if t.n == 0 {
+		// Leaving zero: close the old signal channel so current waiters
+		// that raced with us still wake, but future Wait callers block on
+		// a fresh channel.
+		close(t.zero)
+		t.zero = make(chan struct{})
+	}
+	t.n++
+}
+
+func (t *inflightBatchTracker) done() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.n--
+	if t.n < 0 {
+		t.n = 0
+	}
+	if t.n == 0 {
+		close(t.zero)
+		t.zero = make(chan struct{})
+	}
+}
+
+// wait blocks until the tracker reports zero in-flight batches, or until
+// the timer fires (safety bound against a wedged sink). Returns true if
+// the wait completed, false on timeout.
+func (t *inflightBatchTracker) wait(timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for {
+		t.mu.Lock()
+		if t.n == 0 {
+			t.mu.Unlock()
+			return true
+		}
+		ch := t.zero
+		t.mu.Unlock()
+		if ch == nil {
+			// Not initialized yet — treat as zero.
+			return true
+		}
+
+		select {
+		case <-ch:
+			// either re-check (loop) or return
+		case <-deadline.C:
+			return false
+		}
+	}
 }
 
 func NewRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *alert.Manager) (*Runner, error) {
@@ -163,6 +250,10 @@ func NewRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *ale
 	if spec.FlushIntervalMs > 0 {
 		flushIv = time.Duration(spec.FlushIntervalMs) * time.Millisecond
 	}
+	transformWorkers := 1
+	if spec.Parallelism != nil {
+		transformWorkers = spec.Parallelism.TransformWorkerCount()
+	}
 
 	hooks := &MetricsHooks{}
 	lifecycleHooks := BuildHooks(spec.Name, spec.Hooks)
@@ -187,7 +278,9 @@ func NewRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *ale
 		flushInterval:      flushIv,
 		batchSize:          bs,
 		backpressureBuffer: bp,
+		transformWorkers:   transformWorkers,
 		hooks:              lifecycleHooks,
+		inflightBatch:      newInflightBatchTracker(),
 	}
 	if spec.CircuitBreaker != nil {
 		r.circuitBreaker = NewCircuitBreaker(*spec.CircuitBreaker, am, spec.Name)
@@ -235,6 +328,10 @@ func (r *Runner) Stats() Stats {
 }
 
 func (r *Runner) LogBuffer() *LogBuffer { return r.logBuf }
+
+func (r *Runner) setSinkWriteLimiter(limiter chan struct{}) {
+	r.sinkWriteLimiter = limiter
+}
 
 func (r *Runner) Shards() []ShardInfo {
 	return []ShardInfo{{Index: 0, Status: r.Status(), Stats: r.Stats()}}
@@ -466,7 +563,7 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	// Wrap reader with framework-level shard filter when parallelism > 1
 	// for sources that don't handle sharding natively.
-	if r.spec.Parallelism != nil && r.spec.Parallelism.Count > 1 {
+	if r.spec.Parallelism != nil && r.spec.Parallelism.LogicalShardCount() > 1 {
 		switch r.spec.Source.Type {
 		case "mysql_batch", "mysql_cdc", "mysql_snapshot_cdc", "postgres_cdc", "kafka", "http":
 			// These sources handle sharding natively (SQL-level, consumer-group,
@@ -502,21 +599,33 @@ func schemaValidatorForSink(sink core.Sink) (core.SchemaValidator, bool) {
 
 func (r *Runner) Stop() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.status != StatusRunning {
+		r.mu.Unlock()
 		return nil
 	}
 	r.freezeDurationLocked()
 	r.status = StatusStopped
+	r.mu.Unlock()
 
-	// Instead of immediately cancelling the context (which would abort
-	// in-flight sink writes), we signal the runLoop to exit gracefully.
-	// The runLoop's defer path will flush remaining records and save
-	// the final checkpoint using a background context.
+	// Cancel the loop ctx so readLoop stops reading new records and
+	// writeLoop exits its select loop. Do NOT hold r.mu across the cancel
+	// — writeBatch/saveCommittedCheckpoint acquire r.mu internally.
 	if r.cancel != nil {
 		r.cancel()
 	}
+
+	// Wait for any in-flight batch commit to finish before returning so
+	// that sink writes / DLQ routing / checkpoint saves already underway
+	// are not observed as "context canceled" failures. writeBatch derives
+	// its own background commit ctx, so this wait is bounded by that
+	// ctx's timeout (30s worst case). The tracker supports concurrent
+	// Stop() callers (Stop is documented idempotent), unlike
+	// sync.WaitGroup which forbids concurrent Wait.
+	r.inflightBatch.wait(35 * time.Second)
+
+	r.mu.Lock()
 	r.logInfo(fmt.Sprintf("Pipeline stopped. written=%d read=%d", r.stats.RecordsWritten, r.stats.RecordsRead))
+	r.mu.Unlock()
 	return nil
 }
 
@@ -667,74 +776,124 @@ func (r *Runner) readLoop(ctx context.Context, records chan<- core.Record) {
 	consecutiveErrors := 0
 	for {
 		start := time.Now()
+		if r.useSourceBatchRead() {
+			batch, err := r.reader.ReadBatch(ctx, r.batchSize)
+			if r.metricsHooks != nil {
+				r.metricsHooks.RecordSourceRead(start)
+			}
+			if err != nil {
+				if r.handleReadError(ctx, err, &consecutiveErrors) {
+					return
+				}
+				continue
+			}
+			if len(batch) == 0 {
+				r.markSourceExhausted()
+				return
+			}
+			consecutiveErrors = 0
+			for _, rec := range batch {
+				if !r.emitReadRecord(ctx, records, rec) {
+					return
+				}
+			}
+			continue
+		}
+
 		rec, err := r.reader.Read(ctx)
 		if r.metricsHooks != nil {
 			r.metricsHooks.RecordSourceRead(start)
 		}
 		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if errors.Is(err, io.EOF) {
-				r.mu.Lock()
-				r.freezeDurationLocked()
-				r.status = StatusCompleted
-				r.mu.Unlock()
-				r.logInfo(fmt.Sprintf("Source exhausted (EOF). written=%d read=%d", r.recordsWritten(), r.recordsRead()))
-				return
-			}
-			consecutiveErrors++
-			r.mu.Lock()
-			r.stats.LastError = err.Error()
-			r.mu.Unlock()
-
-			r.logWarn(fmt.Sprintf("Read error (x%d): %v", consecutiveErrors, err))
-
-			r.alertManager.Send(ctx, alert.Event{
-				Level:   alert.LevelError,
-				Title:   "Pipeline read error",
-				Message: err.Error(),
-				JobName: r.spec.Name,
-			})
-
-			backoff := time.Duration(consecutiveErrors) * time.Second
-			if backoff > 30*time.Second {
-				backoff = 30 * time.Second
-			}
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
+			if r.handleReadError(ctx, err, &consecutiveErrors) {
 				return
 			}
 			continue
 		}
 		consecutiveErrors = 0
 
-		rec.Metadata.Source = r.spec.Name
-
-		// Apply pipeline-level record processors (table mapping, enrichment, masking, etc.).
-		if len(r.processors) > 0 {
-			processed, pErr := r.processors.Apply(ctx, rec)
-			if pErr != nil {
-				r.logWarn(fmt.Sprintf("record processor error: %v", pErr))
-			} else {
-				rec = processed
-			}
-		}
-
-		select {
-		case records <- rec:
-			r.mu.Lock()
-			r.lastRecordAt = time.Now()
-			r.mu.Unlock()
-			read := r.addRecordsRead(1)
-			if read%1000 == 0 {
-				written := r.recordsWritten()
-				r.logDebug(fmt.Sprintf("read=%d written=%d", read, written))
-			}
-		case <-ctx.Done():
+		if !r.emitReadRecord(ctx, records, rec) {
 			return
 		}
+	}
+}
+
+func (r *Runner) useSourceBatchRead() bool {
+	// mysql_batch can fetch an indexed page from the database. Calling Read()
+	// would force ReadBatch(ctx, 1), turning a configured page into one SQL
+	// query per row. Other readers keep the existing single-record behavior
+	// until their batch checkpoint semantics are audited.
+	return r.spec.Source.Type == "mysql_batch"
+}
+
+func (r *Runner) handleReadError(ctx context.Context, err error, consecutiveErrors *int) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	if errors.Is(err, io.EOF) {
+		r.markSourceExhausted()
+		return true
+	}
+	(*consecutiveErrors)++
+	r.mu.Lock()
+	r.stats.LastError = err.Error()
+	r.mu.Unlock()
+
+	r.logWarn(fmt.Sprintf("Read error (x%d): %v", *consecutiveErrors, err))
+
+	r.alertManager.Send(ctx, alert.Event{
+		Level:   alert.LevelError,
+		Title:   "Pipeline read error",
+		Message: err.Error(),
+		JobName: r.spec.Name,
+	})
+
+	backoff := time.Duration(*consecutiveErrors) * time.Second
+	if backoff > 30*time.Second {
+		backoff = 30 * time.Second
+	}
+	select {
+	case <-time.After(backoff):
+		return false
+	case <-ctx.Done():
+		return true
+	}
+}
+
+func (r *Runner) markSourceExhausted() {
+	r.mu.Lock()
+	r.freezeDurationLocked()
+	r.status = StatusCompleted
+	r.mu.Unlock()
+	r.logInfo(fmt.Sprintf("Source exhausted (EOF). written=%d read=%d", r.recordsWritten(), r.recordsRead()))
+}
+
+func (r *Runner) emitReadRecord(ctx context.Context, records chan<- core.Record, rec core.Record) bool {
+	rec.Metadata.Source = r.spec.Name
+
+	// Apply pipeline-level record processors (table mapping, enrichment, masking, etc.).
+	if len(r.processors) > 0 {
+		processed, pErr := r.processors.Apply(ctx, rec)
+		if pErr != nil {
+			r.logWarn(fmt.Sprintf("record processor error: %v", pErr))
+		} else {
+			rec = processed
+		}
+	}
+
+	select {
+	case records <- rec:
+		r.mu.Lock()
+		r.lastRecordAt = time.Now()
+		r.mu.Unlock()
+		read := r.addRecordsRead(1)
+		if read%1000 == 0 {
+			written := r.recordsWritten()
+			r.logDebug(fmt.Sprintf("read=%d written=%d", read, written))
+		}
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -809,6 +968,35 @@ func (r *Runner) writeLoop(ctx context.Context, records <-chan core.Record) {
 }
 
 func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
+	// A batch commit (sink write + DLQ routing + checkpoint save) must
+	// survive Stop(): the loop ctx is cancelled by Stop() the instant the
+	// user requests shutdown, but abandoning a half-written batch would
+	// surface as spurious "context canceled" errors from sink.Write /
+	// dlqWriter.WriteDLQ / checkpointStore.Save and risk data loss. We
+	// therefore derive a commit ctx from context.Background() with a
+	// bounded timeout. If the caller supplied an explicit deadline (e.g.
+	// the 10s shutdown flush path), honor the shorter of the two so that
+	// forced shutdowns still time out.
+	commitCtx, commitCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer commitCancel()
+	if dl, ok := ctx.Deadline(); ok {
+		if dlSub, subErr := context.WithDeadline(commitCtx, dl); subErr == nil {
+			commitCtx, commitCancel = context.WithTimeout(dlSub, time.Until(dl))
+			defer commitCancel()
+		}
+	}
+
+	r.inflightBatch.add()
+	defer r.inflightBatch.done()
+
+	// Use commitCtx for everything that must reach a durable store: the
+	// transform chain (state checkpoints), the sink write, single-row
+	// isolation, DLQ writes, and the checkpoint save. The original ctx
+	// remains the source-of-truth for "should we still be running", but
+	// by the time we reach writeBatch the batch was already read from the
+	// source — its commit is the at-least-once guarantee.
+	ctx = commitCtx
+
 	var transformed []core.Record
 	processed := make([]core.Record, len(batch))
 	copy(processed, batch)
@@ -816,14 +1004,7 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	transformFailureCount := 0
 	batchTransformZeroOutput := false
 
-	// Check if any transform in the chain is a BatchTransform.
-	hasBatch := false
-	for _, t := range r.transforms {
-		if _, ok := t.(core.BatchTransform); ok {
-			hasBatch = true
-			break
-		}
-	}
+	hasBatch := r.hasBatchTransform()
 
 	if hasBatch {
 		// Batch path: process the entire batch through the chain.
@@ -845,21 +1026,7 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 		transformed = out
 		batchTransformZeroOutput = len(transformed) == 0
 	} else {
-		// Per-record path (original behavior).
-		transformed = make([]core.Record, 0, len(batch))
-		for _, rec := range batch {
-			tRec, err := r.transforms.Apply(ctx, rec)
-			if err != nil {
-				if errors.Is(err, core.ErrRecordFiltered) {
-					filteredCount++
-					continue
-				}
-				transformFailureCount++
-				r.handleFailedRecord(ctx, rec, err)
-				continue
-			}
-			transformed = append(transformed, tRec)
-		}
+		transformed, filteredCount, transformFailureCount = r.applyRecordTransforms(ctx, batch)
 	}
 
 	if len(transformed) == 0 {
@@ -901,7 +1068,7 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	})
 
 	err := retry.Do(ctx, r.retryConfig, core.IsRetryableError, func() error {
-		return r.sink.Write(ctx, transformed)
+		return r.writeSink(ctx, transformed)
 	})
 
 	if err != nil {
@@ -975,6 +1142,122 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	}
 }
 
+func (r *Runner) hasBatchTransform() bool {
+	for _, t := range r.transforms {
+		if _, ok := t.(core.BatchTransform); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) canParallelizeRecordTransforms() bool {
+	if r.transformWorkers <= 1 || len(r.transforms) == 0 {
+		return false
+	}
+	for _, t := range r.transforms {
+		if _, ok := t.(core.BatchTransform); ok {
+			return false
+		}
+		if _, ok := t.(core.Flusher); ok {
+			return false
+		}
+		if _, ok := t.(core.StateSnapshotter); ok {
+			return false
+		}
+		if _, ok := t.(core.StateMetricsProvider); ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Runner) applyRecordTransforms(ctx context.Context, batch []core.Record) ([]core.Record, int, int) {
+	if r.canParallelizeRecordTransforms() && len(batch) > 1 {
+		return r.applyRecordTransformsParallel(ctx, batch)
+	}
+	return r.applyRecordTransformsSerial(ctx, batch)
+}
+
+func (r *Runner) applyRecordTransformsSerial(ctx context.Context, batch []core.Record) ([]core.Record, int, int) {
+	transformed := make([]core.Record, 0, len(batch))
+	filteredCount := 0
+	transformFailureCount := 0
+	for _, rec := range batch {
+		tRec, err := r.transforms.Apply(ctx, rec)
+		if err != nil {
+			if errors.Is(err, core.ErrRecordFiltered) {
+				filteredCount++
+				continue
+			}
+			transformFailureCount++
+			r.handleFailedRecord(ctx, rec, err)
+			continue
+		}
+		transformed = append(transformed, tRec)
+	}
+	return transformed, filteredCount, transformFailureCount
+}
+
+type recordTransformResult struct {
+	index    int
+	record   core.Record
+	err      error
+	filtered bool
+}
+
+func (r *Runner) applyRecordTransformsParallel(ctx context.Context, batch []core.Record) ([]core.Record, int, int) {
+	workers := r.transformWorkers
+	if workers > len(batch) {
+		workers = len(batch)
+	}
+	jobs := make(chan int)
+	results := make(chan recordTransformResult, len(batch))
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				rec := batch[idx]
+				tRec, err := r.transforms.Apply(ctx, rec)
+				result := recordTransformResult{index: idx, record: tRec, err: err}
+				if errors.Is(err, core.ErrRecordFiltered) {
+					result.filtered = true
+				}
+				results <- result
+			}
+		}()
+	}
+	for i := range batch {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	ordered := make([]recordTransformResult, len(batch))
+	for result := range results {
+		ordered[result.index] = result
+	}
+	transformed := make([]core.Record, 0, len(batch))
+	filteredCount := 0
+	transformFailureCount := 0
+	for i, result := range ordered {
+		if result.filtered {
+			filteredCount++
+			continue
+		}
+		if result.err != nil {
+			transformFailureCount++
+			r.handleFailedRecord(ctx, batch[i], result.err)
+			continue
+		}
+		transformed = append(transformed, result.record)
+	}
+	return transformed, filteredCount, transformFailureCount
+}
+
 // writeRecordsIndividually attempts to write each record one at a time after
 // a batch write failure. This isolates the failing records and allows the
 // good records in the batch to succeed. Returns (successCount, []failedIndexErr).
@@ -983,7 +1266,7 @@ func (r *Runner) writeRecordsIndividually(ctx context.Context, records []core.Re
 	var failures []failedIndexErr
 	for i, rec := range records {
 		singleErr := retry.Do(ctx, r.retryConfig, core.IsRetryableError, func() error {
-			return r.sink.Write(ctx, []core.Record{rec})
+			return r.writeSink(ctx, []core.Record{rec})
 		})
 		if singleErr == nil {
 			good++
@@ -992,6 +1275,19 @@ func (r *Runner) writeRecordsIndividually(ctx context.Context, records []core.Re
 		}
 	}
 	return good, failures
+}
+
+func (r *Runner) writeSink(ctx context.Context, records []core.Record) error {
+	if r.sinkWriteLimiter == nil {
+		return r.sink.Write(ctx, records)
+	}
+	select {
+	case r.sinkWriteLimiter <- struct{}{}:
+		defer func() { <-r.sinkWriteLimiter }()
+		return r.sink.Write(ctx, records)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (r *Runner) partialBatchFailures(err error, records []core.Record) (int, []failedIndexErr, bool) {

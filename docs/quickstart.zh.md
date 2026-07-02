@@ -171,8 +171,10 @@ curl http://localhost:8000/metrics
 | `flush_interval_ms` | 1000 | 批次 flush 间隔（毫秒） |
 | `checkpoint_interval_sec` | 30 | 检查点保存间隔（秒） |
 | `backpressure_buffer` | 100 | Source↔Sink 缓冲区大小 |
-| `parallelism.count` | 1 | 并行分片实例数 |
-| `parallelism.shard_strategy` | round_robin | 分片策略 |
+| `parallelism.sharding.logical_shards` | 1 | 稳定分片命名空间 |
+| `parallelism.execution.max_active_shards` | logical shards | standalone 活跃 shard 并发 |
+| `parallelism.execution.transform_workers` | 1 | 批内无状态逐记录 transform worker 数 |
+| `parallelism.execution.sink_concurrency` | 不限制 | standalone shard 间并发 sink 写入数 |
 | `retry.max_attempts` | 3 | 最大重试次数 |
 | `retry.initial_interval_ms` | 1000 | 初始重试间隔 |
 | `retry.max_interval_ms` | 30000 | 最大重试间隔 |

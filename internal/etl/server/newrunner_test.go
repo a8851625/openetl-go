@@ -58,3 +58,44 @@ func TestNewRunnerNotRecursive(t *testing.T) {
 		t.Fatal("newRunner returned nil runner")
 	}
 }
+
+func TestDispatchIfParallelSkipsDistributedRunnerStartPath(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "in.jsonl")
+	if err := os.WriteFile(srcPath, []byte(`{"id":1}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	spec := &pipeline.Spec{
+		Name:   "distributed-dispatch-owned-by-start",
+		Source: pipeline.SourceSpec{Type: "file", Config: map[string]any{"path": srcPath, "format": "json"}},
+		Sink:   pipeline.SinkSpec{Type: "file_sink", Config: map[string]any{"output_dir": filepath.Join(dir, "out")}},
+		Parallelism: &pipeline.ParallelismConfig{
+			Sharding:  &pipeline.ShardingConfig{LogicalShards: 3},
+			Execution: &pipeline.ParallelExecutionConfig{MaxActiveShards: 2},
+		},
+	}
+
+	store, err := factory.NewStore(context.Background(), "sqlite", filepath.Join(dir, "cp"), filepath.Join(dir, "dlq"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	s, err := NewServer(store, dir)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	s.SetDistributed(true)
+	runner, err := s.newRunner(spec)
+	if err != nil {
+		t.Fatalf("newRunner: %v", err)
+	}
+
+	s.dispatchIfParallel(context.Background(), runner, spec)
+
+	tasks, err := store.ListTasks(context.Background(), spec.Name)
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("dispatchIfParallel created %d tasks in distributed mode; Start owns dispatch", len(tasks))
+	}
+}

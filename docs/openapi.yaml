@@ -46,8 +46,20 @@ components:
         parallelism:
           type: object
           properties:
-            count: { type: integer }
-            shard_strategy: { type: string, enum: [round_robin, partition, id_range, table] }
+            sharding:
+              type: object
+              properties:
+                strategy: { type: string, enum: [round_robin, pk_mod, hash_modulo, partition, id_range, table] }
+                key: { type: string }
+                logical_shards: { type: integer }
+            execution:
+              type: object
+              properties:
+                max_active_shards: { type: integer }
+                transform_workers: { type: integer }
+                sink_concurrency: { type: integer }
+            count: { type: integer, deprecated: true }
+            shard_strategy: { type: string, enum: [round_robin, partition, id_range, table], deprecated: true }
     PluginConfig:
       type: object
       properties:

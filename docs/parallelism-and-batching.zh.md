@@ -8,7 +8,7 @@
 
 ### 工作原理
 
-当 pipeline spec 包含 `parallelism.count > 1` 时，平台创建 N 个独立的 `Runner` 实例。每个实例：
+当 pipeline spec 包含 `parallelism.sharding.logical_shards > 1`（或旧字段 `parallelism.count > 1`）时，平台按 logical shard 创建独立的 `Runner` 实例。每个实例：
 
 1. 获得**深度复制后的 spec**，`shard_index` 和 `shard_total` 注入到 `source.config` 中
 2. 拥有自己的**隔离 checkpoint 命名空间**：`{pipeline-name}.shard-{N}`
@@ -16,45 +16,92 @@
 4. 共享相同的 Sink 目标（如同一个 MySQL 表、同一个 Kafka topic）
 
 ```
-Pipeline spec（count=4）
+Pipeline spec（logical_shards=4）
 ├── Shard 0：Source(shard_index=0) → Transforms → Sink  [checkpoint：name.shard-0]
 ├── Shard 1：Source(shard_index=1) → Transforms → Sink  [checkpoint：name.shard-1]
 ├── Shard 2：Source(shard_index=2) → Transforms → Sink  [checkpoint：name.shard-2]
 └── Shard 3：Source(shard_index=3) → Transforms → Sink  [checkpoint：name.shard-3]
 ```
 
+`parallelism.sharding.logical_shards` 表示稳定的数据归属，不应该只为了调吞吐而随意修改。`parallelism.execution.max_active_shards` 表示 standalone 进程内最多同时运行多少个 logical shard。master/worker 模式会把所有 logical shard 派发为任务，实际并发由 worker slots 限制。
+
 ### 每种 Source 的分片策略
 
 | Source | 分片机制 | 读取的 Config 字段 | 说明 |
 |--------|---------|-------------------|------|
-| **file** | 行号取模 | `shard_index`、`shard_total` | Shard i 获取 `lineNum % total == i` 的行。所有分片读取同一个文件但输出不同行。Byte-offset checkpoint 仍然有效。 |
+| **file** | 行号取模 | `shard_index`、`shard_total` | Shard i 获取 `lineNum % total == i` 的行。所有分片读取同一个文件但输出不同行。在稳定全局位置分片实现前，恢复语义按 at-least-once 处理，可能重放。 |
 | **http** | 页码取模 | `shard_index`、`shard_total` | Shard i 获取第 `i+1, i+1+total, i+1+2*total, ...` 页。每个分片独立发起 HTTP 请求。 |
-| **redis** | Key hash 取模 | `shard_index`、`shard_total` | 所有分片 SCAN 同一个 keyspace，但每个分片只处理 `hash(key) % total == index` 的 key。正确但扫描有重叠。 |
+| **redis** | Key hash 取模 | `shard_index`、`shard_total`、`shard_key` | 使用 `sharding.strategy: hash_modulo` 且 `sharding.key: _key` 或 `@key`。所有分片 SCAN 同一个 keyspace，但每个分片只处理 `hash(key) % total == index` 的 key。正确但扫描有重叠。 |
 | **mysql_batch** | 主键取模 | `shard_index`、`shard_total` | SQL 查询中使用 `WHERE MOD(pk, total) = idx`。每个分片获取不相交的行分区。 |
 | **mysql_cdc** | 表分区 + server_id 隔离 | `shard_index`、`shard_total` | Shard i 处理表 `[i, i+total, ...]`。每个分片获取唯一的 binlog `server_id`。单表 CDC 无效果。 |
 | **mysql_snapshot_cdc** | 快照阶段 PK 取模 + CDC 阶段表分区 | `shard_index`、`shard_total` | 快照期间：`WHERE MOD(pk, total) = idx`。CDC 期间：表分区 + 唯一 server_id。 |
-| **kafka** | 消费者组自动均衡 | （无 — 忽略分片字段） | N 个并行 runner 加入同一个 `group_id`。Kafka 的消费者组协议自动分配分区。 |
+| **kafka** | 消费者组自动均衡 | （无 — 忽略分片字段） | N 个并行 runner 加入同一个 `group_id`。Kafka 的消费者组协议自动分配分区。**logical shards 应小于等于 topic partition 数**，否则多余 shard 空闲。 |
 | **postgres_cdc** | 不支持分片 | — | 仅限单实例。 |
 
-### ShardStrategy 字段
+### Sharding 与 Execution 字段
 
-`ParallelismConfig` 中的 `shard_strategy` 字段是**建议性/文档性**的 — 它描述预期的策略，但每个 Source 直接从其 config 中读取 `shard_index`/`shard_total` 并应用自己的逻辑。字段值：
-
-| 值 | 预期用途 |
-|----|---------|
-| `round_robin` | File、HTTP、Redis（行/页/key 取模） |
-| `partition` | Kafka（消费者组分区再均衡） |
-| `id_range` | MySQL 批量（PK 取模分片） |
-| `table` | MySQL CDC（表列表分区） |
-
-### YAML 配置
+新 spec 应把稳定分片和运行并发分开：
 
 ```yaml
 parallelism:
-  count: 4                    # 并行实例数
-  shard_strategy: "id_range"  # 建议性：数据如何分割
-  shard_key: "id"             # 建议性：按哪个字段分片
-  shard_total: 0              # 可选：覆盖总分片空间（用于 id_range）
+  sharding:
+    strategy: pk_mod
+    key: id
+    logical_shards: 16
+  execution:
+    max_active_shards: 4
+    transform_workers: 1
+    sink_concurrency: 1
+```
+
+`execution.sink_concurrency` 设置为正数时，会限制同一个 standalone 进程内多个 shard runner 的并发 `sink.Write` 数。它不会串行化 transform 或 checkpoint 保存，也不是跨进程的分布式 lease。
+
+`execution.transform_workers` 大于 1 时，会在 linear runner 的当前批次内并行处理逐记录 transform，并在写入 sink 前恢复输入顺序。如果 transform 链包含 `BatchTransform`、`Flusher`、`StateSnapshotter` 或 state metrics provider，runner 会自动退回串行路径，保持 window/deduplicate/join 等状态边界有序。
+
+`execution.source_concurrency` 仅作为前向兼容字段被解析，当前 runner 尚未激活该能力。Source 侧并行度由 `sharding.logical_shards` 和 `execution.max_active_shards` 控制。
+
+旧字段仍兼容，并在 defaults 阶段映射：
+
+```yaml
+parallelism:
+  count: 4
+  shard_strategy: "id_range"
+  shard_key: "id"
+  shard_total: 0
+```
+
+兼容映射：
+
+- `sharding.logical_shards = shard_total`（如设置），否则等于 `count`
+- `execution.max_active_shards = count`
+- `sharding.strategy = shard_strategy`
+- `sharding.key = shard_key`
+
+### DAG Execution Workers
+
+DAG pipeline 不使用线性 `parallelism.sharding` 创建 runner shard。它可以使用顶层 `execution.workers` 在单个 DAG executor 内并行处理 route/transform 工作：
+
+```yaml
+execution:
+  workers: 4
+  batch_size: 1000
+  backpressure_buffer: 200
+```
+
+Worker 结果会按 source 重新排序后再进入 sink 批次聚合。Sink 写入和 checkpoint 保存仍由单个聚合器完成，因此提高 `execution.workers` 可以提升 CPU/IO 型 transform 路由吞吐，但不会让 checkpoint 位置倒退。
+
+### Kafka 并行注意事项
+
+Kafka source 会忽略 `shard_strategy`，所有 logical shard 加入同一个 consumer group，由 Kafka 分配 topic partition。有效并行度受 topic partition 数限制：
+
+- logical shards ≤ topic partitions：所有 shard 都能收到数据。
+- logical shards > topic partitions：多余 shard 空闲，不报错。
+
+提高 `parallelism.sharding.logical_shards` 前先确认 partition 数：
+
+```bash
+kafka-topics.sh --describe --topic <topic>
+# PartitionCount 需要 >= logical_shards
 ```
 
 ## 批处理架构

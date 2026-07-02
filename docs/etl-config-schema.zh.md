@@ -26,6 +26,13 @@ batch_size: 1000
 flush_interval_ms: 1000
 checkpoint_interval_sec: 30
 backpressure_buffer: 100
+parallelism:
+  sharding:
+    strategy: pk_mod
+    key: id
+    logical_shards: 16
+  execution:
+    max_active_shards: 4
 retry:
   max_attempts: 3
   initial_interval_ms: 1000
@@ -52,8 +59,48 @@ dlq:
 | `flush_interval_ms` | 否 | 批次 flush 间隔（毫秒）。默认 `1000`。 |
 | `checkpoint_interval_sec` | 否 | 检查点保存间隔（秒）。默认 `30`。 |
 | `backpressure_buffer` | 否 | 内部记录通道大小。默认 `100`。 |
+| `parallelism` | 否 | 可选分片与运行并发。新 spec 使用 `parallelism.sharding.logical_shards` 表达稳定数据归属，使用 `parallelism.execution.max_active_shards` 表达当前进程并发。旧字段 `parallelism.count`、`shard_strategy`、`shard_key`、`shard_total` 仍兼容并自动映射。 |
 | `retry` | 否 | 重试策略。默认值见上方。 |
 | `dlq.enable` | 否 | 启用死信队列（DLQ）。默认 `true`。 |
+
+### 并行度
+
+```yaml
+parallelism:
+  sharding:
+    strategy: pk_mod        # pk_mod、id_range、hash_modulo、round_robin、partition、table
+    key: id                 # hash 或 PK 策略使用的字段/键
+    logical_shards: 16      # 稳定分片命名空间，也用于 checkpoint key
+  execution:
+    max_active_shards: 4    # standalone 进程内并发
+    transform_workers: 1    # 批内无状态逐记录 transform worker 数
+    sink_concurrency: 1     # standalone shard runner 之间的最大并发 sink 写入数
+```
+
+`parallelism.execution.source_concurrency` 仍会被解析以保持前向兼容，但当前 runner 尚未激活该能力。Source 侧并行度请使用 `parallelism.sharding.logical_shards` 和 `parallelism.execution.max_active_shards` 控制。
+
+旧格式仍有效：
+
+```yaml
+parallelism:
+  count: 4
+  shard_strategy: id_range
+  shard_key: id
+  shard_total: 0
+```
+
+### DAG Execution Workers
+
+DAG spec 使用顶层 `execution`，不使用线性 pipeline 的 `parallelism.execution`：
+
+```yaml
+execution:
+  workers: 4
+  batch_size: 1000
+  backpressure_buffer: 200
+```
+
+`execution.workers` 会并行处理已从 source 节点读取出来的 DAG route/transform 工作。Sink 批次聚合、Sink 写入和 checkpoint 推进仍由单个有序聚合器完成，因此 checkpoint 按 source 记录顺序前进，并保持 at-least-once 语义。默认值为 `1`，兼容原来的单 router 行为。
 
 ### 复用已保存连接
 

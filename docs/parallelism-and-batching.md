@@ -8,7 +8,7 @@ This document describes the parallelism (sharding) and batching architecture of 
 
 ### How It Works
 
-When a pipeline spec includes `parallelism.count > 1`, the platform creates N independent `Runner` instances. Each instance:
+When a pipeline spec includes `parallelism.sharding.logical_shards > 1` (or legacy `parallelism.count > 1`), the platform creates one shard-scoped `Runner` per logical shard. Each instance:
 
 1. Gets a **deep-copied spec** with `shard_index` and `shard_total` injected into `source.config`
 2. Has its own **isolated checkpoint namespace**: `{pipeline-name}.shard-{N}`
@@ -16,45 +16,118 @@ When a pipeline spec includes `parallelism.count > 1`, the platform creates N in
 4. Shares the same sink target (e.g., same MySQL table, same Kafka topic)
 
 ```
-Pipeline spec (count=4)
+Pipeline spec (logical_shards=4)
 ├── Shard 0: Source(shard_index=0) → Transforms → Sink  [checkpoint: name.shard-0]
 ├── Shard 1: Source(shard_index=1) → Transforms → Sink  [checkpoint: name.shard-1]
 ├── Shard 2: Source(shard_index=2) → Transforms → Sink  [checkpoint: name.shard-2]
 └── Shard 3: Source(shard_index=3) → Transforms → Sink  [checkpoint: name.shard-3]
 ```
 
+`parallelism.sharding.logical_shards` is stable data ownership and should not be changed just to tune throughput. `parallelism.execution.max_active_shards` controls how many logical shards may run at once in a standalone process. In master/worker mode, all logical shards are dispatched as tasks and effective concurrency is bounded by worker slots.
+
 ### Per-Source Sharding Strategies
 
 | Source | Sharding Mechanism | Config Fields Read | Description |
 |--------|-------------------|-------------------|-------------|
-| **file** | Line modulo | `shard_index`, `shard_total` | Shard i gets lines where `lineNum % total == i`. All shards read the same file but emit different lines. Byte-offset checkpoints remain valid. |
+| **file** | Line modulo | `shard_index`, `shard_total` | Shard i gets lines where `lineNum % total == i`. All shards read the same file but emit different lines. Treat checkpoint resume as at-least-once with possible replay until stable global-position sharding is implemented. |
 | **http** | Page modulo | `shard_index`, `shard_total` | Shard i fetches pages `i+1, i+1+total, i+1+2*total, ...`. Each shard makes independent HTTP requests. |
-| **redis** | Key hash modulo | `shard_index`, `shard_total` | All shards SCAN the same keyspace, but each shard only processes keys where `hash(key) % total == index`. Correct but scans overlap. |
+| **redis** | Key hash modulo | `shard_index`, `shard_total`, `shard_key` | Use `sharding.strategy: hash_modulo` with `sharding.key: _key` or `@key`. All shards SCAN the same keyspace, but each shard only processes keys where `hash(key) % total == index`. Correct but scans overlap. |
 | **mysql_batch** | PK modulo | `shard_index`, `shard_total` | `WHERE MOD(pk, total) = idx` in the SQL query. Each shard gets a disjoint partition of rows. |
 | **mysql_cdc** | Table partition + server_id isolation | `shard_index`, `shard_total` | Shard i processes tables `[i, i+total, ...]`. Each shard gets a unique binlog `server_id`. Single-table CDC is a no-op. |
 | **mysql_snapshot_cdc** | PK modulo (snapshot) + table partition (CDC) | `shard_index`, `shard_total` | During snapshot: `WHERE MOD(pk, total) = idx`. During CDC: table partition + unique server_id. |
-| **kafka** | Consumer group auto-balance | (none — ignores shard fields) | N parallel runners join the same `group_id`. Kafka's consumer group protocol distributes partitions automatically. |
+| **kafka** | Consumer group auto-balance | (none — ignores shard fields) | N parallel runners join the same `group_id`. Kafka's consumer group protocol distributes partitions automatically. **Set logical shards ≤ topic partition count** — Kafka assigns at most one partition per consumer, so extra shards stay idle. |
 | **postgres_cdc** | Not sharded | — | Single-instance only. |
 
-### ShardStrategy Field
+### Sharding And Execution Fields
 
-The `shard_strategy` field in `ParallelismConfig` is **advisory/documentation** — it describes the intended strategy but each source reads `shard_index`/`shard_total` directly from its config and applies its own logic. The field values:
-
-| Value | Intended Use |
-|-------|-------------|
-| `round_robin` | File, HTTP, Redis (line/page/key modulo) |
-| `partition` | Kafka (consumer group partition rebalance) |
-| `id_range` | MySQL batch (PK modulo sharding) |
-| `table` | MySQL CDC (table-list partitioning) |
-
-### YAML Configuration
+New specs should separate stable sharding from runtime concurrency:
 
 ```yaml
 parallelism:
-  count: 4                    # Number of parallel instances
-  shard_strategy: "id_range"  # Advisory: how data is split
-  shard_key: "id"             # Advisory: which field to shard on
-  shard_total: 0              # Optional: override total shard space (for id_range)
+  sharding:
+    strategy: pk_mod
+    key: id
+    logical_shards: 16
+  execution:
+    max_active_shards: 4
+    transform_workers: 1
+    sink_concurrency: 1
+```
+
+`execution.sink_concurrency`, when set to a positive value, limits concurrent
+`sink.Write` calls across shard runners in the same standalone process. It does
+not serialize transforms or checkpoint saves, and it is not a cross-process
+distributed lease.
+
+`execution.transform_workers`, when greater than 1, parallelizes per-record
+transform work inside a linear runner's current batch and restores input order
+before writing to the sink. If the transform chain contains a `BatchTransform`,
+`Flusher`, `StateSnapshotter`, or state metrics provider, the runner falls back
+to the serial path so window/deduplicate/join style state boundaries remain
+ordered.
+
+`execution.source_concurrency` is accepted for forward compatibility but is not
+active in the current runner. Source-side parallelism is driven by
+`sharding.logical_shards` plus `execution.max_active_shards`.
+
+The legacy fields are still supported and mapped during defaults:
+
+```yaml
+parallelism:
+  count: 4
+  shard_strategy: "id_range"
+  shard_key: "id"
+  shard_total: 0
+```
+
+Legacy mapping:
+
+- `sharding.logical_shards = shard_total` when set, otherwise `count`
+- `execution.max_active_shards = count`
+- `sharding.strategy = shard_strategy`
+- `sharding.key = shard_key`
+
+### DAG Execution Workers
+
+DAG pipelines do not use linear `parallelism.sharding` to create runner shards.
+They can use top-level `execution.workers` to parallelize route/transform work
+inside one DAG executor:
+
+```yaml
+execution:
+  workers: 4
+  batch_size: 1000
+  backpressure_buffer: 200
+```
+
+Worker results are re-ordered per source before sink batching. Sink writes and
+checkpoint saves still happen in the single aggregator, so a higher
+`execution.workers` value improves CPU/IO-bound transform routing without
+allowing checkpoint positions to regress.
+
+### Kafka Parallelism Caveat
+
+For Kafka sources, `shard_strategy` is ignored — all logical shards join the
+same consumer group and Kafka assigns topic partitions to them. Because the
+Kafka consumer-group protocol assigns at most one partition to each consumer
+within a group, the **effective parallelism is bounded by the topic's partition
+count**:
+
+- If logical shards ≤ topic partitions: all shards receive data.
+- If logical shards > topic partitions: the extra shards stay idle (no data, no
+  error).
+
+Check the topic's partition count before raising `parallelism.sharding.logical_shards`:
+
+```bash
+kafka-topics.sh --describe --topic <topic>
+# PartitionCount must be ≥ parallelism.sharding.logical_shards
+```
+
+To raise the partition count (Kafka only supports increasing, never decreasing):
+
+```bash
+kafka-topics.sh --alter --topic <topic> --partitions <new-count>
 ```
 
 ## Batching Architecture

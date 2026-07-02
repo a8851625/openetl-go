@@ -86,6 +86,7 @@ type DAGExecutor struct {
 	retryConfig  retry.Config
 	batchSize    int
 	backpressure int
+	workers      int
 
 	// Per-sink circuit breakers to prevent cascading failures
 	breakers map[string]*pipeline.CircuitBreaker
@@ -155,7 +156,11 @@ func NewDAGExecutor(spec *PipelineSpec, cpStore *storage.CheckpointStoreAdapter,
 	// Apply defaults
 	exec.batchSize = 1000
 	exec.backpressure = 100
+	exec.workers = 1
 	if spec.Execution != nil {
+		if spec.Execution.Workers > 0 {
+			exec.workers = spec.Execution.Workers
+		}
 		if spec.Execution.BatchSize > 0 {
 			exec.batchSize = spec.Execution.BatchSize
 		}
@@ -365,6 +370,7 @@ func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID 
 	}()
 
 	consecutiveErrors := 0
+	var seq int64
 	for {
 		rec, err := reader.Read(ctx)
 		if ctx.Err() != nil {
@@ -391,8 +397,10 @@ func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID 
 		rec.Metadata.Source = e.spec.Name
 		atomic.AddInt64(&e.stats.RecordsRead, 1)
 
+		msg := recordMsg{rec: rec, sourceID: sourceID, seq: seq}
+		seq++
 		select {
-		case records <- recordMsg{rec: rec, sourceID: sourceID}:
+		case records <- msg:
 		case <-ctx.Done():
 			return
 		}
@@ -402,6 +410,11 @@ func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID 
 // routeAndWrite processes records from sources, routes them through the DAG
 // edges (applying transforms and conditions), and writes to sinks.
 func (e *DAGExecutor) routeAndWrite(ctx context.Context, records <-chan recordMsg) {
+	if e.workers > 1 {
+		e.routeAndWriteParallel(ctx, records)
+		return
+	}
+
 	batchBySink := map[string][]core.Record{}
 	lastRecBySource := map[string]core.Record{}
 	ticker := time.NewTicker(time.Second)
@@ -450,6 +463,160 @@ func (e *DAGExecutor) routeAndWrite(ctx context.Context, records <-chan recordMs
 			return
 		}
 	}
+}
+
+type routeResult struct {
+	msg         recordMsg
+	batchBySink map[string][]core.Record
+}
+
+func (e *DAGExecutor) routeAndWriteParallel(ctx context.Context, records <-chan recordMsg) {
+	jobs := make(chan recordMsg, e.backpressure)
+	results := make(chan routeResult, e.backpressure)
+
+	var workers sync.WaitGroup
+	for i := 0; i < e.workers; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for msg := range jobs {
+				result := e.routeRecordSafely(ctx, msg)
+				results <- result
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for {
+			select {
+			case msg, ok := <-records:
+				if !ok {
+					return
+				}
+				select {
+				case jobs <- msg:
+				case <-ctx.Done():
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	batchBySink := map[string][]core.Record{}
+	lastRecBySource := map[string]core.Record{}
+	pending := map[string]map[int64]routeResult{}
+	nextSeq := map[string]int64{}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	ctxDone := ctx.Done()
+
+	applyResult := func(result routeResult) {
+		lastRecBySource[result.msg.sourceID] = result.msg.rec
+		for sinkID, batch := range result.batchBySink {
+			if len(batch) == 0 {
+				continue
+			}
+			batchBySink[sinkID] = append(batchBySink[sinkID], batch...)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		for sinkID, batch := range batchBySink {
+			if len(batch) >= e.batchSize {
+				e.writeToSink(ctx, sinkID, batch, lastRecBySource)
+				batchBySink[sinkID] = batch[:0]
+				lastRecBySource = map[string]core.Record{}
+			}
+		}
+	}
+
+	drainSource := func(sourceID string) {
+		for {
+			sourcePending := pending[sourceID]
+			if sourcePending == nil {
+				return
+			}
+			seq := nextSeq[sourceID]
+			result, ok := sourcePending[seq]
+			if !ok {
+				return
+			}
+			delete(sourcePending, seq)
+			nextSeq[sourceID] = seq + 1
+			applyResult(result)
+		}
+	}
+
+	flushAll := func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		for sinkID, batch := range batchBySink {
+			if len(batch) > 0 {
+				e.writeToSink(flushCtx, sinkID, batch, lastRecBySource)
+				batchBySink[sinkID] = batch[:0]
+			}
+		}
+		lastRecBySource = map[string]core.Record{}
+		cancel()
+	}
+
+	for {
+		select {
+		case result, ok := <-results:
+			if !ok {
+				for sourceID := range pending {
+					drainSource(sourceID)
+				}
+				flushAll()
+				return
+			}
+			if pending[result.msg.sourceID] == nil {
+				pending[result.msg.sourceID] = map[int64]routeResult{}
+			}
+			pending[result.msg.sourceID][result.msg.seq] = result
+			drainSource(result.msg.sourceID)
+
+		case <-ticker.C:
+			flushAll()
+
+		case <-ctxDone:
+			// The input forwarder will close jobs after ctx cancellation.
+			// Keep draining worker results until results closes so records that
+			// already crossed into the worker pool are applied in source order
+			// and included in the terminal background flush below.
+			ctxDone = nil
+		}
+	}
+}
+
+func (e *DAGExecutor) routeRecordSafely(ctx context.Context, msg recordMsg) (result routeResult) {
+	result = routeResult{msg: msg, batchBySink: map[string][]core.Record{}}
+	defer func() {
+		if rec := recover(); rec != nil {
+			err := fmt.Errorf("DAG route panic: %v", rec)
+			g.Log().Errorf(ctx, "DAG pipeline %s route worker panic: %v\n%s", e.spec.Name, rec, debug.Stack())
+			if e.alertMgr != nil {
+				e.alertMgr.Send(ctx, alert.Event{
+					Level:   alert.LevelError,
+					Title:   "DAG route worker panic",
+					Message: fmt.Sprintf("pipeline %s: %v", e.spec.Name, rec),
+					JobName: e.spec.Name,
+				})
+			}
+			e.setStatus("failed")
+			e.handleFailed(ctx, msg.rec, err, "")
+			result.batchBySink = map[string][]core.Record{}
+		}
+	}()
+	e.route(ctx, msg.sourceID, msg.rec, result.batchBySink)
+	return result
 }
 
 // route traverses the DAG from a given node, applying transforms and routing
@@ -776,6 +943,7 @@ func applyTransformSafely(ctx context.Context, t core.Transform, rec core.Record
 type recordMsg struct {
 	rec      core.Record
 	sourceID string
+	seq      int64
 }
 
 func isEOF(err error) bool {

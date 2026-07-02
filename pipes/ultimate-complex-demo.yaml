@@ -124,8 +124,11 @@ sink:
 
 # ── Parallelism: 2 shards (demo; file source doesn't shard, both read same data) ──
 # parallelism:
-#   count: 2
-#   shard_strategy: round_robin
+#   sharding:
+#     strategy: round_robin
+#     logical_shards: 2
+#   execution:
+#     max_active_shards: 2
 
 # ── Retry with exponential backoff ──
 retry:

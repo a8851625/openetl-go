@@ -32,8 +32,11 @@ func BuildShardRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, 
 	}
 
 	strategy := ""
+	shardKey := ""
 	if spec.Parallelism != nil {
-		strategy = spec.Parallelism.ShardStrategy
+		spec.Parallelism.ApplyDefaults()
+		strategy = spec.Parallelism.Strategy()
+		shardKey = spec.Parallelism.Key()
 	}
 
 	shardSpec := *spec // shallow copy of value fields
@@ -49,7 +52,7 @@ func BuildShardRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, 
 	shardSpec.Parallelism.Count = total
 
 	// Deep-copy all config maps to prevent cross-shard / cross-worker mutation.
-	shardSpec.Source.Config = InjectShardConfig(spec.Source.Config, idx, total, strategy)
+	shardSpec.Source.Config = InjectShardConfig(spec.Source.Config, idx, total, strategy, shardKey)
 	shardSpec.Sink.Config = cloneConfig(spec.Sink.Config)
 	shardSpec.Transforms = make([]TransformSpec, len(spec.Transforms))
 	for j, tf := range spec.Transforms {

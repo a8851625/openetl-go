@@ -25,6 +25,13 @@ schedule:
 batch_size: 1000
 checkpoint_interval_sec: 30
 backpressure_buffer: 100
+parallelism:
+  sharding:
+    strategy: pk_mod
+    key: id
+    logical_shards: 16
+  execution:
+    max_active_shards: 4
 retry:
   max_attempts: 3
   initial_interval_ms: 1000
@@ -50,8 +57,51 @@ dlq:
 | `batch_size` | no | Sink flush size. Default `1000`. |
 | `checkpoint_interval_sec` | no | Reserved interval setting; checkpoints currently advance after successful writes. Default `30`. |
 | `backpressure_buffer` | no | Internal record channel size. Default `100`. |
+| `parallelism` | no | Optional sharding and runtime concurrency. New specs should use `parallelism.sharding.logical_shards` for stable data ownership and `parallelism.execution.max_active_shards` for current process concurrency. Legacy `parallelism.count`, `shard_strategy`, `shard_key`, and `shard_total` are still accepted and mapped for compatibility. |
 | `retry` | no | Retry policy. Defaults shown above. |
 | `dlq.enable` | no | Enable file DLQ. |
+
+### Parallelism
+
+```yaml
+parallelism:
+  sharding:
+    strategy: pk_mod        # pk_mod, id_range, hash_modulo, round_robin, partition, table
+    key: id                 # field/key used by hash or PK strategies
+    logical_shards: 16      # stable shard namespace, also used in checkpoint keys
+  execution:
+    max_active_shards: 4    # standalone in-process concurrency
+    transform_workers: 1    # batch-local workers for stateless per-record transforms
+    sink_concurrency: 1     # max concurrent sink writes across standalone shard runners
+```
+
+`parallelism.execution.source_concurrency` is still parsed for forward
+compatibility but is not active in the current runner. Use
+`parallelism.sharding.logical_shards` and
+`parallelism.execution.max_active_shards` for source-side parallelism.
+
+Legacy form remains valid:
+
+```yaml
+parallelism:
+  count: 4
+  shard_strategy: id_range
+  shard_key: id
+  shard_total: 0
+```
+
+### DAG Execution Workers
+
+DAG specs use the top-level `execution` block instead of linear `parallelism.execution`:
+
+```yaml
+execution:
+  workers: 4
+  batch_size: 1000
+  backpressure_buffer: 200
+```
+
+`execution.workers` parallelizes DAG route/transform work for records that have already been read from source nodes. Sink batching, sink writes, and checkpoint advancement still pass through a single ordered aggregator, so checkpoints advance in source record order and retain at-least-once semantics. The default is `1`, which preserves the previous single-router behavior.
 
 ### Reusing Saved Connections
 

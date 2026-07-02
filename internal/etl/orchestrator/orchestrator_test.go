@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/alert"
 	"github.com/a8851625/openetl-go/internal/etl/checkpoint"
@@ -343,6 +346,60 @@ func TestDAGExecutorLoadSourceCheckpointUnwrapsEnvelope(t *testing.T) {
 	}
 }
 
+func TestDAGExecutorExecutionWorkersParallelizeRouting(t *testing.T) {
+	const (
+		sourceName    = "dag-workers-source"
+		transformName = "dag-workers-transform"
+		sinkName      = "dag-workers-sink"
+	)
+	probe := &dagConcurrencyProbe{}
+	sinkProbe := &dagCountingSink{}
+	registry.RegisterSource(sourceName, func(config map[string]any) (core.Source, error) {
+		return dagCountingSource{count: 8}, nil
+	})
+	registry.RegisterTransform(transformName, func(config map[string]any) (core.Transform, error) {
+		return probe, nil
+	})
+	registry.RegisterSink(sinkName, func(config map[string]any) (core.Sink, error) {
+		return sinkProbe, nil
+	})
+
+	spec := &PipelineSpec{
+		Name:      "dag-workers",
+		Execution: &ExecutionConfig{Workers: 4, BatchSize: 20, BackpressureBuf: 20},
+		DAG: DAG{
+			Nodes: []*Node{
+				{ID: "src", Kind: KindSource, Plugin: sourceName},
+				{ID: "tfm", Kind: KindTransform, Plugin: transformName},
+				{ID: "sink", Kind: KindSink, Plugin: sinkName},
+			},
+			Edges: []*Edge{
+				{From: "src", To: "tfm"},
+				{From: "tfm", To: "sink"},
+			},
+		},
+	}
+	am := alert.NewManager()
+	defer am.Close()
+	exec, err := NewDAGExecutor(spec, nil, nil, am)
+	if err != nil {
+		t.Fatalf("NewDAGExecutor: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := exec.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	exec.Wait()
+
+	if got := atomic.LoadInt64(&probe.maxInFlight); got < 2 {
+		t.Fatalf("execution.workers did not parallelize transform routing: max in-flight = %d", got)
+	}
+	if got := atomic.LoadInt64(&sinkProbe.records); got != 8 {
+		t.Fatalf("sink records = %d, want 8", got)
+	}
+}
+
 func newDAGCheckpointAdapter(t *testing.T) (*storage.CheckpointStoreAdapter, func()) {
 	t.Helper()
 	store, err := sqlite.New(filepath.Join(t.TempDir(), "etl.db"))
@@ -372,6 +429,94 @@ func (dagNoopTransform) Name() string { return "dag-noop-transform" }
 func (dagNoopTransform) Apply(_ context.Context, rec core.Record) (core.Record, error) {
 	return rec, nil
 }
+
+type dagCountingSource struct {
+	count int
+}
+
+func (s dagCountingSource) Name() string { return "dag-counting-source" }
+func (s dagCountingSource) Open(context.Context, *core.Checkpoint) (core.RecordReader, error) {
+	return &dagCountingReader{count: s.count}, nil
+}
+
+type dagCountingReader struct {
+	count int
+	next  int
+}
+
+func (r *dagCountingReader) Read(context.Context) (core.Record, error) {
+	if r.next >= r.count {
+		return core.Record{}, io.EOF
+	}
+	r.next++
+	return core.Record{
+		Data:     map[string]any{"id": r.next},
+		Metadata: core.Metadata{Offset: int64(r.next)},
+	}, nil
+}
+
+func (r *dagCountingReader) ReadBatch(ctx context.Context, n int) ([]core.Record, error) {
+	out := make([]core.Record, 0, n)
+	for len(out) < n {
+		rec, err := r.Read(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return out, err
+		}
+		out = append(out, rec)
+	}
+	if len(out) == 0 {
+		return nil, io.EOF
+	}
+	return out, nil
+}
+
+func (r *dagCountingReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (r *dagCountingReader) Close() error { return nil }
+func (r *dagCountingReader) CheckpointForRecord(_ context.Context, rec core.Record) (core.Checkpoint, error) {
+	pos, _ := json.Marshal(map[string]any{"offset": rec.Metadata.Offset})
+	return core.Checkpoint{Source: "dag-counting-reader", Position: pos}, nil
+}
+
+type dagConcurrencyProbe struct {
+	inFlight    int64
+	maxInFlight int64
+}
+
+func (p *dagConcurrencyProbe) Name() string { return "dag-concurrency-probe" }
+func (p *dagConcurrencyProbe) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
+	cur := atomic.AddInt64(&p.inFlight, 1)
+	for {
+		max := atomic.LoadInt64(&p.maxInFlight)
+		if cur <= max || atomic.CompareAndSwapInt64(&p.maxInFlight, max, cur) {
+			break
+		}
+	}
+	select {
+	case <-time.After(50 * time.Millisecond):
+	case <-ctx.Done():
+		atomic.AddInt64(&p.inFlight, -1)
+		return rec, ctx.Err()
+	}
+	atomic.AddInt64(&p.inFlight, -1)
+	return rec, nil
+}
+
+type dagCountingSink struct {
+	records int64
+}
+
+func (s *dagCountingSink) Name() string               { return "dag-counting-sink" }
+func (s *dagCountingSink) Open(context.Context) error { return nil }
+func (s *dagCountingSink) Write(_ context.Context, records []core.Record) error {
+	atomic.AddInt64(&s.records, int64(len(records)))
+	return nil
+}
+func (s *dagCountingSink) Close() error { return nil }
 
 type dagCheckpointReader struct{}
 
