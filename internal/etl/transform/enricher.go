@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -171,11 +172,6 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 		if n, ok := toInt(v); ok && n >= 0 {
 			t.retryBase = time.Duration(n) * time.Millisecond
 		}
-	}
-	// Cap concurrency by max_in_flight so the semaphore cannot exceed the
-	// backpressure bound.
-	if t.concurrency > t.maxInFlight {
-		t.concurrency = t.maxInFlight
 	}
 	if t.concurrency > 1 {
 		t.sem = make(chan struct{}, t.concurrency)
@@ -646,6 +642,7 @@ func (t *EnricherTransform) Close() error {
 //
 // Config:
 //
+//	mode: "cache" | "query"      // cache=full dimension refresh, query=per-record SQL lookup
 //	mode: "mysql" | "postgres"
 //	dsn: "user:pass@tcp(host:3306)/dimdb"
 //	query: "SELECT id, name, region FROM dim_users"
@@ -657,6 +654,7 @@ func (t *EnricherTransform) Close() error {
 //	on_miss: "pass"              // "pass" | "null" | "dlq" | "error"
 //	on_refresh_error: "pass"     // "pass" | "error"
 type LookupTransform struct {
+	mode        string
 	dsn         string
 	query       string
 	joinKey     string
@@ -667,6 +665,12 @@ type LookupTransform struct {
 	maxCache    int
 	onMiss      string
 	onRefresh   string
+	timeout     time.Duration
+
+	concurrency int
+	maxInFlight int
+	maxRetries  int
+	retryBase   time.Duration
 
 	mu    sync.RWMutex
 	cache map[string]map[string]any // normalized dimKeyValue → {field: value}
@@ -677,6 +681,8 @@ type LookupTransform struct {
 	pipeline   string
 	node       string
 	stateTTL   time.Duration
+	cacheTTL   time.Duration
+	sem        chan struct{}
 
 	processed          int64
 	hits               int64
@@ -691,10 +697,19 @@ type LookupTransform struct {
 	restoreSuccesses   int64
 	scanErrors         int64
 	cacheLimitExceeded int64
+	cacheHits          int64
+	cacheMisses        int64
+	querySuccesses     int64
+	queryErrors        int64
+	timeouts           int64
+	retries            int64
+	inFlight           int64
+	backpressureWaits  int64
 }
 
 func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 	t := &LookupTransform{
+		mode:      "cache",
 		joinKey:   "id",
 		dimKey:    "id",
 		refreshIv: 5 * time.Minute,
@@ -703,8 +718,24 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 		node:      "lookup",
 		onMiss:    "pass",
 		onRefresh: "pass",
+		timeout:   5 * time.Second,
+
+		concurrency: 1,
+		maxInFlight: 100,
+		maxRetries:  0,
+		retryBase:   200 * time.Millisecond,
 	}
 
+	if v, ok := config["mode"].(string); ok && strings.TrimSpace(v) != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "cache", "full", "snapshot", "mysql", "postgres":
+			t.mode = "cache"
+		case "query", "async_query":
+			t.mode = "query"
+		default:
+			return nil, fmt.Errorf("lookup: mode must be cache|query, got %q", v)
+		}
+	}
 	if v, ok := config["dsn"].(string); ok {
 		t.dsn = v
 	}
@@ -717,19 +748,52 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 	if v, ok := config["dim_key"].(string); ok {
 		t.dimKey = v
 	}
-	if rawFields, ok := config["fields"].([]any); ok {
+	switch rawFields := config["fields"].(type) {
+	case []any:
 		for _, f := range rawFields {
 			if fs, ok := f.(string); ok {
 				t.fields = append(t.fields, fs)
 			}
 		}
+	case []string:
+		t.fields = append(t.fields, rawFields...)
 	}
-	if v, ok := config["refresh_interval_sec"].(int); ok && v >= 0 {
-		if v == 0 {
-			t.refreshIv = 0 // no auto-refresh
-		} else {
-			t.refreshIv = time.Duration(v) * time.Second
+	if v, ok := config["refresh_interval_sec"]; ok {
+		if n, ok := toInt(v); ok && n >= 0 {
+			if n == 0 {
+				t.refreshIv = 0 // no auto-refresh
+			} else {
+				t.refreshIv = time.Duration(n) * time.Second
+			}
 		}
+	}
+	if v, ok := config["timeout_seconds"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.timeout = time.Duration(n) * time.Second
+		}
+	}
+	if v, ok := config["concurrency"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.concurrency = n
+		}
+	}
+	if v, ok := config["max_in_flight"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.maxInFlight = n
+		}
+	}
+	if v, ok := config["max_retries"]; ok {
+		if n, ok := toInt(v); ok && n >= 0 {
+			t.maxRetries = n
+		}
+	}
+	if v, ok := config["retry_base_ms"]; ok {
+		if n, ok := toInt(v); ok && n >= 0 {
+			t.retryBase = time.Duration(n) * time.Millisecond
+		}
+	}
+	if t.concurrency > 1 {
+		t.sem = make(chan struct{}, t.concurrency)
 	}
 	if v, ok := config["max_cache_entries"]; ok {
 		if n, ok := toInt(v); ok && n > 0 {
@@ -763,6 +827,11 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 			t.stateTTL = time.Duration(n) * time.Second
 		}
 	}
+	if v, ok := config["cache_ttl_seconds"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.cacheTTL = time.Duration(n) * time.Second
+		}
+	}
 	if backend, ok := config["state_backend"].(string); ok && backend != "" {
 		switch strings.ToLower(backend) {
 		case "redis":
@@ -775,6 +844,14 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 		default:
 			return nil, fmt.Errorf("lookup: unsupported state_backend %q", backend)
 		}
+	}
+	if t.cacheTTL > 0 && t.store == nil {
+		store, err := state.NewRedisStoreFromConfig(context.Background(), config)
+		if err != nil {
+			return nil, fmt.Errorf("lookup: cache_ttl_seconds requires configured Redis state backend: %w", err)
+		}
+		t.store = store
+		t.stateOwner = true
 	}
 
 	if t.dsn == "" || t.query == "" {
@@ -789,6 +866,12 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 		}
 		return nil, fmt.Errorf("lookup: at least one field is required")
 	}
+	if t.mode == "query" && !strings.Contains(t.query, "{{.") {
+		if t.stateOwner && t.store != nil {
+			_ = t.store.Close()
+		}
+		return nil, fmt.Errorf("lookup: mode=query requires query to contain at least one {{.field}} placeholder")
+	}
 
 	// Detect driver from DSN prefix.
 	driver := "mysql"
@@ -802,7 +885,11 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 		}
 		return nil, fmt.Errorf("lookup: open db: %w", err)
 	}
-	db.SetMaxOpenConns(3)
+	maxOpen := t.concurrency
+	if maxOpen < 3 {
+		maxOpen = 3
+	}
+	db.SetMaxOpenConns(maxOpen)
 	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
@@ -837,6 +924,10 @@ func (t *LookupTransform) WithStateStore(store state.Store, pipeline, node strin
 
 func (t *LookupTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
 	atomic.AddInt64(&t.processed, 1)
+	if t.mode == "query" {
+		return t.applyQuery(ctx, rec)
+	}
+
 	// Lazy-load cache on first use, or refresh if interval has elapsed.
 	t.mu.RLock()
 	cacheSize := len(t.cache)
@@ -874,16 +965,253 @@ func (t *LookupTransform) Apply(ctx context.Context, rec core.Record) (core.Reco
 		if rec.Data == nil {
 			rec.Data = make(map[string]any)
 		}
-		for _, f := range t.fields {
-			if v, ok := dimRow[f]; ok {
-				rec.Data[f] = v
-			}
-		}
+		t.copyLookupFields(rec.Data, dimRow)
 	} else {
 		return t.handleLookupMiss(rec, keyVal, false)
 	}
 
 	return rec, nil
+}
+
+// ApplyBatch implements core.BatchTransform so query-mode lookup can run
+// independent per-record SQL lookups concurrently while still reporting
+// record-level failures for DLQ routing.
+func (t *LookupTransform) ApplyBatch(ctx context.Context, recs []core.Record) ([]core.Record, error) {
+	out := make([]core.Record, len(recs))
+	var failures []core.TransformRecordFailure
+	var failedMu sync.Mutex
+
+	collect := func(i int, rec core.Record, err error) {
+		if err != nil {
+			failedMu.Lock()
+			failures = append(failures, core.TransformRecordFailure{Record: rec, Err: err})
+			failedMu.Unlock()
+		}
+		out[i] = rec
+	}
+
+	if t.mode != "query" || t.sem == nil || len(recs) <= 1 {
+		for i, rec := range recs {
+			r, err := t.Apply(ctx, rec)
+			collect(i, r, err)
+		}
+		return out, core.NewPartialTransformError("lookup: batch had failures", failures)
+	}
+
+	var wg sync.WaitGroup
+	for i, rec := range recs {
+		select {
+		case t.sem <- struct{}{}:
+		case <-ctx.Done():
+			collect(i, rec, ctx.Err())
+			continue
+		}
+		for atomic.LoadInt64(&t.inFlight) >= int64(t.maxInFlight) {
+			atomic.AddInt64(&t.backpressureWaits, 1)
+			select {
+			case <-ctx.Done():
+				<-t.sem
+				collect(i, rec, ctx.Err())
+				goto nextLoop
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		atomic.AddInt64(&t.inFlight, 1)
+		wg.Add(1)
+		go func(i int, rec core.Record) {
+			defer wg.Done()
+			defer func() { atomic.AddInt64(&t.inFlight, -1); <-t.sem }()
+			r, err := t.Apply(ctx, rec)
+			collect(i, r, err)
+		}(i, rec)
+	nextLoop:
+	}
+	wg.Wait()
+	return out, core.NewPartialTransformError("lookup: batch had failures", failures)
+}
+
+func (t *LookupTransform) applyQuery(ctx context.Context, rec core.Record) (core.Record, error) {
+	if rec.Data == nil {
+		return rec, nil
+	}
+
+	keyVal, ok := rec.Data[t.joinKey]
+	if !ok {
+		atomic.AddInt64(&t.missingKeys, 1)
+		return t.handleLookupMiss(rec, nil, true)
+	}
+
+	cacheKey := t.queryCacheKey(rec.Data)
+	if t.cacheTTL > 0 && t.store != nil {
+		cached, ok, err := t.store.Get(ctx, t.pipeline, t.node, cacheKey)
+		if err != nil {
+			return rec, fmt.Errorf("lookup: cache read failed: %w", err)
+		}
+		if ok {
+			atomic.AddInt64(&t.cacheHits, 1)
+			atomic.AddInt64(&t.hits, 1)
+			row := map[string]any{}
+			if err := json.Unmarshal(cached, &row); err != nil {
+				return rec, fmt.Errorf("lookup: decode cached row: %w", err)
+			}
+			t.copyLookupFields(rec.Data, row)
+			return rec, nil
+		}
+		atomic.AddInt64(&t.cacheMisses, 1)
+	}
+
+	row, err := t.queryWithControls(ctx, rec.Data)
+	if err != nil {
+		atomic.AddInt64(&t.queryErrors, 1)
+		if t.onRefresh == "error" {
+			return rec, core.ClassifiedError{Class: core.ClassifyError(err), Err: fmt.Errorf("lookup: query failed: %w", err)}
+		}
+		return rec, nil
+	}
+	atomic.AddInt64(&t.querySuccesses, 1)
+	if len(row) == 0 {
+		return t.handleLookupMiss(rec, keyVal, false)
+	}
+
+	atomic.AddInt64(&t.hits, 1)
+	t.copyLookupFields(rec.Data, row)
+	if t.cacheTTL > 0 && t.store != nil {
+		payload, err := json.Marshal(row)
+		if err != nil {
+			return rec, fmt.Errorf("lookup: encode cached row: %w", err)
+		}
+		if err := t.store.Set(ctx, t.pipeline, t.node, cacheKey, payload, t.cacheTTL); err != nil {
+			return rec, fmt.Errorf("lookup: cache write failed: %w", err)
+		}
+	}
+	return rec, nil
+}
+
+func (t *LookupTransform) queryWithControls(ctx context.Context, data map[string]any) (map[string]any, error) {
+	var lastErr error
+	for attempt := 0; attempt <= t.maxRetries; attempt++ {
+		if attempt > 0 {
+			atomic.AddInt64(&t.retries, 1)
+			backoff := t.retryBase * time.Duration(1<<(attempt-1))
+			if backoff > 10*t.retryBase {
+				backoff = 10 * t.retryBase
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+		row, err := t.queryOnce(ctx, data)
+		if err == nil {
+			return row, nil
+		}
+		lastErr = err
+		if !core.IsRetryableError(err) {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (t *LookupTransform) queryOnce(ctx context.Context, data map[string]any) (map[string]any, error) {
+	if t.db == nil {
+		return nil, fmt.Errorf("lookup: db not initialized")
+	}
+	if t.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, t.timeout)
+		defer cancel()
+	}
+	query, args := t.resolveSQLQuery(t.query, data)
+	rows, err := t.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			atomic.AddInt64(&t.timeouts, 1)
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	values := make([]any, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range values {
+		ptrs[i] = &values[i]
+	}
+	if err := rows.Scan(ptrs...); err != nil {
+		return nil, err
+	}
+	row := make(map[string]any, len(cols))
+	for i, col := range cols {
+		row[col] = normalizeSQLValue(values[i])
+	}
+	return row, nil
+}
+
+func (t *LookupTransform) resolveSQLQuery(tmpl string, data map[string]any) (string, []any) {
+	var fields []string
+	result := tmpl
+	for k := range data {
+		placeholder := fmt.Sprintf("{{.%s}}", k)
+		if strings.Contains(result, placeholder) {
+			fields = append(fields, k)
+		}
+	}
+	type fieldPos struct {
+		name string
+		pos  int
+	}
+	var positions []fieldPos
+	for _, f := range fields {
+		placeholder := fmt.Sprintf("{{.%s}}", f)
+		positions = append(positions, fieldPos{name: f, pos: strings.Index(tmpl, placeholder)})
+	}
+	for i := 0; i < len(positions); i++ {
+		for j := i + 1; j < len(positions); j++ {
+			if positions[j].pos < positions[i].pos {
+				positions[i], positions[j] = positions[j], positions[i]
+			}
+		}
+	}
+	var args []any
+	for _, fp := range positions {
+		placeholder := fmt.Sprintf("{{.%s}}", fp.name)
+		if strings.HasPrefix(t.dsn, "postgres://") || strings.HasPrefix(t.dsn, "postgresql://") {
+			result = strings.Replace(result, placeholder, fmt.Sprintf("$%d", len(args)+1), 1)
+		} else {
+			result = strings.Replace(result, placeholder, "?", 1)
+		}
+		args = append(args, data[fp.name])
+	}
+	return result, args
+}
+
+func (t *LookupTransform) queryCacheKey(data map[string]any) string {
+	query, args := t.resolveSQLQuery(t.query, data)
+	payload, _ := json.Marshal(map[string]any{"query": query, "args": args})
+	sum := sha256.Sum256(payload)
+	return "query:" + fmt.Sprintf("%x", sum)
+}
+
+func (t *LookupTransform) copyLookupFields(data map[string]any, row map[string]any) {
+	if data == nil {
+		return
+	}
+	for _, f := range t.fields {
+		if v, ok := row[f]; ok {
+			data[f] = v
+		}
+	}
 }
 
 func (t *LookupTransform) handleLookupMiss(rec core.Record, key any, missingKey bool) (core.Record, error) {
@@ -1108,6 +1436,14 @@ func (t *LookupTransform) TransformMetrics() core.TransformMetrics {
 			"restore_success":      atomic.LoadInt64(&t.restoreSuccesses),
 			"scan_error":           atomic.LoadInt64(&t.scanErrors),
 			"cache_limit_exceeded": atomic.LoadInt64(&t.cacheLimitExceeded),
+			"cache_hits":           atomic.LoadInt64(&t.cacheHits),
+			"cache_misses":         atomic.LoadInt64(&t.cacheMisses),
+			"query_success":        atomic.LoadInt64(&t.querySuccesses),
+			"query_error":          atomic.LoadInt64(&t.queryErrors),
+			"timeouts":             atomic.LoadInt64(&t.timeouts),
+			"retries":              atomic.LoadInt64(&t.retries),
+			"in_flight":            atomic.LoadInt64(&t.inFlight),
+			"backpressure_waits":   atomic.LoadInt64(&t.backpressureWaits),
 		},
 	}
 }

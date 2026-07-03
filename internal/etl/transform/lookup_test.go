@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/state"
 )
@@ -294,6 +295,194 @@ func TestLookupStateRestoreRespectsMaxCacheEntries(t *testing.T) {
 		t.Fatal("restoreCacheFromStateLocked succeeded, want max cache error")
 	}
 	assertLookupCounter(t, restarted.TransformMetrics(), "cache_limit_exceeded", 1)
+}
+
+func TestLookupQueryModeFetchesOneRow(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`SELECT tier FROM users WHERE id=\?`).
+		WithArgs("u1").
+		WillReturnRows(sqlmock.NewRows([]string{"tier"}).AddRow("vip"))
+
+	tr := &LookupTransform{
+		mode:      "query",
+		dsn:       "mock",
+		query:     "SELECT tier FROM users WHERE id={{.user_id}}",
+		joinKey:   "user_id",
+		fields:    []string{"tier"},
+		timeout:   time.Second,
+		onRefresh: "error",
+		db:        db,
+	}
+	rec, err := tr.Apply(context.Background(), core.Record{Data: map[string]any{"user_id": "u1"}})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if rec.Data["tier"] != "vip" {
+		t.Fatalf("tier = %v, want vip", rec.Data["tier"])
+	}
+	assertLookupCounter(t, tr.TransformMetrics(), "query_success", 1)
+	assertLookupCounter(t, tr.TransformMetrics(), "hit", 1)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestLookupQueryModeRetriesTransientSQLError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`SELECT tier FROM users WHERE id=\?`).
+		WithArgs("u1").
+		WillReturnError(errors.New("connection reset by peer"))
+	mock.ExpectQuery(`SELECT tier FROM users WHERE id=\?`).
+		WithArgs("u1").
+		WillReturnRows(sqlmock.NewRows([]string{"tier"}).AddRow("vip"))
+
+	tr := &LookupTransform{
+		mode:       "query",
+		dsn:        "mock",
+		query:      "SELECT tier FROM users WHERE id={{.user_id}}",
+		joinKey:    "user_id",
+		fields:     []string{"tier"},
+		timeout:    time.Second,
+		onRefresh:  "error",
+		maxRetries: 1,
+		retryBase:  time.Millisecond,
+		db:         db,
+	}
+	rec, err := tr.Apply(context.Background(), core.Record{Data: map[string]any{"user_id": "u1"}})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if rec.Data["tier"] != "vip" {
+		t.Fatalf("tier = %v, want vip", rec.Data["tier"])
+	}
+	assertLookupCounter(t, tr.TransformMetrics(), "retries", 1)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestLookupQueryModeTimeoutMetric(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`SELECT tier FROM users WHERE id=\?`).
+		WithArgs("u1").
+		WillDelayFor(50 * time.Millisecond).
+		WillReturnRows(sqlmock.NewRows([]string{"tier"}).AddRow("vip"))
+
+	tr := &LookupTransform{
+		mode:      "query",
+		dsn:       "mock",
+		query:     "SELECT tier FROM users WHERE id={{.user_id}}",
+		joinKey:   "user_id",
+		fields:    []string{"tier"},
+		timeout:   5 * time.Millisecond,
+		onRefresh: "error",
+		db:        db,
+	}
+	_, err = tr.Apply(context.Background(), core.Record{Data: map[string]any{"user_id": "u1"}})
+	if err == nil {
+		t.Fatal("Apply succeeded, want timeout error")
+	}
+	if got := tr.TransformMetrics().Counters["timeouts"]; got < 1 {
+		t.Fatalf("timeouts = %d, want >= 1", got)
+	}
+}
+
+func TestLookupQueryModeCachesRowsInStateStore(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`SELECT tier FROM users WHERE id=\?`).
+		WithArgs("u1").
+		WillReturnRows(sqlmock.NewRows([]string{"tier"}).AddRow("vip"))
+
+	tr := &LookupTransform{
+		mode:      "query",
+		dsn:       "mock",
+		query:     "SELECT tier FROM users WHERE id={{.user_id}}",
+		joinKey:   "user_id",
+		fields:    []string{"tier"},
+		timeout:   time.Second,
+		onRefresh: "error",
+		store:     state.NewMemoryStore(),
+		pipeline:  "p",
+		node:      "lookup-users",
+		cacheTTL:  time.Hour,
+		db:        db,
+	}
+	for i := 0; i < 2; i++ {
+		rec, err := tr.Apply(context.Background(), core.Record{Data: map[string]any{"user_id": "u1"}})
+		if err != nil {
+			t.Fatalf("Apply %d: %v", i, err)
+		}
+		if rec.Data["tier"] != "vip" {
+			t.Fatalf("Apply %d tier = %v, want vip", i, rec.Data["tier"])
+		}
+	}
+	assertLookupCounter(t, tr.TransformMetrics(), "cache_misses", 1)
+	assertLookupCounter(t, tr.TransformMetrics(), "cache_hits", 1)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestLookupQueryModeBatchBackpressureMetric(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+	for _, id := range []string{"u1", "u2"} {
+		mock.ExpectQuery(`SELECT tier FROM users WHERE id=\?`).
+			WithArgs(id).
+			WillDelayFor(40 * time.Millisecond).
+			WillReturnRows(sqlmock.NewRows([]string{"tier"}).AddRow("vip"))
+	}
+
+	tr := &LookupTransform{
+		mode:        "query",
+		dsn:         "mock",
+		query:       "SELECT tier FROM users WHERE id={{.user_id}}",
+		joinKey:     "user_id",
+		fields:      []string{"tier"},
+		timeout:     time.Second,
+		onRefresh:   "error",
+		concurrency: 2,
+		maxInFlight: 1,
+		sem:         make(chan struct{}, 2),
+		db:          db,
+	}
+	recs := []core.Record{
+		{Data: map[string]any{"user_id": "u1"}},
+		{Data: map[string]any{"user_id": "u2"}},
+	}
+	out, err := tr.ApplyBatch(context.Background(), recs)
+	if err != nil {
+		t.Fatalf("ApplyBatch: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("out len = %d, want 2", len(out))
+	}
+	if got := tr.TransformMetrics().Counters["backpressure_waits"]; got < 1 {
+		t.Fatalf("backpressure_waits = %d, want >= 1", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
 }
 
 func assertLookupCounter(t *testing.T, metrics core.TransformMetrics, name string, want int64) {

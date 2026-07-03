@@ -91,7 +91,7 @@ func ClassifyError(err error) ErrorClass {
 	}
 	msg := strings.ToLower(err.Error())
 	switch {
-	case containsAny(msg, "connection refused", "connection reset", "i/o timeout", "timeout", "temporarily", "too many connections", "deadlock", "try again", "broken pipe"):
+	case containsAny(msg, "connection refused", "connection reset", "i/o timeout", "timeout", "temporarily", "too many connections", "deadlock", "try again", "broken pipe", "no scannode backend available", "not alive", "in black list"):
 		return ErrorClassTransient
 	case containsAny(msg, "access denied", "permission denied", "unauthorized", "forbidden", "authentication", "invalid credentials"):
 		return ErrorClassAuth

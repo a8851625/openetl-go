@@ -174,6 +174,68 @@ func TestValidateSpecRejectsEnricherCacheWithoutRedisConfig(t *testing.T) {
 	}
 }
 
+func TestValidateSpecRejectsLookupQueryWithoutPlaceholder(t *testing.T) {
+	spec := validStateSpec()
+	spec.Transforms = []TransformSpec{{
+		Type: "lookup",
+		Config: map[string]any{
+			"mode":     "query",
+			"dsn":      "user:pass@tcp(mysql:3306)/app",
+			"query":    "SELECT id, tier FROM dim_users",
+			"join_key": "user_id",
+			"fields":   []any{"tier"},
+		},
+	}}
+	err := ValidateSpec(spec)
+	if err == nil || !strings.Contains(err.Error(), "must contain at least one {{.field}} placeholder") {
+		t.Fatalf("ValidateSpec() error = %v, want query placeholder rejection", err)
+	}
+}
+
+func TestValidateSpecRejectsLookupQueryCacheWithoutRedisConfig(t *testing.T) {
+	t.Setenv("ETL_STATE_REDIS_ADDR", "")
+	spec := validStateSpec()
+	spec.Transforms = []TransformSpec{{
+		Type: "lookup",
+		Config: map[string]any{
+			"mode":              "query",
+			"dsn":               "user:pass@tcp(mysql:3306)/app",
+			"query":             "SELECT tier FROM dim_users WHERE id={{.user_id}}",
+			"join_key":          "user_id",
+			"fields":            []any{"tier"},
+			"cache_ttl_seconds": 60,
+		},
+	}}
+	err := ValidateSpec(spec)
+	if err == nil || !strings.Contains(err.Error(), "cache_ttl_seconds requires Redis") {
+		t.Fatalf("ValidateSpec() error = %v, want Redis cache rejection", err)
+	}
+}
+
+func TestValidateSpecRejectsAsyncIOUnsafeBounds(t *testing.T) {
+	spec := validStateSpec()
+	spec.Transforms = []TransformSpec{{
+		Type: "lookup",
+		Config: map[string]any{
+			"mode":            "query",
+			"dsn":             "user:pass@tcp(mysql:3306)/app",
+			"query":           "SELECT tier FROM dim_users WHERE id={{.user_id}}",
+			"join_key":        "user_id",
+			"fields":          []any{"tier"},
+			"timeout_seconds": 0,
+			"concurrency":     8,
+			"max_in_flight":   4,
+			"max_retries":     -1,
+		},
+	}}
+	err := ValidateSpec(spec)
+	if err == nil ||
+		!strings.Contains(err.Error(), "timeout_seconds must be > 0") ||
+		!strings.Contains(err.Error(), "max_retries must be >= 0") {
+		t.Fatalf("ValidateSpec() error = %v, want async I/O bounds rejection", err)
+	}
+}
+
 func TestValidateSpecRejectsSlidingWindowAsUnsupportedSpec(t *testing.T) {
 	spec := validStateSpec()
 	spec.Transforms = []TransformSpec{{

@@ -50,7 +50,7 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, transforms, "router", "field", "routes", "default")
 	assertFields(t, transforms, "rate_limiter", "rps", "burst")
 	assertFields(t, transforms, "enricher", "timeout_seconds", "cache_ttl_seconds", "on_error")
-	assertFields(t, transforms, "lookup", "dsn", "query", "fields", "on_miss", "on_refresh_error", "state_backend", "state_ttl_seconds")
+	assertFields(t, transforms, "lookup", "mode", "dsn", "query", "fields", "timeout_seconds", "concurrency", "max_in_flight", "max_retries", "retry_base_ms", "cache_ttl_seconds", "on_miss", "on_refresh_error", "state_backend", "state_ttl_seconds")
 	assertFields(t, transforms, "normalize_envelope", "keep_metadata")
 	assertFields(t, transforms, "debezium_envelope", "keep_metadata")
 	assertFields(t, transforms, "project", "fields", "mappings", "constants", "time_formats", "keep_unmapped")

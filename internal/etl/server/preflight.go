@@ -114,6 +114,7 @@ func (s *Server) RunPreflight(ctx context.Context, spec *pipeline.Spec) *Preflig
 	result := &PreflightResult{Passed: true}
 
 	s.checkRuntimeStateRequirements(spec, result)
+	s.checkTransformConfigRequirements(spec, result)
 
 	// Source checks
 	if s.checkStaticSourceConfig(spec, result) {
@@ -159,6 +160,45 @@ func (s *Server) checkRuntimeStateRequirements(spec *pipeline.Spec, result *Pref
 		})
 		result.Passed = false
 	}
+}
+
+func (s *Server) checkTransformConfigRequirements(spec *pipeline.Spec, result *PreflightResult) {
+	for _, problem := range pipeline.ValidateTransformConfigRequirements(spec) {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "transform-config",
+			Message:     problem,
+			Remediation: "fix the transform config before starting; async lookup/enricher I/O controls must have safe positive bounds and Redis-backed caches must configure Redis",
+		})
+		if field := transformProblemField(problem); field != "" {
+			result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+				Level:       "error",
+				Field:       field,
+				Check:       "transform-config",
+				Message:     problem,
+				Remediation: "fix this transform field before starting the pipeline",
+			})
+		}
+		result.Passed = false
+	}
+}
+
+func transformProblemField(problem string) string {
+	idx := strings.Index(problem, ".")
+	if !strings.HasPrefix(problem, "transforms[") || idx < 0 {
+		return ""
+	}
+	field := problem[:idx]
+	rest := problem[idx+1:]
+	for i, r := range rest {
+		if r == ' ' || r == '=' {
+			return field + ".config." + rest[:i]
+		}
+	}
+	if rest == "" {
+		return ""
+	}
+	return field + ".config." + rest
 }
 
 // ── Source: static config checks ─────────────────────────────────────

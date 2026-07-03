@@ -246,6 +246,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
      - 现状：`enricher` 和 `lookup` 支持 HTTP/SQL 查询，但缺少并发控制、队列上限、超时、背压和缓存失效策略。
      - 目标：补齐并发度、in-flight 上限、超时、重试、失败分类、背压和 metrics；缓存能力必须显式依赖 Redis，未配置 Redis 时只能使用无缓存查询或直接阻断要求缓存的配置。
      - 验收：配置字段、默认安全值、preflight 校验、lookup miss / timeout / 429 / SQL 临时错误 e2e、缓存命中率和背压指标；SQLite/MySQL/PostgreSQL 不作为维表缓存后端。
+     - 本轮证据（2026-07-03）：`lookup` 已补 `mode=query` 参数化 SQL、并发/in-flight 上限、timeout/retry/backpressure/cache metrics、`ApplyBatch` 局部失败 DLQ 和 Redis-only query cache gate；`schema` / `spec validate` / preflight 已阻断缺 placeholder、缺 Redis cache、非法异步边界等配置。新增 `hack/e2e-lookup-query.sh` 覆盖 query 成功、lookup miss DLQ、SQL timeout DLQ、MySQL lock wait transient DLQ 和锁释放后 replay；验证命令：`go test ./internal/etl/transform ./internal/etl/pipeline ./internal/etl/server -count=1`、`E2E_SKIP_BUILD=1 bash hack/e2e-lookup-query.sh`。
 - 首要任务：Doris sink production-ready gate 已关闭。证据和边界：
   - 已补 `hack/e2e-doris.sh` 并纳入 `hack/e2e-all.sh`：使用 Podman 启动官方 Doris FE/BE 2.1.11 镜像，已实跑通过 MySQL batch -> Doris 的 Stream Load JSON、Stream Load CSV、MySQL 协议 insert fallback、auto-create Unique Key、decimal 类型推断和零失败记录断言。
   - 已实现 Doris `SchemaValidator` 和 preflight 接入：校验目标表存在、字段缺失、类型兼容、`pk_columns` 与 Doris Unique Key 模型一致；接入已有非 Unique Key 表时，不允许把 `batch_mode=upsert` 宣称为幂等。
@@ -254,8 +255,8 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
   - 已明确 Doris 幂等边界：production CDC/upsert 只支持 Doris Unique Key 表和稳定业务主键；DELETE 使用 MySQL 协议，混合 write/delete 批次默认拒绝，除非显式设置 `allow_mixed_cdc_non_atomic`。
   - 已统一配置契约：修正 `port` / `http_port` 文档、API schema、UI descriptor 和示例 YAML，移除未实现的 `mysql_port` 口径；maturity metadata 已提升为 `production`，对外口径限定为已验证的 Doris Unique Key/upsert、Stream Load/insert fallback、schema/preflight/DDL 安全边界。
   - 已补 observability 和错误分类：Stream Load HTTP 5xx/429/timeout 按 transient，auth/schema/data 类错误进入对应 DLQ 分类；Doris sink 暴露 `SinkMetricsProvider`。
-  - 本轮验证：`E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh` 通过；`go test ./internal/cmd ./internal/etl/server ./internal/etl/sink` 通过。
-  - 持续认证项不再阻塞 production gate，但需要继续补强：MySQL CDC/snapshot+CDC -> Doris、checkpoint restart/reset replay、DLQ/replay、schema drift add-columns、Doris FE/BE outage/recover 的扩展 e2e。
+  - 本轮验证：`E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh` 通过；`go test ./internal/cmd ./internal/etl/server ./internal/etl/sink` 通过。后续扩展中，`hack/e2e-doris.sh` 已覆盖 Doris BE outage -> transient DLQ -> BE/FE recover -> DLQ replay 写回 5 条记录。
+  - 持续认证项不再阻塞 production gate，但需要继续补强：MySQL CDC/snapshot+CDC -> Doris、checkpoint restart/reset replay、schema drift add-columns，以及更多 Doris FE/BE outage/recover 组合。
 - 建立 source 与调度类型的第一版绑定规则：
   - 已落地每个内置 source descriptor 的 `supported_schedules` 和 `default_schedule`，第一版只使用这两个字段，不引入额外运行分类。
   - `mysql_cdc`、`postgres_cdc`、`mysql_snapshot_cdc`、`kafka` 默认只允许 `streaming`；`mysql_batch`、`file`、`http` 默认允许 `once` / `cron` / `periodic` / `dependency`；`redis` 按现有模式保守声明为 `once`。
@@ -284,7 +285,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - Kafka 链路增加 consumer crash、broker restart、consumer group rebalance、offset replay 测试。
 - StateStore 恢复扩展到 e2e，明确 lookup、deduplicate、window 的恢复边界；lookup、deduplicate、window 均已补 Docker e2e 恢复证据。
 - Elasticsearch item-level bulk DLQ 已接入 runner/sink；mapping conflict Docker e2e 已覆盖好记录写入、失败记录进入 schema DLQ、修复 mapping 后按 ID replay。
-- S3/File 只补回填所需 deterministic prefix/manifest，不承诺通用 exactly-once 文件输出；当前 S3/File sink 已使用 content-addressed key 吸收相同批次 replay，S3 MinIO e2e 已覆盖 checkpoint reset 后同一对象 key 不重复，first-class manifest 文件仍待补。
+- S3/File 只补回填所需 deterministic prefix/manifest，不承诺通用 exactly-once 文件输出；当前 S3/File sink 已使用 content-addressed key 吸收相同批次 replay，S3 MinIO e2e 已覆盖 checkpoint reset 后同一对象 key 不重复、MinIO 目标下线进入 transient DLQ、目标恢复后 DLQ replay 写回，first-class manifest 文件仍待补。
 - Preflight 输出风险等级、字段级错误、幂等建议和目标 DDL 预览；当前已补 sink reachability 真实 `Open` 检查、warning 不阻断创建、结构化 `field_issues` 和关系型/MaxCompute `ddl_preview` 的单测证据；幂等建议与更广泛 connector DDL 预览仍需继续完善。
 - `flat_map` / `udtf` transform 已进入核心 transform 集合，Lua 第一版 ABI 支持返回多条记录，并暴露 `input_records`、`output_records`、`dropped_records`、`parse_errors` 等 metrics；JS/TS transform 已支持返回 record/data 数组并可通过 dry-run 预览；WASM/plugin transform 已支持通用数组返回 ABI，插件 dry-run API 已返回多输出；GB32960 fixture 已覆盖 Lua parser 样板，真实 WASM e2e 后续补齐。
 - `project` / `select_fields` transform 已进入核心 transform 集合，用于宽字段投影、常量字段、字段别名和基础时间转换；后续补 Kafka ODS / MaxCompute e2e。
@@ -551,6 +552,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 交付项：
 
 - Connector/plugin certification test kit：
+  - 第一版已落地（2026-07-03）：`internal/etl/server/connector_certification_test.go` 对 MySQL、ClickHouse、Kafka、S3/File 的 production connector 执行 descriptor/schema/readiness/e2e evidence/组件文档一致性认证；`docs/connector-certification.md` 记录认证矩阵、运行命令和新 production connector 准入规则。
   - open/close。
   - schema descriptor/validator。
   - preflight。
@@ -641,9 +643,9 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 0. 修复 DAG 声明式文件加载 bug（Phase 1 增补第 1 项）：让 `loadSpecs` 复用 `RestoreFromDB` 的 `dag:` 检测，使 DAG spec 能像线性格式一样经 `pipes/*.yaml` 自动加载和 hot-reload。
 1. 补 `odps` / `maxcompute` 真实环境证据：用真实 MaxCompute 凭据跑 Kafka ODS -> `project` / `type_convert` -> MaxCompute 分区表 e2e，补 DLQ/replay、checkpoint reset/restart、权限失败和操作文档；没有真实写入证据前保持 experimental。
-2. 完成异步 I/O 维表查询增强：为 `lookup` / `enricher` 补并发控制、in-flight 上限、超时、背压、失败分类和 metrics；需要缓存时只允许 Redis，未配置 Redis 必须 validate/preflight 阻断。
-3. 补 production candidate 链路的失败注入：优先覆盖 Kafka crash/rebalance/offset replay、Debezium 临时故障、ClickHouse/Doris/ES/S3 目标故障、DLQ replay 和 checkpoint 恢复边界。
+2. 已完成异步 I/O 维表查询增强第一轮闭环：`lookup` query-mode、异步边界、Redis-only cache gate、preflight/schema/spec 校验和 `hack/e2e-lookup-query.sh` 已落地；后续只按具体 connector/transform 缺口补强。
+3. 已补 production candidate 链路的失败注入增量：`hack/e2e-s3-minio.sh` 已覆盖 MinIO 目标下线 -> transient DLQ -> 恢复后 replay，并新增 runner DLQ 写入上下文回归测试；`hack/e2e-doris.sh` 已覆盖 Doris BE outage -> transient DLQ -> BE/FE recover -> replay；Kafka/Debezium/ClickHouse/Doris/ES 的更多故障类型继续按已有 e2e 矩阵增补。
 4. 扩展 schema/preflight 覆盖面：优先为 production candidate source/sink 补 `SchemaDescriptor` / `SchemaValidator`、DDL preview 和字段级 remediation，驱动 UI 表单和 preflight。
-5. 建立 connector certification test kit 第一版：先认证 MySQL、ClickHouse、Kafka、S3/File，maturity 必须由测试证据、descriptor、文档和实现共同约束。
+5. 已建立 connector certification test kit 第一版：MySQL、ClickHouse、Kafka、S3/File 的 maturity 由 `TestConnectorCertificationKitProductionSet` 约束 descriptor、readiness、e2e evidence、组件文档和实现注册；下一步扩展到插件 ABI 与第三方 connector。
 6. 补轻量运行 smoke：容器入口命令、standalone/master/worker 三形态启动、非法参数失败输出，以及升级/回滚/备份恢复 runbook 的最小自动化验证。
 7. 推进 Phase 1 增补数仓 ETL 场景闭环：按 pre_write → map_fields → dependency 重算范例 → increment → extract → feishu_sheet → http oauth2_client_credentials → connection 配置职责收束 的次序逐条交付，完成一条再开下一条。

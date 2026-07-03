@@ -1344,7 +1344,9 @@ func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err er
 			Error:      err.Error(),
 			ErrorClass: string(core.ClassifyError(err)),
 		}
-		if dlqErr := r.dlqWriter.WriteDLQ(ctx, entry); dlqErr != nil {
+		dlqCtx, dlqCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer dlqCancel()
+		if dlqErr := r.dlqWriter.WriteDLQ(dlqCtx, entry); dlqErr != nil {
 			// DLQ write failed — this is a data-loss risk. Log loudly, alert,
 			// and trip the circuit breaker so a persistently-down DLQ backend
 			// triggers cooldown rather than losing every record at full tilt.

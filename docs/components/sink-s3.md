@@ -32,4 +32,4 @@ sink:
 ```
 
 ## Evidence
-Covered by `hack/e2e-s3-minio.sh` and S3 sink tests. Preflight blocks missing `endpoint`/`bucket` and opens the S3-compatible target to check bucket reachability; use `file_sink` for local file output.
+Covered by `hack/e2e-s3-minio.sh` and S3 sink tests. The e2e covers deterministic checkpoint reset replay, MinIO outage -> transient DLQ, and replay after target recovery. Preflight blocks missing `endpoint`/`bucket` and opens the S3-compatible target to check bucket reachability; use `file_sink` for local file output.

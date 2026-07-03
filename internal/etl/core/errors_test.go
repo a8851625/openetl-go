@@ -12,6 +12,7 @@ func TestClassifyError(t *testing.T) {
 		class ErrorClass
 	}{
 		{name: "transient", err: errors.New("dial tcp: connection refused"), class: ErrorClassTransient},
+		{name: "doris backend unavailable", err: errors.New("Error 1105 (HY000): errCode = 2, detailMessage = There is no scanNode Backend available.[10003: not alive]"), class: ErrorClassTransient},
 		{name: "auth", err: errors.New("access denied for user"), class: ErrorClassAuth},
 		{name: "schema", err: errors.New("unknown column amount"), class: ErrorClassSchema},
 		{name: "missing table", err: errors.New("Error 1146 (42S02): Table 'target.orders' doesn't exist"), class: ErrorClassSchema},

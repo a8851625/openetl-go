@@ -36,4 +36,4 @@ sink:
 ```
 
 ## Evidence
-Covered by `hack/e2e-doris.sh` and Doris sink/preflight tests. Preflight opens the Doris MySQL protocol target, validates table/Unique Key metadata when reachable, emits DDL preview, and reports field-level schema issues.
+Covered by `hack/e2e-doris.sh` and Doris sink/preflight tests. The e2e covers Stream Load JSON/CSV, MySQL-protocol insert fallback, Unique Key auto-create/schema typing, Doris BE outage -> transient DLQ, BE/FE recovery, and DLQ replay. Preflight opens the Doris MySQL protocol target, validates table/Unique Key metadata when reachable, emits DDL preview, and reports field-level schema issues.

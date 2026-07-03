@@ -1793,6 +1793,49 @@ func TestRunPreflightBlocksRuntimeStateWithoutRedis(t *testing.T) {
 	}
 }
 
+func TestRunPreflightBlocksInvalidLookupQueryConfig(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "lookup-query-config-preflight",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   testSchemaPreflightSink,
+			Config: map[string]any{},
+		},
+		Transforms: []pipeline.TransformSpec{{
+			Type: "lookup",
+			Config: map[string]any{
+				"mode":            "query",
+				"dsn":             "user:pass@tcp(mysql:3306)/app",
+				"query":           "SELECT id, tier FROM dim_users",
+				"join_key":        "user_id",
+				"fields":          []any{"tier"},
+				"timeout_seconds": 0,
+			},
+		}},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, want transform config error")
+	}
+	if !preflightIssuesContain(result, "transform-config") {
+		t.Fatalf("RunPreflight issues = %#v, want transform-config", result.Issues)
+	}
+	if !preflightFieldIssueContain(result, "transforms[0].config.query", "transform-config") {
+		t.Fatalf("RunPreflight field issues = %#v, want transforms[0].config.query", result.FieldIssues)
+	}
+	if !preflightFieldIssueContain(result, "transforms[0].config.timeout_seconds", "transform-config") {
+		t.Fatalf("RunPreflight field issues = %#v, want transforms[0].config.timeout_seconds", result.FieldIssues)
+	}
+}
+
 func TestCreatePipelineReturnsPreflightWarningsWithoutBlocking(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()

@@ -86,6 +86,19 @@ func (s *transientThenSuccessSink) Write(_ context.Context, _ []core.Record) err
 }
 func (s *transientThenSuccessSink) Close() error { return nil }
 
+type contextDeadlineSink struct {
+	calls int32
+}
+
+func (s *contextDeadlineSink) Name() string               { return "context-deadline" }
+func (s *contextDeadlineSink) Open(context.Context) error { return nil }
+func (s *contextDeadlineSink) Write(ctx context.Context, _ []core.Record) error {
+	atomic.AddInt32(&s.calls, 1)
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (s *contextDeadlineSink) Close() error { return nil }
+
 type schemaSource struct {
 	schema    core.SchemaInfo
 	openCalls int32
@@ -445,6 +458,35 @@ func TestRunnerRetriesTransientSinkFailureWithoutDLQ(t *testing.T) {
 	}
 	if !checkpointSaved(t, store, r.spec.Name) {
 		t.Fatal("checkpoint did not advance after transient sink retry succeeded")
+	}
+}
+
+func TestRunnerWritesDLQAfterSinkContextDeadline(t *testing.T) {
+	store := newMemoryCPStore()
+	dlq := &captureDLQ{}
+	sink := &contextDeadlineSink{}
+	r := newCheckpointWriteBatchRunner(t, nil, store, dlq)
+	r.sink = sink
+	r.retryConfig.MaxAttempts = 1
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	r.writeBatch(ctx, checkpointTestBatch())
+
+	if got := atomic.LoadInt32(&sink.calls); got < 1 {
+		t.Fatalf("sink calls = %d, want >= 1", got)
+	}
+	dlq.mu.Lock()
+	defer dlq.mu.Unlock()
+	if len(dlq.entries) != len(checkpointTestBatch()) {
+		t.Fatalf("DLQ entries = %d, want %d", len(dlq.entries), len(checkpointTestBatch()))
+	}
+	stats := r.Stats()
+	if stats.RecordsFailed != int64(len(checkpointTestBatch())) || stats.RecordsDLQ != int64(len(checkpointTestBatch())) {
+		t.Fatalf("stats failed/dlq = %d/%d, want %d/%d", stats.RecordsFailed, stats.RecordsDLQ, len(checkpointTestBatch()), len(checkpointTestBatch()))
+	}
+	if checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint advanced after sink deadline sent every record to DLQ")
 	}
 }
 

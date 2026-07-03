@@ -494,6 +494,7 @@ func ValidateSpec(spec *Spec) error {
 		}
 	}
 	problems = append(problems, ValidateRuntimeStateRequirements(spec)...)
+	problems = append(problems, ValidateTransformConfigRequirements(spec)...)
 	if spec.BatchSize <= 0 {
 		problems = append(problems, "batch_size must be > 0")
 	}
@@ -549,6 +550,84 @@ func ValidateRuntimeStateRequirements(spec *Spec) []string {
 	for i := range spec.Transforms {
 		tr := &spec.Transforms[i]
 		problems = append(problems, ValidateTransformRuntimeStateRequirements(i, tr.Type, tr.Config)...)
+	}
+	return problems
+}
+
+func ValidateTransformConfigRequirements(spec *Spec) []string {
+	if spec == nil {
+		return nil
+	}
+	var problems []string
+	ctx := context.Background()
+	for i := range spec.Transforms {
+		tr := &spec.Transforms[i]
+		transformPath := fmt.Sprintf("transforms[%d]", i)
+		typ := strings.ToLower(strings.TrimSpace(tr.Type))
+		cfg := tr.Config
+		if cfg == nil {
+			cfg = map[string]any{}
+		}
+		switch typ {
+		case "lookup":
+			mode := "cache"
+			if rawMode, ok := stringConfig(cfg, "mode"); ok {
+				switch strings.ToLower(rawMode) {
+				case "cache", "full", "snapshot", "mysql", "postgres":
+					mode = "cache"
+				case "query", "async_query":
+					mode = "query"
+				default:
+					problems = append(problems, fmt.Sprintf("%s.mode=%q is unsupported; use cache or query", transformPath, rawMode))
+				}
+			}
+			if mode == "query" {
+				query, _ := stringConfig(cfg, "query")
+				if !strings.Contains(query, "{{.") {
+					problems = append(problems, fmt.Sprintf("%s.query must contain at least one {{.field}} placeholder when lookup mode=query", transformPath))
+				}
+				if ttl, ok := intConfig(cfg, "cache_ttl_seconds"); ok && ttl > 0 && !redisConfiguredForTransform(ctx, cfg) {
+					problems = append(problems, fmt.Sprintf("%s.cache_ttl_seconds requires Redis cache configuration; set cache_ttl_seconds=0 or configure etl.state.redis.addr", transformPath))
+				}
+			}
+			problems = append(problems, validateAsyncIOConfig(transformPath, cfg)...)
+		case "enricher":
+			mode := "http"
+			if rawMode, ok := stringConfig(cfg, "mode"); ok {
+				mode = strings.ToLower(rawMode)
+			}
+			switch mode {
+			case "http":
+				if url, _ := stringConfig(cfg, "url"); url == "" {
+					problems = append(problems, fmt.Sprintf("%s.url is required when enricher mode=http", transformPath))
+				}
+			case "sql":
+				if dsn, _ := stringConfig(cfg, "dsn"); dsn == "" {
+					problems = append(problems, fmt.Sprintf("%s.dsn is required when enricher mode=sql", transformPath))
+				}
+				if query, _ := stringConfig(cfg, "query"); query == "" {
+					problems = append(problems, fmt.Sprintf("%s.query is required when enricher mode=sql", transformPath))
+				}
+			default:
+				problems = append(problems, fmt.Sprintf("%s.mode=%q is unsupported; use http or sql", transformPath, mode))
+			}
+			problems = append(problems, validateAsyncIOConfig(transformPath, cfg)...)
+		}
+	}
+	return problems
+}
+
+func validateAsyncIOConfig(transformPath string, config map[string]any) []string {
+	var problems []string
+	for _, field := range []string{"timeout_seconds", "concurrency", "max_in_flight"} {
+		if n, ok := intConfig(config, field); ok && n <= 0 {
+			problems = append(problems, fmt.Sprintf("%s.%s must be > 0", transformPath, field))
+		}
+	}
+	for _, field := range []string{"max_retries", "retry_base_ms"} {
+		if n, ok := intConfig(config, field); ok && n < 0 {
+			problems = append(problems, fmt.Sprintf("%s.%s must be >= 0", transformPath, field))
+		}
 	}
 	return problems
 }
