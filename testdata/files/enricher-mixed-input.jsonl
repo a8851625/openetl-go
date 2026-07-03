@@ -1,0 +1,3 @@
+{"user_id":"ok1","fail_key":"ok1","event":"login"}
+{"user_id":"ok2","fail_key":"ok2","event":"login"}
+{"user_id":"bad","fail_key":"bad","event":"login"}

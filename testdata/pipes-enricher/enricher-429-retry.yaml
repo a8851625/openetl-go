@@ -1,0 +1,37 @@
+name: "enricher-429-retry"
+source:
+  type: file
+  config:
+    path: "/app/testdata/files/enricher-input.jsonl"
+    format: "json"
+
+transforms:
+  - type: enricher
+    config:
+      mode: "http"
+      url: "http://host.docker.internal:18080/throttle/{{.user_id}}"
+      method: "GET"
+      target_field: "enriched"
+      timeout_seconds: 5
+      on_error: "error"
+      max_retries: 2
+      retry_base_ms: 200
+
+sink:
+  type: file_sink
+  config:
+    output_dir: "/app/data/output/enricher-429"
+    format: "jsonl"
+    prefix: "out_"
+
+batch_size: 3
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

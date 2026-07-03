@@ -2291,3 +2291,95 @@ func TestUpdatePipelineRejectsPreflightErrorsWithoutReplacingRunner(t *testing.T
 		t.Fatalf("spec replaced on failed update")
 	}
 }
+
+// TestRunPreflightSkipsTableAndPKForDebeziumCDC verifies that when a Debezium
+// CDC transform is present and the MySQL sink uses auto_create, preflight does
+// not require static sink.config.table or sink.config.pk_columns because both
+// are derived from Debezium record metadata at runtime.
+func TestRunPreflightSkipsTableAndPKForDebeziumCDC(t *testing.T) {
+	s, _ := newTestHTTPServer(t)
+
+	spec := pipeline.Spec{
+		Name: "debezium-cdc-to-mysql",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Transforms: []pipeline.TransformSpec{
+			{Type: "debezium_cdc"},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "mysql",
+			Config: map[string]any{
+				"host":                     "localhost",
+				"user":                     "root",
+				"password":                 "",
+				"database":                 "target",
+				"port":                     3306,
+				"batch_mode":               "upsert",
+				"auto_create":              true,
+				"pk_columns_from_metadata": true,
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+
+	// sink.config.table must not be required: the table is derived per record.
+	if preflightIssuesContain(result, "mysql-sink-required-config") {
+		t.Fatalf("issues should not contain mysql-sink-required-config for Debezium CDC pipeline: %#v", result.Issues)
+	}
+	if preflightFieldIssueContain(result, "sink.config.table", "mysql-sink-required-config") {
+		t.Fatalf("field issues should not require sink.config.table for Debezium CDC pipeline: %#v", result.FieldIssues)
+	}
+	// sink.config.pk_columns must not be required: keys come from Debezium metadata.
+	if preflightIssuesContain(result, "mysql-sink-upsert-keys") {
+		t.Fatalf("issues should not contain mysql-sink-upsert-keys for Debezium CDC pipeline: %#v", result.Issues)
+	}
+	if preflightFieldIssueContain(result, "sink.config.pk_columns", "mysql-sink-upsert-keys") {
+		t.Fatalf("field issues should not require sink.config.pk_columns for Debezium CDC pipeline: %#v", result.FieldIssues)
+	}
+	// pk_columns recommendation should be suppressed when keys are derived from metadata.
+	for _, rec := range result.Recommendations {
+		if rec.Path == "sink.config.pk_columns" {
+			t.Fatalf("pk_columns recommendation should be suppressed for Debezium CDC pipeline: %#v", result.Recommendations)
+		}
+	}
+}
+
+// TestRunPreflightStillRequiresTableWithoutDebeziumCDC is a regression guard:
+// without a debezium_cdc transform, the static table requirement still applies.
+func TestRunPreflightStillRequiresTableWithoutDebeziumCDC(t *testing.T) {
+	s, _ := newTestHTTPServer(t)
+
+	spec := pipeline.Spec{
+		Name: "plain-to-mysql",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "mysql",
+			Config: map[string]any{
+				"host":       "localhost",
+				"user":       "root",
+				"database":   "target",
+				"port":       3306,
+				"batch_mode": "upsert",
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if !preflightIssuesContain(result, "mysql-sink-required-config") {
+		t.Fatalf("issues should contain mysql-sink-required-config without Debezium CDC: %#v", result.Issues)
+	}
+	if !preflightFieldIssueContain(result, "sink.config.table", "mysql-sink-required-config") {
+		t.Fatalf("field issues should require sink.config.table without Debezium CDC: %#v", result.FieldIssues)
+	}
+	if !preflightIssuesContain(result, "mysql-sink-upsert-keys") {
+		t.Fatalf("issues should contain mysql-sink-upsert-keys without Debezium CDC: %#v", result.Issues)
+	}
+}

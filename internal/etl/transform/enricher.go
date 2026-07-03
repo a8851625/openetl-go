@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -64,6 +66,12 @@ type EnricherTransform struct {
 	timeout     time.Duration
 	onError     string // "pass" (default, silent) | "error" (route failed record to DLQ)
 
+	// Async I/O controls (Phase 1 roadmap "异步 I/O 维表查询增强").
+	concurrency int           // max parallel in-flight enrichment calls within a batch
+	maxInFlight int           // hard cap on in-flight calls (backpressure bound)
+	maxRetries  int           // retry attempts for transient errors (429/5xx/net)
+	retryBase   time.Duration // base backoff for retry; exponential 2x up to ~10x
+
 	// SQL mode
 	dsn       string
 	queryTmpl string
@@ -77,6 +85,21 @@ type EnricherTransform struct {
 	cacheStore state.Store
 	pipeline   string
 	node       string
+
+	// Concurrency primitives shared across ApplyBatch invocations.
+	sem chan struct{}
+
+	// Metrics counters (atomic).
+	processed   int64
+	hits        int64 // cache hits
+	misses      int64 // cache misses that triggered a fetch
+	cacheHits   int64
+	cacheMisses int64
+	timeouts    int64
+	retries     int64
+	errors      int64
+	succeeded   int64
+	inFlight    int64
 }
 
 func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
@@ -88,6 +111,10 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 		headers:     make(map[string]string),
 		client:      &http.Client{Timeout: 5 * time.Second},
 		onError:     "pass",
+		concurrency: 1,
+		maxInFlight: 100,
+		maxRetries:  0,
+		retryBase:   200 * time.Millisecond,
 		pipeline:    "default",
 		node:        "enricher",
 	}
@@ -124,6 +151,35 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 			t.headers[k] = fmt.Sprintf("%v", v)
 		}
 	}
+	// Async I/O controls.
+	if v, ok := config["concurrency"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.concurrency = n
+		}
+	}
+	if v, ok := config["max_in_flight"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			t.maxInFlight = n
+		}
+	}
+	if v, ok := config["max_retries"]; ok {
+		if n, ok := toInt(v); ok && n >= 0 {
+			t.maxRetries = n
+		}
+	}
+	if v, ok := config["retry_base_ms"]; ok {
+		if n, ok := toInt(v); ok && n >= 0 {
+			t.retryBase = time.Duration(n) * time.Millisecond
+		}
+	}
+	// Cap concurrency by max_in_flight so the semaphore cannot exceed the
+	// backpressure bound.
+	if t.concurrency > t.maxInFlight {
+		t.concurrency = t.maxInFlight
+	}
+	if t.concurrency > 1 {
+		t.sem = make(chan struct{}, t.concurrency)
+	}
 	// SQL mode
 	if v, ok := config["dsn"].(string); ok {
 		t.dsn = v
@@ -142,7 +198,12 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 		if err != nil {
 			return nil, fmt.Errorf("enricher: open db: %w", err)
 		}
-		db.SetMaxOpenConns(5)
+		// Allow the pool to cover the configured concurrency.
+		maxOpen := t.concurrency
+		if maxOpen < 5 {
+			maxOpen = 5
+		}
+		db.SetMaxOpenConns(maxOpen)
 		if err := db.Ping(); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("enricher: ping db: %w", err)
@@ -177,10 +238,31 @@ func NewEnricherTransform(config map[string]any) (*EnricherTransform, error) {
 
 func (t *EnricherTransform) Name() string { return "enricher" }
 
+// TransformMetrics implements core.TransformMetricsProvider.
+func (t *EnricherTransform) TransformMetrics() core.TransformMetrics {
+	return core.TransformMetrics{
+		Node:      t.node,
+		Transform: "enricher",
+		Counters: map[string]int64{
+			"processed":    atomic.LoadInt64(&t.processed),
+			"hits":         atomic.LoadInt64(&t.hits),
+			"misses":       atomic.LoadInt64(&t.misses),
+			"cache_hits":   atomic.LoadInt64(&t.cacheHits),
+			"cache_misses": atomic.LoadInt64(&t.cacheMisses),
+			"timeouts":     atomic.LoadInt64(&t.timeouts),
+			"retries":      atomic.LoadInt64(&t.retries),
+			"errors":       atomic.LoadInt64(&t.errors),
+			"succeeded":    atomic.LoadInt64(&t.succeeded),
+			"in_flight":    atomic.LoadInt64(&t.inFlight),
+		},
+	}
+}
+
 func (t *EnricherTransform) Apply(ctx context.Context, rec core.Record) (core.Record, error) {
 	if rec.Data == nil {
 		rec.Data = make(map[string]any)
 	}
+	atomic.AddInt64(&t.processed, 1)
 
 	// Build the lookup key from the template (extract {{.field}} references).
 	lookupKey := t.resolveTemplate(t.getTemplate(), rec.Data)
@@ -195,6 +277,8 @@ func (t *EnricherTransform) Apply(ctx context.Context, rec core.Record) (core.Re
 			return rec, fmt.Errorf("enricher: cache read failed: %w", err)
 		}
 		if ok {
+			atomic.AddInt64(&t.cacheHits, 1)
+			atomic.AddInt64(&t.hits, 1)
 			var value any
 			if err := json.Unmarshal(cached, &value); err != nil {
 				return rec, fmt.Errorf("enricher: decode cached value: %w", err)
@@ -202,26 +286,21 @@ func (t *EnricherTransform) Apply(ctx context.Context, rec core.Record) (core.Re
 			rec.Data[t.targetField] = value
 			return rec, nil
 		}
+		atomic.AddInt64(&t.cacheMisses, 1)
 	}
+	atomic.AddInt64(&t.misses, 1)
 
-	// Fetch enrichment data.
-	var result any
-	var err error
-	switch t.mode {
-	case "sql":
-		result, err = t.fetchSQL(ctx, rec.Data)
-	case "http":
-		result, err = t.fetchHTTP(ctx, rec.Data)
-	default:
-		return rec, nil
-	}
+	// Fetch enrichment data with retry/backoff and bounded concurrency.
+	result, err := t.fetchWithControls(ctx, rec.Data)
 	if err != nil {
+		atomic.AddInt64(&t.errors, 1)
 		// TF-13: surface the failure instead of silently passing through.
 		if t.onError == "error" {
-			return rec, fmt.Errorf("enricher: lookup failed: %w", err)
+			return rec, core.ClassifiedError{Class: core.ClassifyError(err), Err: fmt.Errorf("enricher: lookup failed: %w", err)}
 		}
 		return rec, nil // default: non-fatal, record passes through unenriched
 	}
+	atomic.AddInt64(&t.succeeded, 1)
 
 	// Cache and apply.
 	if t.cacheTTL > 0 && t.cacheStore != nil {
@@ -235,6 +314,135 @@ func (t *EnricherTransform) Apply(ctx context.Context, rec core.Record) (core.Re
 	}
 	rec.Data[t.targetField] = result
 	return rec, nil
+}
+
+// ApplyBatch implements core.BatchTransform so the runner can route a whole
+// batch through this transform. Records are enriched concurrently up to
+// `concurrency`/`max_in_flight`, with per-record failures routed via
+// PartialTransformError so the runner sends only failed records to DLQ.
+func (t *EnricherTransform) ApplyBatch(ctx context.Context, recs []core.Record) ([]core.Record, error) {
+	out := make([]core.Record, len(recs))
+	var failures []core.TransformRecordFailure
+	var failedMu sync.Mutex
+
+	collect := func(i int, rec core.Record, err error) {
+		if err != nil {
+			failedMu.Lock()
+			failures = append(failures, core.TransformRecordFailure{Record: rec, Err: err})
+			failedMu.Unlock()
+			out[i] = rec
+			return
+		}
+		out[i] = rec
+	}
+
+	if t.sem == nil || len(recs) <= 1 {
+		// Serial path (concurrency <= 1 or trivial batch).
+		for i, rec := range recs {
+			r, err := t.Apply(ctx, rec)
+			collect(i, r, err)
+		}
+		return out, core.NewPartialTransformError("enricher: batch had failures", failures)
+	}
+
+	// Concurrent path: bounded by the semaphore, with a hard in-flight cap.
+	var wg sync.WaitGroup
+	for i, rec := range recs {
+		select {
+		case t.sem <- struct{}{}:
+		case <-ctx.Done():
+			collect(i, rec, ctx.Err())
+			continue
+		}
+		// Backpressure: if in-flight exceeds max_in_flight, block here.
+		for atomic.LoadInt64(&t.inFlight) >= int64(t.maxInFlight) {
+			select {
+			case <-ctx.Done():
+				<-t.sem
+				collect(i, rec, ctx.Err())
+				goto nextLoop
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		atomic.AddInt64(&t.inFlight, 1)
+		wg.Add(1)
+		go func(i int, rec core.Record) {
+			defer wg.Done()
+			defer func() { atomic.AddInt64(&t.inFlight, -1); <-t.sem }()
+			r, err := t.Apply(ctx, rec)
+			collect(i, r, err)
+		}(i, rec)
+	nextLoop:
+	}
+	wg.Wait()
+	return out, core.NewPartialTransformError("enricher: batch had failures", failures)
+}
+
+// fetchWithControls wraps fetchHTTP/fetchSQL with bounded concurrency
+// (enforced by the semaphore when configured) and retry/backoff for
+// transient errors.
+func (t *EnricherTransform) fetchWithControls(ctx context.Context, data map[string]any) (any, error) {
+	var lastErr error
+	for attempt := 0; attempt <= t.maxRetries; attempt++ {
+		if attempt > 0 {
+			atomic.AddInt64(&t.retries, 1)
+			backoff := t.retryBase * time.Duration(1<<(attempt-1))
+			if backoff > 10*t.retryBase {
+				backoff = 10 * t.retryBase
+			}
+			// Honor HTTP 429 Retry-After (seconds) when the previous error
+			// carries it, overriding the exponential backoff.
+			var httpErr *enricherHTTPError
+			if errors.As(lastErr, &httpErr) && httpErr.retryAfter != "" {
+				if secs, perr := strconv.Atoi(httpErr.retryAfter); perr == nil && secs > 0 {
+					backoff = time.Duration(secs) * time.Second
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+		result, err := t.fetchOnce(ctx, data)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		// Retry only transient/unknown errors.
+		if !core.IsRetryableError(err) {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (t *EnricherTransform) fetchOnce(ctx context.Context, data map[string]any) (any, error) {
+	// Wrap with an explicit timeout so SQL mode also benefits.
+	if t.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, t.timeout)
+		defer cancel()
+	}
+	var result any
+	var err error
+	switch t.mode {
+	case "sql":
+		result, err = t.fetchSQL(ctx, data)
+	case "http":
+		result, err = t.fetchHTTP(ctx, data)
+	default:
+		return nil, nil
+	}
+	if err != nil {
+		// Track timeouts explicitly.
+		if ctxErr := ctx.Err(); ctxErr == context.DeadlineExceeded {
+			atomic.AddInt64(&t.timeouts, 1)
+		}
+		// Classify HTTP errors so retry/metrics routing is explicit.
+		err = classifyHTTPError(err)
+	}
+	return result, err
 }
 
 func (t *EnricherTransform) getTemplate() string {
@@ -320,7 +528,11 @@ func (t *EnricherTransform) fetchHTTP(ctx context.Context, data map[string]any) 
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
-		return nil, fmt.Errorf("enricher: HTTP %d: %s", resp.StatusCode, string(body))
+		httpErr := &enricherHTTPError{statusCode: resp.StatusCode, body: string(body)}
+		if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+			httpErr.retryAfter = retryAfter
+		}
+		return nil, httpErr
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024))
@@ -333,6 +545,39 @@ func (t *EnricherTransform) fetchHTTP(ctx context.Context, data map[string]any) 
 		return string(body), nil // store as string if not JSON
 	}
 	return result, nil
+}
+
+// enricherHTTPError carries the HTTP status code so callers can classify it
+// (transient for 429/5xx, auth for 401/403, data for other 4xx) and honor
+// Retry-After for 429 responses.
+type enricherHTTPError struct {
+	statusCode int
+	body       string
+	retryAfter string
+}
+
+func (e *enricherHTTPError) Error() string {
+	if e.retryAfter != "" {
+		return fmt.Sprintf("enricher: HTTP %d (Retry-After: %s): %s", e.statusCode, e.retryAfter, e.body)
+	}
+	return fmt.Sprintf("enricher: HTTP %d: %s", e.statusCode, e.body)
+}
+
+// classifyHTTPError wraps an error in a ClassifiedError based on its HTTP
+// status code so core.IsRetryableError/ClassifyError route it correctly.
+func classifyHTTPError(err error) error {
+	var httpErr *enricherHTTPError
+	if errors.As(err, &httpErr) {
+		switch {
+		case httpErr.statusCode == 429 || httpErr.statusCode >= 500:
+			return core.ClassifiedError{Class: core.ErrorClassTransient, Err: err}
+		case httpErr.statusCode == 401 || httpErr.statusCode == 403:
+			return core.ClassifiedError{Class: core.ErrorClassAuth, Err: err}
+		case httpErr.statusCode >= 400:
+			return core.ClassifiedError{Class: core.ErrorClassData, Err: err}
+		}
+	}
+	return err
 }
 
 func (t *EnricherTransform) fetchSQL(ctx context.Context, data map[string]any) (any, error) {

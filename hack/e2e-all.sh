@@ -24,6 +24,7 @@ TESTS=(
   "e2e-dlq.sh|DLQ list/replay/delete"
   "e2e-s3-minio.sh|S3/MinIO sink + deterministic replay"
   "e2e-http-source.sh|HTTP source pagination/auth"
+  "e2e-enricher.sh|enricher HTTP 429 retry/timeout/partial-failure DLQ"
   "e2e-kafka.sh|Kafka source/sink (Redpanda)"
   "e2e-kafka-raw-ods.sh|Kafka raw parser/flat_map -> lookup -> Kafka ODS"
   "e2e-maxcompute.sh|Kafka ODS->MaxCompute partitioned table (env-gated)"

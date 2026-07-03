@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [v0.2.7] — 2026-07-03 — Debezium CDC preflight fix, enricher async I/O enhancement, Phase 1 数仓 ETL 场景闭环
+
+### Highlights
+- **Debezium CDC preflight fix**: Added `hasDebeziumCDCTransform()` helper; `checkRelationalSinkConfig` and `checkDorisSinkConfig` now skip `table` and `pk_columns` static requirements when the pipeline carries a `debezium_cdc` transform with `auto_create: true` / `pk_columns_from_metadata: true`. Suppressed `pk_columns` recommendation for CDC pipelines.
+- **enricher async I/O enhancement** (Phase 1 "异步 I/O 维表查询增强"): Rewrote `EnricherTransform` with:
+  - `concurrency` / `max_in_flight` controls for parallel in-flight enrichment calls within a batch via `BatchTransform`.
+  - `max_retries` / `retry_base_ms` with exponential backoff for transient errors (HTTP 429/5xx, network timeouts).
+  - HTTP 429 `Retry-After` header honored during retry.
+  - Explicit failure classification: 429/5xx → `transient`, 401/403 → `auth`, other 4xx → `data`.
+  - Full `TransformMetricsProvider` with 10 counters (`processed`, `hits`, `misses`, `cache_hits`, `cache_misses`, `timeouts`, `retries`, `errors`, `succeeded`, `in_flight`).
+  - SQL mode now benefits from `timeout_seconds` context deadline (previously only HTTP).
+  - `hub e2e-enricher.sh` with 4 scenarios: happy path, 429+Retry-After retry, timeout→DLQ, batch partial failure→DLQ.
+- **Phase 1 数仓 ETL 场景闭环** delivered in full:
+  - pre_write action (MySQL/PostgreSQL: delete/truncate/truncate_partition with parameterized condition).
+  - map_fields transform (declarative enum/status code mapping).
+  - Post-Commit Trigger via `schedule.type: dependency` for CDC→recalculation patterns.
+  - increment batch_mode for accumulator columns (MySQL/PostgreSQL).
+  - extract transform (regex `pattern`+`group` and `template` join).
+  - feishu_sheet source connector (OAuth2 client_credentials + sheet polling).
+  - HTTP source OAuth2 client_credentials auth enhancement.
+  - Connection config responsibility consolidation (behavior fields deprecation warning).
+  - Sink metadata-driven column set: generated column skipping and `pk_columns_from_metadata` for Debezium key PK derivation.
+
+### Validation
+- `go test -count=1 -run TestRunPreflight ./internal/etl/server/`
+- `go test -count=1 -run TestEnricher ./internal/etl/transform/`
+- `go test ./internal/etl/transform/ ./internal/etl/server/ ./internal/cmd -count=1`
+- `go vet ./internal/etl/... ./internal/cmd`
+- `E2E_SKIP_BUILD=1 ./hack/e2e-enricher.sh` — 4 scenarios passed
+- `go build -buildvcs=false ./...`
+
 ## [v0.2.6-beta-2] — 2026-07-01 — Wire runtime Scheduler into Server
 
 ### Highlights

@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [v0.2.7] — 2026-07-03 — Debezium CDC preflight 修复、enricher 异步 I/O 增强、Phase 1 数仓 ETL 场景闭环
+
+### 亮点
+- **Debezium CDC preflight 修复**：新增 `hasDebeziumCDCTransform()` 辅助函数；`checkRelationalSinkConfig` 和 `checkDorisSinkConfig` 在检测到 `debezium_cdc` transform + `auto_create: true` / `pk_columns_from_metadata: true` 时，跳过静态 `table` 和 `pk_columns` 必填检查；对 CDC 管道抑制 `pk_columns` recommendation。
+- **enricher 异步 I/O 增强**（Phase 1 "异步 I/O 维表查询增强"）：
+  - `concurrency` / `max_in_flight` 并发控制 + `BatchTransform` 实现 batch 内并行。
+  - `max_retries` / `retry_base_ms` 指数退避重试（仅 transient 类错误：HTTP 429/5xx、网络超时）。
+  - HTTP 429 `Retry-After` 响应头在重试时优先使用服务端要求的退避时间。
+  - 显式失败分类：HTTP 429/5xx → `transient`、401/403 → `auth`、其他 4xx → `data`。
+  - 完整 `TransformMetricsProvider`：10 个计数器（processed/hits/misses/cache_hits/cache_misses/timeouts/retries/errors/succeeded/in_flight）。
+  - SQL mode 现在也受 `timeout_seconds` context deadline 保护（之前仅 HTTP mode 有独立超时）。
+  - 新增 `hack/e2e-enricher.sh`，覆盖 4 个场景：happy path、429+Retry-After 重试、timeout→DLQ、batch partial failure→DLQ。
+- **Phase 1 数仓 ETL 场景闭环**完成交付：
+  - pre_write action（MySQL/PostgreSQL sink：delete/truncate/truncate_partition + 参数化 condition）。
+  - map_fields transform（声明式枚举/码值映射）。
+  - Post-Commit Trigger（通过 `schedule.type: dependency` 实现 CDC→重算）。
+  - increment batch_mode（MySQL/PostgreSQL 累加写入模式）。
+  - extract transform（正则 `pattern`+`group` 提取 + `template` 拼接）。
+  - feishu_sheet source（OAuth2 client_credentials + 飞书表格拉取）。
+  - HTTP source OAuth2 client_credentials 认证增强。
+  - Connection 配置职责收束（behavior 字段 deprecation warning+向后兼容）。
+  - Sink 元数据驱动列集：生成列自动跳过 + `pk_columns_from_metadata` Debezium key PK 推导。
+
+### 验证
+- `go test -count=1 -run TestRunPreflight ./internal/etl/server/`
+- `go test -count=1 -run TestEnricher ./internal/etl/transform/`
+- `go test ./internal/etl/transform/ ./internal/etl/server/ ./internal/cmd -count=1`
+- `go vet ./internal/etl/... ./internal/cmd`
+- `E2E_SKIP_BUILD=1 ./hack/e2e-enricher.sh` — 4 场景通过
+- `go build -buildvcs=false ./...`
+
 ## [v0.2.6-beta-2] — 2026-07-01 — 运行时调度接入 Server
 
 ### 亮点

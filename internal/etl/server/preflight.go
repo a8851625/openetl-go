@@ -598,6 +598,40 @@ func isSupportedKafkaCompression(compression string) bool {
 	}
 }
 
+// hasDebeziumCDCTransform reports whether the pipeline carries a debezium_cdc
+// transform. Such pipelines derive the target table and primary key columns
+// from Debezium record metadata at runtime, so static sink.config.table and
+// sink.config.pk_columns requirements are relaxed.
+func hasDebeziumCDCTransform(spec *pipeline.Spec) bool {
+	if spec == nil {
+		return false
+	}
+	for _, t := range spec.Transforms {
+		if strings.EqualFold(strings.TrimSpace(t.Type), "debezium_cdc") {
+			return true
+		}
+	}
+	return false
+}
+
+// sinkDerivesTableFromMetadata reports whether the sink is expected to derive
+// its target table from per-record metadata (e.g. Debezium CDC multi-table
+// sync). This requires auto_create so missing target tables can be created on
+// the fly.
+func sinkDerivesTableFromMetadata(spec *pipeline.Spec) bool {
+	return hasDebeziumCDCTransform(spec) && boolField(spec.Sink.Config, "auto_create", false)
+}
+
+// sinkDerivesPKFromMetadata reports whether the sink is expected to derive
+// primary key columns from per-record metadata (e.g. Debezium key payload)
+// instead of a static sink.config.pk_columns list.
+func sinkDerivesPKFromMetadata(spec *pipeline.Spec) bool {
+	if boolField(spec.Sink.Config, "pk_columns_from_metadata", false) {
+		return true
+	}
+	return hasDebeziumCDCTransform(spec)
+}
+
 func checkRelationalSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 	sinkType := strings.ToLower(spec.Sink.Type)
 	cfg := spec.Sink.Config
@@ -605,7 +639,13 @@ func checkRelationalSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 	if label == "postgresql" {
 		label = "postgres"
 	}
-	for _, field := range []string{"host", "user", "database", "table"} {
+	// Debezium CDC pipelines derive the target table from record metadata when
+	// auto_create is enabled, so the static table requirement is relaxed.
+	requireFields := []string{"host", "user", "database"}
+	if !sinkDerivesTableFromMetadata(spec) {
+		requireFields = append(requireFields, "table")
+	}
+	for _, field := range requireFields {
 		if strings.TrimSpace(stringField(cfg, field, "")) == "" {
 			check := label + "-sink-required-config"
 			addStaticSinkFieldError(result, check, "sink.config."+field,
@@ -631,13 +671,16 @@ func checkRelationalSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 			fmt.Sprintf("%s sink batch_mode %q is not supported", sinkType, batchMode),
 			"set sink.config.batch_mode to insert, upsert, or increment")
 	}
-	if batchMode == "upsert" && len(stringSliceField(cfg, "pk_columns")) == 0 {
+	// Primary keys may be derived per-table from Debezium key metadata
+	// (pk_columns_from_metadata) instead of a static list.
+	pkFromMetadata := sinkDerivesPKFromMetadata(spec)
+	if batchMode == "upsert" && !pkFromMetadata && len(stringSliceField(cfg, "pk_columns")) == 0 {
 		addStaticSinkFieldError(result, label+"-sink-upsert-keys", "sink.config.pk_columns",
 			fmt.Sprintf("%s sink upsert mode requires sink.config.pk_columns", sinkType),
-			"set sink.config.pk_columns to stable business key columns before relying on replay absorption")
+			"set sink.config.pk_columns to stable business key columns before relying on replay absorption, or set pk_columns_from_metadata: true for CDC multi-table sync")
 	}
 	if batchMode == "increment" {
-		if len(stringSliceField(cfg, "pk_columns")) == 0 {
+		if !pkFromMetadata && len(stringSliceField(cfg, "pk_columns")) == 0 {
 			addStaticSinkFieldError(result, label+"-sink-increment-keys", "sink.config.pk_columns",
 				fmt.Sprintf("%s sink increment mode requires sink.config.pk_columns", sinkType),
 				"set sink.config.pk_columns to identify the row being accumulated")
@@ -831,7 +874,11 @@ func isSupportedClickHouseSourceDialect(value string) bool {
 
 func checkDorisSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 	cfg := spec.Sink.Config
-	for _, field := range []string{"host", "database", "table"} {
+	requireFields := []string{"host", "database"}
+	if !sinkDerivesTableFromMetadata(spec) {
+		requireFields = append(requireFields, "table")
+	}
+	for _, field := range requireFields {
 		if strings.TrimSpace(stringField(cfg, field, "")) == "" {
 			addStaticSinkFieldError(result, "doris-sink-required-config", "sink.config."+field,
 				fmt.Sprintf("doris sink requires sink.config.%s", field),
@@ -866,10 +913,10 @@ func checkDorisSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 			fmt.Sprintf("doris sink batch_mode %q is not supported", batchMode),
 			"set sink.config.batch_mode to insert or upsert")
 	}
-	if batchMode == "upsert" && len(stringSliceField(cfg, "pk_columns")) == 0 {
+	if batchMode == "upsert" && !sinkDerivesPKFromMetadata(spec) && len(stringSliceField(cfg, "pk_columns")) == 0 {
 		addStaticSinkFieldError(result, "doris-sink-upsert-keys", "sink.config.pk_columns",
 			"doris sink upsert mode requires sink.config.pk_columns for a stable UNIQUE KEY model",
-			"set sink.config.pk_columns to stable business key columns before relying on replay absorption")
+			"set sink.config.pk_columns to stable business key columns before relying on replay absorption, or set pk_columns_from_metadata: true for CDC multi-table sync")
 	}
 	format := strings.ToLower(strings.TrimSpace(stringField(cfg, "stream_load_format", "json")))
 	if format == "" {
@@ -2825,7 +2872,9 @@ func addFirstRunRecommendations(spec *pipeline.Spec, result *PreflightResult) {
 				Safety: "review",
 			})
 		}
-		if len(stringSliceField(spec.Sink.Config, "pk_columns")) == 0 {
+		// CDC pipelines with pk_columns_from_metadata derive keys per-table at
+		// runtime, so a static pk_columns recommendation is not actionable.
+		if !sinkDerivesPKFromMetadata(spec) && len(stringSliceField(spec.Sink.Config, "pk_columns")) == 0 {
 			addPreflightRecommendation(result, PreflightRecommendation{
 				Path:   "sink.config.pk_columns",
 				Value:  preferredReplayKeyColumns(spec),
@@ -2834,7 +2883,7 @@ func addFirstRunRecommendations(spec *pipeline.Spec, result *PreflightResult) {
 			})
 		}
 	case "clickhouse":
-		if len(stringSliceField(spec.Sink.Config, "pk_columns")) == 0 {
+		if !sinkDerivesPKFromMetadata(spec) && len(stringSliceField(spec.Sink.Config, "pk_columns")) == 0 {
 			addPreflightRecommendation(result, PreflightRecommendation{
 				Path:   "sink.config.pk_columns",
 				Value:  preferredReplayKeyColumns(spec),
