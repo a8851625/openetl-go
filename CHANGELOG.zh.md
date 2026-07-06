@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+## [v0.2.8] — 2026-07-06 — lookup query-mode 认证、Plugin ABI v1 生产边界、Doris/UI 收尾发布
+
+### 亮点
+- **lookup query-mode 与状态恢复认证**：
+  - 完成 lookup 异步 I/O 第一轮闭环，覆盖 query-mode、Redis-only cache gate、preflight/schema/spec 校验和 `hack/e2e-lookup-query.sh`。
+  - 新增 lookup query fixture，覆盖成功命中、miss、timeout、lock-wait/replay 行为。
+  - 新增 runner DLQ 上下文回归，确保 DLQ 写入失败不会静默推进 checkpoint。
+- **Connector certification kit 扩展**：
+  - 扩展 descriptor/schema/readiness/e2e evidence/组件文档一致性认证。
+  - 补 MySQL、ClickHouse、Kafka、S3/File 生产候选证据，并继续增强 Doris 持续认证。
+  - 认证文档新增插件 ABI 规则和生产插件准入 gate。
+- **Plugin ABI v1 生产边界**：
+  - 在 `internal/etl/plugin/pluginsystem` 统一插件名、kind、manifest 校验。
+  - `/api/v2/plugins/install` 支持可选 Plugin ABI v1 `manifest` 字段，显式 manifest 会在写入/加载 WASM 前校验。
+  - 插件元数据持久化 ABI、最低运行时版本、manifest JSON 和 `manifest_validated`。
+  - `/api/v2/plugins` 与 `/api/v2/plugins/schema` 暴露当前 `plugin_abi` 合约。
+  - TypeScript SDK 导出 ABI 常量、manifest 类型和 `definePluginManifest`；VIP 示例插件同步声明 manifest。
+  - 新增 `docs/plugin-abi-v1.md`，记录 manifest 形状、兼容矩阵、deprecation policy 和认证边界。
+- **Doris 生产候选认证增强**：
+  - `hack/e2e-doris.sh` 改为独立 MySQL source 端口，并覆盖 MySQL CDC -> Doris 与 MySQL snapshot+CDC -> Doris。
+  - 补 restart/replay 证据：app restart 后继续消费、checkpoint reset replay 吸收、schema drift add-column、Doris BE outage -> DLQ -> 恢复后 replay。
+- **Phase 1 验证与 UI 产品化收尾**：
+  - 修复 PostgreSQL CDC e2e 中 MySQL client host 口径。
+  - Wizard transform chain 完成增删、类型切换、排序、逐阶段 dry-run 和 partial error 阶段定位。
+  - UI e2e 覆盖 transform-chain 控件，保持 99 项通过。
+- **运行打磨**：
+  - 补分布式 worker label HTTP e2e 覆盖。
+  - 补日志回归测试。
+  - 刷新内嵌 UI 资产和发布版本元数据。
+
+### 发布边界
+- Plugin ABI v1 基础设施可作为生产扩展边界使用；单个第三方插件只有在具备 manifest、文档、测试和运行证据后才可声明 production-certified。
+- Feishu/Lark 电子表格插件集成已写入 roadmap，作为下一步官方插件样板；现有内置 `feishu_sheet` source 在补更多真实环境证据前仍保持 beta。
+- 默认交付语义仍是 at-least-once；生产建议继续依赖 upsert、稳定业务键、版本列和 sink 侧 replay 吸收策略。
+
+### 验证
+- `go test ./internal/etl/plugin/pluginsystem ./internal/etl/server ./internal/etl/storage/... -count=1`
+- `go test ./internal/etl/... ./internal/cmd -count=1`
+- `go test ./... -count=1`
+- `npm --prefix web/plugin-sdk run build`
+- `npm --prefix web run build`
+- `SKIP_UI=1 ./hack/pack.sh`
+- `CONTAINER_CLI=podman ./hack/e2e-ui.sh` — 99 passed, 0 failed
+- `git diff --check`
+
 ## [v0.2.7] — 2026-07-03 — Debezium CDC preflight 修复、enricher 异步 I/O 增强、Phase 1 数仓 ETL 场景闭环
 
 ### 亮点

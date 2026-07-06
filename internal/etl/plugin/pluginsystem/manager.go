@@ -47,20 +47,39 @@ func NewManager(store storage.Storage, pluginsDir string) (*Manager, error) {
 
 // Install installs a WASM plugin from bytes.
 func (m *Manager) Install(ctx context.Context, name string, kind PluginKind, version string, wasmBytes []byte) error {
-	if name == "" {
-		return fmt.Errorf("plugin name is required")
+	manifest, manifestValidated, err := NormalizeInstallManifest(name, kind, version, nil)
+	if err != nil {
+		return err
 	}
-	wasmPath := filepath.Join(m.pluginsDir, name+".wasm")
+	return m.InstallWithManifest(ctx, manifest, manifestValidated, wasmBytes)
+}
+
+// InstallWithManifest installs a WASM plugin with explicit ABI manifest
+// metadata. Legacy uploads can pass manifestValidated=false with a default
+// manifest, but explicit manifests must have already passed ValidateManifest.
+func (m *Manager) InstallWithManifest(ctx context.Context, manifest PluginManifest, manifestValidated bool, wasmBytes []byte) error {
+	if err := ValidateManifest(manifest); err != nil {
+		return err
+	}
+	manifestJSON, err := MarshalManifestJSON(manifest)
+	if err != nil {
+		return err
+	}
+	wasmPath := filepath.Join(m.pluginsDir, manifest.Name+".wasm")
 	if err := os.WriteFile(wasmPath, wasmBytes, 0644); err != nil {
 		return fmt.Errorf("write wasm file: %w", err)
 	}
 
 	entry := &storage.PluginEntry{
-		Name:     name,
-		Kind:     string(kind),
-		WASMPath: wasmPath,
-		Version:  version,
-		Enabled:  true,
+		Name:              manifest.Name,
+		Kind:              string(manifest.Kind),
+		WASMPath:          wasmPath,
+		Version:           manifest.Version,
+		ABI:               manifest.ABI,
+		MinRuntimeVersion: manifest.MinRuntimeVersion,
+		ManifestJSON:      manifestJSON,
+		ManifestValidated: manifestValidated,
+		Enabled:           true,
 	}
 	if err := m.store.SavePlugin(ctx, entry); err != nil {
 		return fmt.Errorf("save plugin to storage: %w", err)
@@ -70,7 +89,7 @@ func (m *Manager) Install(ctx context.Context, name string, kind PluginKind, ver
 		return fmt.Errorf("load plugin: %w", err)
 	}
 
-	g.Log().Infof(ctx, "Plugin installed: %s (%s v%s)", name, kind, version)
+	g.Log().Infof(ctx, "Plugin installed: %s (%s v%s)", manifest.Name, manifest.Kind, manifest.Version)
 	return nil
 }
 
@@ -101,21 +120,63 @@ func (m *Manager) loadPlugin(ctx context.Context, entry *storage.PluginEntry) er
 	if err != nil {
 		return fmt.Errorf("create extism plugin: %w", err)
 	}
+	meta, err := pluginMetaFromEntry(entry)
+	if err != nil {
+		extismPlugin.Close(ctx)
+		return err
+	}
 
 	m.mu.Lock()
 	m.plugins[entry.Name] = &loadedPlugin{
-		meta: &PluginMeta{
-			Name:    entry.Name,
-			Kind:    PluginKind(entry.Kind),
-			Version: entry.Version,
-			Enabled: entry.Enabled,
-			Path:    entry.WASMPath,
-		},
+		meta:   meta,
 		extism: extismPlugin,
 		hctx:   hctx,
 	}
 	m.mu.Unlock()
 	return nil
+}
+
+func pluginMetaFromEntry(entry *storage.PluginEntry) (*PluginMeta, error) {
+	kind := PluginKind(entry.Kind)
+	if err := ValidateKind(kind); err != nil {
+		return nil, err
+	}
+	version := entry.Version
+	if version == "" {
+		version = "1.0.0"
+	}
+
+	manifest := DefaultManifest(entry.Name, kind, version)
+	manifestValidated := entry.ManifestValidated
+	if entry.ManifestJSON != "" {
+		parsed, err := ParseManifestJSON(entry.ManifestJSON)
+		if err != nil {
+			if manifestValidated {
+				return nil, fmt.Errorf("invalid stored plugin manifest for %s: %w", entry.Name, err)
+			}
+		} else {
+			manifest = parsed
+		}
+	}
+	abi := entry.ABI
+	if abi == "" {
+		abi = manifest.ABI
+	}
+	minRuntimeVersion := entry.MinRuntimeVersion
+	if minRuntimeVersion == "" {
+		minRuntimeVersion = manifest.MinRuntimeVersion
+	}
+	return &PluginMeta{
+		Name:              entry.Name,
+		Kind:              kind,
+		Version:           version,
+		ABI:               abi,
+		MinRuntimeVersion: minRuntimeVersion,
+		ManifestValidated: manifestValidated,
+		Manifest:          &manifest,
+		Enabled:           entry.Enabled,
+		Path:              entry.WASMPath,
+	}, nil
 }
 
 // loadFromStorage loads all enabled plugins from storage at startup.

@@ -349,6 +349,105 @@ func TestDistributedDispatchMySQLReal(t *testing.T) {
 	}
 }
 
+// TestDistributedDispatchLabelsMySQLHTTP proves worker_selector.match_labels on
+// the real distributed HTTP path: both workers register through the master API,
+// both poll via HTTP, but only the worker whose registered labels satisfy the
+// task's RequiredLabels may claim and execute those shards.
+func TestDistributedDispatchLabelsMySQLHTTP(t *testing.T) {
+	store, cleanup := openMySQLStore(t)
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	m := master.NewMaster(store)
+	mux := http.NewServeMux()
+	m.RegisterHTTPRoutes(mux)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	masterURL := "http://" + lis.Addr().String()
+	httpServer := &http.Server{Handler: mux}
+	go func() { _ = httpServer.Serve(lis) }()
+	defer httpServer.Shutdown(context.Background())
+	go m.Run(ctx)
+
+	var mu sync.Mutex
+	ran := make(map[string]string)
+	execFor := func(wid string) func(context.Context, *storage.TaskAssignment) error {
+		return func(ctx context.Context, task *storage.TaskAssignment) error {
+			mu.Lock()
+			ran[task.TaskID] = wid
+			mu.Unlock()
+			if task.RequiredLabels["zone"] != "secure" {
+				t.Errorf("task %s required labels = %v, want zone=secure", task.TaskID, task.RequiredLabels)
+			}
+			return nil
+		}
+	}
+
+	secureWorker := worker.New(worker.Config{
+		ID:        "w-secure",
+		Host:      "127.0.0.1",
+		Slots:     4,
+		Labels:    map[string]string{"zone": "secure"},
+		MasterURL: masterURL,
+		Store:     store,
+	})
+	defaultWorker := worker.New(worker.Config{
+		ID:        "w-default",
+		Host:      "127.0.0.1",
+		Slots:     4,
+		MasterURL: masterURL,
+		Store:     store,
+	})
+	for _, w := range []*worker.Worker{secureWorker, defaultWorker} {
+		w.SetTaskExecutor(execFor(w.ID))
+		if err := w.Start(ctx); err != nil {
+			t.Fatalf("worker %s start: %v", w.ID, err)
+		}
+		defer w.Stop()
+	}
+
+	requiredLabels := map[string]string{"zone": "secure"}
+	if err := m.Dispatcher().DispatchShards(ctx, "label-pipe", 3, requiredLabels); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	completed := 0
+	for time.Now().Before(deadline) {
+		tasks, _ := store.ListTasks(ctx, "label-pipe")
+		completed = 0
+		for _, tk := range tasks {
+			if tk.Status == "completed" {
+				completed++
+			}
+			if tk.WorkerID == "w-default" {
+				t.Fatalf("default worker claimed label-restricted task: %#v", tk)
+			}
+		}
+		if completed >= 3 {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if completed < 3 {
+		t.Fatalf("only %d/3 label-restricted shards completed before deadline", completed)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ran) != 3 {
+		t.Fatalf("executed tasks = %v, want 3", ran)
+	}
+	for taskID, wid := range ran {
+		if wid != "w-secure" {
+			t.Fatalf("task %s executed by %s, want w-secure", taskID, wid)
+		}
+	}
+}
+
 // TestDistributedReassignOnWorkerLossMySQL proves crash recovery deterministically:
 // shards held by a dead (deregistered) worker are re-queued by ReassignStaleTasks
 // and picked up by a surviving worker — no shard is lost.

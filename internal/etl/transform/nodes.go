@@ -9,7 +9,6 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 
-	"github.com/a8851625/openetl-go/internal/etl/alert"
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
 )
@@ -24,61 +23,34 @@ func init() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Tap — Side-channel listener (metrics / alerts / audit)
+// Tap — pass-through observer
 // ════════════════════════════════════════════════════════════════════
 
 // TapTransform is a pass-through node that observes every record without
 // modifying it. It's used for:
 //   - Counting records by table/operation
-//   - Detecting anomalies (e.g., sudden spike in DELETE operations)
-//   - Forwarding to external alert channels
 //   - Computing latency from metadata.Timestamp
+//   - Periodic runtime logs for lightweight inspection
 //
 // Config:
 //
-//	alert_on: "delete_spike" | "error_spike" | "latency_gt" | "field_match"
-//	threshold: numeric threshold (e.g., latency_ms > 5000)
-//	field: field name for field_match alert
-//	value: expected value for field_match
-//	webhook: optional webhook URL to call on alert
 //	log_every: log counters every N records (default 100)
-//	alert_on_lag_ms: emit a warning when processing latency exceeds this (ms)
+//	alert_on_lag_ms: log a warning when processing latency exceeds this (ms)
+//
+// Legacy alert_on/threshold/field/value/webhook config keys are intentionally
+// not implemented. The server schema marks them as unimplemented and spec
+// validation warns when users configure them.
 type TapTransform struct {
-	alertMgr   *alert.Manager
 	counters   sync.Map // key → *int64
 	logEvery   int64
 	alertLagMs int64
-	alertOn    string
-	threshold  float64
-	alertField string
-	alertValue string
-	webhook    string
 }
 
 func NewTapTransform(config map[string]any) (*TapTransform, error) {
 	t := &TapTransform{
-		alertMgr: alert.NewManager(),
 		logEvery: 100,
 	}
 
-	if v, ok := config["alert_on"].(string); ok {
-		t.alertOn = v
-	}
-	if v, ok := config["threshold"].(float64); ok {
-		t.threshold = v
-	} else if v, ok := config["threshold"].(int); ok {
-		t.threshold = float64(v)
-	}
-	if v, ok := config["field"].(string); ok {
-		t.alertField = v
-	}
-	if v, ok := config["value"].(string); ok {
-		t.alertValue = v
-	}
-	if v, ok := config["webhook"].(string); ok && v != "" {
-		t.webhook = v
-		t.alertMgr.Register(alert.NewWebhookChannel(v))
-	}
 	if v, ok := config["log_every"].(int); ok && v > 0 {
 		t.logEvery = int64(v)
 	}
@@ -134,11 +106,8 @@ func (t *TapTransform) Apply(ctx context.Context, rec core.Record) (core.Record,
 	return rec, nil
 }
 
-// Close stops the alert manager's background goroutines.
+// Close is present for interface compatibility; tap has no background work.
 func (t *TapTransform) Close() error {
-	if t.alertMgr != nil {
-		t.alertMgr.Close()
-	}
 	return nil
 }
 

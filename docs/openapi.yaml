@@ -570,6 +570,7 @@ paths:
     get:
       tags: [Plugins]
       summary: List registered plugins
+      description: Returns built-in connector types, installed WASM plugins, typed schemas, metadata, and the current `plugin_abi` contract (`openetl.plugin.abi/v1`).
       responses:
         '200': { description: Plugin list }
 
@@ -584,16 +585,18 @@ paths:
     post:
       tags: [Plugins]
       summary: Install a WASM plugin (multipart upload)
+      description: Accepts `wasm`, `name`, `kind`, `version`, and optional text field `manifest`. Explicit Plugin ABI v1 manifests are validated before the WASM file is loaded; legacy uploads without a manifest are reported as `manifest_validated=false`.
       responses:
         '200': { description: Installed }
 
   /plugins/compile:
     post:
       tags: [Plugins]
-      summary: Compile and optionally install a transform/source/sink plugin from TypeScript source
-      description: Uses a pre-installed extism-js compiler when available. Server-side npx fallback is disabled unless explicitly enabled and configured for a trusted package.
+      summary: Compile and optionally install a transform plugin from TypeScript source
+      description: Uses a pre-installed extism-js compiler when available. Accepts optional Plugin ABI v1 `manifest` text field. Server-side npx fallback is disabled unless explicitly enabled and configured for a trusted package. Source and sink plugins must be compiled offline and uploaded as `.wasm` through `/plugins/install`.
       responses:
         '200': { description: Compiled and installed, or source returned with offline compile guidance }
+        '400': { description: Invalid request, including source/sink compile attempts }
 
   /plugins/dry-run:
     post:

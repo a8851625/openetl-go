@@ -172,6 +172,41 @@ sleep 1
 check "D2.1: Wizard opened" "$(evaljs "document.body.innerText.includes('Create Pipeline Wizard')")"
 check "D2.1a: Fixed templates visible" "$(evaljs "['Database sync','Kafka detail / aggregate','Debezium CDC','Kafka parser','File / HTTP landing'].every(x=>document.body.innerText.includes(x))")"
 check "D2.1b: Schema-driven config forms visible" "$(evaljs "document.querySelector('[data-testid=\"wizard-source-config-form\"] input, [data-testid=\"wizard-source-config-form\"] select, [data-testid=\"wizard-source-config-form\"] textarea') !== null && document.querySelector('[data-testid=\"wizard-sink-config-form\"] input, [data-testid=\"wizard-sink-config-form\"] select, [data-testid=\"wizard-sink-config-form\"] textarea') !== null && document.querySelector('[data-testid=\"wizard-transform-config-form\"]') !== null")"
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-add-transform\"]')?.click(); return true; })()" >/dev/null
+for _ in $(seq 1 10); do
+  transform_added="$(evaljs "document.querySelectorAll('[data-testid^=\"wizard-transform-stage-\"]').length >= 2")"
+  if [[ "$transform_added" == "true" ]]; then break; fi
+  sleep 1
+done
+check "D2.1b1: Transform chain add control works" "$transform_added"
+playwright-cli select "[data-testid='wizard-transform-type-1']" "project" >/dev/null
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-transform-dry-run-1\"]')?.click(); return true; })()" >/dev/null
+stage_dry_run="false"
+for _ in $(seq 1 10); do
+  stage_dry_run="$(evaljs "document.querySelector('[data-testid=\"wizard-transform-stage-result-1\"]')?.innerText.includes('output_count') || false")"
+  if [[ "$stage_dry_run" == "true" ]]; then break; fi
+  sleep 1
+done
+check "D2.1b2: Transform stage dry-run output is visible" "$stage_dry_run"
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-transform-move-up-1\"]')?.click(); return true; })()" >/dev/null
+sleep 1
+check "D2.1b3: Transform chain reorder works" "$(evaljs "document.querySelector('[data-testid=\"wizard-transform-type-0\"]')?.value === 'project'")"
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-transform-remove-0\"]')?.click(); return true; })()" >/dev/null
+sleep 1
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-add-transform\"]')?.click(); return true; })()" >/dev/null
+playwright-cli select "[data-testid='wizard-transform-type-1']" "flat_map" >/dev/null
+evaljs "(() => { const textarea=document.querySelector('[data-testid=\"wizard-transform-stage-1\"] textarea'); if (!textarea) return false; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(textarea,'error(\"ui stage failure\")'); textarea.dispatchEvent(new Event('input',{bubbles:true})); return true; })()" >/dev/null
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-transform-dry-run-1\"]')?.click(); return true; })()" >/dev/null
+stage_error="false"
+for _ in $(seq 1 10); do
+  stage_error="$(evaljs "document.querySelector('[data-testid=\"wizard-transform-stage-error-1\"]')?.innerText.includes('Stage 2 failed') || false")"
+  if [[ "$stage_error" == "true" ]]; then break; fi
+  sleep 1
+done
+check "D2.1b4: Transform stage error is positioned" "$stage_error"
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-transform-remove-1\"]')?.click(); return true; })()" >/dev/null
+sleep 1
+check "D2.1b5: Transform chain remove restores one stage" "$(evaljs "document.querySelectorAll('[data-testid^=\"wizard-transform-stage-\"]').length === 1")"
 check "D2.1c: Docs link visible" "$(evaljs "Array.from(document.querySelectorAll('a')).some(a=>a.getAttribute('href')==='/api/v2/docs')")"
 for _ in $(seq 1 10); do
   connection_options="$(evaljs "Array.from(document.querySelectorAll('[data-testid=\"wizard-source-connection\"] option')).some(o=>o.value==='ui-file-source') && Array.from(document.querySelectorAll('[data-testid=\"wizard-sink-connection\"] option')).some(o=>o.value==='ui-file-sink')")"

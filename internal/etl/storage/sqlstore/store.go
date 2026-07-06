@@ -148,12 +148,16 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_task_pipeline ON task_assignments(pipeline, status)`,
 		`CREATE TABLE IF NOT EXISTS plugins (
-			name         TEXT PRIMARY KEY,
-			kind         TEXT NOT NULL,
-			wasm_path    TEXT NOT NULL,
-			version      TEXT NOT NULL DEFAULT '1.0.0',
-			enabled      INTEGER DEFAULT 1,
-			installed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			name                  TEXT PRIMARY KEY,
+			kind                  TEXT NOT NULL,
+			wasm_path             TEXT NOT NULL,
+			version               TEXT NOT NULL DEFAULT '1.0.0',
+			abi                   TEXT NOT NULL DEFAULT '',
+			min_runtime_version   TEXT NOT NULL DEFAULT '',
+			manifest_json         TEXT NOT NULL DEFAULT '',
+			manifest_validated    INTEGER DEFAULT 0,
+			enabled               INTEGER DEFAULT 1,
+			installed_at          DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS connections (
 			name           TEXT PRIMARY KEY,
@@ -222,6 +226,10 @@ func (s *Store) runVersionedMigrations() error {
 		{6, "add dag_node to dead_letters", "ALTER TABLE dead_letters ADD COLUMN dag_node TEXT"},
 		{7, "add uuid id to pipelines", "ALTER TABLE pipelines ADD COLUMN id TEXT"},
 		{8, "add required_labels to task_assignments", "ALTER TABLE task_assignments ADD COLUMN required_labels TEXT DEFAULT '{}'"},
+		{9, "add abi to plugins", "ALTER TABLE plugins ADD COLUMN abi TEXT NOT NULL DEFAULT ''"},
+		{10, "add min_runtime_version to plugins", "ALTER TABLE plugins ADD COLUMN min_runtime_version TEXT NOT NULL DEFAULT ''"},
+		{11, "add manifest_json to plugins", "ALTER TABLE plugins ADD COLUMN manifest_json TEXT NOT NULL DEFAULT ''"},
+		{12, "add manifest_validated to plugins", "ALTER TABLE plugins ADD COLUMN manifest_validated INTEGER DEFAULT 0"},
 	}
 
 	for _, m := range migrations {
@@ -924,26 +932,37 @@ func (s *Store) listTasksNoLabels(ctx context.Context, pipeline string) ([]*stor
 // ── Plugin registry ──────────────────────────────────────────────────
 
 func (s *Store) SavePlugin(ctx context.Context, p *storage.PluginEntry) error {
-	_, err := s.exec(ctx, s.dialect.PluginUpsert(), p.Name, p.Kind, p.WASMPath, p.Version, s.dialect.BoolValue(p.Enabled))
+	_, err := s.exec(ctx, s.dialect.PluginUpsert(),
+		p.Name,
+		p.Kind,
+		p.WASMPath,
+		p.Version,
+		p.ABI,
+		p.MinRuntimeVersion,
+		p.ManifestJSON,
+		s.dialect.BoolValue(p.ManifestValidated),
+		s.dialect.BoolValue(p.Enabled),
+	)
 	return err
 }
 
 func (s *Store) GetPlugin(ctx context.Context, name string) (*storage.PluginEntry, error) {
 	p := &storage.PluginEntry{}
-	var enabled any
+	var enabled, manifestValidated any
 	err := s.queryRow(ctx,
-		`SELECT name, kind, wasm_path, version, enabled, installed_at FROM plugins WHERE name=?`, name,
-	).Scan(&p.Name, &p.Kind, &p.WASMPath, &p.Version, &enabled, &p.InstalledAt)
+		`SELECT name, kind, wasm_path, version, COALESCE(abi, ''), COALESCE(min_runtime_version, ''), COALESCE(manifest_json, ''), manifest_validated, enabled, installed_at FROM plugins WHERE name=?`, name,
+	).Scan(&p.Name, &p.Kind, &p.WASMPath, &p.Version, &p.ABI, &p.MinRuntimeVersion, &p.ManifestJSON, &manifestValidated, &enabled, &p.InstalledAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
+	p.ManifestValidated = dbBool(manifestValidated)
 	p.Enabled = dbBool(enabled)
 	return p, err
 }
 
 func (s *Store) ListPlugins(ctx context.Context) ([]*storage.PluginEntry, error) {
 	rows, err := s.query(ctx,
-		`SELECT name, kind, wasm_path, version, enabled, installed_at FROM plugins ORDER BY name`)
+		`SELECT name, kind, wasm_path, version, COALESCE(abi, ''), COALESCE(min_runtime_version, ''), COALESCE(manifest_json, ''), manifest_validated, enabled, installed_at FROM plugins ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -951,10 +970,11 @@ func (s *Store) ListPlugins(ctx context.Context) ([]*storage.PluginEntry, error)
 	var result []*storage.PluginEntry
 	for rows.Next() {
 		p := &storage.PluginEntry{}
-		var enabled any
-		if err := rows.Scan(&p.Name, &p.Kind, &p.WASMPath, &p.Version, &enabled, &p.InstalledAt); err != nil {
+		var enabled, manifestValidated any
+		if err := rows.Scan(&p.Name, &p.Kind, &p.WASMPath, &p.Version, &p.ABI, &p.MinRuntimeVersion, &p.ManifestJSON, &manifestValidated, &enabled, &p.InstalledAt); err != nil {
 			return nil, err
 		}
+		p.ManifestValidated = dbBool(manifestValidated)
 		p.Enabled = dbBool(enabled)
 		result = append(result, p)
 	}

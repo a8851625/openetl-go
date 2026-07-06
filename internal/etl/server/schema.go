@@ -21,6 +21,7 @@ type ConfigField struct {
 	Example            any       `json:"example,omitempty"`
 	Enum               []string  `json:"enum,omitempty"`
 	RequiresRedisState bool      `json:"requires_redis_state,omitempty"`
+	Unimplemented      bool      `json:"unimplemented,omitempty"`
 }
 
 func configSchema() map[string]any {
@@ -434,13 +435,13 @@ func transformConfigSchemas() map[string][]ConfigField {
 		},
 		"fanout": {}, // no config — pure 1-to-N broadcast marker
 		"tap": {
-			{Name: "alert_on", Type: FieldString, Required: false, Description: "Alert trigger type", Enum: []string{"delete_spike", "error_spike", "latency_gt", "field_match"}},
-			{Name: "threshold", Type: FieldFloat, Required: false, Description: "Numeric alert threshold"},
-			{Name: "field", Type: FieldString, Required: false, Description: "Field name for field_match alerts"},
-			{Name: "value", Type: FieldString, Required: false, Description: "Expected value for field_match alerts"},
-			{Name: "webhook", Type: FieldString, Required: false, Description: "Webhook URL for alerts", Secret: true},
+			{Name: "alert_on", Type: FieldString, Required: false, Description: "Unimplemented: condition-based tap alerts are ignored by the current runtime", Enum: []string{"delete_spike", "error_spike", "latency_gt", "field_match"}, Unimplemented: true},
+			{Name: "threshold", Type: FieldFloat, Required: false, Description: "Unimplemented: numeric tap alert thresholds are ignored by the current runtime", Unimplemented: true},
+			{Name: "field", Type: FieldString, Required: false, Description: "Unimplemented: field_match tap alerts are ignored by the current runtime", Unimplemented: true},
+			{Name: "value", Type: FieldString, Required: false, Description: "Unimplemented: field_match tap alerts are ignored by the current runtime", Unimplemented: true},
+			{Name: "webhook", Type: FieldString, Required: false, Description: "Unimplemented: tap webhook delivery is ignored by the current runtime", Secret: true, Unimplemented: true},
 			{Name: "log_every", Type: FieldInt, Required: false, Default: 100, Description: "Log every N records"},
-			{Name: "alert_on_lag_ms", Type: FieldInt, Required: false, Default: 0, Description: "Alert if processing latency exceeds N ms (0=off)"},
+			{Name: "alert_on_lag_ms", Type: FieldInt, Required: false, Default: 0, Description: "Log a warning if processing latency exceeds N ms (0=off)"},
 		},
 		"rate_limiter": {
 			{Name: "rps", Type: FieldInt, Required: false, Default: 1000, Description: "Max records per second (token bucket rate)"},

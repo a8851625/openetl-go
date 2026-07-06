@@ -28,6 +28,10 @@ func (m *Manager) Install(ctx context.Context, name string, kind PluginKind, ver
 	return fmt.Errorf("WASM plugins are not available in this build (rebuild with -tags=extism)")
 }
 
+func (m *Manager) InstallWithManifest(ctx context.Context, manifest PluginManifest, manifestValidated bool, wasmBytes []byte) error {
+	return fmt.Errorf("WASM plugins are not available in this build (rebuild with -tags=extism)")
+}
+
 func (m *Manager) Uninstall(ctx context.Context, name string) error {
 	return m.store.DeletePlugin(ctx, name)
 }

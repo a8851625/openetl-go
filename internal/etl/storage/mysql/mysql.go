@@ -133,16 +133,21 @@ func (s *Store) migrate() error {
 			assigned_at DATETIME(3),
 			started_at  DATETIME(3),
 			finished_at DATETIME(3),
+			required_labels JSON,
 			PRIMARY KEY (id),
 			KEY idx_task_pipeline (pipeline, status)
 		)`,
 		`CREATE TABLE IF NOT EXISTS plugins (
-			name         VARCHAR(255) PRIMARY KEY,
-			kind         VARCHAR(64) NOT NULL,
-			wasm_path    VARCHAR(512) NOT NULL,
-			version      VARCHAR(32) NOT NULL DEFAULT '1.0.0',
-			enabled      TINYINT(1) DEFAULT 1,
-			installed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+			name                  VARCHAR(255) PRIMARY KEY,
+			kind                  VARCHAR(64) NOT NULL,
+			wasm_path             VARCHAR(512) NOT NULL,
+			version               VARCHAR(32) NOT NULL DEFAULT '1.0.0',
+			abi                   VARCHAR(64) NOT NULL DEFAULT '',
+			min_runtime_version   VARCHAR(64) NOT NULL DEFAULT '',
+			manifest_json         LONGTEXT,
+			manifest_validated    TINYINT(1) DEFAULT 0,
+			enabled               TINYINT(1) DEFAULT 1,
+			installed_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
 		)`,
 		`CREATE TABLE IF NOT EXISTS connections (
 			name           VARCHAR(255) PRIMARY KEY,
@@ -209,6 +214,11 @@ func (s *Store) runVersionedMigrations() error {
 		{5, "add pipeline_version to dead_letters", "ALTER TABLE dead_letters ADD COLUMN pipeline_version INT DEFAULT 0"},
 		{6, "add dag_node to dead_letters", "ALTER TABLE dead_letters ADD COLUMN dag_node VARCHAR(255)"},
 		{7, "add uuid id to pipelines", "ALTER TABLE pipelines ADD COLUMN id CHAR(36)"},
+		{8, "add required_labels to task_assignments", "ALTER TABLE task_assignments ADD COLUMN required_labels JSON"},
+		{9, "add abi to plugins", "ALTER TABLE plugins ADD COLUMN abi VARCHAR(64) NOT NULL DEFAULT ''"},
+		{10, "add min_runtime_version to plugins", "ALTER TABLE plugins ADD COLUMN min_runtime_version VARCHAR(64) NOT NULL DEFAULT ''"},
+		{11, "add manifest_json to plugins", "ALTER TABLE plugins ADD COLUMN manifest_json LONGTEXT"},
+		{12, "add manifest_validated to plugins", "ALTER TABLE plugins ADD COLUMN manifest_validated TINYINT(1) DEFAULT 0"},
 	}
 
 	for _, m := range migrations {
@@ -218,7 +228,7 @@ func (s *Store) runVersionedMigrations() error {
 			continue
 		}
 		if _, err := s.db.Exec(m.sql); err != nil {
-			if !(m.version == 7 && strings.Contains(err.Error(), "Duplicate column")) {
+			if !strings.Contains(err.Error(), "Duplicate column") {
 				return fmt.Errorf("versioned migration %d failed: %w", m.version, err)
 			}
 		}

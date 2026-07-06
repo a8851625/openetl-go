@@ -1148,6 +1148,7 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 		if exists {
 			warnings = append(warnings, "another pipeline instance already uses this display name; create will allocate a new id")
 		}
+		warnings = append(warnings, tapUnimplementedConfigWarningsForDAG(&dagSpec)...)
 
 		json.NewEncoder(w).Encode(map[string]any{"valid": true, "warnings": warnings, "spec": dagSpec})
 		return
@@ -1186,6 +1187,7 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 
 	// Connection-catalog behavior-field deprecation warnings (scope collapse).
 	warnings = append(warnings, s.connDeprecations.drain()...)
+	warnings = append(warnings, tapUnimplementedConfigWarningsForPipeline(&spec)...)
 
 	// Worker selector: if match_labels is set, the pipeline can only run on
 	// workers whose registered Labels match. Warn so users know to register
@@ -1563,6 +1565,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
 				return
 			}
+			createWarnings := tapUnimplementedConfigWarningsForDAG(&dagSpec)
 			runtime := runtimeDAGSpec(&dagSpec, id)
 			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
@@ -1587,9 +1590,10 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			s.audit(r, "pipeline.create", id)
 
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":     id,
-				"name":   dagSpec.Name,
-				"status": runner.Status(),
+				"id":       id,
+				"name":     dagSpec.Name,
+				"status":   runner.Status(),
+				"warnings": createWarnings,
 			})
 			return
 		}
@@ -1621,6 +1625,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		// block creation.
 		createPreflight := s.RunPreflight(r.Context(), &spec)
 		createWarnings, hasPreflightError := formatPreflightIssues(createPreflight)
+		createWarnings = append(createWarnings, tapUnimplementedConfigWarningsForPipeline(&spec)...)
 		if hasPreflightError {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{
@@ -1747,6 +1752,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
 				return
 			}
+			updateWarnings := tapUnimplementedConfigWarningsForDAG(&dagSpec)
 			runtime := runtimeDAGSpec(&dagSpec, id)
 
 			// Stop old runner if exists
@@ -1791,6 +1797,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				"spec_changed":       specChanged,
 				"checkpoint_warning": "",
 				"checkpoint_reset":   req.ResetCheckpoint,
+				"warnings":           updateWarnings,
 			})
 			return
 		}
@@ -1846,6 +1853,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 
 		updatePreflight := s.RunPreflight(r.Context(), &spec)
 		updateWarnings, hasPreflightError := formatPreflightIssues(updatePreflight)
+		updateWarnings = append(updateWarnings, tapUnimplementedConfigWarningsForPipeline(&spec)...)
 		if hasPreflightError {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{
@@ -3176,6 +3184,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		"transforms": registry.TransformTypes(),
 		"metadata":   pluginMetadata(),
 		"schema":     configSchema(),
+		"plugin_abi": pluginABIInfo(),
 	}
 	if s.pluginMgr != nil {
 		// Ensure empty list serializes as [] not null — frontend maps over it.
@@ -3194,7 +3203,21 @@ func (s *Server) handlePluginSchema(w http.ResponseWriter, r *http.Request) {
 	resp["runtime"] = map[string]any{
 		"redis_state_configured": state.RedisConfigured(r.Context()),
 	}
+	resp["plugin_abi"] = pluginABIInfo()
 	json.NewEncoder(w).Encode(resp)
+}
+
+func pluginABIInfo() map[string]any {
+	return map[string]any{
+		"version":                         pluginsystem.ABIVersionV1,
+		"min_runtime_version":             pluginsystem.MinRuntimeVersionV1,
+		"supported_kinds":                 []string{string(pluginsystem.KindTransform), string(pluginsystem.KindSource), string(pluginsystem.KindSink)},
+		"entrypoints":                     map[string]string{"transform": "transform", "source": "read", "sink": "write"},
+		"config_field_types":              []string{"string", "int", "bool", "float", "string_array", "map"},
+		"server_compile_supported_kinds":  []string{string(pluginsystem.KindTransform)},
+		"manifest_required_for_certified": true,
+		"server_npx_compile_default":      "disabled",
+	}
 }
 
 // handleNodeTypes returns metadata for all supported DAG NodeKind types.
@@ -3276,10 +3299,16 @@ func (s *Server) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
-	kind := r.FormValue("kind")
-	version := r.FormValue("version")
-	if version == "" {
-		version = "1.0.0"
+	manifest, manifestValidated, err := pluginsystem.NormalizeInstallManifest(
+		name,
+		pluginsystem.PluginKind(r.FormValue("kind")),
+		r.FormValue("version"),
+		[]byte(r.FormValue("manifest")),
+	)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
 	}
 	file, header, err := r.FormFile("wasm")
 	if err != nil {
@@ -3288,19 +3317,29 @@ func (s *Server) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	wasmBytes := make([]byte, header.Size)
-	if _, err := file.Read(wasmBytes); err != nil {
+	if header.Size > 32<<20 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "wasm file too large (max 32MiB)"})
+		return
+	}
+	wasmBytes, err := io.ReadAll(io.LimitReader(file, (32<<20)+1))
+	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"error": "read wasm: " + err.Error()})
 		return
 	}
-	if err := s.pluginMgr.Install(r.Context(), name, pluginsystem.PluginKind(kind), version, wasmBytes); err != nil {
+	if len(wasmBytes) > 32<<20 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "wasm file too large (max 32MiB)"})
+		return
+	}
+	if err := s.pluginMgr.InstallWithManifest(r.Context(), manifest, manifestValidated, wasmBytes); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
 	// Re-register plugins so newly installed ones are usable as transforms/sources/sinks.
-	switch pluginsystem.PluginKind(kind) {
+	switch manifest.Kind {
 	case pluginsystem.KindTransform:
 		s.pluginMgr.RegisterTransforms()
 	case pluginsystem.KindSource:
@@ -3309,7 +3348,15 @@ func (s *Server) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 		s.pluginMgr.RegisterSinks()
 	}
 	s.audit(r, "plugin.install", name)
-	json.NewEncoder(w).Encode(map[string]any{"status": "installed", "name": name})
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":              "installed",
+		"name":                manifest.Name,
+		"kind":                manifest.Kind,
+		"version":             manifest.Version,
+		"abi":                 manifest.ABI,
+		"min_runtime_version": manifest.MinRuntimeVersion,
+		"manifest_validated":  manifestValidated,
+	})
 }
 
 func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
@@ -3327,6 +3374,7 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 	source := r.FormValue("source")
 	name := r.FormValue("name")
 	kind := r.FormValue("kind")
+	version := r.FormValue("version")
 
 	if source == "" || name == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -3340,6 +3388,25 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 	}
 	if kind == "" {
 		kind = "transform"
+	}
+	manifest, manifestValidated, err := pluginsystem.NormalizeInstallManifest(
+		name,
+		pluginsystem.PluginKind(kind),
+		version,
+		[]byte(r.FormValue("manifest")),
+	)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	if manifest.Kind != pluginsystem.KindTransform {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "server-side /plugins/compile currently supports transform plugins only; compile source/sink plugins offline and upload the .wasm with /api/v2/plugins/install",
+			"kind":  manifest.Kind,
+		})
+		return
 	}
 
 	// Try server-side compilation via extism-js CLI.
@@ -3364,21 +3431,23 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 
 	// If extism-js succeeds, install the plugin and return the wasm bytes.
 	if compileErr == nil && s.pluginMgr != nil {
-		if err := s.pluginMgr.Install(r.Context(), name, pluginsystem.PluginKind(kind), "1.0.0", wasmBytes); err != nil {
+		if err := s.pluginMgr.InstallWithManifest(r.Context(), manifest, manifestValidated, wasmBytes); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": "install compiled plugin: " + err.Error()})
 			return
 		}
-		if pluginsystem.PluginKind(kind) == pluginsystem.KindTransform {
-			s.pluginMgr.RegisterTransforms()
-		}
+		s.pluginMgr.RegisterTransforms()
 		s.audit(r, "plugin.install", name)
 		json.NewEncoder(w).Encode(map[string]any{
-			"status":   "compiled_and_installed",
-			"name":     name,
-			"kind":     kind,
-			"compiled": true,
-			"size":     len(wasmBytes),
+			"status":              "compiled_and_installed",
+			"name":                manifest.Name,
+			"kind":                manifest.Kind,
+			"version":             manifest.Version,
+			"abi":                 manifest.ABI,
+			"min_runtime_version": manifest.MinRuntimeVersion,
+			"manifest_validated":  manifestValidated,
+			"compiled":            true,
+			"size":                len(wasmBytes),
 		})
 		return
 	}
@@ -3391,8 +3460,10 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":         "source_only",
-		"name":           name,
-		"kind":           kind,
+		"name":           manifest.Name,
+		"kind":           manifest.Kind,
+		"version":        manifest.Version,
+		"abi":            manifest.ABI,
 		"compiled":       false,
 		"source":         source,
 		"compile_hint":   "Pre-install the extism-js compiler or compile plugins offline in CI/CLI, then upload the .wasm with /api/v2/plugins/install",
@@ -3406,26 +3477,7 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 // name like "../../etc/x" would escape the target directory (TF-3 path
 // traversal). Allow alphanumerics, underscore, dash, and dot only.
 func validPluginName(name string) error {
-	if name == "" {
-		return fmt.Errorf("plugin name is required")
-	}
-	if len(name) > 128 {
-		return fmt.Errorf("plugin name too long (max 128 chars)")
-	}
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
-		default:
-			return fmt.Errorf("plugin name %q contains invalid character %q (allowed: A-Z a-z 0-9 _ - .)", name, string(r))
-		}
-	}
-	// No path separators are allowed by the char set above, so directory
-	// traversal is already impossible; reject ".." explicitly as defense in
-	// depth.
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("plugin name must not contain \"..\"")
-	}
-	return nil
+	return pluginsystem.ValidatePluginName(name)
 }
 
 // compileWithExtismJS attempts to compile a TS file to WASM using the extism-js CLI.
@@ -3630,7 +3682,7 @@ func pluginMetadata() map[string]any {
 			"js":                 pluginInfo([]string{"script"}, []string{"script", "inline", "javascript", "one_to_many"}, "experimental"),
 			"router":             pluginInfo(nil, []string{"conditional_routing", "flow_control"}, "beta"),
 			"fanout":             pluginInfo(nil, []string{"broadcast", "flow_control"}, "beta"),
-			"tap":                pluginInfo([]string{"log_every"}, []string{"observe", "metrics", "alerts"}, "beta"),
+			"tap":                pluginInfo([]string{"log_every"}, []string{"observe", "logging"}, "beta"),
 			"rate_limiter":       pluginInfo([]string{"rps"}, []string{"throttle", "flow_control"}, "beta"),
 			"enricher":           pluginInfo([]string{"mode", "url"}, []string{"http_enrichment", "sql_enrichment", "cache"}, "beta"),
 			"lookup":             pluginInfo([]string{"dsn", "query", "fields"}, []string{"dimension_join", "stream_table_join"}, "beta"),

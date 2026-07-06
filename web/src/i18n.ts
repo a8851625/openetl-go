@@ -285,6 +285,10 @@ const dict: Dict = {
   'ui.secret': { en: 'Secret', zh: '秘密' },
   'ui.loadTemplate': { en: 'Load template', zh: '加载模板' },
   'ui.loadExample': { en: 'Load VIP order enricher example', zh: '加载 VIP 订单丰富示例' },
+  'myplugin.compileTransformOnly': {
+    en: 'Server-side compile only supports transform plugins. Compile source/sink plugins offline and upload the .wasm file.',
+    zh: '服务端编译仅支持 transform 插件。source/sink 插件请离线编译后上传 .wasm 文件。',
+  },
   'ui.starting': { en: 'Starting', zh: '启动中' },
   'ui.stopping': { en: 'Stopping', zh: '停止中' },
   'ui.pipelines': { en: 'pipeline(s)', zh: '个管道' },

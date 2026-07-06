@@ -20,7 +20,7 @@
  *         mask_fields: ["credit_card", "ssn"]
  */
 
-import { createExtismTransformPlugin, type Record, type Context } from '@etl/sdk';
+import { createExtismTransformPlugin, definePluginManifest, type Record, type Context } from '@etl/sdk';
 
 interface VIPConfig {
   vip_threshold?: number;
@@ -88,6 +88,18 @@ const plugin = createExtismTransformPlugin({
 
     return record;
   },
+});
+
+export const manifest = definePluginManifest({
+  name: 'vip-order-enricher',
+  kind: 'transform',
+  version: '1.0.0',
+  capabilities: ['dimension_enrichment', 'masking', 'risk_scoring'],
+  config: [
+    { name: 'vip_threshold', type: 'float', required: false, default: 10000 },
+    { name: 'mask_fields', type: 'string_array', required: false, default: ['credit_card', 'ssn', 'password'] },
+    { name: 'risk_weights', type: 'map', required: false },
+  ],
 });
 
 export const transform = plugin;

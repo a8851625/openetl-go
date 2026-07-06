@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+## [v0.2.8] — 2026-07-06 — Lookup query-mode certification, Plugin ABI v1 production boundary, Doris/UI release closure
+
+### Highlights
+- **Lookup query-mode and state certification**:
+  - Closed the first lookup asynchronous I/O loop with query-mode validation, Redis-only cache gate, preflight/schema/spec checks, and `hack/e2e-lookup-query.sh`.
+  - Added lookup query fixtures covering successful lookup, miss, timeout, and lock-wait/replay behavior.
+  - Added runner DLQ context regression coverage so DLQ write failures do not silently advance checkpoints.
+- **Connector certification kit expansion**:
+  - Added/extended certification checks for descriptor/schema/readiness/e2e evidence and component docs.
+  - Added production-candidate evidence for MySQL, ClickHouse, Kafka, S3/File and ongoing Doris certification.
+  - Updated certification docs with plugin ABI rules and production plugin gates.
+- **Plugin ABI v1 production boundary**:
+  - Centralized plugin name/kind/manifest validation in `internal/etl/plugin/pluginsystem`.
+  - `/api/v2/plugins/install` now accepts an optional Plugin ABI v1 `manifest` field and validates explicit manifests before writing/loading WASM.
+  - Plugin metadata persisted in storage now includes ABI, minimum runtime version, manifest JSON, and `manifest_validated`.
+  - `/api/v2/plugins` and `/api/v2/plugins/schema` expose the current `plugin_abi` contract.
+  - TypeScript SDK exports ABI constants, manifest types, and `definePluginManifest`; the VIP example now declares a manifest.
+  - Added `docs/plugin-abi-v1.md` with the manifest shape, compatibility matrix, deprecation policy, and certification boundary.
+- **Doris production-candidate certification hardening**:
+  - Expanded `hack/e2e-doris.sh` to use an independent MySQL source port and cover MySQL CDC -> Doris plus MySQL snapshot+CDC -> Doris.
+  - Added restart/replay evidence: app restart continuation, checkpoint reset replay absorption, schema drift add-column, and Doris BE outage -> DLQ -> recovery replay.
+- **Phase 1 verification and UI productization closure**:
+  - Fixed PostgreSQL CDC e2e MySQL client host usage.
+  - Completed Wizard transform-chain productization for add/remove, type switch, reorder, per-stage dry-run, and stage-positioned partial errors.
+  - UI e2e now covers the transform-chain controls and remains at 99 passing checks.
+- **Operational polish**:
+  - Added distributed worker label HTTP e2e coverage.
+  - Added logging regression coverage.
+  - Refreshed packed UI assets and release version metadata.
+
+### Release Boundary
+- Plugin ABI v1 infrastructure is production-ready as an extension boundary. Individual third-party plugins are not production-certified unless they provide their own manifest, docs, tests, and runtime evidence.
+- Feishu/Lark spreadsheet plugin integration is recorded as the next official plugin-sample item in the roadmap; the existing built-in `feishu_sheet` source remains beta until more real-environment evidence is available.
+- Default delivery semantics remain at-least-once; production guidance continues to rely on upserts, stable business keys, version columns, and sink-specific replay absorption.
+
+### Validation
+- `go test ./internal/etl/plugin/pluginsystem ./internal/etl/server ./internal/etl/storage/... -count=1`
+- `go test ./internal/etl/... ./internal/cmd -count=1`
+- `go test ./... -count=1`
+- `npm --prefix web/plugin-sdk run build`
+- `npm --prefix web run build`
+- `SKIP_UI=1 ./hack/pack.sh`
+- `CONTAINER_CLI=podman ./hack/e2e-ui.sh` — 99 passed, 0 failed
+- `git diff --check`
+
 ## [v0.2.7] — 2026-07-03 — Debezium CDC preflight fix, enricher async I/O enhancement, Phase 1 数仓 ETL 场景闭环
 
 ### Highlights

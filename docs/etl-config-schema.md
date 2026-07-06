@@ -1174,6 +1174,10 @@ WASM plugins use Plugin ABI v1 metadata in `internal/etl/plugin/pluginsystem`:
 - Required entrypoints: source plugins export `read`, sink plugins export `write`, transform plugins export `transform`
 - Transform output contract: empty output, `null`, or `false` drops the input; a JSON record object or plain data object emits one record; an array of record/data objects emits multiple records through the batch transform path
 - Config field types: `string`, `int`, `bool`, `float`, `string_array`, `map`
+- `/api/v2/plugins/install` accepts an optional multipart `manifest` JSON field. Explicit manifests are validated before the WASM file is loaded; legacy uploads without a manifest are reported as `manifest_validated=false`.
+- `/api/v2/plugins/compile` is transform-only. Source and sink plugins must be compiled offline and installed through `/api/v2/plugins/install`.
+
+See `docs/plugin-abi-v1.md` for the manifest shape, compatibility matrix, and deprecation policy.
 
 ## Idempotency Warnings
 

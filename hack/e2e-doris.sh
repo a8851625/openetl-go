@@ -10,21 +10,17 @@ IMAGE="openetl-go-etl:dev"
 DORIS_FE_CONTAINER="etl-doris-fe"
 DORIS_BE_CONTAINER="etl-doris-be"
 DORIS_NETWORK="etl-doris-net"
-MYSQL_CONTAINER="etl-mysql-source"
+MYSQL_CONTAINER="etl-mysql-source-doris"
 APP_CONTAINER="etl-openetl-go-doris"
 DORIS_VERSION="${DORIS_VERSION:-2.1.11}"
 DORIS_FE_IMAGE="${DORIS_FE_IMAGE:-docker.io/apache/doris:fe-$DORIS_VERSION}"
 DORIS_BE_IMAGE="${DORIS_BE_IMAGE:-docker.io/apache/doris:be-$DORIS_VERSION}"
 PIPE_DIR="$ROOT_DIR/data-doris/pipes"
 API_PORT="${DORIS_API_PORT:-8024}"
+MYSQL_PORT="${DORIS_MYSQL_PORT:-13316}"
 MYSQL_DB="dzh3136_go"
 
 start_mysql_source() {
-  if has_compose; then
-    compose -f docker-compose.dev.yml up -d mysql-source
-    return
-  fi
-  echo "==> $CONTAINER_CLI compose unavailable; starting MySQL source directly"
   if "$CONTAINER_CLI" container inspect "$MYSQL_CONTAINER" >/dev/null 2>&1; then
     "$CONTAINER_CLI" start "$MYSQL_CONTAINER" >/dev/null
     return
@@ -40,7 +36,7 @@ start_mysql_source() {
     -e MYSQL_USER=sync_user \
     -e MYSQL_PASSWORD=sync_password_123 \
     -e TZ=Asia/Shanghai \
-    -p 13306:3306 \
+    -p "$MYSQL_PORT:3306" \
     -v "$ROOT_DIR/testdata/mysql/init:/docker-entrypoint-initdb.d:ro" \
     -v "$ROOT_DIR/testdata/mysql/conf.d:/etc/mysql/conf.d:ro" \
     --health-cmd='mysql -h localhost -u root -proot123456 -e "SELECT 1"' \
@@ -130,6 +126,35 @@ wait_doris_count() {
   return 1
 }
 
+wait_doris_column() {
+  table="$1"
+  column="$2"
+  i=0
+  while [ "$i" -lt 120 ]; do
+    if doris_sql "$MYSQL_DB" -e "SHOW COLUMNS FROM $table LIKE '$column';" 2>/dev/null | grep -q "$column"; then
+      return 0
+    fi
+    i=$((i + 1)); sleep 1
+  done
+  doris_sql "$MYSQL_DB" -e "SHOW COLUMNS FROM $table;" || true
+  return 1
+}
+
+wait_pipeline_running() {
+  name="$1"
+  i=0
+  body=""
+  while [ "$i" -lt 90 ]; do
+    body="$(curl -fsS "http://127.0.0.1:$API_PORT/api/v2/pipelines" 2>/dev/null || true)"
+    if echo "$body" | grep "\"name\":\"$name\"" | grep '"status":"running"' >/dev/null 2>&1; then
+      return 0
+    fi
+    i=$((i + 1)); sleep 1
+  done
+  echo "$body"
+  return 1
+}
+
 write_pipe() {
   name="$1"
   source_type="$2"
@@ -143,7 +168,7 @@ source:
   type: $source_type
   config:
     host: "host.docker.internal"
-    port: 13306
+    port: $MYSQL_PORT
     user: "sync_user"
     password: "sync_password_123"
     database: "$MYSQL_DB"
@@ -176,6 +201,61 @@ sink:
 batch_size: 200
 checkpoint_interval_sec: 1
 backpressure_buffer: 500
+dlq:
+  enable: true
+EOF
+}
+
+write_doris_cdc_pipe() {
+  name="$1"
+  source_type="$2"
+  source_table="$3"
+  server_id="$4"
+  cat >"$PIPE_DIR/$name.yaml" <<EOF
+name: "$name"
+source:
+  type: $source_type
+  config:
+    host: "host.docker.internal"
+    port: $MYSQL_PORT
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "$MYSQL_DB"
+    table: "$source_table"
+    tables:
+      - "$source_table"
+    pk_column: "id"
+    limit: 2
+    server_id: $server_id
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: doris
+  config:
+    host: "host.docker.internal"
+    port: 9030
+    http_port: 8030
+    user: "root"
+    database: "$MYSQL_DB"
+    table: "$source_table"
+    write_mode: "stream_load"
+    stream_load_format: "json"
+    batch_mode: "upsert"
+    pk_columns: ["id"]
+    auto_create: true
+    schema_drift: "add_columns"
+    ddl_policy: "ignore"
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 50
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
 dlq:
   enable: true
 EOF
@@ -295,6 +375,92 @@ amount_type="$(doris_sql -N "$MYSQL_DB" -e "SHOW CREATE TABLE customers_json;" |
 echo "$amount_type" | grep "UNIQUE KEY"
 echo "$amount_type" | grep -i "decimal"
 
+echo "==> Verify MySQL CDC and snapshot+CDC to Doris restart/replay/schema drift"
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+rm -rf "$PIPE_DIR"
+rm -f data-doris/etl.db data-doris/etl.db-*
+rm -rf data-doris/checkpoint data-doris/dlq
+mkdir -p "$PIPE_DIR"
+
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 "$MYSQL_DB" -e "
+DROP TABLE IF EXISTS doris_cdc_customers;
+CREATE TABLE doris_cdc_customers (
+  id BIGINT PRIMARY KEY,
+  name VARCHAR(128),
+  status VARCHAR(32),
+  amount DECIMAL(18,2)
+);
+DROP TABLE IF EXISTS doris_snapshot_cdc_customers;
+CREATE TABLE doris_snapshot_cdc_customers (
+  id BIGINT PRIMARY KEY,
+  name VARCHAR(128),
+  status VARCHAR(32),
+  amount DECIMAL(18,2)
+);
+INSERT INTO doris_snapshot_cdc_customers (id, name, status, amount) VALUES
+  (9731, 'Doris Snapshot Ada', 'active', 131.10),
+  (9732, 'Doris Snapshot Grace', 'active', 132.20);
+"
+doris_sql "$MYSQL_DB" -e "DROP TABLE IF EXISTS doris_cdc_customers; DROP TABLE IF EXISTS doris_snapshot_cdc_customers;"
+
+write_doris_cdc_pipe "mysql-cdc-to-doris-certified" "mysql_cdc" "doris_cdc_customers" "2511"
+write_doris_cdc_pipe "mysql-snapshot-cdc-to-doris-certified" "mysql_snapshot_cdc" "doris_snapshot_cdc_customers" "2512"
+
+"$CONTAINER_CLI" run -d \
+  --add-host host.docker.internal:host-gateway \
+  --name "$APP_CONTAINER" \
+  --network "$DORIS_NETWORK" \
+  --ip 172.31.90.4 \
+  -p "$API_PORT:8001" \
+  -v "$PIPE_DIR:/app/pipes:ro" \
+  -v "$ROOT_DIR/testdata:/app/testdata:ro" \
+  -v "$ROOT_DIR/data-doris:/app/data" \
+  -v "$ROOT_DIR/logs:/app/logs" \
+  "$IMAGE" >/dev/null
+
+wait_http "http://127.0.0.1:$API_PORT/api/v2/health"
+wait_pipeline_running "mysql-cdc-to-doris-certified"
+wait_pipeline_running "mysql-snapshot-cdc-to-doris-certified"
+wait_doris_count "doris_snapshot_cdc_customers" "id BETWEEN 9731 AND 9732" "2"
+
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 "$MYSQL_DB" -e "
+INSERT INTO doris_cdc_customers (id, name, status, amount) VALUES (9741, 'Doris CDC Insert', 'active', 141.10);
+UPDATE doris_snapshot_cdc_customers SET amount=232.20 WHERE id=9732;
+"
+wait_doris_count "doris_cdc_customers" "id=9741 AND amount=141.10" "1"
+wait_doris_count "doris_snapshot_cdc_customers" "id=9732 AND amount=232.20" "1"
+
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 "$MYSQL_DB" -e "DELETE FROM doris_cdc_customers WHERE id=9741;"
+wait_doris_count "doris_cdc_customers" "id=9741" "0"
+
+"$CONTAINER_CLI" restart "$APP_CONTAINER" >/dev/null
+wait_http "http://127.0.0.1:$API_PORT/api/v2/health"
+wait_pipeline_running "mysql-cdc-to-doris-certified"
+wait_pipeline_running "mysql-snapshot-cdc-to-doris-certified"
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 "$MYSQL_DB" -e "
+INSERT INTO doris_cdc_customers (id, name, status, amount) VALUES (9742, 'Doris CDC After Restart', 'active', 142.20);
+INSERT INTO doris_snapshot_cdc_customers (id, name, status, amount) VALUES (9733, 'Doris Snapshot After Restart', 'active', 133.30);
+"
+wait_doris_count "doris_cdc_customers" "id=9742 AND amount=142.20" "1"
+wait_doris_count "doris_snapshot_cdc_customers" "id=9733 AND amount=133.30" "1"
+
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 "$MYSQL_DB" -e "
+ALTER TABLE doris_cdc_customers ADD COLUMN tier VARCHAR(32) NULL;
+ALTER TABLE doris_snapshot_cdc_customers ADD COLUMN tier VARCHAR(32) NULL;
+INSERT INTO doris_cdc_customers (id, name, status, amount, tier) VALUES (9743, 'Doris CDC Drift', 'active', 143.30, 'gold');
+UPDATE doris_snapshot_cdc_customers SET tier='silver' WHERE id=9733;
+"
+wait_doris_column "doris_cdc_customers" "tier"
+wait_doris_column "doris_snapshot_cdc_customers" "tier"
+wait_doris_count "doris_cdc_customers" "id=9743 AND tier='gold'" "1"
+wait_doris_count "doris_snapshot_cdc_customers" "id=9733 AND tier='silver'" "1"
+
+curl -fsS -X POST "http://127.0.0.1:$API_PORT/api/v2/pipelines/mysql-snapshot-cdc-to-doris-certified/stop" >/dev/null || true
+curl -fsS -X POST "http://127.0.0.1:$API_PORT/api/v2/pipelines/mysql-snapshot-cdc-to-doris-certified/checkpoint/reset" >/dev/null
+curl -fsS -X POST "http://127.0.0.1:$API_PORT/api/v2/pipelines/mysql-snapshot-cdc-to-doris-certified/start" >/dev/null
+wait_pipeline_running "mysql-snapshot-cdc-to-doris-certified"
+wait_doris_count "doris_snapshot_cdc_customers" "id BETWEEN 9731 AND 9733" "3"
+
 echo "==> Verify Doris BE outage routes Stream Load records to DLQ and replay recovers"
 OUTAGE_PIPELINE="doris-be-outage-dlq"
 "$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
@@ -406,7 +572,7 @@ if ! echo "$dlq_after" | grep '"items":\[\]' >/dev/null; then
 fi
 
 "$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-"$CONTAINER_CLI" rm -f "$DORIS_FE_CONTAINER" "$DORIS_BE_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" rm -f "$DORIS_FE_CONTAINER" "$DORIS_BE_CONTAINER" "$MYSQL_CONTAINER" >/dev/null 2>&1 || true
 "$CONTAINER_CLI" network rm "$DORIS_NETWORK" >/dev/null 2>&1 || true
 
-echo "Doris batch Stream Load JSON/CSV and insert fallback E2E passed"
+echo "Doris batch, CDC, snapshot+CDC, schema drift, restart/reset, and outage DLQ/replay E2E passed"

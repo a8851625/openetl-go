@@ -153,16 +153,21 @@ func (s *Store) migrate(ctx context.Context) error {
 			status      TEXT NOT NULL DEFAULT 'pending',
 			assigned_at TIMESTAMPTZ,
 			started_at  TIMESTAMPTZ,
-			finished_at TIMESTAMPTZ
+			finished_at TIMESTAMPTZ,
+			required_labels JSONB DEFAULT '{}'::jsonb
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_task_pipeline ON task_assignments (pipeline, status)`,
 		`CREATE TABLE IF NOT EXISTS plugins (
-			name         TEXT PRIMARY KEY,
-			kind         TEXT NOT NULL,
-			wasm_path    TEXT NOT NULL,
-			version      TEXT NOT NULL DEFAULT '1.0.0',
-			enabled      BOOLEAN DEFAULT TRUE,
-			installed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+			name                  TEXT PRIMARY KEY,
+			kind                  TEXT NOT NULL,
+			wasm_path             TEXT NOT NULL,
+			version               TEXT NOT NULL DEFAULT '1.0.0',
+			abi                   TEXT NOT NULL DEFAULT '',
+			min_runtime_version   TEXT NOT NULL DEFAULT '',
+			manifest_json         TEXT NOT NULL DEFAULT '',
+			manifest_validated    BOOLEAN DEFAULT FALSE,
+			enabled               BOOLEAN DEFAULT TRUE,
+			installed_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS connections (
 			name           TEXT PRIMARY KEY,
@@ -230,6 +235,11 @@ func (s *Store) runVersionedMigrations(ctx context.Context) error {
 		{5, "add pipeline_version to dead_letters", "ALTER TABLE dead_letters ADD COLUMN IF NOT EXISTS pipeline_version INTEGER DEFAULT 0"},
 		{6, "add dag_node to dead_letters", "ALTER TABLE dead_letters ADD COLUMN IF NOT EXISTS dag_node TEXT"},
 		{7, "add uuid id to pipelines", "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS id TEXT"},
+		{8, "add required_labels to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS required_labels JSONB DEFAULT '{}'::jsonb"},
+		{9, "add abi to plugins", "ALTER TABLE plugins ADD COLUMN IF NOT EXISTS abi TEXT NOT NULL DEFAULT ''"},
+		{10, "add min_runtime_version to plugins", "ALTER TABLE plugins ADD COLUMN IF NOT EXISTS min_runtime_version TEXT NOT NULL DEFAULT ''"},
+		{11, "add manifest_json to plugins", "ALTER TABLE plugins ADD COLUMN IF NOT EXISTS manifest_json TEXT NOT NULL DEFAULT ''"},
+		{12, "add manifest_validated to plugins", "ALTER TABLE plugins ADD COLUMN IF NOT EXISTS manifest_validated BOOLEAN DEFAULT FALSE"},
 	}
 
 	for _, m := range migrations {

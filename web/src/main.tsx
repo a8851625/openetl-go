@@ -1058,9 +1058,10 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   const [yamlText, setYamlText] = useState('');
   const [sourceJsonOpen, setSourceJsonOpen] = useState(false);
   const [sinkJsonOpen, setSinkJsonOpen] = useState(false);
+  const [transformJsonOpen, setTransformJsonOpen] = useState(false);
   const [result, setResult] = useState<ValidateResult | null>(null);
   const [dryRunResult, setDryRunResult] = useState<unknown>(null);
-  const [stageDryRunResult, setStageDryRunResult] = useState<{ index: number; result: unknown } | null>(null);
+  const [stageDryRunResult, setStageDryRunResult] = useState<{ index: number; result?: unknown; error?: string } | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [connections, setConnections] = useState<ConnectionEntry[]>([]);
@@ -1163,10 +1164,11 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     setSampleText(prettyJSON(nextTemplate.sample));
     setSourceJsonOpen(false);
     setSinkJsonOpen(false);
+    setTransformJsonOpen(false);
     setResult(null);
     setDryRunResult(null);
     setStageDryRunResult(null);
-  }, [templateId, seedSourceConfig, seedSinkConfig]);
+  }, [templateId]);
 
   useEffect(() => {
     if (!sourceContext) return;
@@ -1562,9 +1564,17 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
         method: 'POST',
         body: JSON.stringify({ transforms: transformConfigs.slice(0, index + 1), record: parseJSONText(sampleText, template.sample) }),
       });
+      if ((data as any)?.partial_error) {
+        const message = prettyJSON((data as any).errors || data);
+        setStageDryRunResult({ index, error: message });
+        setError(`Stage ${index + 1} failed: ${message}`);
+        return;
+      }
       setStageDryRunResult({ index, result: data });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setStageDryRunResult({ index, error: message });
+      setError(`Stage ${index + 1} failed: ${message}`);
     } finally {
       setBusy('');
     }
@@ -1667,7 +1677,7 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
             <div>
               <div className="mb-1 flex items-center justify-between gap-2">
                 <label className="block text-xs font-medium text-slate-500">Transform chain</label>
-                <button className="btn btn-secondary btn-sm text-[11px]" onClick={addTransform}>Add transform</button>
+                <button data-testid="wizard-add-transform" className="btn btn-secondary btn-sm text-[11px]" onClick={addTransform}>Add transform</button>
               </div>
               <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3" data-testid="wizard-transform-config-form">
                 {transformConfigs.length ? (
@@ -1675,25 +1685,34 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
                     {transformConfigs.map((item, index) => {
                       const fields = (schema?.data?.transforms?.[item.type] || []) as PluginSchemaField[];
                       return (
-                        <div key={`${item.type}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-3">
+                        <div key={`${item.type}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-3" data-testid={`wizard-transform-stage-${index}`}>
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <div className="flex min-w-0 flex-1 items-center gap-2">
                               <span className="shrink-0 text-xs font-semibold text-slate-600">{index + 1}.</span>
-                              <select className="input h-8 min-w-0 flex-1 text-xs" value={item.type} onChange={(e) => updateTransformType(index, e.target.value)}>
+                              <select data-testid={`wizard-transform-type-${index}`} className="input h-8 min-w-0 flex-1 text-xs" value={item.type} onChange={(e) => updateTransformType(index, e.target.value)}>
                                 {transformTypes.map((type) => <option key={type} value={type}>{type}</option>)}
                               </select>
                               <span className="badge badge-slate text-[10px]">{metadata.transforms?.[item.type]?.maturity || 'unknown'}</span>
                             </div>
                             <div className="flex shrink-0 gap-1">
-                              <button className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, -1)} disabled={index === 0} title="Move up">↑</button>
-                              <button className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, 1)} disabled={index === transformConfigs.length - 1} title="Move down">↓</button>
-                              <button className="btn btn-secondary btn-sm px-2" onClick={() => dryRunThroughStage(index)} disabled={busy === `stage-${index}`} title="Dry-run through this stage">▶</button>
-                              <button className="btn btn-danger btn-sm px-2" onClick={() => removeTransform(index)} title="Remove">×</button>
+                              <button data-testid={`wizard-transform-move-up-${index}`} className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, -1)} disabled={index === 0} title="Move up">↑</button>
+                              <button data-testid={`wizard-transform-move-down-${index}`} className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, 1)} disabled={index === transformConfigs.length - 1} title="Move down">↓</button>
+                              <button data-testid={`wizard-transform-dry-run-${index}`} className="btn btn-secondary btn-sm px-2" onClick={() => dryRunThroughStage(index)} disabled={busy === `stage-${index}`} title="Dry-run through this stage">▶</button>
+                              <button data-testid={`wizard-transform-remove-${index}`} className="btn btn-danger btn-sm px-2" onClick={() => removeTransform(index)} title="Remove">×</button>
                             </div>
                           </div>
                           <ConfigForm fields={fields} config={item.config || {}} onChange={(next) => updateTransformConfig(index, next)} t={t} emptyText="No config fields for this transform." />
-                          {stageDryRunResult?.index === index && (
-                            <pre className="mt-2 max-h-36 overflow-auto rounded bg-white p-2 text-xs text-slate-700">{prettyJSON(stageDryRunResult.result)}</pre>
+                          {stageDryRunResult?.index === index && stageDryRunResult.result !== undefined && (
+                            <div data-testid={`wizard-transform-stage-result-${index}`} className="mt-2 rounded border border-emerald-100 bg-white p-2">
+                              <div className="mb-1 text-[11px] font-semibold text-emerald-700">Stage {index + 1} output</div>
+                              <pre className="max-h-36 overflow-auto text-xs text-slate-700">{prettyJSON(stageDryRunResult.result)}</pre>
+                            </div>
+                          )}
+                          {stageDryRunResult?.index === index && stageDryRunResult.error && (
+                            <div data-testid={`wizard-transform-stage-error-${index}`} className="mt-2 rounded border border-rose-100 bg-white p-2 text-xs text-rose-700">
+                              <div className="mb-1 font-semibold">Stage {index + 1} failed</div>
+                              <pre className="max-h-36 overflow-auto whitespace-pre-wrap">{stageDryRunResult.error}</pre>
+                            </div>
                           )}
                         </div>
                       );
@@ -1702,11 +1721,16 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
                 ) : (
                   <div className="space-y-2">
                     <div className="text-xs text-slate-400">No valid transforms in the chain.</div>
-                    <button className="btn btn-secondary btn-sm" onClick={addTransform}>Add transform</button>
+                    <button data-testid="wizard-add-transform-empty" className="btn btn-secondary btn-sm" onClick={addTransform}>Add transform</button>
                   </div>
                 )}
               </div>
-              <textarea className="input min-h-32 w-full font-mono text-xs" value={transformsText} onChange={(e) => setTransformsText(e.target.value)} />
+              <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => setTransformJsonOpen(!transformJsonOpen)}>
+                {transformJsonOpen ? 'Hide chain JSON' : 'Advanced chain JSON'}
+              </button>
+              {transformJsonOpen && (
+                <textarea data-testid="wizard-transform-json" className="input mt-2 min-h-32 w-full font-mono text-xs" value={transformsText} onChange={(e) => setTransformsText(e.target.value)} />
+              )}
             </div>
             <div>
               <div className="mb-1 flex items-center justify-between gap-2">

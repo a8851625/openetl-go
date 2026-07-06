@@ -65,16 +65,27 @@ echo "==> Build binary"
 #   - TestDistributedReassignOnWorkerLossMySQL: a dead (deregistered) worker's
 #     in-flight shards are re-queued by ReassignStaleTasks and completed by a
 #     surviving worker — no shard lost.
+#   - TestDistributedDispatchLabelsMySQLHTTP: label-restricted shard tasks are
+#     only claimed by workers whose labels match over the real master HTTP poll
+#     path.
 echo "==> Run Go integration tests: distributed dispatch (real workers + reassignment)"
 MYSQL_DSN="root:${ROOT_PASS}@tcp(host.docker.internal:${HOST_PORT})/${DB}?parseTime=true&multiStatements=true"
 
-# Use the go-dev container if available; otherwise fall back to host go.
+# Use the go-dev container if available; otherwise run a one-shot go-dev
+# container. Local Go is optional for this repository.
 if "$CONTAINER_CLI" ps --format '{{.Names}}' | grep -q '^etl-go-dev$'; then
   "$CONTAINER_CLI" exec -e MYSQL_DSN="$MYSQL_DSN" -w /workspace etl-go-dev \
     go test -race -count=1 -v -tags=integration -run 'TestDistributed' ./internal/etl/master/
 else
-  MYSQL_DSN="$MYSQL_DSN" go test -race -count=1 -v -tags=integration \
-    -run 'TestDistributed' ./internal/etl/master/
+  "$CONTAINER_CLI" run --rm \
+    --add-host host.docker.internal:host-gateway \
+    -e MYSQL_DSN="$MYSQL_DSN" \
+    -v "$PWD:/workspace" \
+    -v openetl-go_go-cache:/go \
+    -v openetl-go_go-build-cache:/root/.cache/go-build \
+    -w /workspace \
+    etl-go-dev:latest \
+    go test -race -count=1 -v -tags=integration -run 'TestDistributed' ./internal/etl/master/
 fi
 
 echo "==> Distributed dispatch E2E: PASS"

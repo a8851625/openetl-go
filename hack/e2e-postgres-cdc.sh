@@ -49,7 +49,7 @@ wait_pg() {
 wait_mysql() {
   i=0
   while [ "$i" -lt 60 ]; do
-    if "$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysqladmin ping -uroot -proot123456 --silent >/dev/null 2>&1; then
+    if "$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysqladmin ping -h127.0.0.1 -uroot -proot123456 --silent >/dev/null 2>&1; then
       return 0
     fi
     i=$((i + 1))
@@ -135,7 +135,7 @@ CREATE TABLE orders (
 "
 
 echo "==> Prepare MySQL target table"
-"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -h127.0.0.1 -uroot -proot123456 -e "
 CREATE DATABASE IF NOT EXISTS dzh3136_target;
 GRANT ALL PRIVILEGES ON dzh3136_target.* TO 'sync_user'@'%';
 DROP TABLE IF EXISTS dzh3136_target.orders;
@@ -182,7 +182,7 @@ echo "==> Verify MySQL upserted row"
 i=0
 row=""
 while [ "$i" -lt 60 ]; do
-  row="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -N -uroot -proot123456 dzh3136_target -e "SELECT CONCAT(status, '|', amount) FROM orders WHERE id=9301;" | tr -d '[:space:]')"
+  row="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -h127.0.0.1 -N -uroot -proot123456 dzh3136_target -e "SELECT CONCAT(status, '|', amount) FROM orders WHERE id=9301;" | tr -d '[:space:]')"
   if [ "$row" = "paid|321.50" ]; then
     break
   fi
@@ -196,7 +196,7 @@ echo "==> Emit PostgreSQL delete"
 i=0
 deleted=""
 while [ "$i" -lt 60 ]; do
-  deleted="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -N -uroot -proot123456 dzh3136_target -e "SELECT COUNT(*) FROM orders WHERE id=9301;" | tr -d '[:space:]')"
+  deleted="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -h127.0.0.1 -N -uroot -proot123456 dzh3136_target -e "SELECT COUNT(*) FROM orders WHERE id=9301;" | tr -d '[:space:]')"
   if [ "$deleted" = "0" ]; then
     break
   fi
@@ -219,7 +219,7 @@ echo "==> Verify checkpoint restart consumed stopped-period event"
 i=0
 row2=""
 while [ "$i" -lt 60 ]; do
-  row2="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -N -uroot -proot123456 dzh3136_target -e "SELECT CONCAT(status, '|', amount) FROM orders WHERE id=9302;" | tr -d '[:space:]')"
+  row2="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -h127.0.0.1 -N -uroot -proot123456 dzh3136_target -e "SELECT CONCAT(status, '|', amount) FROM orders WHERE id=9302;" | tr -d '[:space:]')"
   if [ "$row2" = "pending|456.75" ]; then
     break
   fi

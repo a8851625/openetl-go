@@ -131,12 +131,16 @@ type TaskAssignment struct {
 
 // PluginEntry records an installed extism plugin.
 type PluginEntry struct {
-	Name        string    `json:"name"`
-	Kind        string    `json:"kind"`
-	WASMPath    string    `json:"wasm_path"`
-	Version     string    `json:"version"`
-	Enabled     bool      `json:"enabled"`
-	InstalledAt time.Time `json:"installed_at"`
+	Name              string    `json:"name"`
+	Kind              string    `json:"kind"`
+	WASMPath          string    `json:"wasm_path"`
+	Version           string    `json:"version"`
+	ABI               string    `json:"abi,omitempty"`
+	MinRuntimeVersion string    `json:"min_runtime_version,omitempty"`
+	ManifestJSON      string    `json:"manifest_json,omitempty"`
+	ManifestValidated bool      `json:"manifest_validated"`
+	Enabled           bool      `json:"enabled"`
+	InstalledAt       time.Time `json:"installed_at"`
 }
 
 // ConnectionEntry records a reusable connector configuration for UI wizards,

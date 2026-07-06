@@ -25,9 +25,9 @@ func (SQLiteDialect) WorkerUpsert() string {
 		 ON CONFLICT(id) DO UPDATE SET host=excluded.host, port=excluded.port, slots=excluded.slots, status='online', labels=excluded.labels, last_heartbeat=CURRENT_TIMESTAMP`
 }
 func (SQLiteDialect) PluginUpsert() string {
-	return `INSERT INTO plugins (name, kind, wasm_path, version, enabled, installed_at)
-		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, wasm_path=excluded.wasm_path, version=excluded.version, enabled=excluded.enabled`
+	return `INSERT INTO plugins (name, kind, wasm_path, version, abi, min_runtime_version, manifest_json, manifest_validated, enabled, installed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, wasm_path=excluded.wasm_path, version=excluded.version, abi=excluded.abi, min_runtime_version=excluded.min_runtime_version, manifest_json=excluded.manifest_json, manifest_validated=excluded.manifest_validated, enabled=excluded.enabled`
 }
 func (SQLiteDialect) ConnectionUpsert() string {
 	return `INSERT INTO connections (name, kind, type, config_json, last_status, last_error, last_tested_at, updated_at)
@@ -65,9 +65,9 @@ func (MySQLDialect) WorkerUpsert() string {
 		 ON DUPLICATE KEY UPDATE host=VALUES(host), port=VALUES(port), slots=VALUES(slots), status='online', labels=VALUES(labels), last_heartbeat=CURRENT_TIMESTAMP(3)`
 }
 func (MySQLDialect) PluginUpsert() string {
-	return `INSERT INTO plugins (name, kind, wasm_path, version, enabled, installed_at)
-		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))
-		 ON DUPLICATE KEY UPDATE kind=VALUES(kind), wasm_path=VALUES(wasm_path), version=VALUES(version), enabled=VALUES(enabled)`
+	return `INSERT INTO plugins (name, kind, wasm_path, version, abi, min_runtime_version, manifest_json, manifest_validated, enabled, installed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))
+		 ON DUPLICATE KEY UPDATE kind=VALUES(kind), wasm_path=VALUES(wasm_path), version=VALUES(version), abi=VALUES(abi), min_runtime_version=VALUES(min_runtime_version), manifest_json=VALUES(manifest_json), manifest_validated=VALUES(manifest_validated), enabled=VALUES(enabled)`
 }
 func (MySQLDialect) ConnectionUpsert() string {
 	return `INSERT INTO connections (name, kind, type, config_json, last_status, last_error, last_tested_at, updated_at)

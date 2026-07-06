@@ -22,6 +22,33 @@ declare const require: any;
 
 // ── Core Types ────────────────────────────────────────────────────────
 
+export const OPENETL_PLUGIN_ABI = 'openetl.plugin.abi/v1';
+export const OPENETL_MIN_RUNTIME_VERSION = 'openetl-runtime/v1';
+
+export type PluginKind = 'transform' | 'source' | 'sink';
+export type ManifestFieldType = 'string' | 'int' | 'bool' | 'float' | 'string_array' | 'map';
+
+export interface ManifestField {
+  name: string;
+  type: ManifestFieldType;
+  required?: boolean;
+  default?: any;
+  description?: string;
+  secret?: boolean;
+  enum?: string[];
+}
+
+export interface PluginManifest {
+  name: string;
+  kind: PluginKind;
+  version: string;
+  abi: typeof OPENETL_PLUGIN_ABI;
+  min_runtime_version: typeof OPENETL_MIN_RUNTIME_VERSION;
+  entrypoints: string[];
+  capabilities?: string[];
+  config?: ManifestField[];
+}
+
 export interface Record {
   operation: 'INSERT' | 'UPDATE' | 'DELETE';
   data: { [key: string]: any };
@@ -67,6 +94,20 @@ export interface SinkPlugin {
   open(ctx: Context): void;
   write(records: Record[], ctx: Context): void;
   close(ctx: Context): void;
+}
+
+export function definePluginManifest(input: Omit<PluginManifest, 'abi' | 'min_runtime_version' | 'entrypoints'> & { entrypoints?: string[] }): PluginManifest {
+  const entrypointByKind: { [K in PluginKind]: string } = {
+    transform: 'transform',
+    source: 'read',
+    sink: 'write',
+  };
+  return {
+    ...input,
+    abi: OPENETL_PLUGIN_ABI,
+    min_runtime_version: OPENETL_MIN_RUNTIME_VERSION,
+    entrypoints: input.entrypoints ?? [entrypointByKind[input.kind]],
+  };
 }
 
 // ── Extism PDK Bridge ─────────────────────────────────────────────────

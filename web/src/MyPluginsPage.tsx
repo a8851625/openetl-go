@@ -7,6 +7,10 @@ type InstalledPlugin = {
   kind: string;
   wasm_path: string;
   version: string;
+  abi?: string;
+  min_runtime_version?: string;
+  manifest_validated?: boolean;
+  manifest?: any;
   enabled: boolean;
   installed_at: string;
 };
@@ -90,6 +94,24 @@ export const write = plugin;
 };
 
 const KIND_OPTIONS: PluginKind[] = ['transform', 'source', 'sink'];
+const OPENETL_PLUGIN_ABI = 'openetl.plugin.abi/v1';
+const OPENETL_MIN_RUNTIME_VERSION = 'openetl-runtime/v1';
+const ENTRYPOINT_BY_KIND: Record<PluginKind, string> = {
+  transform: 'transform',
+  source: 'read',
+  sink: 'write',
+};
+
+function buildPluginManifest(name: string, kind: PluginKind, version: string) {
+  return {
+    name,
+    kind,
+    version: version || '1.0.0',
+    abi: OPENETL_PLUGIN_ABI,
+    min_runtime_version: OPENETL_MIN_RUNTIME_VERSION,
+    entrypoints: [ENTRYPOINT_BY_KIND[kind]],
+  };
+}
 
 // Real-world TS plugin example for the editor
 const VIP_EXAMPLE_SOURCE = `/**
@@ -189,9 +211,11 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadName, setUploadName] = useState('');
   const [uploadKind, setUploadKind] = useState<PluginKind>('transform');
+  const [uploadVersion, setUploadVersion] = useState('1.0.0');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(''), 4000); }, []);
+  const editorManifest = JSON.stringify(buildPluginManifest(editorName.trim(), editorKind, editorVersion.trim()), null, 2);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -205,10 +229,11 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
 
   // ── Tab switching ──
 
-  const switchToEditor = useCallback((source?: string, name?: string, kind?: PluginKind) => {
+  const switchToEditor = useCallback((source?: string, name?: string, kind?: PluginKind, version?: string) => {
     setEditorSource(source ?? TEMPLATES.transform);
     setEditorName(name ?? 'my-transform');
     setEditorKind(kind ?? 'transform');
+    setEditorVersion(version ?? '1.0.0');
     setDebugOutput(null);
     setDebugError('');
     setTab('editor');
@@ -230,6 +255,7 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const loadTemplate = useCallback(() => {
     setEditorSource(TEMPLATES[editorKind]);
     setEditorName(`my-${editorKind}`);
+    setEditorVersion('1.0.0');
   }, [editorKind]);
 
   // Load the VIP order enricher example (a real-world plugin)
@@ -237,6 +263,7 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     setEditorSource(VIP_EXAMPLE_SOURCE);
     setEditorName('vip-order-enricher');
     setEditorKind('transform');
+    setEditorVersion('1.0.0');
   }, []);
 
   // ── Compile ──
@@ -246,12 +273,19 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
       showToast(t('myplugin.enterNameAndSource') || 'Please enter a plugin name and source code');
       return;
     }
+    if (editorKind !== 'transform') {
+      downloadSource(editorName.trim(), editorSource);
+      showToast(t('myplugin.compileTransformOnly'));
+      return;
+    }
     setIsCompiling(true);
     try {
       const formData = new FormData();
       formData.append('source', editorSource);
       formData.append('name', editorName.trim());
       formData.append('kind', editorKind);
+      formData.append('version', editorVersion.trim() || '1.0.0');
+      formData.append('manifest', editorManifest);
       const token = getToken();
       const res = await fetch('/api/v2/plugins/compile', {
         method: 'POST',
@@ -273,7 +307,7 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     } finally {
       setIsCompiling(false);
     }
-  }, [editorName, editorSource, editorKind, t, refresh, showToast]);
+  }, [editorName, editorSource, editorKind, editorVersion, editorManifest, t, refresh, showToast]);
 
   // ── Download TS Source ──
 
@@ -294,9 +328,10 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     try {
       const formData = new FormData();
       formData.append('wasm', selectedFile);
-      formData.append('name', uploadName);
+      formData.append('name', uploadName.trim());
       formData.append('kind', uploadKind);
-      formData.append('version', '1.0.0');
+      formData.append('version', uploadVersion.trim() || '1.0.0');
+      formData.append('manifest', JSON.stringify(buildPluginManifest(uploadName.trim(), uploadKind, uploadVersion.trim()), null, 2));
       const token = getToken();
       const res = await fetch('/api/v2/plugins/install', {
         method: 'POST',
@@ -307,12 +342,13 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
       showToast(`Plugin ${uploadName} installed successfully`);
       setSelectedFile(null);
       setUploadName('');
+      setUploadVersion('1.0.0');
       if (fileRef.current) fileRef.current.value = '';
       refresh();
     } catch (e) {
       showToast(`Install failed: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [selectedFile, uploadName, uploadKind, showToast, refresh]);
+  }, [selectedFile, uploadName, uploadKind, uploadVersion, showToast, refresh]);
 
   // ── Debug Run ──
 
@@ -363,9 +399,9 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     // Fetch plugin details and open in editor
     try {
       const meta = await api<any>(`/api/v2/plugins/${p.name}`);
-      switchToEditor(undefined, meta.name, meta.kind as PluginKind);
+      switchToEditor(undefined, meta.name, meta.kind as PluginKind, meta.version);
     } catch {
-      switchToEditor(undefined, p.name, p.kind as PluginKind);
+      switchToEditor(undefined, p.name, p.kind as PluginKind, p.version);
     }
   }, [switchToEditor]);
 
@@ -415,7 +451,7 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
           <div className="card">
             <div className="card-header"><h2 className="text-sm font-semibold">{t('myplugin.upload')}</h2></div>
             <div className="card-body space-y-4">
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.pluginName')}</label>
                   <input className="input w-full" value={uploadName} onChange={(e) => setUploadName(e.target.value)} placeholder="my-transform" />
@@ -425,6 +461,10 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                   <select className="input w-full" value={uploadKind} onChange={(e) => setUploadKind(e.target.value as PluginKind)}>
                     {KIND_OPTIONS.map((k) => <option key={k} value={k}>{k}</option>)}
                   </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.pluginVersion')}</label>
+                  <input className="input w-full" value={uploadVersion} onChange={(e) => setUploadVersion(e.target.value)} />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.selectFile')}</label>
@@ -460,6 +500,7 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                       <th>{t('common.name')}</th>
                       <th>{t('common.kind')}</th>
                       <th>{t('common.version')}</th>
+                      <th>ABI</th>
                       <th>{t('common.status')}</th>
                       <th>{t('myplugin.wasmPath')}</th>
                       <th>{t('common.actions')}</th>
@@ -471,6 +512,12 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                         <td className="font-medium">{p.name}</td>
                         <td><span className={`badge ${p.kind === 'source' ? 'badge-cyan' : p.kind === 'sink' ? 'badge-emerald' : 'badge-violet'}`}>{p.kind}</span></td>
                         <td className="text-sm">v{p.version}</td>
+                        <td>
+                          <div className="flex flex-col gap-1 text-xs">
+                            <span className="text-slate-500">{p.abi || OPENETL_PLUGIN_ABI}</span>
+                            <span className={`badge ${p.manifest_validated ? 'badge-emerald' : 'badge-slate'}`}>{p.manifest_validated ? 'manifest' : 'legacy'}</span>
+                          </div>
+                        </td>
                         <td><span className={`badge ${p.enabled ? 'badge-emerald' : 'badge-slate'}`}>{p.enabled ? t('common.enabled') : t('common.disabled')}</span></td>
                         <td className="max-w-xs truncate text-xs text-slate-400">{p.wasm_path}</td>
                         <td>
@@ -576,6 +623,9 @@ export const transform = plugin;`}</pre>
                 <select className="input w-full text-sm" value={editorKind} onChange={(e) => handleKindChange(e.target.value as PluginKind)}>
                   {KIND_OPTIONS.map((k) => <option key={k} value={k}>{k}</option>)}
                 </select>
+                {editorKind !== 'transform' && (
+                  <p className="mt-1 text-xs text-amber-600">{t('myplugin.compileTransformOnly')}</p>
+                )}
               </div>
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.pluginVersion')}</label>
@@ -627,6 +677,8 @@ export const transform = plugin;`}</pre>
   - type: plugin_${editorName}
     config:
       prefix: "prod"`}</pre>
+                <p className="pt-2">ABI manifest sent with install/compile:</p>
+                <pre className="mt-1 max-h-56 overflow-auto rounded bg-slate-900 p-2 text-slate-300">{editorManifest}</pre>
               </div>
             </div>
           </div>

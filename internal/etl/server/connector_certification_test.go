@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/a8851625/openetl-go/internal/etl/plugin/pluginsystem"
 )
 
 type connectorCertificationTarget struct {
@@ -89,6 +91,38 @@ func TestConnectorCertificationKitProductionSet(t *testing.T) {
 			}
 			certifyConnectorTarget(t, repoRoot, target, desc)
 		})
+	}
+}
+
+func TestPluginABIV1CertificationDocs(t *testing.T) {
+	repoRoot := filepath.Clean("../../..")
+	abiDoc := readCertificationDoc(t, repoRoot, "docs/plugin-abi-v1.md")
+	required := []string{
+		pluginsystem.ABIVersionV1,
+		pluginsystem.MinRuntimeVersionV1,
+		"Compatibility Matrix",
+		"Deprecation Policy",
+		"manifest_validated=false",
+		"Source and sink plugins must be compiled offline",
+	}
+	for _, want := range required {
+		if !strings.Contains(abiDoc, want) {
+			t.Fatalf("docs/plugin-abi-v1.md missing %q", want)
+		}
+	}
+
+	certDoc := readCertificationDoc(t, repoRoot, "docs/connector-certification.md")
+	for _, want := range []string{"Plugin ABI v1 evidence", "Rules For Production Plugins", "TestPluginABIV1CertificationDocs"} {
+		if !strings.Contains(certDoc, want) {
+			t.Fatalf("docs/connector-certification.md missing %q", want)
+		}
+	}
+
+	sdkBody := readCertificationDoc(t, repoRoot, "web/plugin-sdk/src/index.ts")
+	for _, want := range []string{"OPENETL_PLUGIN_ABI", "OPENETL_MIN_RUNTIME_VERSION", "definePluginManifest"} {
+		if !strings.Contains(sdkBody, want) {
+			t.Fatalf("web/plugin-sdk/src/index.ts missing %q", want)
+		}
 	}
 }
 

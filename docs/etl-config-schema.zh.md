@@ -1125,6 +1125,10 @@ WASM 插件使用 `internal/etl/plugin/pluginsystem` 中的 Plugin ABI v1 元数
 - 必要 entrypoint：source 插件导出 `read`，sink 插件导出 `write`，transform 插件导出 `transform`
 - Transform 输出约定：空输出、`null` 或 `false` 表示丢弃输入；JSON record 对象或普通 data 对象输出一条记录；record/data 对象数组通过 batch transform 路径输出多条记录
 - 配置字段类型：`string`、`int`、`bool`、`float`、`string_array`、`map`
+- `/api/v2/plugins/install` 支持可选 multipart `manifest` JSON 字段。显式 manifest 会在加载 WASM 前校验；不带 manifest 的兼容上传会标记为 `manifest_validated=false`。
+- `/api/v2/plugins/compile` 只支持 transform 插件。source/sink 插件需要离线编译后通过 `/api/v2/plugins/install` 上传。
+
+manifest 形状、兼容矩阵和 deprecation policy 见 `docs/plugin-abi-v1.md`。
 
 ## 幂等性警告
 

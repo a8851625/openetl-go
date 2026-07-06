@@ -78,6 +78,8 @@ Roadmap 按以下差异化推进：
 - Plugin ABI v1 需要版本协商、兼容矩阵、deprecation policy 和最小运行时版本说明。
 - maturity metadata 应由实现、测试和文档边界共同校验。
 
+进展（2026-07-06）：Plugin ABI v1 基础设施已补 production-ready 边界，但不把第三方插件默认声明为 production。`internal/etl/plugin/pluginsystem` 统一了插件名/kind/manifest 校验，显式 manifest 必须包含 `openetl.plugin.abi/v1`、`openetl-runtime/v1`、kind 对应 entrypoint 和类型化 config 字段；`/api/v2/plugins/install` 在写入/加载 WASM 前校验 manifest，legacy 上传保留兼容但返回 `manifest_validated=false`；storage 持久化 ABI/min_runtime/manifest 元数据，`/api/v2/plugins` 和 `/api/v2/plugins/schema` 暴露 `plugin_abi`；`/api/v2/plugins/compile` 保持 transform-only、npx 默认禁用。TypeScript SDK 增加 ABI 常量、manifest 类型和 `definePluginManifest`，`docs/plugin-abi-v1.md` 与 `docs/connector-certification.md` 补兼容矩阵、deprecation policy、生产插件认证规则和测试证据。验收证据：`go test ./internal/etl/plugin/pluginsystem ./internal/etl/server ./internal/etl/storage/... -count=1`、`npm --prefix web/plugin-sdk run build`。
+
 ### 4. 插件化报文解析和一进多出 transform 需要产品化
 
 Kafka 设备协议、行业报文、日志 envelope 等任务常见形态是：
@@ -167,7 +169,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 下列条目都是 spec/UI/文档/descriptor 暴露了能力面，但运行时静默丢弃或不生效，属于“用户以为实现了，实际没有”的高风险伪实现。优先级高于新增功能，必须先收口到“显式拒绝或补齐实现”，不允许继续静默成功。已澄清的非伪实现边界（DAG DLQ replay 显式 501、MaxCompute/ODPS 保持 experimental、未带 `-tags=extism` 的 WASM 显式报错）不进入本 backlog。
 
-1. Worker 标签调度伪实现（高风险，最高优先级）——已实现（2026-07-01）：
+1. Worker 标签调度伪实现（高风险，最高优先级）——已实现（2026-07-01，HTTP e2e 补强 2026-07-04）：
    - 现状（修复前）：`worker_selector.match_labels` 在 spec/UI/Settings 暴露，但分发层直接丢弃 labels：`internal/etl/master/dispatch.go:62`；master/worker poll 只抢第一个 pending task：`internal/etl/master/dispatch.go:104`、`internal/etl/worker/poll.go:52`；worker 启动注册也不带 labels：`internal/etl/worker/worker.go:132`。
    - 影响（修复前）：用户以为有工作负载隔离，实际没有，可能把高敏感任务调度到错误 worker。
    - 实现内容：
@@ -179,19 +181,20 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
      - 新增 `--worker-labels` CLI flag 与 `ETL_WORKER_LABELS` / `etl.workerLabels` 配置入口，支持 `k=v,k=v` 和 JSON object 形态；standalone server 和 worker role 都从同一事实源读取（`internal/cmd/runtime_flags.go`、`internal/etl/server/server.go`、`internal/logic/app/app.go`）。
      - spec validate 对 `worker_selector.match_labels` 给出 warning，提示需要注册匹配的 worker，否则 shard 会一直 pending（`internal/etl/server/server.go`）。
    - 验收（已达成）：新增单测覆盖 `DispatchShards` 持久化 labels、`AssignNextTask` 按 labels 过滤、无匹配 worker 时 task 保持 pending、worker poll standalone 按 labels 过滤、`--worker-labels` flag 解析、`readWorkerLabels` 解析多种形态、spec validate 触发 warning（`internal/etl/master/dispatch_labels_test.go`、`internal/etl/worker/poll_test.go`、`internal/cmd/runtime_flags_test.go`、`internal/etl/server/worker_labels_test.go`）；`go test ./... -count=1` 全绿。
-   - 残留：真实分布式 master+worker HTTP 路径下的 match_labels 端到端 Docker e2e 仍需补强（当前由单测覆盖 standalone store 路径与 AssignNextTask 过滤逻辑）。
+   - HTTP e2e 补强（2026-07-04）：新增 `TestDistributedDispatchLabelsMySQLHTTP`，通过 `hack/e2e-distributed.sh` 的 MySQL 集成环境启动真实 master HTTP poll 路径与两个 `worker.New` worker，验证带 `RequiredLabels{zone=secure}` 的 shard 只会被注册 `Labels{zone=secure}` 的 worker claim/执行，未带匹配 labels 的 worker 保持无法领取该任务。
+   - 残留：无。
 
-2. `/plugins/compile` 对 source/sink 插件安装后不注册：
+2. `/plugins/compile` 对 source/sink 插件安装后不注册——已实现（2026-07-04，显式拒绝 source/sink compile）：
    - 现状：UI/OpenAPI 允许编译安装 transform/source/sink 插件，但编译成功路径只注册 transform：`internal/etl/server/server.go:3217`；仅上传 `.wasm` 路径才注册 source/sink：`internal/etl/server/server.go:3147`。
    - 影响：source/sink 可能返回 `compiled_and_installed` 但当前进程里 `plugin_<name>` 不可用。
-   - 目标：compile 路径对 source/sink 要么显式拒绝并提示用 `.wasm` 上传，要么补齐注册逻辑；API/UI/schema 口径统一。
-   - 验收：compile source/sink 不再静默成功；单测覆盖拒绝或注册路径；OpenAPI/UI 选项与实现一致。
+   - 实现内容：`POST /api/v2/plugins/compile` 现在只允许 `kind=transform`；`kind=source|sink` 直接返回 400，并提示 source/sink 需离线编译后通过 `/api/v2/plugins/install` 上传 `.wasm`。UI 插件编辑器保留 source/sink 模板用于离线开发，但 source/sink 时点击安装会下载源码并提示离线编译；OpenAPI summary/description 同步为 transform-only compile。
+   - 验收（已达成）：新增 `TestPluginCompileRejectsSourceAndSinkKinds` 覆盖 source/sink compile 均返回 400 且包含离线上传指导；OpenAPI/UI 与实现口径一致。
 
-3. tap 的 alerts/metrics 入口大于实现：
+3. tap 的 alerts/metrics 入口大于实现——已实现（2026-07-04，标注 unimplemented + validate warning）：
    - 现状：schema 暴露 `alert_on`/`threshold`/`field`/`value`/`webhook`：`internal/etl/server/schema.go:410`，metadata 标了 metrics/alerts：`internal/etl/server/server.go:3475`，但 Apply 只计数和打日志，不按 alert_on/threshold/field/value 触发 alert，也未实现 `TransformMetricsProvider`：`internal/etl/transform/nodes.go:100`。
    - 影响：配置 webhook/告警条件基本不产生用户期望的告警。
-   - 目标：在未补齐前，schema/descriptor 移除或显式标注 alert_on/threshold/field/value/webhook 为 `unimplemented`；validate 对这些字段 warning；要么补齐 alert 触发和 metrics 暴露。
-   - 验收：用户配置 alert 字段时能收到明确“未实现/被忽略”反馈，或看到真实告警/metrics；schema、metadata、文档与实现一致。
+   - 实现内容：`ConfigField` 新增 `unimplemented` 标记，tap 的 `alert_on`/`threshold`/`field`/`value`/`webhook` 字段在 schema/descriptor 中显式标注未实现；tap metadata capability 从 `observe,metrics,alerts` 收敛为 `observe,logging`；`/api/v2/specs/validate` 对 linear 和 DAG tap 节点配置上述字段时输出 ignored warning；pipeline create/update 的 warning 响应也会带出同类提示；runtime tap 注释和实现收敛为 `log_every` 与 `alert_on_lag_ms` 日志告警。
+   - 验收（已达成）：新增 `TestTapSchemaMarksLegacyAlertFieldsUnimplemented`、`TestTapDescriptorDoesNotAdvertiseUnimplementedAlertsOrMetrics`、`TestSpecValidateWarnsForTapUnimplementedAlertFields`、`TestSpecValidateWarnsForDAGTapUnimplementedAlertFields` 覆盖 schema、descriptor 和 validate warning。
 
 4. dependency schedule 内核支持但 Schedule API/页面不能创建——已实现（2026-07-01）：
    - 现状（修复前）：调度器支持 dependency：`internal/etl/orchestrator/scheduler.go:123`，文档写 `schedule.depends_on`：`docs/etl-config-schema.md:46`，但运行时 Schedule API request 无 `DependsOn` 字段，校验也拒绝 dependency：`internal/etl/server/server.go:1794`、`internal/etl/server/server.go:1909`；Schedules 页面也只有 cron/periodic/streaming/once：`web/src/SchedulesPage.tsx:230`。
@@ -256,7 +259,8 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
   - 已统一配置契约：修正 `port` / `http_port` 文档、API schema、UI descriptor 和示例 YAML，移除未实现的 `mysql_port` 口径；maturity metadata 已提升为 `production`，对外口径限定为已验证的 Doris Unique Key/upsert、Stream Load/insert fallback、schema/preflight/DDL 安全边界。
   - 已补 observability 和错误分类：Stream Load HTTP 5xx/429/timeout 按 transient，auth/schema/data 类错误进入对应 DLQ 分类；Doris sink 暴露 `SinkMetricsProvider`。
   - 本轮验证：`E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh` 通过；`go test ./internal/cmd ./internal/etl/server ./internal/etl/sink` 通过。后续扩展中，`hack/e2e-doris.sh` 已覆盖 Doris BE outage -> transient DLQ -> BE/FE recover -> DLQ replay 写回 5 条记录。
-  - 持续认证项不再阻塞 production gate，但需要继续补强：MySQL CDC/snapshot+CDC -> Doris、checkpoint restart/reset replay、schema drift add-columns，以及更多 Doris FE/BE outage/recover 组合。
+  - 认证补强（2026-07-06）：`hack/e2e-doris.sh` 改为使用独立 MySQL source 容器和 `DORIS_MYSQL_PORT`，避免与本地 quickstart/dev 环境抢占 13306；新增 MySQL CDC -> Doris 和 MySQL snapshot+CDC -> Doris 持续认证，覆盖 CDC insert/delete、snapshot 后 CDC update/insert、app restart 后继续消费、checkpoint reset 后 Doris Unique Key/upsert 吸收重放、schema drift add-columns，以及已有 Doris BE outage -> transient DLQ -> BE/FE recover -> DLQ replay。
+  - 持续认证项不再阻塞 production gate，但还可继续补强更多 Doris FE/BE outage/recover 组合和更复杂 DDL 边界。
 - 建立 source 与调度类型的第一版绑定规则：
   - 已落地每个内置 source descriptor 的 `supported_schedules` 和 `default_schedule`，第一版只使用这两个字段，不引入额外运行分类。
   - `mysql_cdc`、`postgres_cdc`、`mysql_snapshot_cdc`、`kafka` 默认只允许 `streaming`；`mysql_batch`、`file`、`http` 默认允许 `once` / `cron` / `periodic` / `dependency`；`redis` 按现有模式保守声明为 `once`。
@@ -498,11 +502,11 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - `web/src/main.tsx` 向导已把 `batch_size` / `checkpoint_interval_sec` / `dlq.enable` 提升为可见的 Runtime safety 表单控制，并修正 preflight / saved-connection recommendation Apply 的状态闭环：顶层运行参数现在写入 wizard 状态源，和 YAML sync、生成 spec 保持一致，避免用户点击 Apply 后被后续表单变更重新生成的 YAML 覆盖。
 - `web/src/DagEditorPage.tsx` 节点属性已复用保存连接 context，DAG/YAML 继续使用普通 `connection` 字段，不引入专用执行路径；选择 saved connection 时清空旧节点 config，节点级 `source.config.*` / `sink.config.*` 推荐可直接应用为当前节点的 inline override。
 - `docs/etl-api.md` / `docs/etl-api.zh.md` / `docs/openapi.yaml` 已补保存连接上下文接口。
-- 本轮已验证：`go test ./internal/etl/server -count=1`、`npm run build`、`./hack/pack.sh`、`./hack/e2e-ui.sh`，UI e2e 结果 `92 passed, 0 failed`。后续补充验证：`go test ./internal/etl/source ./internal/etl/sink -count=1`、`CONTAINER_CLI=podman ./hack/e2e-postgres-cdc.sh`、`go test ./internal/etl/... -count=1`。
+- 本轮已验证：`go test ./internal/etl/server -count=1`、`npm run build`、`./hack/pack.sh`、`./hack/e2e-ui.sh`，UI e2e 结果 `92 passed, 0 failed`。后续补充验证已补跑（2026-07-06）：`go test ./internal/etl/source ./internal/etl/sink -count=1`、`CONTAINER_CLI=podman E2E_SKIP_BUILD=1 ./hack/e2e-postgres-cdc.sh`、`go test ./internal/etl/... ./internal/cmd -count=1` 均通过。
 
 剩余缺口：
 
-- 复杂 transform chain 的增删、排序和跨 transform 错误定位仍需从 JSON 辅助编辑继续产品化。
+- 复杂 transform chain 的增删、排序和跨 transform 错误定位已从 JSON 辅助编辑推进为 Wizard 一等控件（2026-07-06）：支持 Add/remove、类型切换、上移/下移、逐阶段 dry-run、`partial_error` 阶段错误定位和高级 chain JSON 折叠入口；`hack/e2e-ui.sh` 已覆盖上述交互，UI e2e 结果 `99 passed, 0 failed`。
 - Connector/plugin certification test kit、真实 WASM e2e、更多生产候选链路的故障注入证据仍需继续补齐。
 
 ### 已交付：v0.2.5，组件文档与 AI context pack
@@ -564,6 +568,11 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
   - resource limit。
 - Plugin ABI v1 文档和兼容性测试：manifest、entrypoint、host function、版本协商、deprecation policy。
 - 插件构建移出服务请求主路径，提供 CLI/CI/离线镜像；服务端 compile 只保留受控开发模式。
+- 官方插件样板：用当前 WASM/TypeScript 插件模块实现一个可安装的 `feishu_sheet` source plugin，作为第三方插件接入系统的端到端范例。
+  - 定位：这是插件生态样板，不替代 Phase 1 已实现的内置 `feishu_sheet` beta source；两者共享飞书电子表格场景，但样板必须走 `web/plugin-sdk`、Plugin ABI v1 manifest、离线 `extism-js` 编译、`/api/v2/plugins/install` 上传、`plugin_<name>` pipeline 引用的完整插件路径。
+  - 目标链路：Feishu/Lark 电子表格 -> `plugin_feishu-sheet-source` -> `project` / `type_convert` -> file/MySQL/ClickHouse 任一轻量 sink，用于证明 source plugin 可通过 manifest/config/schema 安装并参与普通 `Source -> Transform -> Sink` pipeline。
+  - 验收：新增 `web/plugin-sdk/examples/feishu-sheet-source.ts`、`manifest.json` 和 README；manifest 显式声明 `openetl.plugin.abi/v1`、`openetl-runtime/v1`、`kind=source`、`entrypoints=["read"]`、`app_id/app_secret/spreadsheet_token/sheet_range/base_url` 等配置字段及 secret 标记；补插件编译/安装/注册文档和示例 pipeline YAML；补 mock fixture 或 e2e，覆盖 token 获取成功/失败、sheet 拉取、空表/header 错误、插件安装后 registry 出现 `plugin_feishu-sheet-source`；真实飞书环境证据缺失前样板 maturity 只标 `beta` 或 `dev-only`。
+  - 不做：不把飞书插件样板扩成插件商店/marketplace；不承诺通用 SaaS connector catalog；不把未跑真实环境和故障注入的样板标成 production。
 - Descriptor 由代码、schema 和测试证据共同生成或校验，阻止 metadata 与实现漂移。
 - 第三方 connector 能在不改 UI 代码的情况下提供表单、preflight、metrics 和 DLQ 行为。
 - 核心组件文档进入扩展合约：
@@ -644,8 +653,8 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 0. 修复 DAG 声明式文件加载 bug（Phase 1 增补第 1 项）：让 `loadSpecs` 复用 `RestoreFromDB` 的 `dag:` 检测，使 DAG spec 能像线性格式一样经 `pipes/*.yaml` 自动加载和 hot-reload。
 1. 补 `odps` / `maxcompute` 真实环境证据：用真实 MaxCompute 凭据跑 Kafka ODS -> `project` / `type_convert` -> MaxCompute 分区表 e2e，补 DLQ/replay、checkpoint reset/restart、权限失败和操作文档；没有真实写入证据前保持 experimental。
 2. 已完成异步 I/O 维表查询增强第一轮闭环：`lookup` query-mode、异步边界、Redis-only cache gate、preflight/schema/spec 校验和 `hack/e2e-lookup-query.sh` 已落地；后续只按具体 connector/transform 缺口补强。
-3. 已补 production candidate 链路的失败注入增量：`hack/e2e-s3-minio.sh` 已覆盖 MinIO 目标下线 -> transient DLQ -> 恢复后 replay，并新增 runner DLQ 写入上下文回归测试；`hack/e2e-doris.sh` 已覆盖 Doris BE outage -> transient DLQ -> BE/FE recover -> replay；Kafka/Debezium/ClickHouse/Doris/ES 的更多故障类型继续按已有 e2e 矩阵增补。
+3. 已补 production candidate 链路的失败注入增量：`hack/e2e-s3-minio.sh` 已覆盖 MinIO 目标下线 -> transient DLQ -> 恢复后 replay，并新增 runner DLQ 写入上下文回归测试；`hack/e2e-doris.sh` 已覆盖 MySQL CDC/snapshot+CDC -> Doris、checkpoint restart/reset replay、schema drift add-columns、Doris BE outage -> transient DLQ -> BE/FE recover -> replay；Kafka/Debezium/ClickHouse/Doris/ES 的更多故障类型继续按已有 e2e 矩阵增补。
 4. 扩展 schema/preflight 覆盖面：优先为 production candidate source/sink 补 `SchemaDescriptor` / `SchemaValidator`、DDL preview 和字段级 remediation，驱动 UI 表单和 preflight。
-5. 已建立 connector certification test kit 第一版：MySQL、ClickHouse、Kafka、S3/File 的 maturity 由 `TestConnectorCertificationKitProductionSet` 约束 descriptor、readiness、e2e evidence、组件文档和实现注册；下一步扩展到插件 ABI 与第三方 connector。
+5. 已建立 connector certification test kit 第一版：MySQL、ClickHouse、Kafka、S3/File 的 maturity 由 `TestConnectorCertificationKitProductionSet` 约束 descriptor、readiness、e2e evidence、组件文档和实现注册；下一步扩展到插件 ABI 与第三方 connector，并优先补一个通过当前插件模块开发的 Feishu/Lark 电子表格 source plugin 样板。
 6. 补轻量运行 smoke：容器入口命令、standalone/master/worker 三形态启动、非法参数失败输出，以及升级/回滚/备份恢复 runbook 的最小自动化验证。
 7. 推进 Phase 1 增补数仓 ETL 场景闭环：按 pre_write → map_fields → dependency 重算范例 → increment → extract → feishu_sheet → http oauth2_client_credentials → connection 配置职责收束 的次序逐条交付，完成一条再开下一条。
