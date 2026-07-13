@@ -635,7 +635,7 @@ func (e *DAGExecutor) route(ctx context.Context, nodeID string, rec core.Record,
 				if err == core.ErrRecordFiltered {
 					return
 				}
-				e.handleFailed(ctx, rec, err, "")
+				e.handleFailed(ctx, rec, err, nodeID)
 				return
 			}
 			rec = transformed
@@ -872,10 +872,10 @@ func unwrapCheckpointForSource(cp *core.Checkpoint) *core.Checkpoint {
 	return &unwrapped
 }
 
-// handleFailed routes a failed record to the DLQ. sinkID is the sink the record
-// was bound for ("" when the failure is upstream, e.g. a transform error) so the
-// DLQ-write-failure path can trip the per-sink circuit breaker (P5-9).
-func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err error, sinkID string) {
+// handleFailed routes a failed record to the DLQ. dagNodeID is the node where
+// the failure happened or the sink the record was bound for; when it names a
+// sink, the DLQ-write-failure path can trip that sink's circuit breaker (P5-9).
+func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err error, dagNodeID string) {
 	atomic.AddInt64(&e.stats.RecordsFailed, 1)
 	if e.dlqWriter == nil {
 		// No DLQ configured — never drop silently. Surface at error level so a
@@ -896,7 +896,7 @@ func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err err
 		Record:     rec,
 		Error:      err.Error(),
 		ErrorClass: string(core.ClassifyError(err)),
-		DAGNode:    sinkID,
+		DAGNode:    dagNodeID,
 	}
 	if dlqErr := e.dlqWriter.WriteDLQ(ctx, entry); dlqErr != nil {
 		// DLQ write itself failed — this is a potential data-loss event.
@@ -905,12 +905,12 @@ func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err err
 		// (pipeline.go) which alerts on DLQ-write failure. P5-9: also trip the
 		// per-sink circuit breaker so a persistently-down DLQ cools down the
 		// offending sink instead of burning through every record.
-		if sinkID != "" {
-			if b := e.breakers[sinkID]; b != nil {
+		if dagNodeID != "" {
+			if b := e.breakers[dagNodeID]; b != nil {
 				b.RecordFailure(ctx, dlqErr)
 			}
 		}
-		g.Log().Errorf(ctx, "DAG pipeline %s: DLQ write failed (potential data loss): source=%s sink=%s original_err=%v dlq_err=%v", e.spec.Name, rec.Metadata.Source, sinkID, err, dlqErr)
+		g.Log().Errorf(ctx, "DAG pipeline %s: DLQ write failed (potential data loss): source=%s dag_node=%s original_err=%v dlq_err=%v", e.spec.Name, rec.Metadata.Source, dagNodeID, err, dlqErr)
 		e.alertMgr.Send(ctx, alert.Event{
 			Level:   alert.LevelError,
 			Title:   "DAG DLQ write failure — potential data loss",

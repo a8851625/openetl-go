@@ -86,7 +86,7 @@ func descriptorsForKind(kind string, registered []string, schemas map[string][]C
 
 	out := make([]ConnectorDescriptor, 0, len(names))
 	for name := range names {
-		fields := schemas[name]
+		fields := annotateFieldScopes(kind, schemas[name])
 		required := requiredFields(fields)
 		secretFields := secretFields(fields)
 		maturity := "experimental"

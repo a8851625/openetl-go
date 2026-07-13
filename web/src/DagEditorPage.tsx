@@ -9,7 +9,7 @@ import '@xyflow/react/dist/style.css';
 import YAML from 'yaml';
 import cronstrue from 'cronstrue';
 import type { TFunc, Lang } from './types';
-import { ConfigForm, type PluginSchemaField } from './configFields';
+import { ConfigForm, filterFieldsByScope, type PluginSchemaField } from './configFields';
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -850,8 +850,10 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const schemaFields: PluginSchemaField[] = useMemo(() => {
     if (!schema?.data || !selKind || !selPlugin) return [];
     const kindKey = selKind === 'source' ? 'sources' : selKind === 'sink' ? 'sinks' : 'transforms';
-    return (schema.data[kindKey]?.[selPlugin] || []) as PluginSchemaField[];
-  }, [schema, selKind, selPlugin]);
+    const all = (schema.data[kindKey]?.[selPlugin] || []) as PluginSchemaField[];
+    if (selKind === 'transform' || !selectedNode?.data.connection) return all;
+    return filterFieldsByScope(all, 'behavior');
+  }, [schema, selKind, selPlugin, selectedNode?.data.connection]);
 
   const nodeConnectionKind = selKind === 'source' ? 'source' : selKind === 'sink' ? 'sink' : 'transform';
   const nodeSupportsConnection = ['source', 'sink', 'transform', 'enricher', 'lookup'].includes(selKind || '');
@@ -915,13 +917,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         <button className="btn btn-danger btn-sm px-2" onClick={deleteSelected} disabled={!selectedNodeId} title={t('dag.deleteNode')}>🗑</button>
         {/* Drawer tabs */}
         <div className="flex items-center gap-0.5">
-          <button className={`btn btn-sm px-2 ${drawerTab === 'schedule' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('schedule')} title={t('nav.schedules')}>📅</button>
-          <button className={`btn btn-sm px-2 ${drawerTab === 'hooks' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('hooks')} title={t('drawer.hooks')}>🪝</button>
-          <button className={`btn btn-sm px-2 ${drawerTab === 'advanced' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('advanced')} title={t('drawer.advanced')}>⚙️</button>
-          <button className={`btn btn-sm px-2 ${drawerTab === 'ai' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('ai')} title={t('drawer.ai')}>🤖</button>
-          <button className="btn btn-secondary btn-sm px-2" onClick={() => { exportYaml(); setDrawerTab('yaml'); }} title={t('dag.exportYaml')}>📄</button>
-          <button className="btn btn-secondary btn-sm px-2" onClick={() => validateCurrentSpec().catch(() => {})} title="Validate + preflight" data-testid="dag-validate-preflight">✓</button>
-          <button className="btn btn-secondary btn-sm px-2" onClick={testNodeConnection} title={t('dag.testConnection')} disabled={!selectedNode}>🔌</button>
+          <button className={`btn btn-sm px-2 ${drawerTab === 'schedule' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('schedule')} title={t('dag.toolbarSchedule')}>📅 <span className="hidden sm:inline">{t('dag.toolbarSchedule')}</span></button>
+          <button className={`btn btn-sm px-2 ${drawerTab === 'hooks' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('hooks')} title={t('dag.toolbarHooks')}>🪝 <span className="hidden sm:inline">{t('dag.toolbarHooks')}</span></button>
+          <button className={`btn btn-sm px-2 ${drawerTab === 'advanced' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('advanced')} title={t('dag.toolbarAdvanced')}>⚙️ <span className="hidden sm:inline">{t('dag.toolbarAdvanced')}</span></button>
+          <button className={`btn btn-sm px-2 ${drawerTab === 'ai' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('ai')} title={t('dag.toolbarAI')}>🤖 <span className="hidden sm:inline">{t('dag.toolbarAI')}</span></button>
+          <button className="btn btn-secondary btn-sm px-2" onClick={() => { exportYaml(); setDrawerTab('yaml'); }} title={t('dag.exportYaml')}>📄 <span className="hidden sm:inline">{t('dag.toolbarYaml')}</span></button>
+          <button className="btn btn-secondary btn-sm px-2" onClick={() => validateCurrentSpec().catch(() => {})} title={t('dag.toolbarValidate')} data-testid="dag-validate-preflight">✓ <span className="hidden sm:inline">{t('dag.toolbarValidate')}</span></button>
+          <button className="btn btn-secondary btn-sm px-2" onClick={testNodeConnection} title={t('dag.toolbarTest')} disabled={!selectedNode}>🔌 <span className="hidden sm:inline">{t('dag.toolbarTest')}</span></button>
         </div>
         {testResult && (
           <span className={`text-xs ${testResult.startsWith('✅') ? 'text-emerald-600' : testResult.startsWith('⏳') ? 'text-amber-600' : 'text-rose-600'}`}>{testResult}</span>
@@ -1130,8 +1132,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                     )}
                   </div>
                 )}
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">{t('dag.config')}</label>
+                <div data-testid="dag-node-config-form">
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    {t('dag.config')}
+                    {selectedNode.data.connection ? ` · ${t('field.scopeBehavior')}` : ''}
+                  </label>
+                  {selectedNode.data.connection && (
+                    <div className="mb-2 text-[11px] text-slate-400">{t('dag.behaviorOnly')}</div>
+                  )}
                   <ConfigForm fields={schemaFields} config={selectedNode.data.config} onChange={updateNodeConfig} t={t} />
                 </div>
               </div>

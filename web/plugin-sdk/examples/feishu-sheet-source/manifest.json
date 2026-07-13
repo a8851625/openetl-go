@@ -1,0 +1,62 @@
+{
+  "name": "feishu-sheet-source",
+  "kind": "source",
+  "version": "0.1.0",
+  "abi": "openetl.plugin.abi/v1",
+  "min_runtime_version": "openetl-runtime/v1",
+  "entrypoints": ["read"],
+  "capabilities": ["batch", "oauth2_client_credentials", "plugin_sample"],
+  "config": [
+    {
+      "name": "app_id",
+      "type": "string",
+      "required": true,
+      "description": "Feishu/Lark app_id",
+      "secret": false
+    },
+    {
+      "name": "app_secret",
+      "type": "string",
+      "required": true,
+      "description": "Feishu/Lark app_secret",
+      "secret": true
+    },
+    {
+      "name": "spreadsheet_token",
+      "type": "string",
+      "required": true,
+      "description": "Spreadsheet token from sheet URL"
+    },
+    {
+      "name": "sheet_range",
+      "type": "string",
+      "required": false,
+      "description": "A1-style range, e.g. Sheet1!A1:Z1000"
+    },
+    {
+      "name": "sheet_id",
+      "type": "string",
+      "required": false,
+      "description": "Alternative to sheet_range"
+    },
+    {
+      "name": "base_url",
+      "type": "string",
+      "required": false,
+      "default": "https://open.feishu.cn",
+      "description": "API base URL"
+    },
+    {
+      "name": "fixture_rows",
+      "type": "map",
+      "required": false,
+      "description": "Fixture rows (header first) for mock/cert paths"
+    },
+    {
+      "name": "sheet_rows",
+      "type": "map",
+      "required": false,
+      "description": "Host-injected value_range.values for live runs"
+    }
+  ]
+}

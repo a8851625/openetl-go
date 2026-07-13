@@ -20,6 +20,8 @@
 - `contains`：对序列化的失败记录负载进行子串匹配。
 - `error_contains`：对 DLQ 错误字符串进行子串匹配。
 
+SQL-backed DLQ 响应会包含稳定 `id`，用于按记录删除和重放。DAG DLQ 响应在失败记录带有节点上下文时还会包含 `dag_node`。
+
 示例：
 ```sh
 curl -H "X-API-Token: $ETL_API_TOKEN" \
@@ -34,15 +36,19 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
 
 ### 重放 DLQ 记录
 `POST /api/v2/dlq/{pipeline}/replay`
+`POST /api/v2/dlq/{pipeline}/{id}/replay`
 
-重放使用与列表相同的查询参数。重放的记录会重新经过 Transform 链并写入配置的 Sink。成功重放的记录会从 DLQ 文件中删除。
+重放使用与列表相同的查询参数。重放的记录会重新经过 Transform 链并写入配置的 Sink。成功重放的记录会优先按稳定 DLQ ID 从 SQL-backed DLQ 存储中删除。
 
-线性 pipeline 支持 DLQ 重放。DAG pipeline 的 DLQ 重放目前明确不支持，因为 node-level replay 尚未实现。DAG 重放请求会返回 HTTP `501`，响应包含 `code: "dag_dlq_replay_unsupported"`，且不会删除 DLQ 记录。
+按 ID 端点用于确定性地重放单条记录，响应会包含 `{"replayed":1}` 这类结果反馈。线性 pipeline 支持 DLQ 重放。DAG pipeline 对包含 `dag_node` 的 DLQ 记录支持节点级重放：sink 节点失败会直接写回该 sink，transform 节点失败会从该 transform 重新执行并继续向下游路由。缺少 `dag_node` 的旧 DAG DLQ 记录会返回 HTTP `400` 和 `{"error":"...dag_node...","replayed":0}`，且不会删除 DLQ 记录。
 
 示例：
 ```sh
 curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
   'http://127.0.0.1:8001/api/v2/dlq/orders/replay?contains=9901'
+
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  'http://127.0.0.1:8001/api/v2/dlq/orders/123/replay'
 
 curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
   'http://127.0.0.1:8001/api/v2/dlq/orders/replay?from=2026-06-06T00:00:00Z&until=2026-06-07T00:00:00Z'

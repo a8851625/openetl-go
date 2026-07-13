@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -59,29 +60,43 @@ func (a *sApp) SetupStaticFiles() {
 
 	// 使用 BindHandler 处理静态文件和 SPA 路由（优先级低于路由组）
 	s.BindHandler("/*", func(r *ghttp.Request) {
-		// 尝试从资源中读取静态文件
-		filePath := r.URL.Path
-		if filePath == "/" {
-			filePath = "/index.html"
-		}
-
-		// 从打包的资源中读取
-		file := gres.Get("resource/public" + filePath)
-		if file != nil {
-			writeStaticContent(r, filePath, file.Content())
+		filePath := staticAssetPath(r.URL.Path)
+		if content, ok := readStaticAsset(filePath); ok {
+			writeStaticContent(r, filePath, content)
 			return
 		}
 
 		// SPA 应用：所有未匹配的路由返回 index.html
-		indexFile := gres.Get("resource/public/index.html")
-		if indexFile != nil {
-			writeStaticContent(r, "/index.html", indexFile.Content())
+		if content, ok := readStaticAsset("/index.html"); ok {
+			writeStaticContent(r, "/index.html", content)
 			return
 		}
 
 		// 没有找到静态文件，返回 404
 		r.Response.WriteStatus(404)
 	})
+}
+
+func staticAssetPath(requestPath string) string {
+	cleaned := path.Clean("/" + strings.TrimPrefix(requestPath, "/"))
+	if cleaned == "/" || cleaned == "." {
+		return "/index.html"
+	}
+	return cleaned
+}
+
+func readStaticAsset(filePath string) ([]byte, bool) {
+	relative := strings.TrimPrefix(path.Clean(filePath), "/")
+	if relative == "" || strings.HasPrefix(relative, "..") {
+		return nil, false
+	}
+	if content, err := os.ReadFile(filepath.Join("resource", "public", relative)); err == nil {
+		return content, true
+	}
+	if file := gres.Get("resource/public/" + relative); file != nil {
+		return file.Content(), true
+	}
+	return nil, false
 }
 
 // writeStaticContent writes embedded static bytes with the correct

@@ -75,8 +75,6 @@ type Server struct {
 	connDeprecations connectionDeprecationWarnings
 }
 
-var errDAGDLQReplayUnsupported = errors.New("dag dlq replay unsupported")
-
 func newPipelineInstanceID() string {
 	row := &storage.PipelineRow{}
 	storage.EnsurePipelineID(row)
@@ -109,6 +107,25 @@ func runtimeDAGSpec(spec *orchestrator.PipelineSpec, id string) *orchestrator.Pi
 	cp := *spec
 	cp.Name = id
 	return &cp
+}
+
+func isDAGSpecYAML(yamlBytes []byte) bool {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(yamlBytes, &doc); err != nil {
+		return false
+	}
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		doc = *doc.Content[0]
+	}
+	if doc.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		if doc.Content[i].Value == "dag" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) registerPipelineLocked(id, name string, runner pipeline.RunnerInterface, spec *pipeline.Spec, dagSpec *orchestrator.PipelineSpec) {
@@ -418,11 +435,7 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 
 		yamlBytes := []byte(row.SpecYAML)
 
-		// Detect format: DAG specs have a "dag:" top-level key
-		var detect struct {
-			DAG *struct{} `yaml:"dag"`
-		}
-		if err := yaml.Unmarshal(yamlBytes, &detect); err == nil && detect.DAG != nil {
+		if isDAGSpecYAML(yamlBytes) {
 			// DAG format
 			var dagSpec orchestrator.PipelineSpec
 			if err := yaml.Unmarshal(yamlBytes, &dagSpec); err != nil {
@@ -538,11 +551,7 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 			continue
 		}
 
-		// Detect format: DAG specs have a "dag:" top-level key (same logic as RestoreFromDB).
-		var detect struct {
-			DAG *struct{} `yaml:"dag"`
-		}
-		if err := yaml.Unmarshal(yamlBytes, &detect); err == nil && detect.DAG != nil {
+		if isDAGSpecYAML(yamlBytes) {
 			// DAG format
 			var dagSpec orchestrator.PipelineSpec
 			if err := yaml.Unmarshal(yamlBytes, &dagSpec); err != nil {
@@ -3820,12 +3829,6 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 func writeDLQReplayError(w http.ResponseWriter, err error, replayed int) {
 	status := http.StatusBadRequest
 	body := map[string]any{"error": err.Error(), "replayed": replayed}
-	if errors.Is(err, errDAGDLQReplayUnsupported) {
-		status = http.StatusNotImplemented
-		body["code"] = "dag_dlq_replay_unsupported"
-		body["supported"] = false
-		body["remediation"] = "DAG DLQ entries include node context but node-level replay is not implemented yet; recover the target manually or rebuild the pipeline as a linear spec before replay."
-	}
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
 }
@@ -3931,10 +3934,8 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 	dagSpec := s.dagSpecs[name]
 	s.mu.RUnlock()
 
-	// DAG-format replay needs node-level routing/state context to avoid
-	// writing recovered records to the wrong downstream sink.
 	if dagSpec != nil {
-		return 0, fmt.Errorf("%w: node-level replay is not implemented for pipeline %s", errDAGDLQReplayUnsupported, name)
+		return s.replayDAGDLQItems(ctx, name, dagSpec, items)
 	}
 
 	if spec == nil {
@@ -3977,22 +3978,74 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 		if err := retry.Do(ctx, cfg, core.IsRetryableError, func() error { return sink.Write(ctx, []core.Record{rec}) }); err != nil {
 			return replayed, err
 		}
-		// Delete the replayed item by its DB primary key for precise targeting
-		// (P4-10, SV-1). Timestamp-based deletion is imprecise when multiple
-		// DLQ entries share the same second.
-		if item.ID != 0 {
-			if err := s.dlqWriter.DeleteByID(ctx, item.ID); err != nil {
-				return replayed, fmt.Errorf("delete replayed dlq id %d: %w", item.ID, err)
-			}
-		} else {
-			// Fallback for file-backed DLQ (no auto-increment ID).
-			if err := s.dlqWriter.Delete(ctx, name, item.Timestamp); err != nil {
-				return replayed, fmt.Errorf("delete replayed dlq timestamp %s: %w", item.Timestamp.Format(time.RFC3339Nano), err)
-			}
+		if err := s.deleteReplayedDLQItem(ctx, name, item); err != nil {
+			return replayed, err
 		}
 		replayed++
 	}
 	return replayed, nil
+}
+
+func (s *Server) replayDAGDLQItems(ctx context.Context, name string, dagSpec *orchestrator.PipelineSpec, items []storage.DeadLetter) (int, error) {
+	if dagSpec == nil {
+		return 0, fmt.Errorf("pipeline %s not found", name)
+	}
+	if len(items) == 0 {
+		return 0, nil
+	}
+
+	runtime := runtimeDAGSpec(dagSpec, name)
+	replayer, err := orchestrator.NewDAGReplayer(runtime)
+	if err != nil {
+		return 0, fmt.Errorf("build dag replayer: %w", err)
+	}
+	if err := replayer.Open(ctx); err != nil {
+		return 0, err
+	}
+	defer replayer.Close()
+
+	replayed := 0
+	for _, item := range items {
+		nodeID := strings.TrimSpace(item.DAGNode)
+		if nodeID == "" {
+			return replayed, fmt.Errorf("dag dlq record %s has no dag_node; replay requires node context", dlqItemRef(item))
+		}
+		if err := replayer.Replay(ctx, nodeID, item.Record); err != nil {
+			return replayed, fmt.Errorf("replay dag dlq record %s from node %s: %w", dlqItemRef(item), nodeID, err)
+		}
+		if err := s.deleteReplayedDLQItem(ctx, name, item); err != nil {
+			return replayed, err
+		}
+		replayed++
+	}
+	return replayed, nil
+}
+
+func (s *Server) deleteReplayedDLQItem(ctx context.Context, name string, item storage.DeadLetter) error {
+	// Delete the replayed item by its DB primary key for precise targeting
+	// (P4-10, SV-1). Timestamp-based deletion is imprecise when multiple
+	// DLQ entries share the same second.
+	if item.ID != 0 {
+		if err := s.dlqWriter.DeleteByID(ctx, item.ID); err != nil {
+			return fmt.Errorf("delete replayed dlq id %d: %w", item.ID, err)
+		}
+		return nil
+	}
+	// Fallback for file-backed DLQ (no auto-increment ID).
+	if err := s.dlqWriter.Delete(ctx, name, item.Timestamp); err != nil {
+		return fmt.Errorf("delete replayed dlq timestamp %s: %w", item.Timestamp.Format(time.RFC3339Nano), err)
+	}
+	return nil
+}
+
+func dlqItemRef(item storage.DeadLetter) string {
+	if item.ID != 0 {
+		return fmt.Sprintf("id %d", item.ID)
+	}
+	if !item.Timestamp.IsZero() {
+		return "timestamp " + item.Timestamp.Format(time.RFC3339Nano)
+	}
+	return "without id"
 }
 
 func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {

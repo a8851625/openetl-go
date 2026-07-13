@@ -28,7 +28,19 @@ func (p *TableMappingProcessor) Process(ctx context.Context, rec core.Record) (c
 	if p.mapping == nil || rec.Metadata.Table == "" {
 		return rec, nil
 	}
-	rec.Metadata.Table = p.mapping.MapTable(rec.Metadata.Table)
+	// Preserve original table before rewrite so sinks/debug can still see source name.
+	if rec.Data == nil {
+		rec.Data = make(map[string]any)
+	}
+	if _, ok := rec.Data["_source_table"]; !ok {
+		rec.Data["_source_table"] = rec.Metadata.Table
+	}
+	if rec.Metadata.Database != "" {
+		if _, ok := rec.Data["_source_database"]; !ok {
+			rec.Data["_source_database"] = rec.Metadata.Database
+		}
+	}
+	rec.Metadata.Table = p.mapping.MapTableWithDB(rec.Metadata.Database, rec.Metadata.Table)
 	return rec, nil
 }
 
@@ -165,13 +177,11 @@ func simpleHash(s string) uint64 {
 func BuildProcessors(spec *Spec) core.RecordProcessorChain {
 	var chain core.RecordProcessorChain
 
-	// 1. Table mapping (if configured).
+	// Table mapping rewrites Metadata.Table and preserves _source_table /
+	// _source_database on the record data for multi-table sync and wide-table filters.
 	if spec.TableMapping != nil {
 		chain = append(chain, NewTableMappingProcessor(spec.TableMapping))
 	}
-
-	// 2. Data masking (if configured via spec.Hooks or a dedicated field).
-	// This can be extended to read from a dedicated data_masking spec field.
 
 	return chain
 }

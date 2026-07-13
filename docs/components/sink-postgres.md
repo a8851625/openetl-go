@@ -36,4 +36,4 @@ sink:
 ```
 
 ## Evidence
-Covered by `hack/e2e-mysql-postgres.sh`, `hack/e2e-cdc-postgres.sh`, and PostgreSQL sink tests. Preflight opens the target, validates table metadata when reachable, emits DDL preview, and reports field-level schema issues.
+Covered by `hack/e2e-mysql-postgres.sh`, `hack/e2e-cdc-postgres.sh`, `hack/e2e-relational-write-modes.sh`, and PostgreSQL sink tests. `hack/e2e-relational-write-modes.sh` validates PostgreSQL `pre_write` delete+rewrite after checkpoint reset. Preflight opens the target, validates table metadata when reachable, emits DDL preview, and reports field-level schema issues.

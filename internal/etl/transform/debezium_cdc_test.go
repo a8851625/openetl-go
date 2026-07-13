@@ -53,6 +53,52 @@ func TestDebeziumCDCParsesSnapshotAndAppliesTableTemplate(t *testing.T) {
 	}
 }
 
+func TestDebeziumCDCDeletePreservesKafkaKeyMetadata(t *testing.T) {
+	tr, err := NewDebeziumCDCTransform(map[string]any{
+		"keep_metadata": true,
+		"table_mapping": map[string]any{
+			"template": "ods_pk_{source_table}",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDebeziumCDCTransform: %v", err)
+	}
+
+	rec, err := tr.Apply(context.Background(), core.Record{
+		Metadata: core.Metadata{Key: `{"tenant_id":"fleet-a","seq":7}`},
+		Data: map[string]any{
+			"payload": map[string]any{
+				"op":    "d",
+				"ts_ms": float64(1710000012123),
+				"source": map[string]any{
+					"db":    "dl_vls_dev",
+					"table": "vehicle_trip",
+				},
+				"before": map[string]any{"tenant_id": "fleet-a", "seq": float64(7), "vin": "VIN-PK-TRIP"},
+				"after":  nil,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if rec.Operation != core.OpDelete {
+		t.Fatalf("Operation = %s, want DELETE", rec.Operation)
+	}
+	if rec.Metadata.Key != `{"tenant_id":"fleet-a","seq":7}` {
+		t.Fatalf("Metadata.Key = %q, want Debezium Kafka key JSON", rec.Metadata.Key)
+	}
+	if rec.Metadata.Table != "ods_pk_vehicle_trip" {
+		t.Fatalf("Metadata.Table = %q, want mapped target table", rec.Metadata.Table)
+	}
+	if rec.Data["_source_table"] != "vehicle_trip" || rec.Data["_source_database"] != "dl_vls_dev" {
+		t.Fatalf("source metadata = %#v, want original source table/database", rec.Data)
+	}
+	if rec.Data["tenant_id"] != "fleet-a" || rec.Data["seq"] != float64(7) {
+		t.Fatalf("delete row image = %#v, want before image", rec.Data)
+	}
+}
+
 func TestCDCPolicySkipsSnapshotAndDelete(t *testing.T) {
 	tr, err := NewCDCPolicyTransform("cdc_policy", map[string]any{
 		"skip_snapshot": true,

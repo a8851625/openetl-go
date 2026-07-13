@@ -427,8 +427,11 @@ sink:
 | `password` | 否 | | MySQL 密码（**密钥**）。 |
 | `database` | 是 | | 目标数据库。 |
 | `table` | 是 | | 目标表。 |
-| `batch_mode` | 否 | `insert` | `insert` 或 `upsert`。 |
+| `batch_mode` | 否 | `insert` | `insert`、`upsert` 或 `increment`。 |
 | `pk_columns` | 否 | `["id"]` | Upsert 模式的主键列。 |
+| `pk_columns_from_metadata` | 否 | `false` | 从 `record.metadata.key` 为 Debezium 多表 CDC 按表推导主键列。 |
+| `increment_columns` | 否 | | `batch_mode: increment` 的目标列 -> 源字段映射。 |
+| `pre_write` | 否 | | 写入前动作块：`delete`、`truncate` 或 `truncate_partition`，可带 `params`。 |
 | `auto_create` | 否 | `false` | 自动建表。 |
 | `schema_drift` | 否 | `ignore` | `ignore`、`fail` 或 `add_columns`。 |
 | `ddl_policy` | 否 | `reject` | `reject`、`ignore` 或 `apply`。 |
@@ -594,8 +597,10 @@ sink:
 | `database` | 是 | | 目标数据库。 |
 | `schema` | 否 | `public` | 目标 schema。 |
 | `table` | 是 | | 目标表。 |
-| `batch_mode` | 否 | `insert` | `insert` 或 `upsert`（INSERT … ON CONFLICT）。 |
+| `batch_mode` | 否 | `insert` | `insert`、`upsert`（INSERT … ON CONFLICT）或 `increment`。 |
 | `pk_columns` | 否 | `["id"]` | Upsert 模式的主键列。 |
+| `increment_columns` | 否 | | `batch_mode: increment` 的目标列 -> 源字段映射。 |
+| `pre_write` | 否 | | 写入前动作块：`delete`、`truncate` 或 `truncate_partition`，可带 `params`。 |
 | `auto_create` | 否 | `false` | 自动建表。 |
 | `schema_drift` | 否 | `ignore` | `ignore`、`fail` 或 `add_columns`。 |
 | `ddl_policy` | 否 | `reject` | `reject`、`ignore` 或 `apply`。 |

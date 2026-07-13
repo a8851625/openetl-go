@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { TFunc, Lang } from './types';
-import { ConfigForm, buildDefaultConfig, missingRequiredFields, type PluginSchemaField } from './configFields';
+import { ConfigForm, buildDefaultConfig, filterFieldsByScope, missingRequiredFields, type PluginSchemaField } from './configFields';
 
 type ConnectorKind = 'source' | 'sink' | 'transform';
 
@@ -89,12 +89,15 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   }, [descriptors, kind]);
 
   const selectedDescriptor = descriptors.find((d) => d.kind === kind && d.type === type);
-  const selectedFields = selectedDescriptor?.fields || [];
+  const selectedFields = filterFieldsByScope(selectedDescriptor?.fields || [], kind === 'transform' ? 'all' : 'connection');
   const missingFields = missingRequiredFields(selectedFields, config);
 
   const nextConfigFor = (nextKind: ConnectorKind, nextType: string) => {
     const descriptor = descriptors.find((d) => d.kind === nextKind && d.type === nextType);
-    if (descriptor?.fields?.length) return buildDefaultConfig(descriptor.fields);
+    if (descriptor?.fields?.length) {
+      const scoped = filterFieldsByScope(descriptor.fields, nextKind === 'transform' ? 'all' : 'connection');
+      return buildDefaultConfig(scoped);
+    }
     return starterConfig[nextKind] || {};
   };
 
@@ -239,7 +242,10 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
               <div className="p-8 text-center text-sm text-slate-400">{t('common.loading')}</div>
             ) : connections.length === 0 ? (
               <div className="p-8">
-                <div className="rounded-lg border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">{t('conn.empty')}</div>
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-10 text-center">
+                  <div className="text-sm text-slate-500">{t('conn.empty')}</div>
+                  <div className="mt-1 text-xs text-slate-400">{t('conn.emptyHint')}</div>
+                </div>
               </div>
             ) : (
               <table className="tbl">
@@ -336,14 +342,15 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                 </div>
               </div>
             )}
-            <div>
+            <div data-testid="connection-catalog-config-form">
               <div className="mb-2 flex items-center justify-between">
-                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{t('dag.config')}</span>
+                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{t('conn.configTitle')}</span>
                 <button className="text-xs font-medium text-indigo-600 hover:text-indigo-700" onClick={() => applyConfig(nextConfigFor(kind, type))}>
                   {t('conn.loadDefaults')}
                 </button>
               </div>
               <ConfigForm fields={selectedFields} config={config} onChange={applyConfig} t={t} />
+              <div className="mt-2 text-[11px] text-slate-400">{t('conn.scopeNote')}</div>
               {missingFields.length > 0 && (
                 <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
                   {t('conn.missingRequired')}: {missingFields.join(', ')}

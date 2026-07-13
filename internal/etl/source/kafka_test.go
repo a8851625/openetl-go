@@ -77,8 +77,9 @@ func (s *fakeSession) Context() context.Context { return s.ctx }
 // sink persists the batch.
 func TestKafkaHandlerDoesNotMarkOnConsume(t *testing.T) {
 	src := &KafkaSource{
-		name:  "kafka",
-		topic: "test",
+		name:      "kafka",
+		topic:     "test",
+		keyColumn: "raw_key",
 	}
 	reader := &kafkaReader{
 		source:           src,
@@ -101,6 +102,7 @@ func TestKafkaHandlerDoesNotMarkOnConsume(t *testing.T) {
 		Topic:     "test",
 		Partition: 0,
 		Offset:    42,
+		Key:       []byte(`{"id":42}`),
 		Value:     []byte(`{"k":"v"}`),
 	}
 	close(claim.ch)
@@ -121,6 +123,12 @@ func TestKafkaHandlerDoesNotMarkOnConsume(t *testing.T) {
 	case rec := <-reader.records:
 		if rec.Metadata.Offset != 42 {
 			t.Errorf("delivered offset = %d, want 42", rec.Metadata.Offset)
+		}
+		if rec.Metadata.Key != `{"id":42}` {
+			t.Errorf("metadata key = %q, want Debezium key JSON", rec.Metadata.Key)
+		}
+		if got, _ := rec.Data["raw_key"].(string); got != `{"id":42}` {
+			t.Errorf("data raw_key = %q, want key_column copy", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("record not delivered")

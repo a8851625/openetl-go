@@ -82,7 +82,9 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
             <div className="p-8 text-center text-sm text-slate-400">{t('common.loading')}</div>
           ) : workers.length === 0 ? (
             <div className="p-8">
-              <div className="rounded-lg border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">{t('worker.noWorkers')}</div>
+              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-10 text-center">
+                <div className="text-sm text-slate-500">{t('worker.noWorkers')}</div>
+              </div>
             </div>
           ) : (
             <table className="tbl">

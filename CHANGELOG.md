@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 
+## [v0.2.9] — 2026-07-13 — Multi-table mapping sync, CDC wide-table path, UI scenario entry, connection scope
+
+### Highlights
+- **Multi-table A→B sync with table name mapping**:
+  - Pipeline-level `table_mapping` supports `template` / `rules` / `regex` with `{source_table}` and `{source_db}` tokens.
+  - Mapping preserves `_source_table` / `_source_database` before rewrite.
+  - `mysql_cdc` / `mysql_snapshot_cdc` now populate `Metadata.Database` for qualified mapping and CDC policy filters.
+  - Snapshot checkpoint cursors remain keyed by original source table after mapping.
+  - New e2e: `hack/e2e-multi-table-map.sh` + `testdata/pipes-multi-table-map/`.
+- **Multi-table binlog → wide table**:
+  - Production-candidate path: `mysql_cdc` + `cdc_policy` + `lookup` + rename/type_convert → ClickHouse wide table.
+  - New e2e: `hack/e2e-mysql-cdc-wide.sh` + `testdata/pipes-mysql-cdc-wide/`.
+- **UI productization for the two core scenarios**:
+  - Wizard adds recommended templates: multi-table DB sync + mapping, and CDC wide table (lookup).
+  - Wizard exposes editable `table_mapping` and generates ordinary pipeline YAML.
+  - Connection Catalog / Wizard / DAG forms use connection vs task-parameter field scope with clearer labels.
+  - Designer toolbar labels, empty-state copy, and empty pipeline/connection/DLQ/audit/WASM hints improved.
+  - Fixed WASM Plugins and Workers i18n bare keys (EN/ZH).
+- **Extension and ops packaging**:
+  - Official Feishu sheet source plugin sample under `web/plugin-sdk/examples/feishu-sheet-source/` (beta/dev-only).
+  - Lightweight runtime modes doc + smoke: `docs/runtime-modes.md`, `hack/e2e-runtime-smoke.sh`.
+  - Descriptor/schema field `scope` annotation and certification kit sample checks extended.
+- **Warehouse ETL residual evidence** (carried from mainline work):
+  - Relational write modes, generated-column skip, Debezium metadata PK, DAG load/DLQ replay, and related e2e coverage remain part of the release surface.
+
+### Release Boundary
+- Default delivery semantics remain **at-least-once**. Use upsert, stable business keys, version columns, ReplacingMergeTree, or explicit deduplication to absorb replay.
+- MaxCompute/ODPS remains experimental without real-environment write/DLQ/replay evidence.
+- Built-in `feishu_sheet` and the Feishu WASM plugin sample remain beta/dev-only until real Feishu fault-injection evidence exists.
+- Complex multi-fact real-time merge / Flink-style wide-table semantics are still out of scope; the certified wide-table path is fact stream + dimension lookup (+ optional tumbling aggregate).
+
+### Validation
+- `go test ./internal/etl/server ./internal/etl/pipeline ./internal/etl/source ./internal/cmd -count=1`
+- `npm --prefix web run build`
+- `./hack/pack.sh` (or `SKIP_UI=1 ./hack/pack.sh` after UI build)
+- `bash hack/e2e-runtime-smoke.sh`
+- `E2E_SKIP_BUILD=1 bash hack/e2e-multi-table-map.sh`
+- `E2E_SKIP_BUILD=1 bash hack/e2e-mysql-cdc-wide.sh`
+- Playwright UI spot-check: Wizard templates, table_mapping panel, WASM/Workers ZH i18n
+
 ## [v0.2.8] — 2026-07-06 — Lookup query-mode certification, Plugin ABI v1 production boundary, Doris/UI release closure
 
 ### Highlights

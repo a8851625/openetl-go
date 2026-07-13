@@ -1,0 +1,53 @@
+name: "debezium-pk-metadata-to-mysql"
+source:
+  type: kafka
+  config:
+    brokers:
+      - "host.docker.internal:19092"
+    topic: "debezium.dl_vls_dev.pk_metadata"
+    group_id: "${DEBEZIUM_PK_METADATA_GROUP_ID:-debezium-pk-metadata-e2e}"
+    format: "json"
+    initial_offset: "oldest"
+
+transforms:
+  - type: debezium_cdc
+    config:
+      keep_metadata: true
+      skip_tombstone: true
+      table_mapping:
+        template: "ods_pk_{source_table}"
+  - type: cdc_policy
+    config:
+      include_databases:
+        - "dl_vls_dev"
+      include_tables:
+        - "dl_vls_dev.vehicle_order"
+        - "dl_vls_dev.vehicle_trip"
+      skip_snapshot: true
+      skip_tombstone: true
+      dangerous_ddl: drop
+
+sink:
+  type: mysql
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_target"
+    batch_mode: "upsert"
+    pk_columns_from_metadata: true
+    auto_create: false
+    schema_drift: "ignore"
+
+batch_size: 10
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

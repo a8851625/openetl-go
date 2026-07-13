@@ -392,7 +392,7 @@ paths:
         - { name: limit, in: query, schema: { type: integer } }
         - { name: contains, in: query, schema: { type: string } }
       responses:
-        '200': { description: DLQ items }
+        '200': { description: DLQ items, including stable id and dag_node when available }
     delete:
       tags: [DLQ]
       summary: Delete DLQ records
@@ -409,7 +409,7 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Replayed }
-        '501': { description: DAG pipeline DLQ replay is not implemented; response code is dag_dlq_replay_unsupported }
+        '400': { description: DAG DLQ replay requires dag_node context on legacy records }
 
   /dlq/{pipeline_id}/{id}:
     delete:
@@ -430,7 +430,7 @@ paths:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
       responses:
         '200': { description: Replayed }
-        '501': { description: DAG pipeline DLQ replay is not implemented; response code is dag_dlq_replay_unsupported }
+        '400': { description: DAG DLQ replay requires dag_node context on legacy records }
 
   /connections:
     get:

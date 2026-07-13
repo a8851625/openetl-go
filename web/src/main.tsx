@@ -8,7 +8,7 @@ import { WorkersPage } from './WorkersPage';
 import { MyPluginsPage } from './MyPluginsPage';
 import { SchedulesPage } from './SchedulesPage';
 import { ConnectionsPage } from './ConnectionsPage';
-import { ConfigForm, buildDefaultConfig, missingRequiredFields, type PluginSchemaField } from './configFields';
+import { ConfigForm, buildDefaultConfig, filterFieldsByScope, missingRequiredFields, type PluginSchemaField } from './configFields';
 
 // ════════════════════════════════════════════════
 // Types
@@ -326,7 +326,14 @@ function App() {
   }, []);
 
   const runAction = useCallback(async (label: string, fn: () => Promise<unknown>) => {
-    try { await fn(); toast('success', label); setRefreshKey((n) => n + 1); }
+    try {
+      const result = await fn();
+      const toastMessage = result && typeof result === 'object' && 'toastMessage' in result && typeof (result as any).toastMessage === 'string'
+        ? (result as any).toastMessage
+        : label;
+      toast('success', toastMessage);
+      setRefreshKey((n) => n + 1);
+    }
     catch (e) { toast('error', `${label}: ${e instanceof Error ? e.message : String(e)}`); }
   }, [toast]);
 
@@ -517,6 +524,9 @@ function SettingsModal({ t, lang, token, setToken, switchLang, llmConfig, setLLM
                 <label className="mb-2 block text-sm font-medium text-slate-700">{t('settings.apiToken')}</label>
                 <input className="input w-full" value={token} onChange={(e) => setToken(e.target.value)} placeholder={t('settings.tokenPlaceholder')} />
                 <button className="btn btn-secondary btn-sm mt-2" onClick={onSaveToken}>{t('settings.saveToken')}</button>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-xs font-medium text-slate-600">💡 {t('settings.runtimeHint')}</div>
               </div>
             </div>
           )}
@@ -946,10 +956,14 @@ function SpecImportModal({ t, onClose, onImported }: { t: (k: string) => string;
 type WizardTemplate = {
   id: string;
   title: string;
+  descKey?: string;
+  recommended?: boolean;
   sourceTypes: string[];
   sinkTypes: string[];
   transforms: { type: string; config: Record<string, unknown> }[];
   sample: Record<string, unknown>;
+  tableMapping?: { template?: string; rules?: Record<string, string> };
+  hideSinkTable?: boolean;
 };
 
 type ValidateResult = {
@@ -976,11 +990,39 @@ type ValidateResult = {
 };
 
 const WIZARD_TEMPLATES: WizardTemplate[] = [
-  { id: 'database-sync', title: 'Database sync', sourceTypes: ['mysql_batch', 'mysql_cdc', 'mysql_snapshot_cdc'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'Alice', updated_at: '2026-06-27T10:00:00Z' }, metadata: { source: 'wizard', table: 'customers' } } },
-  { id: 'kafka-detail', title: 'Kafka detail / aggregate', sourceTypes: ['kafka'], sinkTypes: ['clickhouse', 'mysql', 'postgresql'], transforms: [{ type: 'project', config: { fields: ['id', 'user_id', 'amount', 'dt'] } }, { type: 'deduplicate', config: { key_fields: ['id'] } }], sample: { operation: 'INSERT', data: { id: 1001, user_id: 42, amount: 19.5, dt: '20260627' }, metadata: { source: 'kafka', table: 'orders' } } },
-  { id: 'debezium-cdc', title: 'Debezium CDC', sourceTypes: ['kafka'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'debezium_cdc', config: { skip_snapshot: true } }, { type: 'cdc_policy', config: { skip_delete: false, dangerous_ddl: 'reject' } }], sample: { operation: 'INSERT', data: { payload: { op: 'c', source: { db: 'app', table: 'orders' }, after: { id: 1, amount: 29.9 } } }, metadata: { source: 'debezium', table: 'orders' } } },
-  { id: 'kafka-parser', title: 'Kafka parser', sourceTypes: ['kafka'], sinkTypes: ['kafka', 'clickhouse', 'file_sink'], transforms: [{ type: 'flat_map', config: { script: 'return { { data = { id = record.data.id, value = record.data.value } } }' } }, { type: 'project', config: { fields: ['id', 'value'] } }], sample: { operation: 'INSERT', data: { id: 'raw-1', value: 7, payload: '010203' }, metadata: { source: 'kafka', table: 'raw' } } },
-  { id: 'file-http-landing', title: 'File / HTTP landing', sourceTypes: ['file', 'http'], sinkTypes: ['file_sink', 's3', 'maxcompute'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'UI Wizard', dt: '20260627' }, metadata: { source: 'wizard', table: 'landing' } } },
+  {
+    id: 'multi-table-sync',
+    title: 'multi-table-sync',
+    descKey: 'wizard.multiTableSyncDesc',
+    recommended: true,
+    sourceTypes: ['mysql_snapshot_cdc', 'mysql_cdc'],
+    sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'],
+    transforms: [{ type: 'identity', config: {} }],
+    sample: { operation: 'INSERT', data: { id: 1, name: 'Alice', updated_at: '2026-06-27T10:00:00Z' }, metadata: { source: 'wizard', table: 'customers' } },
+    tableMapping: { template: 'ods_{source_table}' },
+    hideSinkTable: true,
+  },
+  {
+    id: 'cdc-wide-table',
+    title: 'cdc-wide-table',
+    descKey: 'wizard.cdcWideTableDesc',
+    recommended: true,
+    sourceTypes: ['mysql_cdc'],
+    sinkTypes: ['clickhouse', 'mysql', 'postgresql'],
+    transforms: [
+      { type: 'cdc_policy', config: { include_tables: ['orders'], skip_tombstone: true } },
+      { type: 'lookup', config: { join_key: 'customer_id', dim_key: 'id', fields: ['name', 'tier', 'region'], on_miss: 'null', on_refresh_error: 'pass', refresh_interval_sec: 60 } },
+      { type: 'rename', config: { mappings: { name: 'user_name', tier: 'user_tier', region: 'user_region' } } },
+      { type: 'add_field', config: { field: '_version', value: '1' } },
+    ],
+    sample: { operation: 'INSERT', data: { id: 1001, customer_id: 42, amount: 19.5 }, metadata: { source: 'wizard', table: 'orders' } },
+    tableMapping: { rules: { orders: 'order_detail_wide' } },
+  },
+  { id: 'database-sync', title: 'database-sync', descKey: 'wizard.databaseSync', sourceTypes: ['mysql_batch', 'mysql_cdc', 'mysql_snapshot_cdc'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'Alice', updated_at: '2026-06-27T10:00:00Z' }, metadata: { source: 'wizard', table: 'customers' } } },
+  { id: 'kafka-detail', title: 'kafka-detail', descKey: 'wizard.kafkaDetail', sourceTypes: ['kafka'], sinkTypes: ['clickhouse', 'mysql', 'postgresql'], transforms: [{ type: 'project', config: { fields: ['id', 'user_id', 'amount', 'dt'] } }, { type: 'deduplicate', config: { key_fields: ['id'] } }], sample: { operation: 'INSERT', data: { id: 1001, user_id: 42, amount: 19.5, dt: '20260627' }, metadata: { source: 'kafka', table: 'orders' } } },
+  { id: 'debezium-cdc', title: 'debezium-cdc', descKey: 'wizard.debeziumCdc', sourceTypes: ['kafka'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'debezium_cdc', config: { skip_snapshot: true } }, { type: 'cdc_policy', config: { skip_delete: false, dangerous_ddl: 'reject' } }], sample: { operation: 'INSERT', data: { payload: { op: 'c', source: { db: 'app', table: 'orders' }, after: { id: 1, amount: 29.9 } } }, metadata: { source: 'debezium', table: 'orders' } } },
+  { id: 'kafka-parser', title: 'kafka-parser', descKey: 'wizard.kafkaParser', sourceTypes: ['kafka'], sinkTypes: ['kafka', 'clickhouse', 'file_sink'], transforms: [{ type: 'flat_map', config: { script: 'return { { data = { id = record.data.id, value = record.data.value } } }' } }, { type: 'project', config: { fields: ['id', 'value'] } }], sample: { operation: 'INSERT', data: { id: 'raw-1', value: 7, payload: '010203' }, metadata: { source: 'kafka', table: 'raw' } } },
+  { id: 'file-http-landing', title: 'file-http-landing', descKey: 'wizard.fileHttp', sourceTypes: ['file', 'http'], sinkTypes: ['file_sink', 's3', 'maxcompute'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'UI Wizard', dt: '20260627' }, metadata: { source: 'wizard', table: 'landing' } } },
 ];
 
 function defaultSourceConfig(type: string): Record<string, unknown> {
@@ -1046,9 +1088,9 @@ function prettyJSON(value: unknown) {
 }
 
 function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc; plugins: any; schema: any; onClose: () => void; onCreated: (name: string) => void }) {
-  const [templateId, setTemplateId] = useState('file-http-landing');
+  const [templateId, setTemplateId] = useState('multi-table-sync');
   const template = WIZARD_TEMPLATES.find((tpl) => tpl.id === templateId) || WIZARD_TEMPLATES[0];
-  const [name, setName] = useState('ui-wizard-file');
+  const [name, setName] = useState('ui-wizard-multi-table');
   const [sourceType, setSourceType] = useState(template.sourceTypes[0]);
   const [sinkType, setSinkType] = useState(template.sinkTypes[0]);
   const [sourceConfigText, setSourceConfigText] = useState(prettyJSON(defaultSourceConfig(sourceType)));
@@ -1059,6 +1101,8 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   const [sourceJsonOpen, setSourceJsonOpen] = useState(false);
   const [sinkJsonOpen, setSinkJsonOpen] = useState(false);
   const [transformJsonOpen, setTransformJsonOpen] = useState(false);
+  const [tableMappingOpen, setTableMappingOpen] = useState(false);
+  const [tableMappingText, setTableMappingText] = useState(template.tableMapping ? prettyJSON(template.tableMapping) : '');
   const [result, setResult] = useState<ValidateResult | null>(null);
   const [dryRunResult, setDryRunResult] = useState<unknown>(null);
   const [stageDryRunResult, setStageDryRunResult] = useState<{ index: number; result?: unknown; error?: string } | null>(null);
@@ -1073,13 +1117,19 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   const [checkpointIntervalSec, setCheckpointIntervalSec] = useState(1);
   const [dlqEnabled, setDlqEnabled] = useState(true);
 
-  const sourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
-  const sinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
+  const allSourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
+  const allSinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
+  const sourceFields = filterFieldsByScope(allSourceFields, sourceConnection ? 'behavior' : 'all');
+  const sinkFields = filterFieldsByScope(allSinkFields, sinkConnection ? 'behavior' : 'all');
   const sourceConfig = parseJSONObject(sourceConfigText);
   const sinkConfig = parseJSONObject(sinkConfigText);
   const transformConfigs = parseTransformList(transformsText);
-  const sourceMissing = sourceConnection ? [] : missingRequiredFields(sourceFields, sourceConfig);
-  const sinkMissing = sinkConnection ? [] : missingRequiredFields(sinkFields, sinkConfig);
+  const sourceMissing = sourceConnection
+    ? missingRequiredFields(sourceFields, sourceConfig)
+    : missingRequiredFields(allSourceFields, sourceConfig);
+  const sinkMissing = sinkConnection
+    ? missingRequiredFields(sinkFields, sinkConfig)
+    : missingRequiredFields(allSinkFields, sinkConfig);
   const metadata = plugins?.data?.metadata || {};
   const transformTypes = Object.keys(schema?.data?.transforms || {}).sort();
   const sourceMaturity = metadata.sources?.[sourceType]?.maturity || 'unknown';
@@ -1107,13 +1157,19 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   }, []);
 
   const seedSourceConfig = useCallback((type: string) => {
-    const fields = (schema?.data?.sources?.[type] || []) as PluginSchemaField[];
+    const fields = filterFieldsByScope((schema?.data?.sources?.[type] || []) as PluginSchemaField[], 'all');
     return { ...buildDefaultConfig(fields), ...defaultSourceConfig(type) };
   }, [schema?.data]);
 
   const seedSinkConfig = useCallback((type: string) => {
-    const fields = (schema?.data?.sinks?.[type] || []) as PluginSchemaField[];
+    const fields = filterFieldsByScope((schema?.data?.sinks?.[type] || []) as PluginSchemaField[], 'all');
     return { ...buildDefaultConfig(fields), ...defaultSinkConfig(type) };
+  }, [schema?.data]);
+
+  const seedBehaviorConfig = useCallback((kind: 'source' | 'sink', type: string) => {
+    const group = kind === 'source' ? schema?.data?.sources : schema?.data?.sinks;
+    const fields = filterFieldsByScope((group?.[type] || []) as PluginSchemaField[], 'behavior');
+    return buildDefaultConfig(fields);
   }, [schema?.data]);
 
   const buildSpec = useCallback(() => {
@@ -1122,10 +1178,14 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
       sourceConfigForSpec.sample = parseJSONText(sampleText, template.sample);
     }
     const source: Record<string, unknown> = { type: sourceType, config: sourceConfigForSpec };
-    const sink: Record<string, unknown> = { type: sinkType, config: parseJSONText(sinkConfigText, {}) };
+    const sinkConfigForSpec = parseJSONText(sinkConfigText, {}) as Record<string, unknown>;
+    if (template.hideSinkTable) {
+      delete sinkConfigForSpec.table;
+    }
+    const sink: Record<string, unknown> = { type: sinkType, config: sinkConfigForSpec };
     if (sourceConnection) source.connection = sourceConnection;
     if (sinkConnection) sink.connection = sinkConnection;
-    return {
+    const spec: Record<string, unknown> = {
       name: name.trim(),
       source,
       transforms: parseJSONText(transformsText, []),
@@ -1137,7 +1197,12 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
       dlq: { enable: dlqEnabled },
       tags: ['ui-wizard', template.id],
     };
-  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, batchSize, checkpointIntervalSec, dlqEnabled, template.id, template.sample]);
+    const tm = parseJSONText(tableMappingText, null);
+    if (tm && typeof tm === 'object' && !Array.isArray(tm) && Object.keys(tm).length > 0) {
+      spec.table_mapping = tm;
+    }
+    return spec;
+  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, batchSize, checkpointIntervalSec, dlqEnabled, template.id, template.sample, template.hideSinkTable, tableMappingText]);
 
   useEffect(() => {
     refreshConnections();
@@ -1162,6 +1227,8 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     setDlqEnabled(true);
     setTransformsText(prettyJSON(nextTemplate.transforms));
     setSampleText(prettyJSON(nextTemplate.sample));
+    setTableMappingText(nextTemplate.tableMapping ? prettyJSON(nextTemplate.tableMapping) : '');
+    setName(`ui-wizard-${nextTemplate.id}`);
     setSourceJsonOpen(false);
     setSinkJsonOpen(false);
     setTransformJsonOpen(false);
@@ -1189,7 +1256,7 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
     const data = await api<ConnectionContext>(`/api/v2/connections/${encodeURIComponent(name)}/context`);
     if (target === 'source') {
       if (data.connection?.type) setSourceType(data.connection.type);
-      setSourceConfigText(prettyJSON({}));
+      setSourceConfigText(prettyJSON(seedBehaviorConfig('source', data.connection?.type || sourceType)));
       const firstSample = data.introspection?.sample?.[0];
       if (firstSample) setSampleText(prettyJSON(firstSample));
       setBatchSize(recommendationNumber(data.recommendations, 'batch_size', batchSize));
@@ -1197,10 +1264,10 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
       setSourceContext(data);
     } else {
       if (data.connection?.type) setSinkType(data.connection.type);
-      setSinkConfigText(prettyJSON({}));
+      setSinkConfigText(prettyJSON(seedBehaviorConfig('sink', data.connection?.type || sinkType)));
       setSinkContext(data);
     }
-  }, [batchSize, checkpointIntervalSec]);
+  }, [batchSize, checkpointIntervalSec, seedBehaviorConfig, sourceType, sinkType]);
 
   const selectSourceConnection = async (connName: string) => {
     setSourceConnection(connName);
@@ -1444,6 +1511,13 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
         <div className="text-xs font-semibold text-slate-600">{title}</div>
         <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => setJsonOpen(!jsonOpen)}>{jsonOpen ? 'Hide JSON' : 'Advanced JSON'}</button>
       </div>
+      {title.toLowerCase().includes('source') || title.toLowerCase().includes('sink') ? (
+        <div className="mb-2 text-[11px] text-slate-400" data-testid={`${testId}-scope-hint`}>
+          {fields.every((f) => f.scope === 'behavior')
+            ? t('field.behaviorOnlyHint')
+            : t('field.fullConfigHint')}
+        </div>
+      ) : null}
       <ConfigForm fields={fields} config={config} onChange={(next) => setConfigText(prettyJSON(next))} t={t} />
       {jsonOpen && (
         <textarea className="input mt-3 min-h-36 w-full font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
@@ -1581,13 +1655,17 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
   };
 
   return (
-    <Modal title="Create Pipeline Wizard" onClose={onClose} width="max-w-6xl">
+    <Modal title={t('wizard.title')} onClose={onClose} width="max-w-6xl">
       <div className="grid gap-5 xl:grid-cols-[280px_1fr]">
         <div className="space-y-3">
+          <div className="px-1 pb-1 text-xs font-medium text-slate-400">{t('wizard.emptyStart')}</div>
           {WIZARD_TEMPLATES.map((tpl) => (
-            <button key={tpl.id} className={`w-full rounded-lg border p-3 text-left text-sm transition ${templateId === tpl.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'}`} onClick={() => setTemplateId(tpl.id)}>
-              <div className="font-semibold">{tpl.title}</div>
-              <div className="mt-1 text-xs text-slate-400">{tpl.sourceTypes.join(' / ')} → {tpl.sinkTypes.join(' / ')}</div>
+            <button key={tpl.id} className={`relative w-full rounded-lg border p-3 text-left text-sm transition ${templateId === tpl.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'}`} onClick={() => setTemplateId(tpl.id)}>
+              <div className="flex items-center gap-1.5">
+                <span className="font-semibold">{tpl.title}</span>
+                {tpl.recommended && <span className="badge badge-indigo px-1.5 py-0 text-[10px]">{t('wizard.recommended')}</span>}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">{tpl.descKey ? t(tpl.descKey) : `${tpl.sourceTypes.join(' / ')} → ${tpl.sinkTypes.join(' / ')}`}</div>
             </button>
           ))}
         </div>
@@ -1634,6 +1712,28 @@ function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc;
             {renderSchemaSummary(`Descriptor schema: ${sourceType}`, sourceFields, sourceMaturity, sourceCapabilities, sourceMissing)}
             {renderSchemaSummary(`Descriptor schema: ${sinkType}`, sinkFields, sinkMaturity, sinkCapabilities, sinkMissing)}
           </div>
+          {(template.tableMapping || tableMappingOpen) && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3" data-testid="wizard-table-mapping">
+              <div className="mb-2 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-slate-700">{t('wizard.tableMapping')}</div>
+                  <div className="text-[11px] text-slate-500">{t('wizard.tableMappingHint')}</div>
+                </div>
+                <button className="btn btn-ghost btn-sm text-[11px]" onClick={() => setTableMappingOpen(!tableMappingOpen)}>{tableMappingOpen ? '−' : '+'}</button>
+              </div>
+              {tableMappingOpen ? (
+                <textarea
+                  data-testid="wizard-table-mapping-json"
+                  className="input min-h-20 w-full font-mono text-xs"
+                  value={tableMappingText}
+                  onChange={(e) => setTableMappingText(e.target.value)}
+                  placeholder={'{\n  "template": "ods_{source_table}"\n}'}
+                />
+              ) : (
+                <pre className="overflow-auto rounded bg-white/70 p-2 text-xs text-slate-600">{tableMappingText || '—'}</pre>
+              )}
+            </div>
+          )}
           <div className="grid gap-3 lg:grid-cols-2">
             {renderConnectionContext('Source', sourceContext)}
             {renderConnectionContext('Sink', sinkContext)}
@@ -2079,7 +2179,7 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
             <button className={`btn btn-ghost btn-sm text-xs ${compact ? 'text-indigo-600' : ''}`} onClick={() => setCompact(!compact)} title={t(compact ? 'pipe.expandedMode' : 'pipe.compactMode')}>
               {compact ? '⛶' : '⊞'}
             </button>
-            <button data-testid="open-first-task-wizard" className="btn btn-primary btn-sm" onClick={() => setShowWizard(true)}>Create from wizard</button>
+            <button data-testid="open-first-task-wizard" className="btn btn-primary btn-sm" onClick={() => setShowWizard(true)}>✨ {t('pipe.createWizard')}</button>
             <button className="btn btn-secondary btn-sm" onClick={() => setShowImport(true)}>📥 {t('pipe.import')}</button>
           </div>
         </div>
@@ -2113,7 +2213,11 @@ function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSele
               />
             );
           })}
-          {!filteredPipelines.length && <Empty text={search ? `No pipelines matching "${search}"` : tagFilter ? `No pipelines with tag "${tagFilter}"` : t('pipe.noPipelines')} />}
+          {!filteredPipelines.length && <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center">
+            <div className="text-sm font-semibold text-slate-600">{search ? `No pipelines matching "${search}"` : tagFilter ? `No pipelines with tag "${tagFilter}"` : t('pipe.emptyTitle')}</div>
+            <div className="mt-1 text-xs text-slate-400">{search || tagFilter ? '' : t('pipe.emptyHint')}</div>
+            {!search && !tagFilter && <button data-testid="empty-open-wizard" className="btn btn-primary btn-sm mt-3" onClick={() => setShowWizard(true)}>✨ {t('pipe.createWizard')}</button>}
+          </div>}
         </div>
       </div>
 
@@ -2290,7 +2394,7 @@ function PipelineLogDrawer({ t, name }: { t: (k: string) => string; name: string
   );
 }
 // DLQRow displays a single dead-letter queue entry with expandable record data.
-function DLQRow({ item, onDelete, onReplay, replayDisabled, t }: { item: DLQItem; onDelete: () => void; onReplay: () => void; replayDisabled?: boolean; t: TFunc }) {
+function DLQRow({ item, onDelete, onReplay, replayDisabled, replayDisabledReason, t }: { item: DLQItem; onDelete: () => void; onReplay: () => void; replayDisabled?: boolean; replayDisabledReason?: string; t: TFunc }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="rounded-lg border border-slate-200 p-3 hover:border-slate-300 transition">
@@ -2298,21 +2402,26 @@ function DLQRow({ item, onDelete, onReplay, replayDisabled, t }: { item: DLQItem
         <span className="badge badge-slate">{item.record.operation}</span>
         {item.id && <span className="badge badge-slate">#{item.id}</span>}
         {item.error_class && <span className="badge badge-amber">{item.error_class}</span>}
-        {item.dag_node && <span className="badge badge-slate">{item.dag_node}</span>}
+        {item.dag_node && <span className="badge badge-slate">{t('dlq.dagNode')} {item.dag_node}</span>}
         <span className="text-xs text-slate-400">{fmtTime(item.timestamp)}</span>
         <div className="flex-1 min-w-0">
           <div className="truncate text-xs font-mono text-rose-600">{item.error}</div>
         </div>
         <button className="btn btn-ghost btn-sm text-xs" onClick={() => setExpanded(!expanded)}>{expanded ? '▲' : '▼'} {t('dlq.data')}</button>
-        <button className="btn btn-secondary btn-sm text-xs" disabled={replayDisabled} onClick={onReplay} title={replayDisabled ? t('dlq.dagReplayUnsupported') : t('dlq.replayRecord')}>↻</button>
+        <button className="btn btn-secondary btn-sm text-xs" disabled={replayDisabled} onClick={onReplay} title={replayDisabledReason || t('dlq.replayRecord')}>↻</button>
         <button className="btn btn-danger btn-sm text-xs" onClick={onDelete} title={t('dlq.deleteRecord')}>🗑</button>
       </div>
+      {replayDisabledReason && (
+        <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {replayDisabledReason}
+        </div>
+      )}
       {expanded && (
         <div className="mt-2 rounded-lg bg-slate-50 p-3">
           <div className="mb-2 grid gap-1 text-[11px] text-slate-500 md:grid-cols-3">
             {item.record_hash && <div className="truncate font-mono">hash {item.record_hash}</div>}
             {!!item.pipeline_version && <div>version {item.pipeline_version}</div>}
-            {item.dag_node && <div>node {item.dag_node}</div>}
+            {item.dag_node && <div>{t('dlq.dagNode')} {item.dag_node}</div>}
           </div>
           <pre className="text-xs overflow-x-auto whitespace-pre-wrap break-all">{JSON.stringify(item.record.data, null, 2)}</pre>
         </div>
@@ -2327,10 +2436,22 @@ function DLQRow({ item, onDelete, onReplay, replayDisabled, t }: { item: DLQItem
 function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
   const [filter, setFilter] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [lastReplayResult, setLastReplayResult] = useState('');
   const query = filter ? `limit=50&contains=${encodeURIComponent(filter)}` : 'limit=50';
   const selectedRef = pipelineRef(selected);
   const dlq = useApi<{ items: DLQItem[] }>(selected ? `/api/v2/dlq/${selectedRef}?${query}` : '/api/v2/dlq/_missing', selected ? refreshKey : -1);
-  const replayUnsupported = Boolean(selected?.dag);
+  const dlqItems = dlq.data?.items || [];
+  const isDAG = Boolean(selected?.dag);
+  const missingDagNodeCount = isDAG ? dlqItems.filter((item) => !item.dag_node).length : 0;
+  const bulkReplayDisabled = !selected || missingDagNodeCount > 0;
+
+  useEffect(() => { setLastReplayResult(''); }, [selectedRef]);
+
+  const replayResultToast = (label: string, result: { replayed?: number }) => {
+    const message = `${label} · ${t('dlq.replayed')}: ${Number(result.replayed) || 0}`;
+    setLastReplayResult(message);
+    return { toastMessage: message };
+  };
 
   const deleteOne = async (item: DLQItem) => {
     try {
@@ -2363,27 +2484,40 @@ function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
           <div className="flex items-center gap-2">
             <input className="input w-56" placeholder={t('dlq.filter')} value={filter} onChange={(e) => { setFilter(e.target.value); setRefreshKey(n => n + 1); }} />
             <button className="btn btn-secondary btn-sm" onClick={() => { setRefreshKey(n => n + 1); }}>{t('dlq.refresh')}</button>
-            <button className="btn btn-secondary btn-sm" disabled={!selected || replayUnsupported} title={replayUnsupported ? t('dlq.dagReplayUnsupported') : t('dlq.replay')} onClick={() => onAction(`${t('toast.replayDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selectedRef}/replay${q}`, { method: 'POST' }).then(() => setRefreshKey(n => n + 1)); })}>{t('dlq.replay')}</button>
+            <button className="btn btn-secondary btn-sm" disabled={bulkReplayDisabled} title={missingDagNodeCount > 0 ? t('dlq.dagBulkBlocked') : t('dlq.replay')} onClick={() => onAction(`${t('toast.replayDlq')}: ${selected.name}`, async () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; const result = await api<{ replayed?: number }>(`/api/v2/dlq/${selectedRef}/replay${q}`, { method: 'POST' }); setRefreshKey(n => n + 1); return replayResultToast(`${t('toast.replayDlq')}: ${selected.name}`, result); })}>{t('dlq.replay')}</button>
             <button className="btn btn-danger btn-sm" disabled={!selected} onClick={() => { if (confirm(t('dlq.confirmDeleteAll'))) { onAction(`${t('toast.deleteDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selectedRef}${q}`, { method: 'DELETE' }).then(() => setRefreshKey(n => n + 1)); }); } }}>{t('dlq.deleteAll')}</button>
           </div>
         </div>
         <div className="card-body">
-          {replayUnsupported && (
-            <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              {t('dlq.dagReplayUnsupported')}
+          {isDAG && (
+            <div className={`mb-3 rounded border px-3 py-2 text-xs ${missingDagNodeCount > 0 ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+              {missingDagNodeCount > 0 ? t('dlq.dagNodeMissing') : t('dlq.dagReplaySupported')}
+            </div>
+          )}
+          {lastReplayResult && (
+            <div data-testid="dlq-replay-result" className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+              {lastReplayResult}
             </div>
           )}
           {dlq.error ? <ErrorBox message={dlq.error} /> :
-            dlq.data?.items?.length ? (
+            dlqItems.length ? (
               <div className="space-y-2">
-                {dlq.data.items.map((item, i) => (
-                  <DLQRow key={item.id || i} t={t} item={item} onDelete={() => deleteOne(item)} onReplay={() => onAction(`Replay: ${selected.name}`, () => {
+                {dlqItems.map((item, i) => {
+                  const replayDisabledReason = isDAG && !item.dag_node ? t('dlq.dagNodeMissingRecord') : undefined;
+                  return (
+                  <DLQRow key={item.id || i} t={t} item={item} onDelete={() => deleteOne(item)} onReplay={() => onAction(`${t('toast.replayDlq')}: ${selected.name}${item.id ? ` #${item.id}` : ''}`, async () => {
                     const url = item.id ? `/api/v2/dlq/${selectedRef}/${item.id}/replay` : `/api/v2/dlq/${selectedRef}/replay?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`;
-                    return api(url, { method: 'POST' }).then(() => setRefreshKey(n => n + 1));
-                  })} replayDisabled={replayUnsupported} />
-                ))}
+                    const result = await api<{ replayed?: number }>(url, { method: 'POST' });
+                    setRefreshKey(n => n + 1);
+                    return replayResultToast(`${t('toast.replayDlq')}: ${selected.name}${item.id ? ` #${item.id}` : ''}`, result);
+                  })} replayDisabled={Boolean(replayDisabledReason)} replayDisabledReason={replayDisabledReason} />
+                  );
+                })}
               </div>
-            ) : <Empty text={t('dlq.noRecords')} />
+            ) : <div className="rounded-lg border border-dashed border-emerald-200 bg-emerald-50/40 py-8 text-center">
+              <div className="text-sm font-medium text-emerald-700">{t('dlq.noRecords')}</div>
+              <div className="mt-1 text-xs text-slate-500">{t('dlq.emptyHint')}</div>
+            </div>
           }
         </div>
       </div>
@@ -2454,7 +2588,10 @@ function AuditPage({ t, audit }: any) {
             ))}
           </tbody>
         </table>
-        {!audit.data?.events?.length && <div className="p-8"><Empty text={t('audit.noEvents')} /></div>}
+        {!audit.data?.events?.length && <div className="p-8"><div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-8 text-center">
+          <div className="text-sm text-slate-500">{t('audit.noEvents')}</div>
+          <div className="mt-1 text-xs text-slate-400">{t('audit.emptyHint')}</div>
+        </div></div>}
       </div>
     </div>
   );

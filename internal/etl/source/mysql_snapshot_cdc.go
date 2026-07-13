@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -513,7 +514,7 @@ func (r *snapshotCDCReader) runSnapshot(ctx context.Context) error {
 						lastID = rowLastID
 					}
 				}
-				rec := core.Record{Operation: core.OpInsert, Data: data, Metadata: core.Metadata{Table: tableName, Timestamp: time.Now(), Offset: rowLastID}}
+				rec := core.Record{Operation: core.OpInsert, Data: data, Metadata: core.Metadata{Source: r.source.name, Database: r.source.database, Table: tableName, Timestamp: time.Now(), Offset: rowLastID}}
 				select {
 				case r.records <- rec:
 				case <-ctx.Done():
@@ -651,7 +652,14 @@ func (r *snapshotCDCReader) Snapshot(ctx context.Context) (core.Checkpoint, erro
 func (r *snapshotCDCReader) CheckpointForRecord(ctx context.Context, rec core.Record) (core.Checkpoint, error) {
 	phase := r.getPhase()
 	if rec.Metadata.Offset > 0 && phase != "cdc" {
-		r.setTableLastID(rec.Metadata.Table, rec.Metadata.Offset)
+		// Prefer original source table when pipeline table_mapping rewrote Metadata.Table.
+		tableName := rec.Metadata.Table
+		if rec.Data != nil {
+			if v, ok := rec.Data["_source_table"].(string); ok && strings.TrimSpace(v) != "" {
+				tableName = v
+			}
+		}
+		r.setTableLastID(tableName, rec.Metadata.Offset)
 	}
 	r.mu.RLock()
 	lastIDs := make(map[string]int64, len(r.tableLastIDs))
@@ -695,7 +703,7 @@ func (h *snapshotCDCHandler) OnRow(e *canal.RowsEvent) error {
 	file, pos := h.reader.getBinlogPos()
 	for i := 0; i < len(e.Rows); i++ {
 		row := e.Rows[i]
-		rec := core.Record{Metadata: core.Metadata{Table: e.Table.Name, Timestamp: time.Now(), BinlogFile: file, BinlogPos: pos}}
+		rec := core.Record{Metadata: core.Metadata{Source: h.reader.source.name, Database: h.reader.source.database, Table: e.Table.Name, Timestamp: time.Now(), BinlogFile: file, BinlogPos: pos}}
 		switch e.Action {
 		case canal.InsertAction:
 			rec.Operation = core.OpInsert
@@ -750,6 +758,8 @@ func (h *snapshotCDCHandler) OnDDL(header *replication.EventHeader, p mysql.Posi
 	rec := core.Record{
 		Operation: core.OpDDL,
 		Metadata: core.Metadata{
+			Source:     h.reader.source.name,
+			Database:   h.reader.source.database,
 			Table:      extractDDLTable(ddl),
 			Timestamp:  time.Now(),
 			BinlogFile: p.Name,

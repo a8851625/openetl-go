@@ -42,7 +42,7 @@ Kafka JSON/Debezium 订单事件
 - Kafka source 使用 checkpoint 保存 topic/partition offset。
 - Stateful transform 后续通过 `StateStore` 保存 snapshot version，checkpoint 可引用该 state version。
 - ClickHouse 宽表优先使用 ReplacingMergeTree + version column，重复写入由主键和版本消除。
-- DLQ replay 对 linear pipeline 使用 DLQ ID 精确删除；DAG/stateful replay 在实现 node-level replay 前必须明确拒绝并给出恢复 runbook。
+- DLQ replay 对 linear pipeline 使用 DLQ ID 精确删除；DAG replay 对带 `dag_node` 的记录按失败节点恢复，缺少节点上下文的旧记录必须明确拒绝并给出恢复 runbook。
 
 ## 验收测试
 

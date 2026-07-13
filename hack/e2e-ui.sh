@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT_DIR/hack/container-cli.sh"
 detect_container_cli
 
-IMAGE="openetl-go-etl:ui-e2e"
+IMAGE="${IMAGE:-openetl-go-etl:ui-e2e}"
 APP="etl-ui-e2e"
 DATA_DIR="$ROOT_DIR/data-ui-e2e"
 LOG_DIR="$ROOT_DIR/logs"
@@ -19,7 +19,7 @@ if ! command -v playwright-cli >/dev/null 2>&1; then echo "playwright-cli is req
 cleanup() { "$CONTAINER_CLI" rm -f "$APP" >/dev/null 2>&1 || true; rm -rf "$DATA_DIR"; playwright-cli close >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-mkdir -p "$DATA_DIR/output" "$DATA_DIR/checkpoint" "$DATA_DIR/dlq" "$LOG_DIR"
+mkdir -p "$DATA_DIR/output" "$DATA_DIR/checkpoint" "$DATA_DIR/dlq" "$DATA_DIR/input" "$LOG_DIR"
 chmod -R a+rwX "$DATA_DIR"
 chmod a+rwX "$LOG_DIR"
 
@@ -221,8 +221,12 @@ for _ in $(seq 1 10); do
   if [[ "$context_loaded" == "true" ]]; then break; fi
   sleep 1
 done
-check "D2.1e: Wizard loads connection context and YAML refs" "$context_loaded"
-runtime_recommended="false"
+  check "D2.1e: Wizard loads connection context and YAML refs" "$context_loaded"
+  scope_hint="$(evaljs "document.querySelector('[data-testid=\"wizard-source-config-form-scope-hint\"]')?.innerText.includes('behavior fields') || document.querySelector('[data-testid=\"wizard-source-config-form\"]')?.innerText.includes('behavior') || false")"
+  check "D2.1e1: Wizard source form is behavior-scoped with saved connection" "$scope_hint"
+  sink_scope_hint="$(evaljs "document.querySelector('[data-testid=\"wizard-sink-config-form-scope-hint\"]')?.innerText.includes('behavior fields') || document.querySelector('[data-testid=\"wizard-sink-config-form\"]')?.innerText.includes('behavior') || false")"
+  check "D2.1e2: Wizard sink form is behavior-scoped with saved connection" "$sink_scope_hint"
+  runtime_recommended="false"
 for _ in $(seq 1 10); do
   runtime_recommended="$(evaljs "(() => { const y=document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || ''; return document.querySelector('[data-testid=\"wizard-runtime-safety\"]') !== null && document.querySelector('[data-testid=\"wizard-batch-size\"]')?.value === '1000' && document.querySelector('[data-testid=\"wizard-checkpoint-sec\"]')?.value === '30' && y.includes('batch_size: 1000') && y.includes('checkpoint_interval_sec: 30') && y.includes('enable: true'); })()")"
   if [[ "$runtime_recommended" == "true" ]]; then break; fi
@@ -290,6 +294,26 @@ curl -fsS -X POST "${BASE_URL}/api/v2/pipelines/ui-dlq-replay/stop" >/dev/null |
 curl -fsS -X PUT "${BASE_URL}/api/v2/pipelines" \
   -H 'Content-Type: application/json' \
   -d '{"reset_checkpoint":false,"spec":{"name":"ui-dlq-replay","source":{"type":"file","config":{"path":"/app/testdata/files/dlq_customers.jsonl","format":"json"}},"transforms":[{"type":"identity","config":{}}],"sink":{"type":"file_sink","config":{"output_dir":"/app/data/output/ui-dlq","format":"jsonl","prefix":"dlq_"}},"batch_size":2,"checkpoint_interval_sec":1,"backpressure_buffer":10,"dlq":{"enable":true}}}' >/dev/null
+
+echo "==> Seed DAG DLQ replay fixture"
+cat >"$DATA_DIR/input/ui_dag_dlq.jsonl" <<'JSON'
+{"id":501,"name":"DAG DLQ"}
+JSON
+curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \
+  -H 'Content-Type: application/json' \
+  -d '{"spec":{"name":"ui-dag-dlq-replay","dag":{"nodes":[{"id":"src","kind":"source","plugin":"file","config":{"path":"/app/data/input/ui_dag_dlq.jsonl","format":"json"}},{"id":"parse","kind":"transform","plugin":"flat_map","config":{"script":"error(\"ui dag replay failure\")"}},{"id":"sink","kind":"sink","plugin":"file_sink","config":{"output_dir":"/app/data/output/ui-dag-dlq","format":"jsonl","prefix":"dag_"}}],"edges":[{"from":"src","to":"parse"},{"from":"parse","to":"sink"}]},"execution":{"batch_size":1,"checkpoint_interval_sec":1,"backpressure_buffer":10},"retry":{"max_attempts":2,"initial_interval_ms":100,"max_interval_ms":1000},"dlq":{"enable":true}}}' >/dev/null
+curl -fsS -X POST "${BASE_URL}/api/v2/pipelines/ui-dag-dlq-replay/start" >/dev/null
+for _ in $(seq 1 30); do
+  body="$(curl -fsS "${BASE_URL}/api/v2/dlq/ui-dag-dlq-replay?limit=10" || true)"
+  echo "$body" | grep -q 'ui dag replay failure' && echo "$body" | grep -q '"dag_node":"parse"' && break
+  sleep 1
+done
+echo "$body" | grep 'ui dag replay failure' >/dev/null
+echo "$body" | grep '"dag_node":"parse"' >/dev/null
+curl -fsS -X POST "${BASE_URL}/api/v2/pipelines/ui-dag-dlq-replay/stop" >/dev/null || true
+curl -fsS -X PUT "${BASE_URL}/api/v2/pipelines" \
+  -H 'Content-Type: application/json' \
+  -d '{"reset_checkpoint":false,"spec":{"name":"ui-dag-dlq-replay","dag":{"nodes":[{"id":"src","kind":"source","plugin":"file","config":{"path":"/app/data/input/ui_dag_dlq.jsonl","format":"json"}},{"id":"parse","kind":"transform","plugin":"identity","config":{}},{"id":"sink","kind":"sink","plugin":"file_sink","config":{"output_dir":"/app/data/output/ui-dag-dlq","format":"jsonl","prefix":"dag_"}}],"edges":[{"from":"src","to":"parse"},{"from":"parse","to":"sink"}]},"execution":{"batch_size":1,"checkpoint_interval_sec":1,"backpressure_buffer":10},"retry":{"max_attempts":2,"initial_interval_ms":100,"max_interval_ms":1000},"dlq":{"enable":true}}}' >/dev/null
 
 # ════════════════════════════════════════════════
 echo "=== E: Designer Page (Visual DAG Editor) ==="
@@ -395,6 +419,28 @@ for _ in $(seq 1 10); do
 done
 check "F9: DLQ record replayed" "$dlq_replayed"
 
+for _ in $(seq 1 12); do
+  has_dag_fixture="$(evaljs "document.body.innerText.includes('ui-dag-dlq-replay')")"
+  if [[ "$has_dag_fixture" == "true" ]]; then break; fi
+  sleep 1
+done
+evaljs "(() => { Array.from(document.querySelectorAll('.pipeline-row')).find(e=>e.textContent.includes('ui-dag-dlq-replay'))?.click(); return true; })()" >/dev/null
+sleep 2
+check "F10: DAG DLQ fixture record visible" "$(evaljs "document.body.innerText.includes('ui dag replay failure')")"
+check "F11: DAG node shown" "$(evaljs "document.body.innerText.includes('node parse')")"
+check "F12: DAG replay not shown as unsupported" "$(evaljs "!document.body.innerText.includes('not supported yet') && !document.body.innerText.includes('暂不支持')")"
+evaljs "(() => { Array.from(document.querySelectorAll('button[title=\"Replay this record\"]')).find(b=>b.textContent.includes('↻'))?.click(); return true; })()" >/dev/null
+dag_dlq_replayed="false"
+dag_replay_toast="false"
+for _ in $(seq 1 10); do
+  dag_dlq_replayed="$(evaljs "fetch('/api/v2/dlq/ui-dag-dlq-replay?limit=10').then(r=>r.json()).then(d=>Array.isArray(d.items)&&d.items.length===0).catch(()=>false)")"
+  dag_replay_toast="$(evaljs "document.body.innerText.includes('replayed: 1')")"
+  if [[ "$dag_dlq_replayed" == "true" && "$dag_replay_toast" == "true" ]]; then break; fi
+  sleep 1
+done
+check "F13: DAG DLQ record replayed by ID" "$dag_dlq_replayed"
+check "F14: DAG replay result feedback" "$dag_replay_toast"
+
 # ════════════════════════════════════════════════
 echo "=== G: Plugins Page ==="
 goto_page "Built-in"
@@ -468,6 +514,7 @@ check "K1: /api/v2/pipelines works" "$(echo "$pipelines_json" | grep -q '"pipeli
 check "K2: /api/v2/metrics has latency" "$(echo "$metrics_json" | grep -q 'source_read_latency_ms' && echo true || echo false)"
 check "K3: /api/v2/plugins has metadata" "$(echo "$plugins_json" | grep -q '"metadata"' && echo true || echo false)"
 check "K4: /api/v2/plugins/schema works" "$(echo "$schema_json" | grep -q '"sources"' && echo true || echo false)"
+check "K4a: schema fields include connection/behavior scope" "$(echo "$schema_json" | grep -q '"scope":"connection"' && echo "$schema_json" | grep -q '"scope":"behavior"' && echo true || echo false)"
 check "K5: schema includes P5-18 fields" "$(echo "$schema_json" | grep -q 'cursor_column' && echo "$schema_json" | grep -q 'auto_create' && echo "$schema_json" | grep -q 'chunk_size' && echo "$schema_json" | grep -q 'rps' && echo "$schema_json" | grep -q 'timeout_ms' && echo true || echo false)"
 check "K6: /api/v2/checkpoints works" "$(echo "$checkpoints_json" | grep -q '"checkpoints"' && echo true || echo false)"
 check "K7: /api/v2/audit works" "$(echo "$audit_json" | grep -q '"events"' && echo true || echo false)"

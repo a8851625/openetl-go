@@ -1,0 +1,87 @@
+name: mysql-cdc-wide-detail-clickhouse
+tags: [wide-table, mysql-cdc, lookup, production-candidate]
+
+# Scenario 2: multi-table binlog watch, keep fact table only, lookup dimension, write one wide table.
+source:
+  type: mysql_cdc
+  config:
+    host: host.docker.internal
+    port: 13306
+    user: sync_user
+    password: sync_password_123
+    database: dzh3136_go
+    tables:
+      - orders
+      - customers
+      - products
+    server_id: 1611
+
+# Force single wide sink table for MySQL-style Metadata.Table routing.
+table_mapping:
+  rules:
+    orders: order_detail_wide
+
+transforms:
+  - type: cdc_policy
+    config:
+      include_tables:
+        - orders
+      skip_tombstone: true
+  - type: lookup
+    config:
+      dsn: sync_user:sync_password_123@tcp(host.docker.internal:13306)/dzh3136_go?timeout=5s&readTimeout=5s&writeTimeout=5s
+      query: SELECT id, name, tier, region FROM dim_users
+      join_key: customer_id
+      dim_key: id
+      fields:
+        - name
+        - tier
+        - region
+      refresh_interval_sec: 60
+      max_cache_entries: 100000
+      on_miss: "null"
+      on_refresh_error: pass
+  - type: rename
+    config:
+      mappings:
+        name: user_name
+        tier: user_tier
+        region: user_region
+  - type: type_convert
+    config:
+      conversions:
+        id: int
+        customer_id: int
+        price: float
+        quantity: int
+  - type: add_field
+    config:
+      field: _version
+      value: "1"
+
+sink:
+  type: clickhouse
+  config:
+    host: host.docker.internal
+    port: 9000
+    user: default
+    password: dzh123456
+    database: wide
+    table: order_detail_wide
+    auto_create: true
+    schema_drift: add_columns
+    pk_columns:
+      - id
+    version_column: _version
+
+batch_size: 50
+checkpoint_interval_sec: 2
+backpressure_buffer: 50
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 200
+  max_interval_ms: 2000
+
+dlq:
+  enable: true

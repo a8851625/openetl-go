@@ -10,7 +10,19 @@ export type PluginSchemaField = {
   secret?: boolean;
   example?: unknown;
   enum?: string[];
+  scope?: 'connection' | 'behavior' | string;
+  unimplemented?: boolean;
 };
+
+export type FieldScopeFilter = 'all' | 'connection' | 'behavior';
+
+export function filterFieldsByScope(fields: PluginSchemaField[] = [], scope: FieldScopeFilter = 'all') {
+  if (scope === 'all') return fields;
+  return fields.filter((field) => {
+    const fieldScope = field.scope || 'connection';
+    return fieldScope === scope;
+  });
+}
 
 export function buildDefaultConfig(fields: PluginSchemaField[] = []) {
   const next: Record<string, unknown> = {};
@@ -170,6 +182,8 @@ export function ConfigForm({
               <span>{field.name}</span>
               {field.required && <span className="text-rose-500">*</span>}
               {field.secret && <span className="badge badge-amber px-1.5 py-0 text-[10px]">{t('ui.secret')}</span>}
+              {field.scope === 'behavior' && <span className="badge badge-slate px-1.5 py-0 text-[10px]">{t('field.scopeBehavior')}</span>}
+              {field.scope === 'connection' && <span className="badge badge-blue px-1.5 py-0 text-[10px]">{t('field.scopeConnection')}</span>}
               {field.default !== undefined && <span className="ml-auto text-[10px] text-slate-400">{t('conn.default')}: {exampleText(field.default)}</span>}
             </label>
             {input}

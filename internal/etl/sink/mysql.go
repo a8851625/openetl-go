@@ -37,12 +37,12 @@ type MySQLSink struct {
 	// metadata (Debezium key payload in Metadata.Key). Used in multi-table CDC
 	// sync to avoid configuring pk_columns for each table manually.
 	pkColumnsFromMetadata bool
-	batchMode string
+	batchMode             string
 	// incrementColumns maps target column -> source field for batch_mode=increment.
 	// Each entry generates `col = IFNULL(col, 0) + VALUES(col)` in the
 	// ON DUPLICATE KEY UPDATE clause.
 	incrementColumns map[string]string
-	db        *sql.DB
+	db               *sql.DB
 	// insertChunkSize controls how many rows are placed into a single
 	// INSERT statement. MySQL has a max_allowed_packet limit (default 4MB)
 	// and placeholder limits; chunking keeps us well below them.
@@ -208,6 +208,7 @@ func (s *MySQLSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) 
 }
 
 func (s *MySQLSink) Open(ctx context.Context) error {
+	s.preWrite.ResetExecution()
 	tlsParam := ""
 	if s.tlsEnabled {
 		tlsName := fmt.Sprintf("openetl-%p", s)
@@ -303,7 +304,7 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 	// Compact the batch so multiple events on the same (table, PK) collapse to
 	// the final operation in source order. Without this, grouping by op kind
 	// would reorder DELETE(pk=1)→INSERT(pk=1) into INSERT→DELETE.
-	records = CompactRecordsByPK(records, func(table string) []string {
+	pkColumnsForTable := func(table string) []string {
 		if s.pkColumnsFromMetadata {
 			if pk := s.derivePKFromMetadata(table, records); len(pk) > 0 {
 				return pk
@@ -313,17 +314,20 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 			return s.pkColumns
 		}
 		return []string{"id"}
-	})
+	}
+	records = CompactRecordsByPK(records, pkColumnsForTable)
 
 	// Group records by (table, sorted-column-signature) so we can emit one
 	// multi-row INSERT per group. Heterogeneous batches still produce a few
 	// statements rather than N.
 	type groupKey struct {
-		table string
-		cols  string
+		table  string
+		cols   string
+		pkCols string
 	}
 	type groupBuf struct {
 		cols       []string
+		pkCols     []string
 		rows       [][]any
 		ops        []core.OpType
 		deleteRows [][]any // separately batched
@@ -347,18 +351,19 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 			cols = append(cols, k)
 		}
 		sort.Strings(cols)
-		key := groupKey{table: tableName, cols: strings.Join(cols, ",")}
+		pkCols := pkColumnsForTable(tableName)
+		key := groupKey{table: tableName, cols: strings.Join(cols, ","), pkCols: strings.Join(pkCols, ",")}
 
 		g, ok := groups[key]
 		if !ok {
-			g = &groupBuf{cols: cols}
+			g = &groupBuf{cols: cols, pkCols: pkCols}
 			groups[key] = g
 			groupOrder = append(groupOrder, key)
 		}
 
 		// Route delete vs insert/upsert into separate statement kinds.
 		if rec.Operation == core.OpDelete {
-			vals, err := s.deleteValues(cols, rec)
+			vals, err := s.deleteValues(g.pkCols, rec)
 			if err != nil {
 				return err
 			}
@@ -393,7 +398,7 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 			}
 		}
 		if len(g.deleteRows) > 0 {
-			if err := s.batchDelete(ctx, tx, key.table, g.deleteRows); err != nil {
+			if err := s.batchDelete(ctx, tx, key.table, g.pkCols, g.deleteRows); err != nil {
 				return err
 			}
 		}
@@ -536,7 +541,7 @@ func (s *MySQLSink) buildBatchInsertStatement(table string, cols []string, rowCo
 	return b.String()
 }
 
-func (s *MySQLSink) batchDelete(ctx context.Context, tx *sql.Tx, table string, rows [][]any) error {
+func (s *MySQLSink) batchDelete(ctx context.Context, tx *sql.Tx, table string, pkCols []string, rows [][]any) error {
 	for offset := 0; offset < len(rows); offset += s.insertChunkSize {
 		end := offset + s.insertChunkSize
 		if end > len(rows) {
@@ -546,8 +551,8 @@ func (s *MySQLSink) batchDelete(ctx context.Context, tx *sql.Tx, table string, r
 		if len(chunk) == 0 {
 			continue
 		}
-		query := s.buildBatchDeleteStatement(table, len(chunk))
-		args := make([]any, 0, len(chunk)*len(s.pkColumns))
+		query := s.buildBatchDeleteStatement(table, pkCols, len(chunk))
+		args := make([]any, 0, len(chunk)*len(pkCols))
 		for _, row := range chunk {
 			args = append(args, row...)
 		}
@@ -560,8 +565,7 @@ func (s *MySQLSink) batchDelete(ctx context.Context, tx *sql.Tx, table string, r
 
 // buildBatchDeleteStatement builds an OR-joined DELETE statement for rowCount
 // rows. Pure function for testability.
-func (s *MySQLSink) buildBatchDeleteStatement(table string, rowCount int) string {
-	pkCols := s.pkColumns
+func (s *MySQLSink) buildBatchDeleteStatement(table string, pkCols []string, rowCount int) string {
 	if len(pkCols) == 0 {
 		pkCols = []string{"id"}
 	}
@@ -588,8 +592,7 @@ func (s *MySQLSink) buildBatchDeleteStatement(table string, rowCount int) string
 	return b.String()
 }
 
-func (s *MySQLSink) deleteValues(cols []string, rec core.Record) ([]any, error) {
-	pkCols := s.pkColumns
+func (s *MySQLSink) deleteValues(pkCols []string, rec core.Record) ([]any, error) {
 	if len(pkCols) == 0 {
 		pkCols = []string{"id"}
 	}

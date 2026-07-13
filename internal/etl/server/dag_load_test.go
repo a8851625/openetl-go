@@ -5,6 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	_ "github.com/a8851625/openetl-go/internal/etl/sink"
+	_ "github.com/a8851625/openetl-go/internal/etl/source"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 const dagSpecYAML = `name: dag-file-demo
@@ -66,6 +70,47 @@ func TestLoadSpecsDAGFile(t *testing.T) {
 	defer s.mu.RUnlock()
 	if len(s.dagSpecs) != 1 {
 		t.Fatalf("expected 1 dagSpec registered, got %d", len(s.dagSpecs))
+	}
+}
+
+func TestDAGSpecYAMLDetectionUsesTopLevelKey(t *testing.T) {
+	if !isDAGSpecYAML([]byte("name: empty-dag\ndag:\n")) {
+		t.Fatal("isDAGSpecYAML returned false for top-level dag key")
+	}
+	if isDAGSpecYAML([]byte(linearSpecYAML)) {
+		t.Fatal("isDAGSpecYAML returned true for linear spec")
+	}
+	if isDAGSpecYAML([]byte("name: nested\nsource:\n  dag: no\n")) {
+		t.Fatal("isDAGSpecYAML returned true for nested dag key")
+	}
+}
+
+func TestRestoreFromDBLoadsDAGSpec(t *testing.T) {
+	s := newSchedulerTestServer(t)
+	ctx := context.Background()
+	row := &storage.PipelineRow{
+		ID:       "dag-db-id",
+		Name:     "dag-file-demo",
+		SpecYAML: dagSpecYAML,
+		Status:   "loaded",
+	}
+	if err := s.store.SavePipeline(ctx, row); err != nil {
+		t.Fatalf("SavePipeline: %v", err)
+	}
+	if err := s.RestoreFromDB(ctx); err != nil {
+		t.Fatalf("RestoreFromDB: %v", err)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.dagSpecs[row.ID] == nil {
+		t.Fatalf("dag spec for %s not restored", row.ID)
+	}
+	if s.pipelines[row.ID] == nil {
+		t.Fatalf("runner for %s not registered", row.ID)
+	}
+	if got := s.pipelineNames[row.ID]; got != "dag-file-demo" {
+		t.Fatalf("pipeline name = %q, want dag-file-demo", got)
 	}
 }
 

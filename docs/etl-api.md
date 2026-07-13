@@ -20,6 +20,8 @@ Query parameters:
 - `contains`: substring match against the serialized failed record payload.
 - `error_contains`: substring match against the DLQ error string.
 
+SQL-backed DLQ responses include stable `id` values for per-record delete/replay. DAG DLQ responses also include `dag_node` when the failure was recorded with node context.
+
 Examples:
 ```sh
 curl -H "X-API-Token: $ETL_API_TOKEN" \
@@ -34,15 +36,19 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
 
 ### Replay DLQ Records
 `POST /api/v2/dlq/{pipeline}/replay`
+`POST /api/v2/dlq/{pipeline}/{id}/replay`
 
-Replay uses the same query parameters as list. Replayed records are transformed again and written to the configured sink. Successfully replayed records are deleted from the DLQ file.
+Replay uses the same query parameters as list. Replayed records are transformed again and written to the configured sink. Successfully replayed records are deleted from SQL-backed DLQ storage by stable DLQ ID when available.
 
-Linear pipeline DLQ replay is supported. DAG pipeline DLQ replay is explicitly not supported yet because node-level replay has not been implemented. DAG replay attempts return HTTP `501` with `code: "dag_dlq_replay_unsupported"` and do not delete DLQ records.
+Use the ID endpoint for deterministic one-record replay and UI/API feedback such as `{"replayed":1}`. Linear pipeline DLQ replay is supported. DAG pipeline DLQ replay is supported for records that include `dag_node`: sink-node failures are written back to that sink, and transform-node failures resume at that transform and route downstream. Legacy DAG DLQ records without `dag_node` return HTTP `400` with `{"error":"...dag_node...","replayed":0}` and are not deleted.
 
 Examples:
 ```sh
 curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
   'http://127.0.0.1:8001/api/v2/dlq/orders/replay?contains=9901'
+
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  'http://127.0.0.1:8001/api/v2/dlq/orders/123/replay'
 
 curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
   'http://127.0.0.1:8001/api/v2/dlq/orders/replay?from=2026-06-06T00:00:00Z&until=2026-06-07T00:00:00Z'

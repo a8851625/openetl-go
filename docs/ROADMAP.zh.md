@@ -47,7 +47,7 @@ Roadmap 按以下差异化推进：
 
 - Kafka crash/rebalance/offset replay 认证不足。
 - Stateful transform 的 e2e 恢复边界还不够系统，尤其是 `Kafka offset + state snapshot + sink commit` 的关系。
-- DAG DLQ replay 当前不支持，必须持续显式暴露，不让用户误以为可用。
+- DAG DLQ replay 已支持带 `dag_node` 的节点级恢复；缺少节点上下文的旧记录必须明确拒绝并保留 DLQ，不让用户误以为已恢复。
 - Elasticsearch partial bulk 已能按失败条目进入 DLQ；S3/File 重放幂等、跨 sink fanout 非原子等边界仍需要更清楚的测试和文档。
 - Connector maturity 需要由测试证据驱动，而不是手写字符串。
 - Doris sink 的 production gate 已关闭，但 maturity 必须持续由真实 Doris e2e、schema/model preflight、DDL 安全策略、幂等语义验证，以及文档、descriptor 和实现一致性共同约束。
@@ -162,12 +162,12 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
   - Kafka raw message -> parser plugin/flat_map -> lookup -> project -> Kafka ODS。
   - Kafka ODS JSON -> project/type_convert -> MaxCompute partitioned table。
   - file/HTTP -> file/S3。
-- 把 DAG DLQ replay 当前不支持的行为保持在 API/UI/文档中显式可见。
+- 把 DAG DLQ replay 的可用边界保持在 API/UI/文档中显式可见：带 `dag_node` 可自动重放，缺少节点上下文的旧记录需人工恢复。
 - 建立“失败记录必须可见”规则：失败只能进入 DLQ、返回错误触发 retry，或由显式 allow-drop 配置并计数审计。
 
 ### Phase 0 伪实现清理 backlog（2026-07-01）
 
-下列条目都是 spec/UI/文档/descriptor 暴露了能力面，但运行时静默丢弃或不生效，属于“用户以为实现了，实际没有”的高风险伪实现。优先级高于新增功能，必须先收口到“显式拒绝或补齐实现”，不允许继续静默成功。已澄清的非伪实现边界（DAG DLQ replay 显式 501、MaxCompute/ODPS 保持 experimental、未带 `-tags=extism` 的 WASM 显式报错）不进入本 backlog。
+下列条目都是 spec/UI/文档/descriptor 暴露了能力面，但运行时静默丢弃或不生效，属于“用户以为实现了，实际没有”的高风险伪实现。优先级高于新增功能，必须先收口到“显式拒绝或补齐实现”，不允许继续静默成功。已澄清的非伪实现边界（MaxCompute/ODPS 保持 experimental、未带 `-tags=extism` 的 WASM 显式报错）不进入本 backlog；DAG DLQ replay 已在 2026-07-07 补齐带 `dag_node` 的节点级恢复。
 
 1. Worker 标签调度伪实现（高风险，最高优先级）——已实现（2026-07-01，HTTP e2e 补强 2026-07-04）：
    - 现状（修复前）：`worker_selector.match_labels` 在 spec/UI/Settings 暴露，但分发层直接丢弃 labels：`internal/etl/master/dispatch.go:62`；master/worker poll 只抢第一个 pending task：`internal/etl/master/dispatch.go:104`、`internal/etl/worker/poll.go:52`；worker 启动注册也不带 labels：`internal/etl/worker/worker.go:132`。
@@ -318,11 +318,11 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 2. Pre-write Action（MySQL/PostgreSQL sink 写入前清理）——已实现（2026-07-02）：
    - 现状（修复前）：MySQL/PostgreSQL sink 的 `batch_mode` 只有 `insert`(INSERT IGNORE) 和 `upsert`(ON DUPLICATE KEY UPDATE)（`internal/etl/server/schema.go:185`、`internal/etl/sink/mysql.go:87`、`postgres.go:92`），没有写入前钩子。数仓日快照「DELETE FROM dws WHERE dt=? → INSERT」和批量回填「先清再写」无法配置化表达。
-   - 目标：MySQL/PostgreSQL sink 增加 `pre_write` 配置块：`action: delete | truncate | truncate_partition`、参数化 `condition`、`params`（支持 `${PROCESSING_DATE}` / `${params.xxx}` 占位符）。`pre_write` 在每个写入 batch 的事务开始前执行，失败按 transient/data 错误分类进入 DLQ 或 retry，不静默跳过。`truncate` / `truncate_partition` 仅允许 `once`/`cron`/`periodic` 调度的 batch pipeline，CDC/streaming pipeline 在 validate/preflight 阶段拒绝。
+   - 目标：MySQL/PostgreSQL sink 增加 `pre_write` 配置块：`action: delete | truncate | truncate_partition`、参数化 `condition`、`params`（支持 `${PROCESSING_DATE}` / `${params.xxx}` 占位符）。`pre_write` 在每次 pipeline start 的首个写入事务中执行一次，失败按 transient/data 错误分类进入 DLQ 或 retry，不静默跳过；多 batch 回填不会在后续 batch 删除前序 batch 已写入数据。`truncate` / `truncate_partition` 仅允许 `once`/`cron`/`periodic` 调度的 batch pipeline，CDC/streaming pipeline 在 validate/preflight 阶段拒绝。
    - 幂等边界：`pre_write` + `insert` 模式在 checkpoint reset 后会重新清空并重写，属于幂等回填语义；spec validate / preflight 必须显式提示「此组合会先删后写，重放会重置目标分区」，不与 at-least-once 吸收策略混淆。
    - 验收：MySQL/PostgreSQL sink 支持 `pre_write`；preflight 校验 action/condition/params 合法性并拒绝 CDC+truncate；新增 e2e 覆盖 batch 先删后写 + checkpoint reset replay 后目标表等于重放结果；组件文档 `docs/components/sink-mysql.md` / `sink-postgres.md` 补 pre_write 段落。
    - 实现内容：新增 `internal/etl/sink/pre_write.go` 提供 `PreWriteConfig`（delete/truncate/truncate_partition、condition、params、`${PROCESSING_DATE}`/`${params.xxx}` 展开、`ExecSQL`/`ExecPgx`、`IsDangerousForStreaming`、`DescribeForWarning`）；MySQL sink（`mysql.go`）和 PostgreSQL sink（`postgres.go`）在 `BeginTx` 后、数据写入前执行 `pre_write`；schema.go 补 `pre_write` 字段；preflight.go 校验 action/condition 合法性；`ValidateIdempotency` 对 pre_write 输出幂等 warning；CDC+truncate/truncate_partition 在 preflight guidance 输出 error 级别；`sink-mysql.md`/`sink-postgres.md` 补 pre_write 段落。
-   - 验收（已达成）：新增 `internal/etl/sink/pre_write_test.go` 和 `internal/etl/server/pre_write_preflight_test.go` 覆盖配置解析、condition 必填、truncate 免 condition、CDC+truncate error、schema 字段存在性；`go test ./internal/etl/... -count=1`（含 `-race`）全绿。（真实 MySQL/PG e2e 先删后写 + checkpoint reset replay 后续补 Docker e2e 脚本。）
+   - 验收（已达成）：新增 `internal/etl/sink/pre_write_test.go` 和 `internal/etl/server/pre_write_preflight_test.go` 覆盖配置解析、condition 必填、truncate 免 condition、CDC+truncate error、schema 字段存在性；`pre_write` 执行状态在 sink `Open()` 时重置，保证 checkpoint reset/restart 会重新执行清理；`hack/e2e-relational-write-modes.sh` 覆盖真实 MySQL 与 PostgreSQL delete+rewrite，并在重放前污染目标分区验证 checkpoint reset 后重新清理；`go test ./internal/etl/... -count=1`（含 `-race`）全绿。
 
 3. 字典映射 Transform（`map_fields`）——已实现（2026-07-02）：
    - 现状（修复前）：枚举/码值转换（如车辆状态码 1→ONLINE、充电状态码 3→NOT_CHARGING）只能用 Lua `if-else` 实现，不可声明式配置，多表场景难以维护。`internal/etl/transforms` 无 `map_fields`。
@@ -346,7 +346,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
    - 幂等边界：increment 不是幂等模式——重放会重复累加。spec validate / preflight 必须对 increment 模式输出强 warning，推荐仅在「源端有去重键 + checkpoint 不会 reset」或「下游有版本/时间窗口对账」时使用；checkpoint reset 后必须人工对账。
    - 验收：MySQL/PostgreSQL sink 支持 increment；preflight 输出非幂等 warning；新增 e2e 覆盖正常累加 + checkpoint reset 后重复累加的行为文档化（不阻断，但显式记录）；组件文档补 increment 段落与幂等边界。
    - 实现内容：MySQL sink 新增 `incrementColumns map[string]string`、`batch_mode=increment` 生成 `INSERT INTO ... ON DUPLICATE KEY UPDATE col=IFNULL(col,0)+VALUES(src_col)`（PK 列不进 UPDATE，非 PK 非 increment 列仍 `=VALUES(col)`）；PostgreSQL sink 对应生成 `ON CONFLICT ... DO UPDATE SET col=COALESCE(col,0)+EXCLUDED.src_col`；schema.go 把 `batch_mode` enum 扩展为 `insert|upsert|increment` 并新增 `increment_columns` 字段；preflight.go 校验 increment 必须有 `pk_columns` 和 `increment_columns`；`ValidateIdempotency` 的 `incrementWarnings` 对 increment 输出非幂等强 warning。
-   - 验收（已达成）：新增 `internal/etl/sink/increment_test.go` 覆盖 MySQL increment SQL 生成（含 PK 排除、IFNULL+VALUES 子句）、MySQL/PG increment 缺 `increment_columns` 报错；`go test ./internal/etl/... -count=1` 全绿。（真实累加 + checkpoint reset 重复累加 Docker e2e 后续补。）
+   - 验收（已达成）：新增 `internal/etl/sink/increment_test.go` 覆盖 MySQL increment SQL 生成（含 PK 排除、IFNULL+VALUES 子句）、MySQL/PG increment 缺 `increment_columns` 报错；`hack/e2e-relational-write-modes.sh` 覆盖真实 MySQL 累加写入，并验证 checkpoint reset 后重复累加边界；`go test ./internal/etl/... -count=1` 全绿。
 
 6. 字段拆分/提取 Transform（`extract`）——已实现（2026-07-02）：
    - 现状（修复前）：从 `material_name` 正则提取厂商、`mes_administrator + '.' + mes_optional_parts` 拼接物料号等需求只能用 Lua/JS。
@@ -396,8 +396,8 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
     - 目标（生成列）：MySQL sink 在 schema introspection 时查询 `information_schema.columns` 过滤 `GENERATION_EXPRESSION != ''` 的列，自动从 INSERT/UPDATE 列集中剔除；PostgreSQL sink 同理按 `pg_attribute.attgenerated` 过滤。剔除行为在 preflight/schema 校验阶段日志可见，不静默丢字段。
     - 目标（PK 提取）：MySQL/PostgreSQL sink 增加 `pk_columns_from_metadata: true`，CDC 链路下从 record metadata（Debezium key payload 已由 `debezium_cdc` transform 解析写入 `rec.Metadata.Key` 或约定字段）按当前 `Metadata.Table` 动态推导 pk_columns，省去多表逐表配置；推导失败时进入 schema-class 错误，不静默退化为无 pk 的 INSERT。
     - 不做：不在 sink 层引入表名模板（表名动态路由已由 `debezium_cdc` 的 `target_table_template` / `table_mapping` 在 transform 层完成，sink 只按 `rec.Metadata.Table` 写入）；不引入正向 `allowed_ops` 白名单（`cdc_policy` 的 `skip_*` 已覆盖）；不引入 sink 层 `table_rewrite`（DDL 表名重写已由 transform 层映射 + sink 层 `CREATE TABLE IF NOT EXISTS` + `ddl_policy` 安全 apply 共同覆盖，分层更清晰）。
-    - 实现内容：(a) 生成列——`core.ColumnInfo` 新增 `Generated bool`；MySQL `getExistingColumnInfo` 增加 `generation_expression`/`extra` 列检测 VIRTUAL/STORED 生成列；PostgreSQL `pgGetColumnInfo` JOIN `pg_attribute.attgenerated`（旧版 PG 回退到无生成列检测）；`core.SchemaCache` 新增 `GeneratedColumns`/`SetGeneratedColumns` 缓存；MySQL/PG sink 在 Write 分组阶段按 `generatedColumnsFor(ctx, table)` 过滤 `rec.Data` 中的生成列。(b) PK 提取——MySQL sink 新增 `pkColumnsFromMetadata` 配置 + `derivePKFromMetadata`（从 `rec.Metadata.Key` JSON 对象取键名作为 pk_columns，按表缓存，推导失败回退到显式 pk_columns）。
-    - 验收（已达成）：新增 `internal/etl/sink/generated_pk_test.go` 覆盖 (a) `derivePKFromMetadata` 单列/复合列/空 key 回退/缓存命中，(b) `SchemaCache.GeneratedColumns`/`SetGeneratedColumns` 往返；`go test ./internal/etl/... -count=1`（含 `-race`）全绿。（真实 MySQL VIRTUAL/STORED 列 e2e、多表 CDC pk 自动推导 e2e 后续补；schema.go 已补 `pk_columns_from_metadata` 字段。）
+    - 实现内容：(a) 生成列——`core.ColumnInfo` 新增 `Generated bool`；MySQL `getExistingColumnInfo` 增加 `generation_expression`/`extra` 列检测 VIRTUAL/STORED 生成列；PostgreSQL `pgGetColumnInfo` JOIN `pg_attribute.attgenerated`（旧版 PG 回退到无生成列检测）；`core.SchemaCache` 新增 `GeneratedColumns`/`SetGeneratedColumns` 缓存；MySQL/PG sink 在 Write 分组阶段按 `generatedColumnsFor(ctx, table)` 过滤 `rec.Data` 中的生成列。(b) PK 提取——Kafka source 将 message key 保留到 `rec.Metadata.Key`；MySQL sink 新增 `pkColumnsFromMetadata` 配置 + `derivePKFromMetadata`（从 `rec.Metadata.Key` JSON 对象取键名作为 pk_columns，按表缓存，推导失败回退到显式 pk_columns），并在 DELETE 条件生成中使用按表推导出的 PK。
+    - 验收（已达成）：新增 `internal/etl/sink/generated_pk_test.go` 覆盖 (a) `derivePKFromMetadata` 单列/复合列/空 key 回退/缓存命中，(b) metadata-derived composite PK DELETE 条件和值提取，(c) `SchemaCache.GeneratedColumns`/`SetGeneratedColumns` 往返；`internal/etl/source/kafka_test.go` 覆盖 Kafka key 写入 `Metadata.Key` 且可选 `key_column` 仍复制到 data；`internal/etl/transform/debezium_cdc_test.go` 覆盖 Debezium DELETE 保留 Kafka key metadata、目标表映射和原始 source metadata；`hack/e2e-relational-write-modes.sh` 已真实跑通 MySQL STORED/VIRTUAL generated columns，源数据故意携带 generated 字段并验证 sink 自动跳过、目标由 MySQL 计算；`hack/e2e-debezium-mysql.sh` 新增并实跑通过 `debezium-pk-metadata-to-mysql` fixture，用于覆盖 Debezium Kafka key -> `Metadata.Key` -> MySQL `pk_columns_from_metadata` 的多表 CDC DELETE，包含单列非 `id` PK 和复合 PK；`go test ./internal/etl/source ./internal/etl/transform ./internal/etl/sink -count=1` 全绿。2026-07-07 已在本机 default Podman machine 补跑 `hack/e2e-debezium-mysql.sh`，覆盖 offset replay、Redpanda restart、consumer rebalance、MySQL lock wait retry、DLQ replay、危险 DDL reject 与 metadata PK fixture。
     - 验收：MySQL/PostgreSQL sink 写入含生成列的目标表不再报错，生成列被自动剔除并有日志；`pk_columns_from_metadata` 在多表 CDC 链路能自动推导 pk，推导失败进入 schema-class DLQ；新增单测覆盖生成列剔除和 PK 推导；`docs/components/sink-mysql.md` / `sink-postgres.md` 补说明。
 
 明确不做（本增补边界）：
@@ -426,7 +426,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 - 不新增 connector、不改变 transform 执行语义、不引入通用 SQL planner 或 Flink 兼容层。
 - MaxCompute/ODPS sink 在没有真实环境 DLQ/replay/e2e 证据前 maturity 继续保持 experimental/beta。
-- DAG DLQ replay 当前不支持的行为继续在 API/UI/文档中显式可见。
+- DAG DLQ replay 的节点上下文边界继续在 API/UI/文档中显式可见。
 
 验证：
 
@@ -476,7 +476,7 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 - 向导同屏接入 sample record、transform dry-run、spec validate/preflight、DDL preview、field issue/remediation 和 `/api/v2/docs` 入口；MaxCompute remote preflight 用于 endpoint/project/table/partition/权限失败修复路径验证。
 - `web/src/DagEditorPage.tsx` 已支持 DAG/YAML 与 canvas/form 往返：YAML drawer 可编辑并同步回节点/表单；DAG Editor 内置 Validate + preflight 结果面板，创建前阻断 `valid:false`，并展示错误、warning、preflight issue、field issue 和 remediation。
 - `docs/quickstart.md` / `docs/quickstart.zh.md` 已把 Web UI Wizard 放到首选路径，覆盖 dry-run、Validate + preflight、修复、Create and start，以及 YAML 可见/可同步。
-- `hack/e2e-ui.sh` 已覆盖：五类向导入口可见、schema-driven 表单、Runtime safety 控制与 YAML 同步、saved-connection 推荐写入 batch/checkpoint、docs 入口、preflight 失败、修复后创建启动、向导 YAML -> 表单同步、DAG YAML -> canvas/form 同步、DAG validation 错误定位、DLQ 查看与 replay。
+- `hack/e2e-ui.sh` 已覆盖：五类向导入口可见、schema-driven 表单、Runtime safety 控制与 YAML 同步、saved-connection 推荐写入 batch/checkpoint、docs 入口、preflight 失败、修复后创建启动、向导 YAML -> 表单同步、DAG YAML -> canvas/form 同步、DAG validation 错误定位、线性 DLQ 查看/replay，以及 DAG DLQ `dag_node` 展示、按 ID replay 和 replay 数量反馈。
 
 连接上下文闭环证据（2026-06-29）：
 
@@ -650,11 +650,16 @@ MySQL -> Debezium -> Kafka -> OpenETL-Go -> MySQL/PostgreSQL/ClickHouse/Doris/OD
 
 ## 下一步清单
 
-0. 修复 DAG 声明式文件加载 bug（Phase 1 增补第 1 项）：让 `loadSpecs` 复用 `RestoreFromDB` 的 `dag:` 检测，使 DAG spec 能像线性格式一样经 `pipes/*.yaml` 自动加载和 hot-reload。
+0. 已完成 DAG 声明式文件加载与 DAG DLQ replay 补强：`loadSpecs` 与 `RestoreFromDB` 共用 `dag:` 顶层 key 检测，DAG spec 可经 `pipes/*.yaml` 自动加载和 hot-reload；DAG DLQ 对带 `dag_node` 的 sink/transform 失败记录支持节点级重放，缺少节点上下文的旧记录返回 400 并保留 DLQ；DLQ UI/API 文档已展示 `dag_node`、缺 node context 提示、按 ID replay 和 replay 结果反馈，`hack/e2e-ui.sh` 已补 DAG DLQ replay 断言。2026-07-07 已在本机 default Podman machine 补跑 `hack/e2e-ui.sh`，结果 `104 passed, 0 failed`。
 1. 补 `odps` / `maxcompute` 真实环境证据：用真实 MaxCompute 凭据跑 Kafka ODS -> `project` / `type_convert` -> MaxCompute 分区表 e2e，补 DLQ/replay、checkpoint reset/restart、权限失败和操作文档；没有真实写入证据前保持 experimental。
 2. 已完成异步 I/O 维表查询增强第一轮闭环：`lookup` query-mode、异步边界、Redis-only cache gate、preflight/schema/spec 校验和 `hack/e2e-lookup-query.sh` 已落地；后续只按具体 connector/transform 缺口补强。
 3. 已补 production candidate 链路的失败注入增量：`hack/e2e-s3-minio.sh` 已覆盖 MinIO 目标下线 -> transient DLQ -> 恢复后 replay，并新增 runner DLQ 写入上下文回归测试；`hack/e2e-doris.sh` 已覆盖 MySQL CDC/snapshot+CDC -> Doris、checkpoint restart/reset replay、schema drift add-columns、Doris BE outage -> transient DLQ -> BE/FE recover -> replay；Kafka/Debezium/ClickHouse/Doris/ES 的更多故障类型继续按已有 e2e 矩阵增补。
 4. 扩展 schema/preflight 覆盖面：优先为 production candidate source/sink 补 `SchemaDescriptor` / `SchemaValidator`、DDL preview 和字段级 remediation，驱动 UI 表单和 preflight。
-5. 已建立 connector certification test kit 第一版：MySQL、ClickHouse、Kafka、S3/File 的 maturity 由 `TestConnectorCertificationKitProductionSet` 约束 descriptor、readiness、e2e evidence、组件文档和实现注册；下一步扩展到插件 ABI 与第三方 connector，并优先补一个通过当前插件模块开发的 Feishu/Lark 电子表格 source plugin 样板。
-6. 补轻量运行 smoke：容器入口命令、standalone/master/worker 三形态启动、非法参数失败输出，以及升级/回滚/备份恢复 runbook 的最小自动化验证。
-7. 推进 Phase 1 增补数仓 ETL 场景闭环：按 pre_write → map_fields → dependency 重算范例 → increment → extract → feishu_sheet → http oauth2_client_credentials → connection 配置职责收束 的次序逐条交付，完成一条再开下一条。
+5. 已建立 connector certification test kit 第一版，并扩展 Feishu source 插件样板：MySQL、ClickHouse、Kafka、S3/File 的 maturity 由 `TestConnectorCertificationKitProductionSet` 约束；`TestPluginABIV1CertificationDocs` / `TestFeishuSheetSourcePluginSampleCertification` 约束 ABI 文档与 `web/plugin-sdk/examples/feishu-sheet-source/` 样板（manifest、README、fixture、example pipeline）。样板 maturity 保持 beta/dev-only。
+6. 已补轻量运行 smoke 与最小 runbook：`docs/runtime-modes.md` 覆盖 standalone/master/worker/headless、备份恢复、DLQ 积压、worker 扩缩容、升级回滚；`hack/e2e-runtime-smoke.sh` 校验 CLI help/非法 role、compose 文件与文档门闩。
+7. 已补 Connection scope UI 产品化：descriptor/schema 字段暴露 `scope=connection|behavior`；Connection Catalog 只编辑 connection-scope；Wizard/DAG 选择 saved connection 后只编辑 behavior 字段；`docs/etl-config-schema.md` 补 connection field scope；`hack/e2e-ui.sh` 增加 scope 断言。
+8. 推进生产候选链路故障注入与 MaxCompute 真实证据（仍为置顶 backlog 1/2，本轮未做）。
+9. 已补两个核心业务场景交付与 e2e（2026-07-11）：
+   - 多表 A→B + 表名映射：`table_mapping.template/rules/regex` 增强、CDC 写入 `Metadata.Database`、保留 `_source_table`；`hack/e2e-multi-table-map.sh` + `testdata/pipes-multi-table-map/`。
+   - 多表 binlog→宽表：`mysql_cdc` + `cdc_policy` + `lookup` → ClickHouse；`hack/e2e-mysql-cdc-wide.sh` + `testdata/pipes-mysql-cdc-wide/`。
+   - 单测：`internal/etl/pipeline/table_mapping_test.go`。

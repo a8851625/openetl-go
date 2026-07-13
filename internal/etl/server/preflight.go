@@ -2794,9 +2794,9 @@ func addOperationalGuidance(spec *pipeline.Spec, result *PreflightResult) {
 					if tableName == "" {
 						tableName = "<dynamic>"
 					}
-					msg := fmt.Sprintf("pre_write action %q on %s wipes target data before each batch", action, tableName)
+					msg := fmt.Sprintf("pre_write action %q on %s wipes target data once per pipeline start", action, tableName)
 					if isStreamingOrReplaySource(spec.Source.Type) {
-						msg = fmt.Sprintf("pre_write action %q is unsafe for CDC/streaming source %s: it wipes the target on every batch", action, spec.Source.Type)
+						msg = fmt.Sprintf("pre_write action %q is unsafe for CDC/streaming source %s: it wipes target data on each pipeline restart", action, spec.Source.Type)
 					}
 					addPreflightGuidance(result, PreflightGuidance{
 						Level:    level,
@@ -2813,9 +2813,9 @@ func addOperationalGuidance(spec *pipeline.Spec, result *PreflightResult) {
 	addPreflightGuidance(result, PreflightGuidance{
 		Level:    "info",
 		Category: "dlq",
-		Code:     "dlq-linear-replay",
-		Message:  "failed records are persisted to the configured SQL storage backend and can be replayed for linear pipelines",
-		Action:   "review DLQ before checkpoint reset or bulk replay; DAG DLQ entries currently require manual recovery because node-level replay is not implemented",
+		Code:     "dlq-replay",
+		Message:  "failed records are persisted to the configured SQL storage backend and can be replayed for linear pipelines and node-context DAG records",
+		Action:   "review DLQ before checkpoint reset or bulk replay; legacy DAG DLQ records without dag_node context require manual recovery",
 	})
 }
 

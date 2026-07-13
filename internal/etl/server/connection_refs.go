@@ -20,25 +20,9 @@ import (
 // When a saved connection still contains any of these fields we keep merging
 // them for backward compatibility but surface a deprecation warning via the
 // returned `behaviorDeprecations` list.
-var sinkBehaviorFields = map[string]bool{
-	"batch_mode":           true,
-	"pk_columns":           true,
-	"pre_write":            true,
-	"schema_drift":         true,
-	"ddl_policy":           true,
-	"retry":                true,
-	"compression":          true,
-	"increment_columns":    true,
-	"insert_chunk_size":    true,
-	"allow_mixed_cdc_non_atomic": true,
-	"version_column":       true,
-	"optimize_interval_sec": true,
-	"use_final":            true,
-	"write_mode":           true,
-	"format":               true,
-	"columns":              true,
-	"partition":            true,
-}
+//
+// The authoritative map lives in field_scope.go (shared with descriptor/UI scope).
+// This comment is retained for callers reading connection_refs.go.
 
 func (s *Server) resolvePipelineConnections(ctx context.Context, spec *pipeline.Spec) error {
 	if spec == nil {
@@ -156,12 +140,12 @@ func (s *Server) resolveLinearEndpoint(ctx context.Context, kind string, typ *st
 	}
 	// Detect behavior-scope fields left in the connection catalog. We keep
 	// merging them for backward compatibility but warn the user to migrate.
-	if kind == "sink" {
+	if kind == "sink" || kind == "source" {
 		for k := range conn.Config {
-			if sinkBehaviorFields[k] {
+			if IsBehaviorField(kind, k) {
 				s.addConnectionDeprecation(fmt.Sprintf(
-					"connection %q (type %s) carries behavior field %q; move it into the pipeline sink config so the connection stays pure connection-scope and reusable. The field is still merged for backward compatibility.",
-					ref, conn.Type, k))
+					"connection %q (type %s) carries behavior field %q; move it into the pipeline %s config so the connection stays pure connection-scope and reusable. The field is still merged for backward compatibility.",
+					ref, conn.Type, k, kind))
 			}
 		}
 	}

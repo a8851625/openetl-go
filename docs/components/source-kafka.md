@@ -10,7 +10,7 @@ Consume Kafka or Redpanda topics as JSON/text records for realtime ETL.
 - `sasl_user`, `sasl_password`, `sasl_mechanism`, `tls`: auth and transport.
 
 ## Record Shape
-JSON messages become record `data`; raw/text messages can be carried through configured key/value fields.
+JSON messages become record `data`; raw/text messages can be carried through configured key/value fields. Kafka message keys are preserved as `record.metadata.key`, and `key_column` can additionally copy the key into `data` for downstream transforms.
 
 ## Checkpoint, DLQ, Idempotency
 Offsets are checkpointed after sink commit. Replaying offsets can duplicate append sinks; prefer deterministic keys or upsert sinks.

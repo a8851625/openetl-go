@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 
+## [v0.2.9] — 2026-07-13 — 多表映射同步、CDC 宽表链路、UI 场景入口、connection scope
+
+### 亮点
+- **多表 A→B 同步 + 表名映射**：
+  - 管道级 `table_mapping` 支持 `template` / `rules` / `regex`，模板变量含 `{source_table}`、`{source_db}`。
+  - 映射前保留 `_source_table` / `_source_database`。
+  - `mysql_cdc` / `mysql_snapshot_cdc` 写入 `Metadata.Database`，便于限定库表映射与 `cdc_policy` 过滤。
+  - snapshot checkpoint 在表映射后仍按源表名维护游标。
+  - 新增 e2e：`hack/e2e-multi-table-map.sh` + `testdata/pipes-multi-table-map/`。
+- **多表 binlog → 宽表**：
+  - 生产候选路径：`mysql_cdc` + `cdc_policy` + `lookup` + rename/type_convert → ClickHouse 宽表。
+  - 新增 e2e：`hack/e2e-mysql-cdc-wide.sh` + `testdata/pipes-mysql-cdc-wide/`。
+- **两个核心场景的 UI 产品化**：
+  - 向导新增推荐模板：多表库同步 + 表映射、CDC 宽表（lookup 补维）。
+  - 向导可编辑 `table_mapping`，生成普通 pipeline YAML。
+  - Connection Catalog / Wizard / DAG 表单按连接字段 vs 任务参数分流，文案更清晰。
+  - Designer 工具栏文字标签、空态文案、管道/连接/DLQ/审计/WASM 空状态增强。
+  - 修复 WASM Plugins 与 Workers 的 i18n 裸 key（中英文）。
+- **扩展与运维包装**：
+  - 官方飞书表格 source 插件样板：`web/plugin-sdk/examples/feishu-sheet-source/`（beta/dev-only）。
+  - 轻量运行形态文档与 smoke：`docs/runtime-modes.md`、`hack/e2e-runtime-smoke.sh`。
+  - descriptor/schema 字段 `scope` 标注，以及认证 kit 对插件样板的检查扩展。
+- **数仓 ETL 残留证据**（主线已有能力一并纳入本版面）：
+  - 关系型写入模式、生成列跳过、Debezium metadata PK、DAG 加载/DLQ 重放等相关 e2e 仍属发布面。
+
+### 发布边界
+- 默认交付语义仍是 **at-least-once**。生产链路请用 upsert、稳定业务键、版本列、ReplacingMergeTree 或显式去重吸收重放。
+- MaxCompute/ODPS 在无真实环境写入/DLQ/replay 证据前保持 experimental。
+- 内置 `feishu_sheet` 与飞书 WASM 插件样板在补真实环境故障注入前保持 beta/dev-only。
+- 复杂多事实实时 merge / Flink 级宽表语义仍不在范围内；已认证宽表路径是事实流 + 维表 lookup（+ 可选 tumbling 聚合）。
+
+### 验证
+- `go test ./internal/etl/server ./internal/etl/pipeline ./internal/etl/source ./internal/cmd -count=1`
+- `npm --prefix web run build`
+- `./hack/pack.sh`（UI 已构建时可用 `SKIP_UI=1`）
+- `bash hack/e2e-runtime-smoke.sh`
+- `E2E_SKIP_BUILD=1 bash hack/e2e-multi-table-map.sh`
+- `E2E_SKIP_BUILD=1 bash hack/e2e-mysql-cdc-wide.sh`
+- Playwright UI 抽查：Wizard 模板、table_mapping 面板、WASM/Workers 中文 i18n
+
 ## [v0.2.8] — 2026-07-06 — lookup query-mode 认证、Plugin ABI v1 生产边界、Doris/UI 收尾发布
 
 ### 亮点

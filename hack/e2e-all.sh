@@ -13,7 +13,11 @@ SKIP_UI=false
 TESTS=(
   "e2e.sh|file->file, MySQL batch->file, MySQL batch->MySQL"
   "e2e-mysql-postgres.sh|MySQL batch JOIN->PostgreSQL"
+  "e2e-relational-write-modes.sh|MySQL/PostgreSQL pre_write + MySQL increment/generated columns"
   "e2e-cdc-mysql.sh|MySQL CDC->MySQL"
+  "e2e-multi-table-map.sh|Multi-table snapshot+CDC map->MySQL"
+  "e2e-mysql-cdc-wide.sh|MySQL CDC multi-table->lookup wide ClickHouse"
+  "e2e-runtime-smoke.sh|CLI/runtime modes smoke"
   "e2e-cdc-postgres.sh|MySQL CDC->PostgreSQL"
   "e2e-postgres-cdc.sh|PostgreSQL CDC source->MySQL"
   "e2e-clickhouse.sh|MySQL CDC->ClickHouse"
@@ -41,7 +45,7 @@ TESTS=(
   "e2e-api-conflict.sh|Duplicate pipeline 409 conflict"
 )
 if [[ "$SKIP_UI" == false ]]; then
-  TESTS+=("e2e-ui.sh|UI Playwright (80 tests)")
+  TESTS+=("e2e-ui.sh|UI Playwright + DAG DLQ replay")
 fi
 
 PASS=0

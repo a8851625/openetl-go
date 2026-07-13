@@ -1,0 +1,34 @@
+# Example: Feishu sheet source plugin -> project/type_convert -> file_sink
+# Requires plugin install first so type plugin_feishu-sheet-source is registered.
+name: feishu-plugin-to-file
+schedule:
+  type: once
+batch_size: 100
+checkpoint_interval_sec: 30
+source:
+  type: plugin_feishu-sheet-source
+  config:
+    app_id: ${FEISHU_APP_ID:-demo-app}
+    app_secret: ${FEISHU_APP_SECRET:-demo-secret}
+    spreadsheet_token: ${FEISHU_SHEET_TOKEN:-demo-token}
+    sheet_range: "Sheet1!A1:D100"
+    # Fixture mode for offline validation without live Feishu:
+    fixture_rows:
+      - ["id", "name", "amount", "status"]
+      - ["1", "alpha", "10.5", "ok"]
+      - ["2", "beta", "20", "ok"]
+transforms:
+  - type: project
+    config:
+      fields: ["id", "name", "amount", "status"]
+  - type: type_convert
+    config:
+      conversions:
+        amount: float
+sink:
+  type: file_sink
+  config:
+    output_dir: /tmp/feishu-plugin-out
+    format: jsonl
+dlq:
+  enable: true

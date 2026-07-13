@@ -33,6 +33,7 @@ Plugin ABI v1 evidence:
 | WASM ABI | `openetl.plugin.abi/v1`, `openetl-runtime/v1`, required entrypoints per kind | `docs/plugin-abi-v1.md`, `internal/etl/plugin/pluginsystem/abi_test.go` |
 | Install API | explicit manifest is validated before WASM load; legacy uploads are marked `manifest_validated=false` | `internal/etl/server/plugin_contract_test.go` |
 | SDK | TypeScript SDK exports ABI constants, manifest types, and `definePluginManifest` | `web/plugin-sdk/src/index.ts`, `web/plugin-sdk/examples/vip-order-enricher.ts` |
+| Source plugin sample | Feishu sheet source plugin with offline compile + install docs | `web/plugin-sdk/examples/feishu-sheet-source/`, `TestFeishuSheetSourcePluginSampleCertification` |
 
 ## Running
 
@@ -41,7 +42,9 @@ Run the descriptor/doc certification checks:
 ```sh
 go test ./internal/etl/server -run TestConnectorCertificationKitProductionSet -count=1
 go test ./internal/etl/server -run TestPluginABIV1CertificationDocs -count=1
+go test ./internal/etl/server -run TestFeishuSheetSourcePluginSampleCertification -count=1
 ```
+
 
 Run the main behavioral evidence used by this kit:
 

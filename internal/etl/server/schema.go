@@ -22,14 +22,25 @@ type ConfigField struct {
 	Enum               []string  `json:"enum,omitempty"`
 	RequiresRedisState bool      `json:"requires_redis_state,omitempty"`
 	Unimplemented      bool      `json:"unimplemented,omitempty"`
+	// Scope is "connection" for Connection Catalog fields or "behavior" for
+	// pipeline endpoint runtime options. Empty means unset; descriptors annotate it.
+	Scope string `json:"scope,omitempty"`
 }
 
 func configSchema() map[string]any {
 	return map[string]any{
-		"sources":    sourceConfigSchemas(),
-		"sinks":      sinkConfigSchemas(),
-		"transforms": transformConfigSchemas(),
+		"sources":    annotateSchemaMap("source", sourceConfigSchemas()),
+		"sinks":      annotateSchemaMap("sink", sinkConfigSchemas()),
+		"transforms": annotateSchemaMap("transform", transformConfigSchemas()),
 	}
+}
+
+func annotateSchemaMap(kind string, in map[string][]ConfigField) map[string][]ConfigField {
+	out := make(map[string][]ConfigField, len(in))
+	for name, fields := range in {
+		out[name] = annotateFieldScopes(kind, fields)
+	}
+	return out
 }
 
 func sourceConfigSchemas() map[string][]ConfigField {

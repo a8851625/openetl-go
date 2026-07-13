@@ -491,7 +491,10 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                 <div className="p-8 text-center text-sm text-slate-400">Loading...</div>
               ) : plugins.length === 0 ? (
                 <div className="p-8">
-                  <div className="rounded-lg border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">{t('myplugin.noPlugins')}</div>
+                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-10 text-center">
+                    <div className="text-sm text-slate-500">{t('myplugin.noPlugins')}</div>
+                    <div className="mt-1 text-xs text-slate-400">{t('myplugin.emptyHint')}</div>
+                  </div>
                 </div>
               ) : (
                 <table className="tbl">

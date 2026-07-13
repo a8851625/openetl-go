@@ -60,6 +60,46 @@ dlq:
 | `parallelism` | no | Optional sharding and runtime concurrency. New specs should use `parallelism.sharding.logical_shards` for stable data ownership and `parallelism.execution.max_active_shards` for current process concurrency. Legacy `parallelism.count`, `shard_strategy`, `shard_key`, and `shard_total` are still accepted and mapped for compatibility. |
 | `retry` | no | Retry policy. Defaults shown above. |
 | `dlq.enable` | no | Enable file DLQ. |
+| `table_mapping` | no | Pipeline-level source→target table rename applied before transforms. Used for multi-table A→B sync. |
+
+### Table mapping (multi-table A→B)
+
+Pipeline-level `table_mapping` rewrites `record.metadata.table` before transforms and preserves the original name in `data._source_table` (and `data._source_database` when present). Leave `sink.config.table` empty so each mapped table routes dynamically.
+
+```yaml
+name: multi-table-map-to-mysql
+source:
+  type: mysql_snapshot_cdc
+  config:
+    database: src_db
+    tables: [customers, products]
+    pk_column: id
+table_mapping:
+  template: "ods_{source_table}"
+  # or:
+  # rules:
+  #   customers: ods_customers
+  #   products: ods_products
+  # regex:
+  #   - {pattern: "^(.*)$", replacement: "ods_$1"}
+sink:
+  type: mysql
+  config:
+    database: tgt_db
+    # table omitted → Metadata.Table after mapping
+    batch_mode: upsert
+    pk_columns: [id]
+    auto_create: true
+    schema_drift: add_columns
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `table_mapping.template` | no | Default target template when no rule matches. Supports `{source_table}`, `{source_db}`, `{table}`, `{db}`. |
+| `table_mapping.rules` | no | Glob map of source pattern → target (target may use the same template tokens). Prefers `db.table` keys when metadata.database is set. |
+| `table_mapping.regex` | no | List of `{pattern, replacement}` regex rewrites. |
+
+Evidence: `hack/e2e-multi-table-map.sh`, `hack/e2e-mysql-cdc-wide.sh`.
 
 ### Parallelism
 
@@ -119,6 +159,20 @@ sink:
 ```
 
 The saved connection supplies `kind`, `type`, and base `config`. The pipeline endpoint must use a connection with the matching kind (`source`, `sink`, or `transform`). Inline `config` wins over saved config, so shared credentials can live in the catalog while per-pipeline fields such as `table`, `topic`, or `query` remain in the spec.
+
+### Connection field scope
+
+Connection Catalog entries should store **connection-scope** fields only. Pipeline endpoints own **behavior-scope** fields.
+
+| Scope | Lives in | Typical fields |
+| --- | --- | --- |
+| `connection` | Connection Catalog | `host`, `port`, `user`, `password`, `database`, `brokers`, `endpoint`, `bucket`, `access_key`, `secret_key`, TLS/SASL credentials |
+| `behavior` | pipeline `source.config` / `sink.config` | `table`, `tables`, `topic`, `query`, `batch_mode`, `pk_columns`, `pre_write`, `schema_drift`, `ddl_policy`, `format`, `partition`, `increment_columns` |
+
+Descriptor and `/api/v2/plugins/schema` fields expose `scope: connection|behavior`. The UI Connection Catalog form filters to connection-scope fields; wizard/DAG forms show behavior-only fields when a saved connection is selected.
+
+Legacy connections that still store behavior fields continue to merge for one compatibility window, but `POST /api/v2/specs/validate` emits a deprecation warning asking operators to move those fields into the endpoint config.
+
 
 ### Post-Commit Trigger (dependency schedule)
 
@@ -445,8 +499,11 @@ sink:
 | `password` | no | | MySQL password (**secret**). |
 | `database` | yes | | Target database. |
 | `table` | yes | | Target table. |
-| `batch_mode` | no | `insert` | `insert` or `upsert`. |
+| `batch_mode` | no | `insert` | `insert`, `upsert`, or `increment`. |
 | `pk_columns` | no | `["id"]` | Primary key columns for upsert mode. |
+| `pk_columns_from_metadata` | no | `false` | Derive per-table primary key columns from `record.metadata.key` for Debezium multi-table CDC. |
+| `increment_columns` | no | | Target column -> source field map for additive `batch_mode: increment`. |
+| `pre_write` | no | | Pre-write action block: `delete`, `truncate`, or `truncate_partition` with optional `params`. |
 | `auto_create` | no | `false` | Auto-create table if missing. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
 | `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. |
@@ -613,8 +670,10 @@ sink:
 | `database` | yes | | Target database. |
 | `schema` | no | `public` | Target schema. |
 | `table` | yes | | Target table. |
-| `batch_mode` | no | `insert` | `insert` or `upsert` (`INSERT ... ON CONFLICT`). |
+| `batch_mode` | no | `insert` | `insert`, `upsert` (`INSERT ... ON CONFLICT`), or `increment`. |
 | `pk_columns` | no | `["id"]` | Primary key columns for upsert mode. |
+| `increment_columns` | no | | Target column -> source field map for additive `batch_mode: increment`. |
+| `pre_write` | no | | Pre-write action block: `delete`, `truncate`, or `truncate_partition` with optional `params`. |
 | `auto_create` | no | `false` | Auto-create table if missing. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
 | `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. |

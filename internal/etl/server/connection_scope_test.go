@@ -142,6 +142,35 @@ func TestConnectionBackwardCompatMergeStillWorks(t *testing.T) {
 	}
 }
 
+func TestFieldScopeAnnotationOnDescriptors(t *testing.T) {
+	var mysqlSink *ConnectorDescriptor
+	for i := range connectorDescriptors() {
+		d := connectorDescriptors()[i]
+		if d.Kind == "sink" && d.Type == "mysql" {
+			mysqlSink = &d
+			break
+		}
+	}
+	if mysqlSink == nil {
+		t.Fatal("mysql sink descriptor missing")
+	}
+	var hostScope, batchScope string
+	for _, f := range mysqlSink.Fields {
+		switch f.Name {
+		case "host":
+			hostScope = f.Scope
+		case "batch_mode":
+			batchScope = f.Scope
+		}
+	}
+	if hostScope != FieldScopeConnection {
+		t.Fatalf("host scope = %q, want connection", hostScope)
+	}
+	if batchScope != FieldScopeBehavior {
+		t.Fatalf("batch_mode scope = %q, want behavior", batchScope)
+	}
+}
+
 // containsStr is a small helper to avoid importing strings just for one call.
 func containsStr(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || indexOf(s, sub) >= 0)

@@ -917,8 +917,8 @@ func TestRunPreflightReportsSinkReachabilityWarning(t *testing.T) {
 	if !preflightGuidanceContain(result, "delivery-at-least-once") {
 		t.Fatalf("guidance = %#v, want delivery-at-least-once", result.Guidance)
 	}
-	if !preflightGuidanceContain(result, "dlq-linear-replay") {
-		t.Fatalf("guidance = %#v, want dlq-linear-replay", result.Guidance)
+	if !preflightGuidanceContain(result, "dlq-replay") {
+		t.Fatalf("guidance = %#v, want dlq-replay", result.Guidance)
 	}
 }
 

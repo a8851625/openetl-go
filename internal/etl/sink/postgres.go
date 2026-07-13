@@ -25,26 +25,26 @@ func init() {
 }
 
 type PostgresSink struct {
-	name            string
-	host            string
-	port            int
-	user            string
-	password        string
-	database        string
-	table           string
-	schema          string
-	sslmode         string
-	pkColumns       []string
-	batchMode       string
+	name             string
+	host             string
+	port             int
+	user             string
+	password         string
+	database         string
+	table            string
+	schema           string
+	sslmode          string
+	pkColumns        []string
+	batchMode        string
 	incrementColumns map[string]string
-	pool            *pgxpool.Pool
-	insertChunkSize int
-	autoCreate      bool
-	schemaDrift     string
-	ddLPolicy       DDLPolicy
-	schemaCache     *core.SchemaCache
-	preWrite        *PreWriteConfig
-	sinkCounters    // P4-20: per-sink write metrics (SK-4)
+	pool             *pgxpool.Pool
+	insertChunkSize  int
+	autoCreate       bool
+	schemaDrift      string
+	ddLPolicy        DDLPolicy
+	schemaCache      *core.SchemaCache
+	preWrite         *PreWriteConfig
+	sinkCounters     // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
@@ -188,6 +188,7 @@ func (s *PostgresSink) ValidateSchema(ctx context.Context, schema core.SchemaInf
 }
 
 func (s *PostgresSink) Open(ctx context.Context) error {
+	s.preWrite.ResetExecution()
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		s.user, s.password, s.host, s.port, s.database, s.sslmode)
 	cfg, err := pgxpool.ParseConfig(dsn)

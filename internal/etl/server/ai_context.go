@@ -109,7 +109,7 @@ func buildAIContextPack() AIContextPack {
 			"A linear pipeline uses source, optional transforms, and sink.",
 			"DAG must still express ordinary source/transform/sink nodes and edges; do not invent a separate runtime path.",
 			"Schedule type must be supported by the selected source descriptor. Streaming sources normally use streaming schedules.",
-			"DLQ replay is supported for linear pipelines; DAG DLQ replay is intentionally unsupported until node-level replay is implemented.",
+			"DLQ replay is supported for linear pipelines and DAG DLQ records that include dag_node context; legacy DAG DLQ records without node context must be recovered manually.",
 		},
 		CommonErrors: []string{
 			"Missing required connector fields or secret values.",

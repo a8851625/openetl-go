@@ -159,12 +159,15 @@ type WorkerSelector struct {
 }
 
 // TableMapping defines source-to-target table name mapping rules.
-// Supports glob patterns like "order_*" -> "orders" or regex replacement.
+// Supports glob patterns like "order_*" -> "orders", regex replacement,
+// and a default template such as "ods_{source_table}" or "ods_{source_db}__{source_table}".
 type TableMapping struct {
-	// Rules: source_pattern -> target_table
+	// Rules: source_pattern -> target_table (glob; target may use {source_table}/{source_db})
 	Rules map[string]string `yaml:"rules,omitempty" json:"rules,omitempty"`
 	// RegexPatterns: [{"pattern": "...", "replacement": "..."}]
 	RegexPatterns []TableRegexPattern `yaml:"regex,omitempty" json:"regex,omitempty"`
+	// Template is applied when no rule/regex matches. Supports {source_table} and {source_db}.
+	Template string `yaml:"template,omitempty" json:"template,omitempty"`
 }
 
 type TableRegexPattern struct {
@@ -356,12 +359,30 @@ func (p *ParallelismConfig) Key() string {
 }
 
 // MapTable resolves a source table name to its target table name.
+// sourceDB is optional and used for {source_db} templates and "db.table" rule keys.
 // Returns the original name if no mapping matches.
 func (tm *TableMapping) MapTable(sourceTable string) string {
-	// Check exact glob rules first
+	return tm.MapTableWithDB("", sourceTable)
+}
+
+// MapTableWithDB resolves mapping using optional source database metadata.
+func (tm *TableMapping) MapTableWithDB(sourceDB, sourceTable string) string {
+	if tm == nil || sourceTable == "" {
+		return sourceTable
+	}
+	qualified := sourceTable
+	if sourceDB != "" {
+		qualified = sourceDB + "." + sourceTable
+	}
+	// Check exact/glob rules first (prefer db.table keys when database is known).
+	for pattern, target := range tm.Rules {
+		if sourceDB != "" && matchGlob(pattern, qualified) {
+			return expandTableTemplate(target, sourceDB, sourceTable)
+		}
+	}
 	for pattern, target := range tm.Rules {
 		if matchGlob(pattern, sourceTable) {
-			return target
+			return expandTableTemplate(target, sourceDB, sourceTable)
 		}
 	}
 	// Check regex patterns
@@ -371,10 +392,25 @@ func (tm *TableMapping) MapTable(sourceTable string) string {
 			continue
 		}
 		if re.MatchString(sourceTable) {
-			return re.ReplaceAllString(sourceTable, rp.Replacement)
+			return expandTableTemplate(re.ReplaceAllString(sourceTable, rp.Replacement), sourceDB, sourceTable)
+		}
+		if sourceDB != "" && re.MatchString(qualified) {
+			return expandTableTemplate(re.ReplaceAllString(qualified, rp.Replacement), sourceDB, sourceTable)
 		}
 	}
+	if strings.TrimSpace(tm.Template) != "" {
+		return expandTableTemplate(tm.Template, sourceDB, sourceTable)
+	}
 	return sourceTable
+}
+
+func expandTableTemplate(tpl, sourceDB, sourceTable string) string {
+	out := tpl
+	out = strings.ReplaceAll(out, "{source_table}", sourceTable)
+	out = strings.ReplaceAll(out, "{source_db}", sourceDB)
+	out = strings.ReplaceAll(out, "{table}", sourceTable)
+	out = strings.ReplaceAll(out, "{db}", sourceDB)
+	return out
 }
 
 func matchGlob(pattern, name string) bool {
@@ -856,16 +892,16 @@ func preWriteWarnings(spec *Spec) []string {
 	case "delete":
 		cond, _ := m["condition"].(string)
 		return []string{fmt.Sprintf(
-			"pre_write will DELETE FROM %s WHERE %s before each batch; checkpoint reset replays the delete+rewrite (idempotent for batch, not for CDC)",
+			"pre_write will DELETE FROM %s WHERE %s once per pipeline start; checkpoint reset replays the delete+rewrite (idempotent for batch, not for CDC)",
 			tableName, cond)}
 	case "truncate":
 		return []string{fmt.Sprintf(
-			"pre_write will TRUNCATE TABLE %s before each batch; checkpoint reset replays the truncate+rewrite (idempotent for batch, not for CDC)",
+			"pre_write will TRUNCATE TABLE %s once per pipeline start; checkpoint reset replays the truncate+rewrite (idempotent for batch, not for CDC)",
 			tableName)}
 	case "truncate_partition":
 		cond, _ := m["condition"].(string)
 		return []string{fmt.Sprintf(
-			"pre_write will DELETE the target partition of %s (WHERE %s) before each batch; checkpoint reset replays the delete+rewrite (idempotent for batch, not for CDC)",
+			"pre_write will DELETE the target partition of %s (WHERE %s) once per pipeline start; checkpoint reset replays the delete+rewrite (idempotent for batch, not for CDC)",
 			tableName, cond)}
 	}
 	return nil

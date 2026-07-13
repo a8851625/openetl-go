@@ -1,0 +1,49 @@
+name: multi-table-map-to-mysql
+tags: [multi-table, table-mapping, production-candidate]
+
+# Scenario 1: A-library multi-table snapshot+CDC -> B-library with table name mapping.
+source:
+  type: mysql_snapshot_cdc
+  config:
+    host: host.docker.internal
+    port: 13306
+    user: sync_user
+    password: sync_password_123
+    database: dzh3136_go
+    tables:
+      - customers
+      - products
+    pk_column: id
+    limit: 100
+    server_id: 1511
+
+table_mapping:
+  template: "ods_{source_table}"
+
+sink:
+  type: mysql
+  config:
+    host: host.docker.internal
+    port: 13306
+    user: sync_user
+    password: sync_password_123
+    database: dzh3136_target
+    # table omitted: Metadata.Table (after mapping) routes each source table
+    batch_mode: upsert
+    pk_columns:
+      - id
+    auto_create: true
+    schema_drift: add_columns
+    ddl_policy: ignore
+
+batch_size: 50
+checkpoint_interval_sec: 1
+backpressure_buffer: 50
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

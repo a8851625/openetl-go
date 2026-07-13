@@ -62,7 +62,7 @@ func TestMySQLBuildBatchInsertSQL(t *testing.T) {
 
 func TestMySQLBuildBatchDeleteSQL(t *testing.T) {
 	s := &MySQLSink{name: "mysql", table: "users", pkColumns: []string{"id"}, insertChunkSize: 500}
-	stmt := s.buildBatchDeleteStatement("users", 5)
+	stmt := s.buildBatchDeleteStatement("users", s.pkColumns, 5)
 	if !contains(stmt, "DELETE FROM") {
 		t.Errorf("not a DELETE: %s", stmt)
 	}

@@ -103,3 +103,14 @@ func TestPreWriteExpandParams(t *testing.T) {
 		t.Fatalf("expanded=%q", expanded)
 	}
 }
+
+func TestPreWriteResetExecution(t *testing.T) {
+	cfg, _ := ParsePreWriteConfig(map[string]any{
+		"pre_write": map[string]any{"action": "delete", "condition": "dt='x'"},
+	})
+	cfg.executed = true
+	cfg.ResetExecution()
+	if cfg.executed {
+		t.Fatalf("ResetExecution did not clear executed flag")
+	}
+}

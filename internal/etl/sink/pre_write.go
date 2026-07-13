@@ -15,10 +15,11 @@ import (
 //   - "truncate":          execute `TRUNCATE TABLE <table>`
 //   - "truncate_partition": execute a partition-scoped truncate/DELETE
 //
-// pre_write runs once per Write() batch, inside the same transaction and
-// BEFORE any data-row insert/upsert/delete. A pre_write failure is classified
-// as a data-class error and surfaces to DLQ/retry like any other sink error;
-// it does NOT silently skip the batch.
+// pre_write runs on the first Write() of each pipeline start, inside the same
+// transaction and BEFORE any data-row insert/upsert/delete. The once-per-start
+// guard prevents later batches from deleting rows inserted by earlier batches.
+// A pre_write failure is classified as a data-class error and surfaces to
+// DLQ/retry like any other sink error; it does NOT silently skip the batch.
 type PreWriteAction string
 
 const (
@@ -29,11 +30,11 @@ const (
 
 // PreWriteConfig captures a declarative pre-write action.
 type PreWriteConfig struct {
-	Action     PreWriteAction        `yaml:"action" json:"action"`
-	Condition  string                `yaml:"condition,omitempty" json:"condition,omitempty"`
-	Params     map[string]any        `yaml:"params,omitempty" json:"params,omitempty"`
-	enabled    bool                  `yaml:"-" json:"-"`
-	executed   bool                  `yaml:"-" json:"-"`
+	Action    PreWriteAction `yaml:"action" json:"action"`
+	Condition string         `yaml:"condition,omitempty" json:"condition,omitempty"`
+	Params    map[string]any `yaml:"params,omitempty" json:"params,omitempty"`
+	enabled   bool           `yaml:"-" json:"-"`
+	executed  bool           `yaml:"-" json:"-"`
 }
 
 // ParsePreWriteConfig extracts an optional `pre_write` block from sink config.
@@ -75,6 +76,15 @@ func ParsePreWriteConfig(config map[string]any) (*PreWriteConfig, error) {
 
 // Enabled reports whether pre_write is configured.
 func (p *PreWriteConfig) Enabled() bool { return p != nil && p.enabled }
+
+// ResetExecution allows a reused sink instance to run pre_write again on the
+// next pipeline start. The action is still guarded to run once per start so a
+// multi-batch rewrite does not delete rows inserted by earlier batches.
+func (p *PreWriteConfig) ResetExecution() {
+	if p != nil {
+		p.executed = false
+	}
+}
 
 // expandParams resolves ${PROCESSING_DATE} and ${params.xxx} placeholders in
 // the condition string. Unknown placeholders are left untouched so that a
@@ -135,11 +145,11 @@ func (p *PreWriteConfig) DescribeForWarning(table string) string {
 	}
 	switch p.Action {
 	case PreWriteDelete:
-		return fmt.Sprintf("pre_write will DELETE FROM %s WHERE %s before each batch; checkpoint reset replays the delete+rewrite", table, p.Condition)
+		return fmt.Sprintf("pre_write will DELETE FROM %s WHERE %s once per pipeline start; checkpoint reset replays the delete+rewrite", table, p.Condition)
 	case PreWriteTruncate:
-		return fmt.Sprintf("pre_write will TRUNCATE TABLE %s before each batch; checkpoint reset replays the truncate+rewrite", table)
+		return fmt.Sprintf("pre_write will TRUNCATE TABLE %s once per pipeline start; checkpoint reset replays the truncate+rewrite", table)
 	case PreWriteTruncatePartition:
-		return fmt.Sprintf("pre_write will DELETE the target partition of %s (WHERE %s) before each batch; checkpoint reset replays the delete+rewrite", table, p.Condition)
+		return fmt.Sprintf("pre_write will DELETE the target partition of %s (WHERE %s) once per pipeline start; checkpoint reset replays the delete+rewrite", table, p.Condition)
 	}
 	return ""
 }

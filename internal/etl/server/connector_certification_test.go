@@ -112,16 +112,71 @@ func TestPluginABIV1CertificationDocs(t *testing.T) {
 	}
 
 	certDoc := readCertificationDoc(t, repoRoot, "docs/connector-certification.md")
-	for _, want := range []string{"Plugin ABI v1 evidence", "Rules For Production Plugins", "TestPluginABIV1CertificationDocs"} {
+	for _, want := range []string{"Plugin ABI v1 evidence", "Rules For Production Plugins", "TestPluginABIV1CertificationDocs", "feishu-sheet-source"} {
 		if !strings.Contains(certDoc, want) {
 			t.Fatalf("docs/connector-certification.md missing %q", want)
 		}
 	}
 
 	sdkBody := readCertificationDoc(t, repoRoot, "web/plugin-sdk/src/index.ts")
-	for _, want := range []string{"OPENETL_PLUGIN_ABI", "OPENETL_MIN_RUNTIME_VERSION", "definePluginManifest"} {
+	for _, want := range []string{"OPENETL_PLUGIN_ABI", "OPENETL_MIN_RUNTIME_VERSION", "definePluginManifest", "createExtismSourcePlugin"} {
 		if !strings.Contains(sdkBody, want) {
 			t.Fatalf("web/plugin-sdk/src/index.ts missing %q", want)
+		}
+	}
+}
+
+func TestFeishuSheetSourcePluginSampleCertification(t *testing.T) {
+	repoRoot := filepath.Clean("../../..")
+	files := []string{
+		"web/plugin-sdk/examples/feishu-sheet-source/feishu-sheet-source.ts",
+		"web/plugin-sdk/examples/feishu-sheet-source/manifest.json",
+		"web/plugin-sdk/examples/feishu-sheet-source/README.md",
+		"web/plugin-sdk/examples/feishu-sheet-source/pipeline.example.yaml",
+		"web/plugin-sdk/examples/feishu-sheet-source/fixture.test.ts",
+	}
+	for _, path := range files {
+		if _, err := os.Stat(filepath.Join(repoRoot, path)); err != nil {
+			t.Fatalf("plugin sample missing %s: %v", path, err)
+		}
+	}
+
+	manifestBody := readCertificationDoc(t, repoRoot, "web/plugin-sdk/examples/feishu-sheet-source/manifest.json")
+	for _, want := range []string{
+		pluginsystem.ABIVersionV1,
+		pluginsystem.MinRuntimeVersionV1,
+		`"kind": "source"`,
+		`"read"`,
+		"app_id",
+		"app_secret",
+		"spreadsheet_token",
+		"sheet_range",
+		"base_url",
+		`"secret": true`,
+	} {
+		if !strings.Contains(manifestBody, want) {
+			t.Fatalf("feishu-sheet-source manifest missing %q", want)
+		}
+	}
+
+	sourceBody := readCertificationDoc(t, repoRoot, "web/plugin-sdk/examples/feishu-sheet-source/feishu-sheet-source.ts")
+	for _, want := range []string{"createExtismSourcePlugin", "definePluginManifest", "export const read", "tenant_access_token", "value_range"} {
+		if !strings.Contains(sourceBody, want) {
+			t.Fatalf("feishu-sheet-source.ts missing %q", want)
+		}
+	}
+
+	readme := readCertificationDoc(t, repoRoot, "web/plugin-sdk/examples/feishu-sheet-source/README.md")
+	for _, want := range []string{"extism-js", "/api/v2/plugins/install", "plugin_feishu-sheet-source", "beta", "dev-only"} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("feishu-sheet-source README missing %q", want)
+		}
+	}
+
+	pipeline := readCertificationDoc(t, repoRoot, "web/plugin-sdk/examples/feishu-sheet-source/pipeline.example.yaml")
+	for _, want := range []string{"plugin_feishu-sheet-source", "project", "type_convert", "file_sink"} {
+		if !strings.Contains(pipeline, want) {
+			t.Fatalf("pipeline.example.yaml missing %q", want)
 		}
 	}
 }

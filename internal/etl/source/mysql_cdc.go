@@ -451,6 +451,8 @@ func (h *mysqlCDCHandler) OnRow(e *canal.RowsEvent) error {
 		row := e.Rows[i]
 		rec := core.Record{
 			Metadata: core.Metadata{
+				Source:     h.reader.source.name,
+				Database:   h.reader.source.database,
 				Table:      tableName,
 				Timestamp:  now,
 				BinlogFile: file,
@@ -540,6 +542,8 @@ func (h *mysqlCDCHandler) OnDDL(header *replication.EventHeader, p mysql.Positio
 	rec := core.Record{
 		Operation: core.OpDDL,
 		Metadata: core.Metadata{
+			Source:     h.reader.source.name,
+			Database:   h.reader.source.database,
 			Table:      extractDDLTable(ddl),
 			Timestamp:  time.Now(),
 			BinlogFile: p.Name,

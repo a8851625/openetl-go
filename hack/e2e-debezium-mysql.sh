@@ -8,16 +8,20 @@ cd "$ROOT_DIR"
 . "$ROOT_DIR/hack/container-cli.sh"
 detect_container_cli
 
-IMAGE="openetl-go-etl:dev"
+IMAGE="${IMAGE:-openetl-go-etl:dev}"
 REDPANDA_CONTAINER="etl-redpanda"
 MYSQL_CONTAINER="etl-mysql-source"
 APP_CONTAINER="etl-openetl-go-debezium-mysql"
 DDL_REJECT_APP_CONTAINER="etl-openetl-go-debezium-ddl-reject"
 TOPIC="debezium.dl_vls_dev.vehicle_charge"
 DDL_REJECT_TOPIC="debezium.dl_vls_dev.vehicle_charge_ddl_reject"
+PK_TOPIC="debezium.dl_vls_dev.pk_metadata"
 TARGET_TABLE="ods_dl_vls_dev__vehicle_charge"
+PK_ORDER_TABLE="ods_pk_vehicle_order"
+PK_TRIP_TABLE="ods_pk_vehicle_trip"
 GROUP_ID="debezium-mysql-e2e-$(date +%s)"
 DDL_REJECT_GROUP_ID="debezium-ddl-reject-e2e-$(date +%s)"
+PK_METADATA_GROUP_ID="debezium-pk-metadata-e2e-$(date +%s)"
 
 wait_http() {
   url="$1"
@@ -57,11 +61,34 @@ done
 "$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
 
 echo "==> Prepare Kafka topic"
-"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic delete "$TOPIC" "$DDL_REJECT_TOPIC" --brokers localhost:9092 >/dev/null 2>&1 || true
-"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic create "$TOPIC" "$DDL_REJECT_TOPIC" --brokers localhost:9092 >/dev/null
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic delete "$TOPIC" "$DDL_REJECT_TOPIC" "$PK_TOPIC" --brokers localhost:9092 >/dev/null 2>&1 || true
+"$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic create "$TOPIC" "$DDL_REJECT_TOPIC" "$PK_TOPIC" --brokers localhost:9092 >/dev/null
 
 echo "==> Prepare MySQL target"
-"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "SET GLOBAL innodb_lock_wait_timeout=1; CREATE DATABASE IF NOT EXISTS dzh3136_target; DROP TABLE IF EXISTS dzh3136_target.$TARGET_TABLE; DROP TABLE IF EXISTS dzh3136_target.ods_dl_vls_dev__vehicle_charge_debug; GRANT ALL PRIVILEGES ON dzh3136_target.* TO 'sync_user'@'%'; FLUSH PRIVILEGES;"
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
+SET GLOBAL innodb_lock_wait_timeout=1;
+CREATE DATABASE IF NOT EXISTS dzh3136_target;
+DROP TABLE IF EXISTS dzh3136_target.$TARGET_TABLE;
+DROP TABLE IF EXISTS dzh3136_target.ods_dl_vls_dev__vehicle_charge_debug;
+DROP TABLE IF EXISTS dzh3136_target.$PK_ORDER_TABLE;
+DROP TABLE IF EXISTS dzh3136_target.$PK_TRIP_TABLE;
+CREATE TABLE dzh3136_target.$PK_ORDER_TABLE (
+  order_id BIGINT PRIMARY KEY,
+  vin VARCHAR(64) NOT NULL,
+  amount INT NOT NULL
+);
+CREATE TABLE dzh3136_target.$PK_TRIP_TABLE (
+  tenant_id VARCHAR(32) NOT NULL,
+  seq INT NOT NULL,
+  vin VARCHAR(64) NOT NULL,
+  miles INT NOT NULL,
+  PRIMARY KEY (tenant_id, seq)
+);
+INSERT INTO dzh3136_target.$PK_ORDER_TABLE (order_id, vin, amount) VALUES (8101, 'VIN-PK-ORDER', 10);
+INSERT INTO dzh3136_target.$PK_TRIP_TABLE (tenant_id, seq, vin, miles) VALUES ('fleet-a', 7, 'VIN-PK-TRIP', 12);
+GRANT ALL PRIVILEGES ON dzh3136_target.* TO 'sync_user'@'%';
+FLUSH PRIVILEGES;
+"
 
 echo "==> Reset ETL data"
 rm -rf data-debezium-mysql data-debezium-ddl-reject
@@ -76,6 +103,7 @@ echo "==> Run Debezium Kafka -> MySQL pipeline"
   --name "$APP_CONTAINER" \
   -p 8017:8001 \
   -e DEBEZIUM_MYSQL_GROUP_ID="$GROUP_ID" \
+  -e DEBEZIUM_PK_METADATA_GROUP_ID="$PK_METADATA_GROUP_ID" \
   -v "$ROOT_DIR/testdata/pipes-debezium-mysql:/app/pipes:ro" \
   -v "$ROOT_DIR/testdata:/app/testdata:ro" \
   -v "$ROOT_DIR/data-debezium-mysql:/app/data" \
@@ -88,7 +116,8 @@ echo "==> Wait pipeline running"
 i=0
 while [ "$i" -lt 60 ]; do
   body="$(curl -fsS http://127.0.0.1:8017/api/v2/pipelines)"
-  echo "$body" | grep '"name":"debezium-kafka-to-mysql"' | grep '"status":"running"' >/dev/null 2>&1 && break
+  echo "$body" | grep '"name":"debezium-kafka-to-mysql"' | grep '"status":"running"' >/dev/null 2>&1 && \
+    echo "$body" | grep '"name":"debezium-pk-metadata-to-mysql"' | grep '"status":"running"' >/dev/null 2>&1 && break
   i=$((i + 1)); sleep 1
 done
 
@@ -228,6 +257,25 @@ echo "$replay" | grep '"replayed":1'
 dlq_replayed_rows="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.$TARGET_TABLE WHERE id=9004 AND vin='VIN-DLQ' AND soc=999;" | tr -d '[:space:]')"
 test "$dlq_replayed_rows" = "1"
 body="$(curl -fsS http://127.0.0.1:8017/api/v2/dlq/debezium-kafka-to-mysql?contains=VIN-DLQ)"
+echo "$body"
+echo "$body" | grep '"items":\[\]'
+
+echo "==> Validate multi-table Debezium key -> metadata PK delete inference"
+cat <<'JSON' | "$CONTAINER_CLI" exec -i "$REDPANDA_CONTAINER" rpk topic produce "$PK_TOPIC" --brokers localhost:9092 -f '%k %v{json}\n' >/dev/null
+{"order_id":8101} {"payload":{"op":"d","ts_ms":1710000011123,"source":{"db":"dl_vls_dev","table":"vehicle_order"},"before":{"order_id":8101,"vin":"VIN-PK-ORDER","amount":10},"after":null}}
+{"tenant_id":"fleet-a","seq":7} {"payload":{"op":"d","ts_ms":1710000012123,"source":{"db":"dl_vls_dev","table":"vehicle_trip"},"before":{"tenant_id":"fleet-a","seq":7,"vin":"VIN-PK-TRIP","miles":12},"after":null}}
+JSON
+
+i=0
+while [ "$i" -lt 90 ]; do
+  pk_order_rows="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.$PK_ORDER_TABLE WHERE order_id=8101;" 2>/dev/null | tr -d '[:space:]' || true)"
+  pk_trip_rows="$("$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -N -usync_user -psync_password_123 -e "SELECT COUNT(*) FROM dzh3136_target.$PK_TRIP_TABLE WHERE tenant_id='fleet-a' AND seq=7;" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ "$pk_order_rows" = "0" ] && [ "$pk_trip_rows" = "0" ]; then break; fi
+  i=$((i + 1)); sleep 1
+done
+test "$pk_order_rows" = "0"
+test "$pk_trip_rows" = "0"
+body="$(curl -fsS http://127.0.0.1:8017/api/v2/dlq/debezium-pk-metadata-to-mysql?limit=10)"
 echo "$body"
 echo "$body" | grep '"items":\[\]'
 

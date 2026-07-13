@@ -264,6 +264,9 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 			if h.reader.source.keyColumn != "" && msg.Key != nil {
 				data[h.reader.source.keyColumn] = string(msg.Key)
 			}
+			if msg.Key != nil {
+				rec.Metadata.Key = string(msg.Key)
+			}
 
 			switch {
 			case h.reader.source.format == "json" && h.reader.source.valueColumn == "":
