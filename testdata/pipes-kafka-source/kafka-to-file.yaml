@@ -1,4 +1,7 @@
 name: "kafka-to-file"
+# This certification path intentionally exercises Kafka offset replay into a
+# file sink and verifies the documented deterministic-batch duplicate boundary.
+allow_unsafe: true
 source:
   type: kafka
   config:

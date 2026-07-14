@@ -4,6 +4,42 @@
 
 ## [Unreleased]
 
+## [v0.2.10-beta.1] — 2026-07-14 — Reliability certification and real WASM plugin path
+
+### P1: Reliability certification closure
+
+- Unified linear pipeline and DAG checkpoint envelopes around source position, StateStore snapshot versions, and sink acknowledgement metadata while retaining at-least-once delivery rather than cross-system transactions.
+- Made checkpoint advancement fail closed: DLQ persistence, state snapshot collection, sink acknowledgement metadata collection, or checkpoint storage failures no longer silently advance the source position.
+- Fixed Kafka offset `0` being skipped by zero-value checkpoint checks.
+- Fixed the final sink-acknowledged batch remaining uncheckpointed after interval throttling when traffic becomes idle; pending boundaries are now flushed by a timer and on Stop/EOF.
+- Made `allow_unsafe` an executable spec field. Kafka/CDC to file/S3 remains blocked by default and requires an explicit opt-in limited to paths whose replay-duplicate boundary has been tested and documented.
+- Added the [reliability certification matrix](docs/reliability-certification.md) and expanded Kafka/wide-table coverage for process crashes, broker restarts, consumer group rebalances, offset replay, state restoration, and sink acknowledgement envelopes.
+
+### P2: Real WASM plugin end-to-end path
+
+- Added a real TypeScript transform fixture and `hack/e2e-wasm-plugin.sh` covering real WASM compilation, ABI v1 manifest installation, 0/1/N outputs, secret configuration, DLQ routing, replay after upgrade, and restart reload.
+- Added a compiler image with architecture checksum validation and pinned esbuild 0.25.6, Extism JS PDK 1.6.0, and Binaryen 130, including build-time checks for `wasm-merge` and `wasm-opt`.
+- Updated the Extism JS SDK bridge to current `Host`, `Config`, and `Var` globals, with WASI, per-call configuration updates, state bridging, and concurrency-safe install/unload/exec behavior.
+- Fixed the server-side transform-only compilation path and public docs: TypeScript is bundled to CommonJS by esbuild before the current `extism-js input.js -i interface.d.ts -o output.wasm` CLI is invoked; source and sink plugins remain offline-compile/install flows.
+- Added static certification gates for real WASM fixtures, manifests, and compiler inputs. Third-party plugins without independent fault/replay evidence remain beta/dev-only.
+
+### Release Boundary
+
+- Default delivery semantics remain **at-least-once**; this release does not provide cross-system exactly-once transactions. Production pipelines should use stable business keys, versions, upserts, ReplacingMergeTree-style sinks, or explicit deduplication to absorb replay.
+- MaxCompute/ODPS remains experimental and externally blocked until SDK-backed writes, real permission/table checks, and DLQ/retry end-to-end evidence are available.
+- Uncertified third-party plugins and Feishu plugin samples remain beta/dev-only until they have real-environment fault injection and replay evidence.
+
+### Validation
+
+- `go test ./... -count=1`
+- `go test -tags=extism ./internal/etl/plugin/pluginsystem ./internal/etl/server -count=1`
+- `npm --prefix web/plugin-sdk run build`
+- `npm --prefix web run build`
+- `./hack/e2e-kafka.sh`
+- `E2E_SKIP_BUILD=1 ./hack/e2e-wide-table.sh`
+- `E2E_SKIP_BUILD=1 ./hack/e2e-lookup-state.sh`
+- `./hack/e2e-wasm-plugin.sh`
+
 ## [v0.2.9] — 2026-07-13 — Multi-table mapping sync, CDC wide-table path, UI scenario entry, connection scope
 
 ### Highlights

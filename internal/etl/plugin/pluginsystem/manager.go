@@ -29,6 +29,7 @@ type loadedPlugin struct {
 	meta   *PluginMeta
 	extism *extism.Plugin
 	hctx   *HostFunctionContext
+	callMu sync.Mutex
 }
 
 // NewManager creates a new plugin manager.
@@ -109,7 +110,9 @@ func (m *Manager) loadPlugin(ctx context.Context, entry *storage.PluginEntry) er
 	}
 
 	config := extism.PluginConfig{
-		EnableWasi: false,
+		// extism-js embeds a QuickJS runtime that requires WASI. No filesystem
+		// preopens or allowed network hosts are granted by this manifest.
+		EnableWasi: true,
 	}
 
 	// Build host functions for this plugin.
@@ -127,12 +130,18 @@ func (m *Manager) loadPlugin(ctx context.Context, entry *storage.PluginEntry) er
 	}
 
 	m.mu.Lock()
+	previous := m.plugins[entry.Name]
 	m.plugins[entry.Name] = &loadedPlugin{
 		meta:   meta,
 		extism: extismPlugin,
 		hctx:   hctx,
 	}
 	m.mu.Unlock()
+	if previous != nil {
+		previous.callMu.Lock()
+		previous.extism.Close(ctx)
+		previous.callMu.Unlock()
+	}
 	return nil
 }
 
@@ -200,11 +209,14 @@ func (m *Manager) loadFromStorage(ctx context.Context) {
 // Uninstall removes a plugin from storage and memory.
 func (m *Manager) Uninstall(ctx context.Context, name string) error {
 	m.mu.Lock()
-	if lp, ok := m.plugins[name]; ok {
-		lp.extism.Close(ctx)
-		delete(m.plugins, name)
-	}
+	lp := m.plugins[name]
+	delete(m.plugins, name)
 	m.mu.Unlock()
+	if lp != nil {
+		lp.callMu.Lock()
+		lp.extism.Close(ctx)
+		lp.callMu.Unlock()
+	}
 
 	if err := m.store.DeletePlugin(ctx, name); err != nil {
 		return fmt.Errorf("delete plugin from storage: %w", err)
@@ -267,6 +279,13 @@ func (m *Manager) ExecTransformRecords(ctx context.Context, pluginName string, r
 	if !ok {
 		return nil, fmt.Errorf("plugin %s not found", pluginName)
 	}
+	lp.callMu.Lock()
+	defer lp.callMu.Unlock()
+	setPluginConfigLocked(lp, nil)
+	return execTransformRecordsLocked(ctx, pluginName, lp, rec)
+}
+
+func execTransformRecordsLocked(ctx context.Context, pluginName string, lp *loadedPlugin, rec core.Record) ([]core.Record, error) {
 
 	input, err := json.Marshal(rec)
 	if err != nil {
@@ -312,17 +331,36 @@ func (m *Manager) ExecTransformRecordsWithConfig(ctx context.Context, pluginName
 	if !ok {
 		return nil, fmt.Errorf("plugin %s not found", pluginName)
 	}
+	lp.callMu.Lock()
+	defer lp.callMu.Unlock()
+	setPluginConfigLocked(lp, config)
+	return execTransformRecordsLocked(ctx, pluginName, lp, rec)
+}
 
-	// Update config on the host function context.
-	if config != nil && lp.hctx != nil {
+func setPluginConfigLocked(lp *loadedPlugin, config map[string]any) {
+	if lp.extism.Config == nil {
+		lp.extism.Config = map[string]string{}
+	}
+	for key := range lp.extism.Config {
+		delete(lp.extism.Config, key)
+	}
+	if lp.hctx != nil {
 		lp.hctx.mu.Lock()
-		for k, v := range config {
-			lp.hctx.Config[k] = v
-		}
+		lp.hctx.Config = make(map[string]any, len(config))
 		lp.hctx.mu.Unlock()
 	}
-
-	return m.ExecTransformRecords(ctx, pluginName, rec)
+	for key, value := range config {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			raw = []byte(fmt.Sprintf("%v", value))
+		}
+		lp.extism.Config[key] = string(raw)
+		if lp.hctx != nil {
+			lp.hctx.mu.Lock()
+			lp.hctx.Config[key] = value
+			lp.hctx.mu.Unlock()
+		}
+	}
 }
 
 func pluginTransformOutputToRecords(output []byte, base core.Record) ([]core.Record, error) {
@@ -438,9 +476,15 @@ foundStart:
 // Close unloads all plugins.
 func (m *Manager) Close(ctx context.Context) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for name, lp := range m.plugins {
+	plugins := make([]*loadedPlugin, 0, len(m.plugins))
+	for _, lp := range m.plugins {
+		plugins = append(plugins, lp)
+	}
+	m.plugins = map[string]*loadedPlugin{}
+	m.mu.Unlock()
+	for _, lp := range plugins {
+		lp.callMu.Lock()
 		lp.extism.Close(ctx)
-		delete(m.plugins, name)
+		lp.callMu.Unlock()
 	}
 }

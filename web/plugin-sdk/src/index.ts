@@ -7,7 +7,8 @@
  *
  * Quick start:
  *   npm install @etl/sdk
- *   extism-js compile src/transform.ts -o dist/transform.wasm
+ *   esbuild src/transform.ts --bundle --platform=neutral --format=cjs --target=es2020 --outfile=dist/transform.js
+ *   extism-js dist/transform.js -i plugin-transform.d.ts -o dist/transform.wasm
  *
  * Two modes:
  *   1. EXTISM MODE (for WASM compilation):
@@ -18,7 +19,15 @@
  *      and returns Uint8Array, suitable for testing without WASM.
  */
 
-declare const require: any;
+declare const Host: {
+  inputString(): string;
+  outputString(value: string): void;
+};
+declare const Config: { get(key: string): string | null };
+declare const Var: {
+  getString(key: string): string | null;
+  set(key: string, value: string): void;
+};
 
 // ── Core Types ────────────────────────────────────────────────────────
 
@@ -66,6 +75,10 @@ export interface Record {
 export interface Context {
   log(message: string): void;
   config: { [key: string]: any };
+  state: {
+    get(key: string): string | null;
+    set(key: string, value: string): void;
+  };
   metrics: {
     increment(name: string, value?: number): void;
     gauge(name: string, value: number): void;
@@ -117,32 +130,22 @@ export function definePluginManifest(input: Omit<PluginManifest, 'abi' | 'min_ru
 // The host function bridge provides access to logging, config, KV store,
 // and metrics via the 6 host functions exposed by the Go server.
 
-let _hasExtismPdk = false;
-try {
-  if (typeof require !== 'undefined') {
-    require('@extism/js-pdk');
-    _hasExtismPdk = true;
-  }
-} catch {
-  _hasExtismPdk = false;
+function _decodeConfig(raw: string | null): any {
+  if (raw === null || raw === '') return undefined;
+  try { return JSON.parse(raw); } catch { return raw; }
 }
 
-function _bridgeContext(config: { [key: string]: any }): Context {
-  if (_hasExtismPdk) {
-    // In extism mode, use Host for logging/config.
-    const { Host } = require('@extism/js-pdk');
-    return {
-      log: (msg: string) => Host.log(msg),
-      config: config,
-      metrics: {
-        increment: (_name: string, _value?: number) => {},
-        gauge: (_name: string, _value: number) => {},
-      },
-    };
-  }
+function _bridgeContext(): Context {
+  const config = new Proxy({} as { [key: string]: any }, {
+    get: (_target, key) => typeof key === 'string' ? _decodeConfig(Config.get(key)) : undefined,
+  });
   return {
-    log: (_msg: string) => {},
-    config: config,
+    log: (msg: string) => console.log(msg),
+    config,
+    state: {
+      get: (key: string) => Var.getString(key),
+      set: (key: string, value: string) => Var.set(key, value),
+    },
     metrics: {
       increment: (_name: string, _value?: number) => {},
       gauge: (_name: string, _value: number) => {},
@@ -177,11 +180,9 @@ function _bridgeContext(config: { [key: string]: any }): Context {
  */
 export function createExtismTransformPlugin(plugin: TransformPlugin): () => void {
   return () => {
-    const { Host } = require('@extism/js-pdk');
     const inputStr = Host.inputString();
     const record = JSON.parse(inputStr) as Record;
-    const config = JSON.parse(Host.config() || '{}');
-    const ctx = _bridgeContext(config);
+    const ctx = _bridgeContext();
     const result = plugin.apply(record, ctx);
     if (result === null || result === undefined || result === false) {
       Host.outputString('');
@@ -212,9 +213,7 @@ export function createExtismTransformPlugin(plugin: TransformPlugin): () => void
  */
 export function createExtismSourcePlugin(plugin: SourcePlugin): () => void {
   return () => {
-    const { Host } = require('@extism/js-pdk');
-    const config = JSON.parse(Host.config() || '{}');
-    const ctx = _bridgeContext(config);
+    const ctx = _bridgeContext();
     const record = plugin.read(ctx);
     if (record === null) {
       Host.outputString('');
@@ -249,11 +248,9 @@ export function createExtismSourcePlugin(plugin: SourcePlugin): () => void {
  */
 export function createExtismSinkPlugin(plugin: SinkPlugin): () => void {
   return () => {
-    const { Host } = require('@extism/js-pdk');
     const inputStr = Host.inputString();
     const records = JSON.parse(inputStr) as Record[];
-    const config = JSON.parse(Host.config() || '{}');
-    const ctx = _bridgeContext(config);
+    const ctx = _bridgeContext();
     plugin.write(records, ctx);
   };
 }
@@ -271,12 +268,17 @@ export function createExtismSinkPlugin(plugin: SinkPlugin): () => void {
  *   Record/data objects as Uint8Array
  */
 export function createTransformPlugin(plugin: TransformPlugin): (input: Uint8Array) => Uint8Array {
+  const state = new Map<string, string>();
   return (input: Uint8Array): Uint8Array => {
     const jsonStr = new TextDecoder().decode(input);
     const record = JSON.parse(jsonStr) as Record;
     const ctx: Context = {
       log: (_msg: string) => {},
       config: {},
+      state: {
+        get: (key: string) => state.get(key) ?? null,
+        set: (key: string, value: string) => { state.set(key, value); },
+      },
       metrics: {
         increment: (_name: string, _value?: number) => {},
         gauge: (_name: string, _value: number) => {},

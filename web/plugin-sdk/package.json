@@ -7,18 +7,14 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "build:wasm": "extism-js compile src/index.ts -o dist/plugin.wasm",
-    "build:wasm:watch": "extism-js compile src/index.ts -o dist/plugin.wasm -w",
-    "example:transform": "extism-js compile examples/transform.ts -o examples/transform.wasm",
-    "example:source": "extism-js compile examples/source.ts -o examples/source.wasm",
-    "example:sink": "extism-js compile examples/sink.ts -o examples/sink.wasm"
+    "build:wasm": "npm run example:transform",
+    "example:transform": "mkdir -p dist/examples && esbuild examples/replay-matrix-transform/replay-matrix-v1.ts --bundle --platform=neutral --format=cjs --target=es2020 --outfile=dist/examples/replay-matrix-v1.js && extism-js dist/examples/replay-matrix-v1.js -i plugin-transform.d.ts -o dist/examples/replay-matrix-v1.wasm",
+    "example:source": "mkdir -p dist/examples && esbuild examples/feishu-sheet-source/feishu-sheet-source.ts --bundle --platform=neutral --format=cjs --target=es2020 --outfile=dist/examples/feishu-sheet-source.js && extism-js dist/examples/feishu-sheet-source.js -i plugin-source.d.ts -o dist/examples/feishu-sheet-source.wasm"
   },
   "keywords": ["etl", "plugin", "wasm", "transform", "data-pipeline", "extism"],
   "license": "MIT",
-  "dependencies": {
-    "@extism/js-pdk": "^1.1.1"
-  },
   "devDependencies": {
+    "esbuild": "0.25.6",
     "typescript": "^5.6.0"
   }
 }

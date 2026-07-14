@@ -104,6 +104,8 @@ func TestPluginABIV1CertificationDocs(t *testing.T) {
 		"Deprecation Policy",
 		"manifest_validated=false",
 		"Source and sink plugins must be compiled offline",
+		"esbuild src/transform.ts",
+		"extism-js dist/transform.js",
 	}
 	for _, want := range required {
 		if !strings.Contains(abiDoc, want) {
@@ -126,6 +128,89 @@ func TestPluginABIV1CertificationDocs(t *testing.T) {
 	}
 }
 
+func TestWASMPluginCertificationFixture(t *testing.T) {
+	repoRoot := filepath.Clean("../../..")
+	files := []string{
+		"hack/e2e-wasm-plugin.sh",
+		"hack/wasm-compiler.Dockerfile",
+		"web/plugin-sdk/plugin-transform.d.ts",
+		"web/plugin-sdk/examples/replay-matrix-transform/replay-matrix-v1.ts",
+		"web/plugin-sdk/examples/replay-matrix-transform/replay-matrix-v2.ts",
+		"web/plugin-sdk/examples/replay-matrix-transform/plugin.d.ts",
+		"web/plugin-sdk/examples/replay-matrix-transform/manifest-v1.json",
+		"web/plugin-sdk/examples/replay-matrix-transform/manifest-v2.json",
+		"web/plugin-sdk/examples/replay-matrix-transform/README.md",
+	}
+	for _, path := range files {
+		if _, err := os.Stat(filepath.Join(repoRoot, path)); err != nil {
+			t.Fatalf("WASM certification fixture missing %s: %v", path, err)
+		}
+	}
+
+	for _, manifestPath := range []string{
+		"web/plugin-sdk/examples/replay-matrix-transform/manifest-v1.json",
+		"web/plugin-sdk/examples/replay-matrix-transform/manifest-v2.json",
+	} {
+		body := readCertificationDoc(t, repoRoot, manifestPath)
+		for _, want := range []string{
+			pluginsystem.ABIVersionV1,
+			pluginsystem.MinRuntimeVersionV1,
+			`"kind": "transform"`,
+			`"transform"`,
+			`"api_token"`,
+			`"secret": true`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s missing %q", manifestPath, want)
+			}
+		}
+	}
+
+	e2e := readCertificationDoc(t, repoRoot, "hack/e2e-wasm-plugin.sh")
+	for _, want := range []string{
+		"extism-js /workspace/data-wasm-plugin/build/replay-matrix-v1.js",
+		"wait_pipeline_stats 3 1",
+		"split-1-a",
+		"secret_was_configured",
+		"/api/v2/dlq/wasm-replay-matrix/replay",
+		"Restart app and verify plugin reloads from storage",
+	} {
+		if !strings.Contains(e2e, want) {
+			t.Fatalf("hack/e2e-wasm-plugin.sh missing %q", want)
+		}
+	}
+	if strings.Contains(e2e, "extism-js compile ") {
+		t.Fatal("hack/e2e-wasm-plugin.sh uses removed extism-js compile subcommand")
+	}
+
+	compiler := readCertificationDoc(t, repoRoot, "hack/wasm-compiler.Dockerfile")
+	for _, want := range []string{
+		"EXTISM_JS_VERSION=1.6.0",
+		"ESBUILD_VERSION=0.25.6",
+		"BINARYEN_VERSION=130",
+		"sha256sum -c",
+		"wasm-merge --version",
+		"wasm-opt --version",
+	} {
+		if !strings.Contains(compiler, want) {
+			t.Fatalf("hack/wasm-compiler.Dockerfile missing %q", want)
+		}
+	}
+
+	ui := readCertificationDoc(t, repoRoot, "web/src/MyPluginsPage.tsx")
+	for _, want := range []string{
+		"esbuild src/transform.ts --bundle",
+		"extism-js dist/transform.js -i plugin-transform.d.ts -o dist/transform.wasm",
+	} {
+		if !strings.Contains(ui, want) {
+			t.Fatalf("web/src/MyPluginsPage.tsx missing current compiler guidance %q", want)
+		}
+	}
+	if strings.Contains(ui, "extism-js compile src/transform.ts") {
+		t.Fatal("web/src/MyPluginsPage.tsx uses removed extism-js compile subcommand")
+	}
+}
+
 func TestFeishuSheetSourcePluginSampleCertification(t *testing.T) {
 	repoRoot := filepath.Clean("../../..")
 	files := []string{
@@ -134,6 +219,7 @@ func TestFeishuSheetSourcePluginSampleCertification(t *testing.T) {
 		"web/plugin-sdk/examples/feishu-sheet-source/README.md",
 		"web/plugin-sdk/examples/feishu-sheet-source/pipeline.example.yaml",
 		"web/plugin-sdk/examples/feishu-sheet-source/fixture.test.ts",
+		"web/plugin-sdk/plugin-source.d.ts",
 	}
 	for _, path := range files {
 		if _, err := os.Stat(filepath.Join(repoRoot, path)); err != nil {

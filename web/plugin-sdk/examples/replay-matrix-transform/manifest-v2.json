@@ -1,0 +1,24 @@
+{
+  "name": "replay-matrix-transform",
+  "kind": "transform",
+  "version": "1.1.0",
+  "abi": "openetl.plugin.abi/v1",
+  "min_runtime_version": "openetl-runtime/v1",
+  "entrypoints": ["transform"],
+  "capabilities": ["one_to_many", "drop", "dlq_replay", "recovery_upgrade"],
+  "config": [
+    {
+      "name": "label",
+      "type": "string",
+      "required": true,
+      "description": "Marker copied to successful output records"
+    },
+    {
+      "name": "api_token",
+      "type": "string",
+      "required": true,
+      "secret": true,
+      "description": "Secret used to verify manifest/config handling; never emitted"
+    }
+  ]
+}

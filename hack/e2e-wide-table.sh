@@ -241,6 +241,14 @@ while [ "$i" -lt 90 ]; do
 done
 test "${window_state_keys:-0}" -ge 1
 
+echo "==> Verify checkpoint envelope binds Kafka offset, state snapshot, and sink acknowledgement"
+state_checkpoint="$(curl -fsS http://127.0.0.1:8018/api/v2/pipelines/kafka-orders-aggregate-clickhouse/checkpoint)"
+echo "$state_checkpoint" | grep '"state"'
+echo "$state_checkpoint" | grep '"window-3"'
+echo "$state_checkpoint" | grep '"sink_commit"'
+echo "$state_checkpoint" | grep '"acknowledged":true'
+echo "$state_checkpoint" | grep '"sink":"clickhouse"'
+
 "$CONTAINER_CLI" kill "$APP_CONTAINER" >/dev/null
 "$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
 run_wide_app

@@ -106,6 +106,17 @@ type Runner struct {
 	lastCheckpointSave time.Time
 	// uncheckpointedBatches counts batches written since last checkpoint save.
 	uncheckpointedBatches int64
+	// pendingCheckpoint* retains the latest sink-acknowledged source boundary
+	// when checkpoint saves are throttled. A timer or shutdown flush persists
+	// it even if no later record arrives.
+	pendingCheckpointProcessed []core.Record
+	pendingCheckpointCommitted []core.Record
+	// checkpointBlocked prevents a later successful batch from advancing past
+	// a record that could reach neither the sink nor durable DLQ storage. It is
+	// reset on the next Start, when the source reopens from the last durable
+	// checkpoint and replays the unsafe range.
+	checkpointBlocked     bool
+	checkpointBlockReason string
 
 	// circuitBreaker pauses the source when sink failures exceed threshold.
 	circuitBreaker *CircuitBreaker
@@ -489,6 +500,10 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.stats = Stats{StartedAt: &now}
 	r.lastCheckpointSave = time.Time{}
 	r.uncheckpointedBatches = 0
+	r.pendingCheckpointProcessed = nil
+	r.pendingCheckpointCommitted = nil
+	r.checkpointBlocked = false
+	r.checkpointBlockReason = ""
 	r.done = make(chan struct{})
 	r.runActive = true
 	done := r.done
@@ -916,17 +931,19 @@ func (r *Runner) writeLoop(ctx context.Context, records <-chan core.Record) {
 	// by Stop() — without this, the final flush would be aborted by ctx.Err()
 	// and the in-flight batch would be lost (PC-2). Mirrors the ctx.Done branch.
 	forceFlushAndCheckpoint := func() {
-		if len(batch) == 0 {
-			return
+		if len(batch) > 0 {
+			// Force checkpoint save on final flush.
+			r.mu.Lock()
+			r.uncheckpointedBatches = 10
+			r.mu.Unlock()
+			flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			r.writeBatch(flushCtx, batch)
+			cancel()
+			batch = batch[:0]
 		}
-		// Force checkpoint save on final flush
-		r.mu.Lock()
-		r.uncheckpointedBatches = 10 // force shouldSave=true
-		r.mu.Unlock()
 		flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		r.writeBatch(flushCtx, batch)
+		r.flushPendingCheckpoint(flushCtx, true)
 		cancel()
-		batch = batch[:0]
 	}
 
 	for {
@@ -953,13 +970,20 @@ func (r *Runner) writeLoop(ctx context.Context, records <-chan core.Record) {
 			}
 		case <-ticker.C:
 			flush()
+			r.flushPendingCheckpoint(ctx, false)
 		case <-ctx.Done():
 			// On context cancellation (stop/pause/config-change), flush the
 			// in-flight batch using a fresh background context so the sink
 			// write isn't immediately cancelled. This prevents data loss
 			// when the batch was already read from the source.
 			flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			r.writeBatch(flushCtx, batch)
+			if len(batch) > 0 {
+				r.mu.Lock()
+				r.uncheckpointedBatches = 10
+				r.mu.Unlock()
+				r.writeBatch(flushCtx, batch)
+			}
+			r.flushPendingCheckpoint(flushCtx, true)
 			flushCancel()
 			batch = batch[:0]
 			return
@@ -1003,6 +1027,7 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	filteredCount := 0
 	transformFailureCount := 0
 	batchTransformZeroOutput := false
+	checkpointBoundarySafe := true
 
 	hasBatch := r.hasBatchTransform()
 
@@ -1013,25 +1038,29 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			var partial core.PartialTransformError
 			if !errors.As(err, &partial) {
 				for _, rec := range batch {
-					r.handleFailedRecord(ctx, rec, err)
+					if !r.handleFailedRecord(ctx, rec, err) {
+						checkpointBoundarySafe = false
+					}
 				}
 				return
 			}
 			failures := partial.FailedRecords()
 			transformFailureCount = len(failures)
 			for _, failure := range failures {
-				r.handleFailedRecord(ctx, failure.Record, failure.Err)
+				if !r.handleFailedRecord(ctx, failure.Record, failure.Err) {
+					checkpointBoundarySafe = false
+				}
 			}
 		}
 		transformed = out
 		batchTransformZeroOutput = len(transformed) == 0
 	} else {
-		transformed, filteredCount, transformFailureCount = r.applyRecordTransforms(ctx, batch)
+		transformed, filteredCount, transformFailureCount, checkpointBoundarySafe = r.applyRecordTransforms(ctx, batch)
 	}
 
 	if len(transformed) == 0 {
 		if !hasBatch && filteredCount == len(processed) && transformFailureCount == 0 {
-			r.saveCommittedCheckpoint(ctx, processed)
+			r.saveCommittedCheckpoint(ctx, processed, nil)
 			return
 		}
 		reason := fmt.Sprintf("filtered=%d failed=%d", filteredCount, transformFailureCount)
@@ -1129,17 +1158,48 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 		Config:       r.spec.Hooks.getConfig(core.HookOnPostBatch),
 	})
 
-	// Throttle checkpoint saves: save at most once per checkpointInterval.
-	// This reduces checkpoint store load for high-throughput pipelines.
-	// On EOF/shutdown, saveCommittedCheckpoint is always called (writeLoop
-	// flush path handles the final save).
+	if !checkpointBoundarySafe {
+		r.handleCheckpointBoundaryError(ctx, "DLQ persistence failed; checkpoint not advanced so the source range will replay")
+		return
+	}
+
+	// Throttle checkpoint saves while retaining the latest acknowledged
+	// boundary. The write-loop timer persists this pending boundary even if the
+	// stream becomes idle, so checkpoint_interval_sec cannot strand a final
+	// successful batch indefinitely.
 	r.mu.Lock()
 	r.uncheckpointedBatches++
+	r.pendingCheckpointProcessed = append(r.pendingCheckpointProcessed[:0], processed...)
+	r.pendingCheckpointCommitted = append(r.pendingCheckpointCommitted[:0], transformed...)
 	shouldSave := time.Since(r.lastCheckpointSave) >= r.checkpointInterval || r.uncheckpointedBatches >= 10
 	r.mu.Unlock()
 	if shouldSave {
-		r.saveCommittedCheckpoint(ctx, processed)
+		r.flushPendingCheckpoint(ctx, true)
 	}
+}
+
+func (r *Runner) flushPendingCheckpoint(ctx context.Context, force bool) bool {
+	r.mu.RLock()
+	if len(r.pendingCheckpointProcessed) == 0 {
+		r.mu.RUnlock()
+		return true
+	}
+	if !force && time.Since(r.lastCheckpointSave) < r.checkpointInterval && r.uncheckpointedBatches < 10 {
+		r.mu.RUnlock()
+		return true
+	}
+	processed := append([]core.Record(nil), r.pendingCheckpointProcessed...)
+	committed := append([]core.Record(nil), r.pendingCheckpointCommitted...)
+	r.mu.RUnlock()
+
+	if !r.saveCommittedCheckpoint(ctx, processed, committed) {
+		return false
+	}
+	r.mu.Lock()
+	r.pendingCheckpointProcessed = nil
+	r.pendingCheckpointCommitted = nil
+	r.mu.Unlock()
+	return true
 }
 
 func (r *Runner) hasBatchTransform() bool {
@@ -1172,17 +1232,18 @@ func (r *Runner) canParallelizeRecordTransforms() bool {
 	return true
 }
 
-func (r *Runner) applyRecordTransforms(ctx context.Context, batch []core.Record) ([]core.Record, int, int) {
+func (r *Runner) applyRecordTransforms(ctx context.Context, batch []core.Record) ([]core.Record, int, int, bool) {
 	if r.canParallelizeRecordTransforms() && len(batch) > 1 {
 		return r.applyRecordTransformsParallel(ctx, batch)
 	}
 	return r.applyRecordTransformsSerial(ctx, batch)
 }
 
-func (r *Runner) applyRecordTransformsSerial(ctx context.Context, batch []core.Record) ([]core.Record, int, int) {
+func (r *Runner) applyRecordTransformsSerial(ctx context.Context, batch []core.Record) ([]core.Record, int, int, bool) {
 	transformed := make([]core.Record, 0, len(batch))
 	filteredCount := 0
 	transformFailureCount := 0
+	checkpointBoundarySafe := true
 	for _, rec := range batch {
 		tRec, err := r.transforms.Apply(ctx, rec)
 		if err != nil {
@@ -1191,12 +1252,14 @@ func (r *Runner) applyRecordTransformsSerial(ctx context.Context, batch []core.R
 				continue
 			}
 			transformFailureCount++
-			r.handleFailedRecord(ctx, rec, err)
+			if !r.handleFailedRecord(ctx, rec, err) {
+				checkpointBoundarySafe = false
+			}
 			continue
 		}
 		transformed = append(transformed, tRec)
 	}
-	return transformed, filteredCount, transformFailureCount
+	return transformed, filteredCount, transformFailureCount, checkpointBoundarySafe
 }
 
 type recordTransformResult struct {
@@ -1206,7 +1269,7 @@ type recordTransformResult struct {
 	filtered bool
 }
 
-func (r *Runner) applyRecordTransformsParallel(ctx context.Context, batch []core.Record) ([]core.Record, int, int) {
+func (r *Runner) applyRecordTransformsParallel(ctx context.Context, batch []core.Record) ([]core.Record, int, int, bool) {
 	workers := r.transformWorkers
 	if workers > len(batch) {
 		workers = len(batch)
@@ -1243,6 +1306,7 @@ func (r *Runner) applyRecordTransformsParallel(ctx context.Context, batch []core
 	transformed := make([]core.Record, 0, len(batch))
 	filteredCount := 0
 	transformFailureCount := 0
+	checkpointBoundarySafe := true
 	for i, result := range ordered {
 		if result.filtered {
 			filteredCount++
@@ -1250,12 +1314,14 @@ func (r *Runner) applyRecordTransformsParallel(ctx context.Context, batch []core
 		}
 		if result.err != nil {
 			transformFailureCount++
-			r.handleFailedRecord(ctx, batch[i], result.err)
+			if !r.handleFailedRecord(ctx, batch[i], result.err) {
+				checkpointBoundarySafe = false
+			}
 			continue
 		}
 		transformed = append(transformed, result.record)
 	}
-	return transformed, filteredCount, transformFailureCount
+	return transformed, filteredCount, transformFailureCount, checkpointBoundarySafe
 }
 
 // writeRecordsIndividually attempts to write each record one at a time after
@@ -1326,7 +1392,7 @@ type failedIndexErr struct {
 	err error
 }
 
-func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err error) {
+func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err error) bool {
 	r.addRecordsFailed(1)
 
 	// Fire OnError hook.
@@ -1361,8 +1427,11 @@ func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err er
 				Message: fmt.Sprintf("Pipeline %s: DLQ write failed: %v. Original record error: %v", r.spec.Name, dlqErr, err),
 				JobName: r.spec.Name,
 			})
+			r.blockCheckpoint("DLQ persistence failed: " + dlqErr.Error())
+			return false
 		} else {
 			r.addRecordsDLQ(1)
+			return true
 		}
 	} else {
 		// No DLQ writer configured — the record can neither reach the sink nor
@@ -1376,30 +1445,59 @@ func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err er
 			Message: fmt.Sprintf("Pipeline %s: record failed (table=%s) with no DLQ writer; record could not be stored. Error: %v", r.spec.Name, rec.Metadata.Table, err),
 			JobName: r.spec.Name,
 		})
+		r.blockCheckpoint("record failure occurred without a configured DLQ writer")
+		return false
 	}
 }
 
-func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed []core.Record) {
+func (r *Runner) blockCheckpoint(reason string) {
+	r.mu.Lock()
+	r.checkpointBlocked = true
+	if r.checkpointBlockReason == "" {
+		r.checkpointBlockReason = reason
+	}
+	r.mu.Unlock()
+}
+
+func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committed []core.Record) bool {
 	if r.reader == nil || r.checkpointStore == nil || len(processed) == 0 {
-		return
+		return false
 	}
 	checkpointer, ok := r.reader.(core.RecordCheckpointer)
 	if !ok {
-		return
+		return false
+	}
+	r.mu.RLock()
+	blocked := r.checkpointBlocked
+	blockReason := r.checkpointBlockReason
+	r.mu.RUnlock()
+	if blocked {
+		r.handleCheckpointBoundaryError(ctx, "checkpoint blocked until restart: "+blockReason)
+		return false
 	}
 	cp, err := checkpointer.CheckpointForRecord(ctx, processed[len(processed)-1])
 	if err != nil {
-		return
+		return false
 	}
 	cp.JobName = r.spec.Name
 	cp.ID = fmt.Sprintf("%s-%d", r.spec.Name, time.Now().UnixNano())
-	if stateVersions, err := r.transforms.StateSnapshotVersions(ctx); err != nil {
+	stateVersions, err := r.transforms.StateSnapshotVersions(ctx)
+	if err != nil {
 		r.handleCheckpointBoundaryError(ctx, fmt.Sprintf("state snapshot version collection failed: %v", err))
-		return
-	} else if len(stateVersions) > 0 {
-		if wrapped, wrapErr := checkpoint.BuildEnvelope(cp.Position, stateVersions, nil); wrapErr != nil {
+		return false
+	}
+	var sinkCommit map[string]any
+	if len(committed) > 0 {
+		sinkCommit, err = checkpoint.BuildSinkCommitMetadata(ctx, r.sink, committed, "")
+		if err != nil {
+			r.handleCheckpointBoundaryError(ctx, fmt.Sprintf("sink commit metadata collection failed: %v", err))
+			return false
+		}
+	}
+	if len(stateVersions) > 0 || len(sinkCommit) > 0 {
+		if wrapped, wrapErr := checkpoint.BuildEnvelope(cp.Position, stateVersions, sinkCommit); wrapErr != nil {
 			r.handleCheckpointBoundaryError(ctx, fmt.Sprintf("checkpoint envelope build failed: %v", wrapErr))
-			return
+			return false
 		} else {
 			cp.Position = wrapped
 		}
@@ -1425,7 +1523,7 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed []core.R
 			JobName: r.spec.Name,
 		})
 		r.logError(errMsg + " — circuit breaker tripped, pipeline will pause")
-		return
+		return false
 	}
 
 	r.mu.Lock()
@@ -1440,6 +1538,7 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed []core.R
 		CheckpointPos: cp.Position,
 		Config:        r.spec.Hooks.getConfig(core.HookOnCheckpoint),
 	})
+	return true
 }
 
 func (r *Runner) handleCheckpointBoundaryError(ctx context.Context, errMsg string) {

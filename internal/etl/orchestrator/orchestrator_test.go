@@ -280,6 +280,9 @@ func TestDAGExecutorCheckpointIncludesStateSnapshotVersions(t *testing.T) {
 	if string(env.Source) != `{"offset":42}` {
 		t.Fatalf("source position = %s, want offset 42", env.Source)
 	}
+	if env.SinkCommit["acknowledged"] != true || env.SinkCommit["sink"] != "dag-noop-sink" || env.SinkCommit["node"] != "sink" {
+		t.Fatalf("sink commit metadata = %#v", env.SinkCommit)
+	}
 }
 
 func TestDAGExecutorDoesNotCheckpointWhenStateSnapshotFails(t *testing.T) {
@@ -317,6 +320,81 @@ func TestDAGExecutorDoesNotCheckpointWhenStateSnapshotFails(t *testing.T) {
 	}
 	if cp != nil {
 		t.Fatalf("checkpoint advanced after state snapshot failed: %s", cp.Position)
+	}
+}
+
+func TestDAGExecutorDoesNotCheckpointWhenSinkCommitMetadataFails(t *testing.T) {
+	adapter, cleanup := newDAGCheckpointAdapter(t)
+	defer cleanup()
+	am := alert.NewManager()
+	defer am.Close()
+
+	exec := &DAGExecutor{
+		spec:       &PipelineSpec{Name: "dag-commit-metadata-fail"},
+		transforms: map[string]core.Transform{},
+		sinks: map[string]core.Sink{
+			"sink": dagCommitMetadataFailSink{},
+		},
+		readers: map[string]core.RecordReader{
+			"src": dagCheckpointReader{},
+		},
+		cpAdapter:        adapter,
+		alertMgr:         am,
+		retryConfig:      retry.DefaultConfig(),
+		breakers:         map[string]*pipeline.CircuitBreaker{},
+		checkpointBlocks: map[string]string{},
+	}
+
+	exec.writeToSink(context.Background(), "sink", []core.Record{
+		{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
+	}, map[string]core.Record{
+		"src": {Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
+	})
+
+	cp, err := adapter.Load(context.Background(), "dag-commit-metadata-fail-src")
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	if cp != nil {
+		t.Fatalf("checkpoint advanced after commit metadata failed: %s", cp.Position)
+	}
+}
+
+func TestDAGExecutorDoesNotCheckpointPastFailedDLQPersistence(t *testing.T) {
+	adapter, cleanup := newDAGCheckpointAdapter(t)
+	defer cleanup()
+	am := alert.NewManager()
+	defer am.Close()
+
+	exec := &DAGExecutor{
+		spec:             &PipelineSpec{Name: "dag-dlq-boundary"},
+		transforms:       map[string]core.Transform{},
+		sinks:            map[string]core.Sink{"sink": dagNoopSink{}},
+		readers:          map[string]core.RecordReader{"src": dagCheckpointReader{}},
+		cpAdapter:        adapter,
+		dlqWriter:        dagFailingDLQ{},
+		alertMgr:         am,
+		retryConfig:      retry.DefaultConfig(),
+		breakers:         map[string]*pipeline.CircuitBreaker{},
+		checkpointBlocks: map[string]string{},
+	}
+
+	if exec.handleFailed(context.Background(), core.Record{Metadata: core.Metadata{Source: "dag-dlq-boundary"}}, errors.New("transform failed"), "transform") {
+		t.Fatal("failed DLQ persistence reported a durable boundary")
+	}
+	exec.blockSourceCheckpoint("src", "record failure could not be persisted to DLQ")
+	exec.writeToSink(context.Background(), "sink", []core.Record{
+		{Data: map[string]any{"id": 2}, Metadata: core.Metadata{Offset: 2}},
+	}, map[string]core.Record{
+		"src": {Data: map[string]any{"id": 2}, Metadata: core.Metadata{Offset: 2}},
+	})
+
+	cp, err := adapter.Load(context.Background(), "dag-dlq-boundary-src")
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	if cp != nil {
+		t.Fatalf("later successful sink write advanced checkpoint past failed DLQ persistence: %s", cp.Position)
 	}
 }
 
@@ -422,6 +500,22 @@ func (dagNoopSink) Name() string                               { return "dag-noo
 func (dagNoopSink) Open(context.Context) error                 { return nil }
 func (dagNoopSink) Write(context.Context, []core.Record) error { return nil }
 func (dagNoopSink) Close() error                               { return nil }
+
+type dagCommitMetadataFailSink struct{}
+
+func (dagCommitMetadataFailSink) Name() string                               { return "dag-commit-fail" }
+func (dagCommitMetadataFailSink) Open(context.Context) error                 { return nil }
+func (dagCommitMetadataFailSink) Write(context.Context, []core.Record) error { return nil }
+func (dagCommitMetadataFailSink) Close() error                               { return nil }
+func (dagCommitMetadataFailSink) SinkCommitMetadata(context.Context) (map[string]any, error) {
+	return nil, errors.New("commit token unavailable")
+}
+
+type dagFailingDLQ struct{}
+
+func (dagFailingDLQ) WriteDLQ(context.Context, pipeline.DLQEntry) error {
+	return errors.New("DLQ store unavailable")
+}
 
 type dagNoopTransform struct{}
 

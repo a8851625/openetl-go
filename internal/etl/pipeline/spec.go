@@ -56,6 +56,7 @@ type DLQSpec struct {
 
 type Spec struct {
 	Name                  string             `yaml:"name" json:"name"`
+	AllowUnsafe           bool               `yaml:"allow_unsafe,omitempty" json:"allow_unsafe,omitempty"`
 	Source                SourceSpec         `yaml:"source" json:"source"`
 	Transforms            []TransformSpec    `yaml:"transforms,omitempty" json:"transforms,omitempty"`
 	Sink                  SinkSpec           `yaml:"sink" json:"sink"`
@@ -567,7 +568,7 @@ func ValidateSpec(spec *Spec) error {
 	nonIdempotentSinks := map[string]bool{
 		"file_sink": true, "s3": true,
 	}
-	if cdcSources[spec.Source.Type] && nonIdempotentSinks[spec.Sink.Type] {
+	if !spec.AllowUnsafe && cdcSources[spec.Source.Type] && nonIdempotentSinks[spec.Sink.Type] {
 		return fmt.Errorf(
 			"unsafe pipeline %q: CDC source %q with non-idempotent sink %q will silently duplicate data on crash recovery; "+
 				"use an idempotent sink (mysql/postgres/clickhouse/doris with upsert) or a batch source instead",

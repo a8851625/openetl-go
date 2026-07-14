@@ -57,7 +57,12 @@ Config field types are `string`, `int`, `bool`, `float`, `string_array`, and `ma
 Recommended production flow:
 
 ```sh
-extism-js compile src/transform.ts -o dist/transform.wasm
+esbuild src/transform.ts \
+  --bundle --platform=neutral --format=cjs --target=es2020 \
+  --outfile=dist/transform.js
+extism-js dist/transform.js \
+  -i web/plugin-sdk/plugin-transform.d.ts \
+  -o dist/transform.wasm
 curl -F wasm=@dist/transform.wasm \
   -F name=vip-order-enricher \
   -F kind=transform \
@@ -66,7 +71,9 @@ curl -F wasm=@dist/transform.wasm \
   http://localhost:8000/api/v2/plugins/install
 ```
 
-`/api/v2/plugins/compile` is limited to transform plugins. It uses a pre-installed `extism-js` compiler when available. Runtime `npx` fallback is disabled by default and should only be enabled in trusted development environments.
+`extism-js` accepts bundled JavaScript, not raw TypeScript and not a `compile` subcommand. The repeatable compiler image in `hack/wasm-compiler.Dockerfile` pins esbuild, Extism JS PDK, and Binaryen with release checksums.
+
+`/api/v2/plugins/compile` is limited to transform plugins. It uses pre-installed `esbuild` and `extism-js` binaries when available. Runtime `npx` fallback for `extism-js` is disabled by default and should only be enabled in trusted development environments.
 
 Source and sink plugins must be compiled offline and installed through `/api/v2/plugins/install`.
 
@@ -86,3 +93,8 @@ A plugin can be considered production-certified only when it has:
 - component docs with operational limits and examples
 - unit tests for manifest and transform/source/sink behavior
 - repeatable e2e or certification evidence for failure, restart, DLQ/replay, and idempotency boundaries that apply to the plugin kind
+
+The real ABI v1 transform certification fixture is
+`web/plugin-sdk/examples/replay-matrix-transform/`; `hack/e2e-wasm-plugin.sh`
+compiles it to real WASM and verifies install, 0/1/N output, secret config,
+DLQ/replay, in-place upgrade, and restart reload.

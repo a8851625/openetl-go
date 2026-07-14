@@ -2,6 +2,8 @@
 
 This kit turns connector and plugin maturity claims into executable checks. It is focused on the first production-candidate connector set: MySQL, ClickHouse, Kafka, S3, and File. Plugin ABI checks cover the extension boundary; each third-party plugin still needs its own evidence before it can be called production-certified.
 
+Cross-connector crash, replay, DLQ, state, and sink-commit evidence is tracked in [reliability-certification.md](./reliability-certification.md).
+
 ## Scope
 
 The current kit checks:
@@ -34,6 +36,7 @@ Plugin ABI v1 evidence:
 | Install API | explicit manifest is validated before WASM load; legacy uploads are marked `manifest_validated=false` | `internal/etl/server/plugin_contract_test.go` |
 | SDK | TypeScript SDK exports ABI constants, manifest types, and `definePluginManifest` | `web/plugin-sdk/src/index.ts`, `web/plugin-sdk/examples/vip-order-enricher.ts` |
 | Source plugin sample | Feishu sheet source plugin with offline compile + install docs | `web/plugin-sdk/examples/feishu-sheet-source/`, `TestFeishuSheetSourcePluginSampleCertification` |
+| Real transform runtime | real TypeScript→WASM, 0/1/N output, secret config, DLQ/replay, upgrade, restart reload | `hack/e2e-wasm-plugin.sh`, `hack/wasm-compiler.Dockerfile`, `web/plugin-sdk/examples/replay-matrix-transform/`, `TestWASMPluginCertificationFixture` |
 
 ## Running
 
@@ -43,6 +46,7 @@ Run the descriptor/doc certification checks:
 go test ./internal/etl/server -run TestConnectorCertificationKitProductionSet -count=1
 go test ./internal/etl/server -run TestPluginABIV1CertificationDocs -count=1
 go test ./internal/etl/server -run TestFeishuSheetSourcePluginSampleCertification -count=1
+go test ./internal/etl/server -run TestWASMPluginCertificationFixture -count=1
 ```
 
 
@@ -53,6 +57,7 @@ bash hack/e2e-s3-minio.sh
 bash hack/e2e-kafka.sh
 bash hack/e2e-clickhouse.sh
 bash hack/e2e-cdc-mysql.sh
+bash hack/e2e-wasm-plugin.sh
 ```
 
 Use `E2E_SKIP_BUILD=1` only after rebuilding `openetl-go-etl:dev` from the current tree.

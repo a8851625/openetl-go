@@ -172,6 +172,31 @@ func TestKafkaCheckpointForRecordMarksOffset(t *testing.T) {
 	}
 }
 
+func TestKafkaCheckpointForRecordPersistsOffsetZero(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "test"}
+	reader := &kafkaReader{
+		source:           src,
+		records:          make(chan core.Record, 1),
+		offsets:          make(map[int32]int64),
+		committedOffsets: make(map[int32]int64),
+		sessions:         make(map[int32]sarama.ConsumerGroupSession),
+	}
+
+	cp, err := reader.CheckpointForRecord(context.Background(), core.Record{
+		Metadata: core.Metadata{Partition: 0, Offset: 0},
+	})
+	if err != nil {
+		t.Fatalf("CheckpointForRecord: %v", err)
+	}
+	var pos kafkaPosition
+	if err := json.Unmarshal(cp.Position, &pos); err != nil {
+		t.Fatalf("unmarshal position: %v", err)
+	}
+	if offset, ok := pos.Offsets[0]; !ok || offset != 0 {
+		t.Fatalf("offsets = %#v, want explicit partition 0 offset 0", pos.Offsets)
+	}
+}
+
 func TestKafkaSetupResetsStartOffsetsFromCheckpoint(t *testing.T) {
 	src := &KafkaSource{name: "kafka", topic: "test"}
 	reader := &kafkaReader{

@@ -4,7 +4,7 @@
  * Third-party source plugin sample that mirrors the built-in feishu_sheet
  * connector path while proving the full plugin install surface:
  *
- *   offline extism-js compile
+ *   offline esbuild bundle + extism-js compile
  *     -> POST /api/v2/plugins/install (manifest + wasm)
  *     -> type: plugin_feishu-sheet-source in a normal pipeline
  *
@@ -23,9 +23,7 @@
  *   -> GET spreadsheet values (value_range.values)
  * Prefer the built-in feishu_sheet source for production HTTP pulls.
  *
- * Compile:
- *   extism-js compile examples/feishu-sheet-source/feishu-sheet-source.ts \
- *     -o examples/feishu-sheet-source/feishu-sheet-source.wasm
+ * Compile: see the current esbuild + extism-js command in README.md.
  *
  * Install:
  *   curl -F wasm=@feishu-sheet-source.wasm \
@@ -128,8 +126,7 @@ const plugin = createExtismSourcePlugin({
 
     const header = headerFrom(rows);
     const cursorKey = 'feishu_sheet_cursor';
-    // Prefer host KV if available through config mirror; otherwise local index.
-    let cursor = Number((cfg as any)[cursorKey] ?? cfg._cursor ?? 0);
+    let cursor = Number(ctx.state.get(cursorKey) ?? cfg._cursor ?? 0);
     if (!Number.isFinite(cursor) || cursor < 0) cursor = 0;
 
     // Skip header on first call.
@@ -139,7 +136,7 @@ const plugin = createExtismSourcePlugin({
     }
 
     const rec = rowToRecord(header, rows[dataIndex] || [], dataIndex);
-    (cfg as any)[cursorKey] = dataIndex + 1;
+    ctx.state.set(cursorKey, String(dataIndex + 1));
     cfg._cursor = dataIndex + 1;
     return rec;
   },

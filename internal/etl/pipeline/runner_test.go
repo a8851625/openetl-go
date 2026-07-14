@@ -288,6 +288,16 @@ func (d *captureDLQ) WriteDLQ(_ context.Context, e DLQEntry) error {
 }
 func (d *captureDLQ) Close() error { return nil }
 
+type failingDLQ struct{ err error }
+
+func (d failingDLQ) WriteDLQ(context.Context, DLQEntry) error { return d.err }
+
+type commitMetadataFailSink struct{ recordingSink }
+
+func (s *commitMetadataFailSink) SinkCommitMetadata(context.Context) (map[string]any, error) {
+	return nil, errors.New("commit metadata unavailable")
+}
+
 func makeRunnerSpec(t *testing.T, batchSize int) (*Spec, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -517,6 +527,27 @@ func TestRunnerUsesPartialTransformErrorForDLQAttribution(t *testing.T) {
 	}
 }
 
+func TestRunnerDoesNotCheckpointPastFailedDLQPersistence(t *testing.T) {
+	store := newMemoryCPStore()
+	r := newCheckpointWriteBatchRunner(t, core.TransformChain{partialFailureTransform{}}, store, failingDLQ{err: errors.New("DLQ store unavailable")})
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	if checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint advanced after a failed record could not be persisted to DLQ")
+	}
+	if !r.checkpointBlocked {
+		t.Fatal("checkpoint boundary was not persistently blocked")
+	}
+
+	// A later all-success batch must not jump past the unsafe source range.
+	r.transforms = nil
+	r.writeBatch(context.Background(), []core.Record{{Data: map[string]any{"id": 3}, Metadata: core.Metadata{Offset: 3}}})
+	if checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("later successful batch advanced checkpoint past failed DLQ persistence")
+	}
+}
+
 func TestRunnerTransformWorkersParallelizeStatelessRecordsInOrder(t *testing.T) {
 	probe := &concurrencyProbeTransform{delay: 30 * time.Millisecond}
 	r := &Runner{
@@ -530,10 +561,10 @@ func TestRunnerTransformWorkersParallelizeStatelessRecordsInOrder(t *testing.T) 
 		{Data: map[string]any{"id": 4}},
 	}
 
-	got, filtered, failed := r.applyRecordTransforms(context.Background(), batch)
+	got, filtered, failed, checkpointSafe := r.applyRecordTransforms(context.Background(), batch)
 
-	if filtered != 0 || failed != 0 {
-		t.Fatalf("filtered=%d failed=%d, want 0/0", filtered, failed)
+	if filtered != 0 || failed != 0 || !checkpointSafe {
+		t.Fatalf("filtered=%d failed=%d checkpointSafe=%v, want 0/0/true", filtered, failed, checkpointSafe)
 	}
 	if max := atomic.LoadInt64(&probe.maxInFlight); max < 2 {
 		t.Fatalf("transform_workers did not parallelize stateless transform: max in-flight=%d", max)
@@ -562,10 +593,10 @@ func TestRunnerTransformWorkersKeepStatefulTransformsSerial(t *testing.T) {
 		{Data: map[string]any{"id": 3}},
 	}
 
-	got, filtered, failed := r.applyRecordTransforms(context.Background(), batch)
+	got, filtered, failed, checkpointSafe := r.applyRecordTransforms(context.Background(), batch)
 
-	if filtered != 0 || failed != 0 || len(got) != len(batch) {
-		t.Fatalf("got len=%d filtered=%d failed=%d, want len=%d filtered=0 failed=0", len(got), filtered, failed, len(batch))
+	if filtered != 0 || failed != 0 || !checkpointSafe || len(got) != len(batch) {
+		t.Fatalf("got len=%d filtered=%d failed=%d checkpointSafe=%v, want len=%d filtered=0 failed=0 checkpointSafe=true", len(got), filtered, failed, checkpointSafe, len(batch))
 	}
 	if max := atomic.LoadInt64(&probe.maxInFlight); max != 1 {
 		t.Fatalf("stateful transform ran concurrently: max in-flight=%d, want 1", max)
@@ -692,6 +723,49 @@ func TestRunnerCheckpointIncludesStateSnapshotVersions(t *testing.T) {
 	if string(env.Source) != `{"offset":2}` {
 		t.Fatalf("source position = %s, want offset 2", env.Source)
 	}
+	if env.SinkCommit["acknowledged"] != true || env.SinkCommit["sink"] != "recording" {
+		t.Fatalf("sink commit metadata = %#v", env.SinkCommit)
+	}
+	if env.SinkCommit["last_batch_sha256"] == "" {
+		t.Fatalf("sink commit batch digest missing: %#v", env.SinkCommit)
+	}
+}
+
+func TestRunnerFlushesThrottledCheckpointWhenStreamBecomesIdle(t *testing.T) {
+	store := newMemoryCPStore()
+	r := newCheckpointWriteBatchRunner(t, nil, store, noopDLQ{})
+	r.checkpointInterval = 20 * time.Millisecond
+	r.lastCheckpointSave = time.Now()
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+	if checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint saved before checkpoint interval elapsed")
+	}
+	if len(r.pendingCheckpointProcessed) == 0 {
+		t.Fatal("latest sink-acknowledged boundary was not retained while checkpoint was throttled")
+	}
+
+	time.Sleep(30 * time.Millisecond)
+	if ok := r.flushPendingCheckpoint(context.Background(), false); !ok {
+		t.Fatal("flushPendingCheckpoint() = false")
+	}
+	cp, err := store.Load(context.Background(), r.spec.Name)
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	if cp == nil {
+		t.Fatal("idle stream did not persist pending checkpoint after interval")
+	}
+	env, ok, err := checkpoint.ParseEnvelope(cp.Position)
+	if err != nil || !ok {
+		t.Fatalf("ParseEnvelope() ok=%v err=%v position=%s", ok, err, cp.Position)
+	}
+	if string(env.Source) != `{"offset":2}` {
+		t.Fatalf("source position = %s, want latest offset 2", env.Source)
+	}
+	if len(r.pendingCheckpointProcessed) != 0 || len(r.pendingCheckpointCommitted) != 0 {
+		t.Fatal("pending checkpoint boundary was not cleared after durable save")
+	}
 }
 
 func TestRunnerDoesNotCheckpointWhenStateSnapshotFails(t *testing.T) {
@@ -704,6 +778,18 @@ func TestRunnerDoesNotCheckpointWhenStateSnapshotFails(t *testing.T) {
 
 	if checkpointSaved(t, store, r.spec.Name) {
 		t.Fatal("checkpoint advanced after state snapshot failed")
+	}
+}
+
+func TestRunnerDoesNotCheckpointWhenSinkCommitMetadataFails(t *testing.T) {
+	store := newMemoryCPStore()
+	r := newCheckpointWriteBatchRunner(t, nil, store, noopDLQ{})
+	r.sink = &commitMetadataFailSink{}
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	if checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint advanced after sink commit metadata collection failed")
 	}
 }
 

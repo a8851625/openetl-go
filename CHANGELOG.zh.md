@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+## [v0.2.10-beta.1] — 2026-07-14 — 可靠性认证与真实 WASM 插件链路
+
+### P1：可靠性认证矩阵收口
+
+- 统一线性 pipeline 与 DAG checkpoint envelope：绑定 source position、StateStore snapshot version 和 sink acknowledgement metadata；明确保持 at-least-once，而非跨系统事务。
+- DLQ 持久化失败会阻断后续 checkpoint；sink commit metadata/state snapshot/checkpoint store 任一失败均不会静默推进 source position。
+- 修复 Kafka offset `0` 未进入 checkpoint 的零值判断缺陷。
+- 修复 checkpoint 节流后流转为空闲时，最后一个 sink-acknowledged batch 可能长期不落 checkpoint 的问题；pending boundary 现在由定时器以及 Stop/EOF 强制持久化。
+- `allow_unsafe` 成为可执行 spec 字段：Kafka/CDC 写 file/S3 仍默认阻断，只允许测试并记录过 replay 重复边界的链路显式 opt-in。
+- 新增 [可靠性认证矩阵](docs/reliability-certification.md)，并扩展 `hack/e2e-kafka.sh`、`hack/e2e-wide-table.sh`，覆盖普通 Kafka crash、broker restart、consumer group rebalance、offset replay、state restore 与 sink commit envelope。
+
+### P2：真实 WASM 插件链路 E2E
+
+- 新增真实 TypeScript transform fixture 和 `hack/e2e-wasm-plugin.sh`，验证真实 WASM 编译、ABI v1 manifest 安装、0/1/N 输出、secret config、错误入 DLQ、升级后 replay 和 restart reload。
+- 新增带架构校验和的 compiler image：固定 esbuild 0.25.6、Extism JS PDK 1.6.0 和 Binaryen 130，并在构建期检查 `wasm-merge`/`wasm-opt`。
+- 修正 Extism JS SDK bridge：使用当前 `Host`、`Config`、`Var` globals，启用 WASI、调用级配置更新、状态桥接和并发安全的 install/unload/exec。
+- 修正服务端 transform-only 编译入口和公开文档：TypeScript 先经 esbuild 打包为 CommonJS，再使用当前 `extism-js input.js -i interface.d.ts -o output.wasm` CLI；source/sink 继续离线编译安装。
+- 新增真实 WASM fixture/manifest/compiler 静态认证门闩；未完成独立故障/replay 证据的第三方插件仍保持 beta/dev-only。
+
+### 验证
+
+- `go test ./... -count=1`
+- `go test -tags=extism ./internal/etl/plugin/pluginsystem ./internal/etl/server -count=1`
+- `npm --prefix web/plugin-sdk run build`
+- `npm --prefix web run build`
+- `./hack/e2e-kafka.sh`
+- `E2E_SKIP_BUILD=1 ./hack/e2e-wide-table.sh`
+- `E2E_SKIP_BUILD=1 ./hack/e2e-lookup-state.sh`
+- `./hack/e2e-wasm-plugin.sh`
+
 ## [v0.2.9] — 2026-07-13 — 多表映射同步、CDC 宽表链路、UI 场景入口、connection scope
 
 ### 亮点

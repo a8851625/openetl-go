@@ -81,7 +81,7 @@ type DAGExecutor struct {
 	transforms   map[string]core.Transform
 	sinks        map[string]core.Sink
 	cpAdapter    *storage.CheckpointStoreAdapter
-	dlqWriter    *storage.DLQCompatWriter
+	dlqWriter    pipeline.DLQWriter
 	alertMgr     *alert.Manager
 	retryConfig  retry.Config
 	batchSize    int
@@ -91,12 +91,13 @@ type DAGExecutor struct {
 	// Per-sink circuit breakers to prevent cascading failures
 	breakers map[string]*pipeline.CircuitBreaker
 
-	status         string
-	mu             sync.RWMutex
-	cancel         context.CancelFunc
-	done           chan struct{}
-	stats          ExecutorStats
-	frozenDuration time.Duration
+	status           string
+	mu               sync.RWMutex
+	cancel           context.CancelFunc
+	done             chan struct{}
+	stats            ExecutorStats
+	frozenDuration   time.Duration
+	checkpointBlocks map[string]string
 }
 
 // ExecutorStats tracks per-pipeline execution metrics.
@@ -115,17 +116,18 @@ func NewDAGExecutor(spec *PipelineSpec, cpStore *storage.CheckpointStoreAdapter,
 	}
 
 	exec := &DAGExecutor{
-		spec:       spec,
-		sources:    map[string]core.Source{},
-		readers:    map[string]core.RecordReader{},
-		transforms: map[string]core.Transform{},
-		sinks:      map[string]core.Sink{},
-		breakers:   map[string]*pipeline.CircuitBreaker{},
-		cpAdapter:  cpStore,
-		dlqWriter:  dlqW,
-		alertMgr:   am,
-		status:     "stopped",
-		done:       make(chan struct{}),
+		spec:             spec,
+		sources:          map[string]core.Source{},
+		readers:          map[string]core.RecordReader{},
+		transforms:       map[string]core.Transform{},
+		sinks:            map[string]core.Sink{},
+		breakers:         map[string]*pipeline.CircuitBreaker{},
+		cpAdapter:        cpStore,
+		dlqWriter:        dlqW,
+		alertMgr:         am,
+		status:           "stopped",
+		done:             make(chan struct{}),
+		checkpointBlocks: map[string]string{},
 	}
 
 	// Build plugins from registry
@@ -219,6 +221,7 @@ func (e *DAGExecutor) Start(ctx context.Context) error {
 	e.frozenDuration = 0
 	now := time.Now()
 	e.stats = ExecutorStats{StartedAt: &now}
+	e.checkpointBlocks = map[string]string{}
 	e.mu.Unlock()
 
 	ctx, e.cancel = context.WithCancel(ctx)
@@ -445,7 +448,9 @@ func (e *DAGExecutor) routeAndWrite(ctx context.Context, records <-chan recordMs
 				return
 			}
 			lastRecBySource[msg.sourceID] = msg.rec
-			e.route(ctx, msg.sourceID, msg.rec, batchBySink)
+			if !e.route(ctx, msg.sourceID, msg.rec, batchBySink) {
+				e.blockSourceCheckpoint(msg.sourceID, "record failure could not be persisted to DLQ")
+			}
 
 			for sinkID, batch := range batchBySink {
 				if len(batch) >= e.batchSize {
@@ -466,8 +471,9 @@ func (e *DAGExecutor) routeAndWrite(ctx context.Context, records <-chan recordMs
 }
 
 type routeResult struct {
-	msg         recordMsg
-	batchBySink map[string][]core.Record
+	msg            recordMsg
+	batchBySink    map[string][]core.Record
+	checkpointSafe bool
 }
 
 func (e *DAGExecutor) routeAndWriteParallel(ctx context.Context, records <-chan recordMsg) {
@@ -519,6 +525,9 @@ func (e *DAGExecutor) routeAndWriteParallel(ctx context.Context, records <-chan 
 	ctxDone := ctx.Done()
 
 	applyResult := func(result routeResult) {
+		if !result.checkpointSafe {
+			e.blockSourceCheckpoint(result.msg.sourceID, "record failure could not be persisted to DLQ")
+		}
 		lastRecBySource[result.msg.sourceID] = result.msg.rec
 		for sinkID, batch := range result.batchBySink {
 			if len(batch) == 0 {
@@ -597,7 +606,7 @@ func (e *DAGExecutor) routeAndWriteParallel(ctx context.Context, records <-chan 
 }
 
 func (e *DAGExecutor) routeRecordSafely(ctx context.Context, msg recordMsg) (result routeResult) {
-	result = routeResult{msg: msg, batchBySink: map[string][]core.Record{}}
+	result = routeResult{msg: msg, batchBySink: map[string][]core.Record{}, checkpointSafe: true}
 	defer func() {
 		if rec := recover(); rec != nil {
 			err := fmt.Errorf("DAG route panic: %v", rec)
@@ -611,20 +620,20 @@ func (e *DAGExecutor) routeRecordSafely(ctx context.Context, msg recordMsg) (res
 				})
 			}
 			e.setStatus("failed")
-			e.handleFailed(ctx, msg.rec, err, "")
+			result.checkpointSafe = e.handleFailed(ctx, msg.rec, err, "")
 			result.batchBySink = map[string][]core.Record{}
 		}
 	}()
-	e.route(ctx, msg.sourceID, msg.rec, result.batchBySink)
+	result.checkpointSafe = e.route(ctx, msg.sourceID, msg.rec, result.batchBySink)
 	return result
 }
 
 // route traverses the DAG from a given node, applying transforms and routing
 // records to sinks based on edge conditions. Records are accumulated in batchBySink.
-func (e *DAGExecutor) route(ctx context.Context, nodeID string, rec core.Record, batchBySink map[string][]core.Record) {
+func (e *DAGExecutor) route(ctx context.Context, nodeID string, rec core.Record, batchBySink map[string][]core.Record) bool {
 	node := e.spec.DAG.GetNode(nodeID)
 	if node == nil {
-		return
+		return true
 	}
 
 	// Apply transform if this is a transform node
@@ -633,10 +642,9 @@ func (e *DAGExecutor) route(ctx context.Context, nodeID string, rec core.Record,
 			transformed, err := applyTransformSafely(ctx, t, rec)
 			if err != nil {
 				if err == core.ErrRecordFiltered {
-					return
+					return true
 				}
-				e.handleFailed(ctx, rec, err, nodeID)
-				return
+				return e.handleFailed(ctx, rec, err, nodeID)
 			}
 			rec = transformed
 		}
@@ -645,9 +653,10 @@ func (e *DAGExecutor) route(ctx context.Context, nodeID string, rec core.Record,
 	// If this is a sink, add to batch
 	if node.Kind == KindSink {
 		batchBySink[nodeID] = append(batchBySink[nodeID], rec)
-		return
+		return true
 	}
 
+	checkpointSafe := true
 	// Route to downstream nodes based on edge conditions
 	for _, edge := range e.spec.DAG.Edges {
 		if edge.From != nodeID {
@@ -658,8 +667,11 @@ func (e *DAGExecutor) route(ctx context.Context, nodeID string, rec core.Record,
 		}
 		// Clone the record for each downstream path to avoid shared mutation
 		clone := cloneRecord(rec)
-		e.route(ctx, edge.To, clone, batchBySink)
+		if !e.route(ctx, edge.To, clone, batchBySink) {
+			checkpointSafe = false
+		}
 	}
+	return checkpointSafe
 }
 
 // writeToSink writes a batch of records to a sink with retry.
@@ -695,8 +707,16 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 			breaker.RecordFailure(ctx, err)
 		}
 		g.Log().Errorf(ctx, "sink %s write error: %v", sinkID, err)
+		dlqDurable := true
 		for _, rec := range batch {
-			e.handleFailed(ctx, rec, err, sinkID)
+			if !e.handleFailed(ctx, rec, err, sinkID) {
+				dlqDurable = false
+			}
+		}
+		if !dlqDurable {
+			for sourceID := range lastRecBySource {
+				e.blockSourceCheckpoint(sourceID, "sink failure could not be persisted to DLQ")
+			}
 		}
 		e.alertMgr.Send(ctx, alert.Event{
 			Level:   alert.LevelError,
@@ -718,7 +738,19 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 			e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("state snapshot version collection failed: %v", err))
 			return
 		}
+		sinkCommit, err := checkpoint.BuildSinkCommitMetadata(ctx, sink, batch, sinkID)
+		if err != nil {
+			for sourceID := range lastRecBySource {
+				e.blockSourceCheckpoint(sourceID, "sink commit metadata collection failed: "+err.Error())
+			}
+			e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("sink commit metadata collection failed: %v", err))
+			return
+		}
 		for sourceID, lastRec := range lastRecBySource {
+			if reason, blocked := e.sourceCheckpointBlocked(sourceID); blocked {
+				e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("checkpoint for source %s blocked until restart: %s", sourceID, reason))
+				continue
+			}
 			cp, err := e.checkpointForRecord(ctx, sourceID, lastRec)
 			if err != nil {
 				g.Log().Warningf(ctx, "checkpoint source %s: %v", sourceID, err)
@@ -727,8 +759,8 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 			saveKey := e.spec.Name + "-" + sourceID
 			cp.JobName = saveKey
 			cp.ID = fmt.Sprintf("%s-%d", saveKey, time.Now().UnixNano())
-			if len(stateVersions) > 0 {
-				wrapped, wrapErr := checkpoint.BuildEnvelope(cp.Position, stateVersions, nil)
+			if len(stateVersions) > 0 || len(sinkCommit) > 0 {
+				wrapped, wrapErr := checkpoint.BuildEnvelope(cp.Position, stateVersions, sinkCommit)
 				if wrapErr != nil {
 					e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("checkpoint envelope build failed for source %s: %v", sourceID, wrapErr))
 					return
@@ -875,7 +907,7 @@ func unwrapCheckpointForSource(cp *core.Checkpoint) *core.Checkpoint {
 // handleFailed routes a failed record to the DLQ. dagNodeID is the node where
 // the failure happened or the sink the record was bound for; when it names a
 // sink, the DLQ-write-failure path can trip that sink's circuit breaker (P5-9).
-func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err error, dagNodeID string) {
+func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err error, dagNodeID string) bool {
 	atomic.AddInt64(&e.stats.RecordsFailed, 1)
 	if e.dlqWriter == nil {
 		// No DLQ configured — never drop silently. Surface at error level so a
@@ -889,7 +921,7 @@ func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err err
 			Message: fmt.Sprintf("pipeline %s: record failed (source=%s) with no DLQ writer: %v", e.spec.Name, rec.Metadata.Source, err),
 			JobName: e.spec.Name,
 		})
-		return
+		return false
 	}
 	entry := pipeline.DLQEntry{
 		JobName:    e.spec.Name,
@@ -917,9 +949,28 @@ func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err err
 			Message: fmt.Sprintf("pipeline %s: failed to write record to DLQ (%v); original error: %v", e.spec.Name, dlqErr, err),
 			JobName: e.spec.Name,
 		})
-		return
+		return false
 	}
 	atomic.AddInt64(&e.stats.RecordsDLQ, 1)
+	return true
+}
+
+func (e *DAGExecutor) blockSourceCheckpoint(sourceID, reason string) {
+	e.mu.Lock()
+	if e.checkpointBlocks == nil {
+		e.checkpointBlocks = map[string]string{}
+	}
+	if _, exists := e.checkpointBlocks[sourceID]; !exists {
+		e.checkpointBlocks[sourceID] = reason
+	}
+	e.mu.Unlock()
+}
+
+func (e *DAGExecutor) sourceCheckpointBlocked(sourceID string) (string, bool) {
+	e.mu.RLock()
+	reason, ok := e.checkpointBlocks[sourceID]
+	e.mu.RUnlock()
+	return reason, ok
 }
 
 // applyTransformSafely invokes a transform with panic recovery so a single

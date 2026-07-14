@@ -7,7 +7,8 @@
  * 3. Masks sensitive fields (credit_card)
  * 4. Computes a risk score based on amount + customer tier
  *
- * Compile: extism-js compile examples/vip-order-enricher.ts -o vip-order-enricher.wasm
+ * Compile: bundle with esbuild, then run extism-js on the generated CommonJS
+ *          using plugin-transform.d.ts (see docs/plugin-abi-v1.md).
  * Install:  Upload the .wasm file via UI or:
  *           curl -F wasm=@vip-order-enricher.wasm -F name=vip-order-enricher -F kind=transform \
  *             http://localhost:8000/api/v2/plugins/install

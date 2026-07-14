@@ -46,14 +46,15 @@ func (m *Manager) ExecSource(ctx context.Context, pluginName string, config map[
 		return nil, fmt.Errorf("plugin %q is not a source (kind=%s)", pluginName, lp.meta.Kind)
 	}
 
-	for k, v := range config {
-		lp.hctx.Config[k] = v
-	}
+	lp.callMu.Lock()
+	setPluginConfigLocked(lp, config)
+	lp.callMu.Unlock()
 
 	reader := &pluginSourceReader{
 		manager:    m,
 		pluginName: pluginName,
 		lp:         lp,
+		config:     config,
 		records:    make(chan core.Record, 1024),
 		errors:     make(chan error, 16),
 		done:       make(chan struct{}),
@@ -80,6 +81,7 @@ type pluginSourceReader struct {
 	manager    *Manager
 	pluginName string
 	lp         *loadedPlugin
+	config     map[string]any
 	records    chan core.Record
 	errors     chan error
 	done       chan struct{}
@@ -125,6 +127,9 @@ func (r *pluginSourceReader) callRead(ctx context.Context) (*core.Record, error)
 	lp := r.lp
 	r.manager.mu.RUnlock()
 
+	lp.callMu.Lock()
+	defer lp.callMu.Unlock()
+	setPluginConfigLocked(lp, r.config)
 	_, output, err := lp.extism.CallWithContext(ctx, "read", nil)
 	if err != nil {
 		return nil, fmt.Errorf("wasm source read: %w", err)
@@ -215,9 +220,9 @@ func (m *Manager) ExecSink(ctx context.Context, pluginName string, records []cor
 		return fmt.Errorf("plugin %q is not a sink (kind=%s)", pluginName, lp.meta.Kind)
 	}
 
-	for k, v := range config {
-		lp.hctx.Config[k] = v
-	}
+	lp.callMu.Lock()
+	defer lp.callMu.Unlock()
+	setPluginConfigLocked(lp, config)
 
 	data, err := json.Marshal(records)
 	if err != nil {
@@ -247,9 +252,9 @@ func (s *pluginSink) Open(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("sink plugin %q not found", s.name)
 	}
-	for k, v := range s.config {
-		lp.hctx.Config[k] = v
-	}
+	lp.callMu.Lock()
+	setPluginConfigLocked(lp, s.config)
+	lp.callMu.Unlock()
 	return nil
 }
 

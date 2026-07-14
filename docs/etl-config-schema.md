@@ -8,6 +8,7 @@ The config surface should serve common CDC/ETL paths, checkpoints, DLQ, idempote
 
 ```yaml
 name: example-pipeline
+allow_unsafe: false
 source:
   type: file
   connection: saved-source
@@ -43,6 +44,7 @@ dlq:
 | Field | Required | Description |
 | --- | --- | --- |
 | `name` | yes | Unique pipeline name. Duplicate runtime creates return `409`; duplicate files are skipped. |
+| `allow_unsafe` | no | Explicit opt-in for a CDC/stream source writing to a non-idempotent `file_sink`/`s3` target. Default `false`; use only when duplicate handling and replay boundaries are documented and tested. |
 | `source.type` | yes unless `source.connection` is set | Registered source plugin name. If omitted with `connection`, it is inferred from the saved connection. |
 | `source.connection` / `source.connection_ref` | no | Saved connection catalog entry to use as the base source config. Inline `source.config` overrides fields from the saved connection. |
 | `source.config` | no | Source-specific settings. Defaults to `{}`. |
@@ -1178,12 +1180,11 @@ transforms with `state_backend` enabled automatically receive `state_pipeline`
 from the pipeline name and `state_node` from the transform/node id. Set these
 fields only when you need an explicit shared or migrated state namespace.
 
-The linear runner and DAG executor now save checkpoint envelopes for stateful
-transforms that implement `StateSnapshotter`: after a successful sink write they
-store the source position together with the latest state snapshot versions and
-unwrap the source position again before reopening the source. If state snapshot
-collection fails, the source checkpoint is not advanced. Sink commit metadata is
-still a roadmap item.
+The linear runner and DAG executor now save checkpoint envelopes that bind the
+source position, latest state snapshot versions, and sink acknowledgement
+metadata after a successful sink write. They unwrap the source position again
+before reopening the source. If state snapshot or sink acknowledgement metadata
+collection fails, the source checkpoint is not advanced.
 
 `deduplicate`, `lookup`, `join`, and `window` also expose basic state metrics
 when `state_backend` is enabled. `/api/v2/metrics` includes `state_metrics`

@@ -99,6 +99,15 @@ type SinkMetricsProvider interface {
 	SinkMetrics() SinkMetrics
 }
 
+// SinkCommitMetadataProvider optionally exposes sink-native commit metadata
+// after a successful Write call. The runner stores this together with the
+// source position and state snapshot versions in the checkpoint envelope.
+// Returning an error prevents checkpoint advancement: the sink write may have
+// committed, so replay is safer than persisting an unverifiable boundary.
+type SinkCommitMetadataProvider interface {
+	SinkCommitMetadata(ctx context.Context) (map[string]any, error)
+}
+
 // SchemaInfo describes the schema of a source or sink for validation.
 type SchemaInfo struct {
 	Columns []ColumnInfo

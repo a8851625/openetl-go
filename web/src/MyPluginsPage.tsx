@@ -543,8 +543,8 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
             <div className="card-body">
               <p className="text-sm text-slate-600">{t('myplugin.sdkDesc')}</p>
               <div className="mt-3 rounded-lg bg-slate-900 p-4 text-sm text-slate-300">
-                <div className="text-xs text-slate-500"># Install the SDK &amp; Extism JS PDK</div>
-                <div className="font-mono">npm install @etl/sdk @extism/js-pdk</div>
+                <div className="text-xs text-slate-500"># Install the SDK &amp; bundler</div>
+                <div className="font-mono">npm install @etl/sdk esbuild</div>
                 <div className="mt-3 text-xs text-slate-500"># Install the extism-js compiler from Extism releases or your CI image</div>
                 <div className="font-mono">extism-js --version</div>
                 <div className="mt-3 text-xs text-slate-500"># Write your plugin (src/transform.ts)</div>
@@ -561,8 +561,9 @@ const plugin = createExtismTransformPlugin({
 });
 
 export const transform = plugin;`}</pre>
-                <div className="mt-3 text-xs text-slate-500"># Compile to WASM &amp; install</div>
-                <div className="font-mono">extism-js compile src/transform.ts -o dist/transform.wasm</div>
+                <div className="mt-3 text-xs text-slate-500"># Bundle, compile to WASM &amp; install</div>
+                <div className="font-mono">esbuild src/transform.ts --bundle --platform=neutral --format=cjs --target=es2020 --outfile=dist/transform.js</div>
+                <div className="font-mono">extism-js dist/transform.js -i plugin-transform.d.ts -o dist/transform.wasm</div>
                 <div className="font-mono mt-1"># Then upload dist/transform.wasm in the UI</div>
               </div>
             </div>

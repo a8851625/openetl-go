@@ -1,7 +1,7 @@
 {
   "name": "sync-canal-etl-ui",
   "private": true,
-  "version": "0.2.9",
+  "version": "0.2.10-beta.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

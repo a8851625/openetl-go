@@ -3427,7 +3427,9 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Write the TS source to a temp file.
+	// Write the TS source to a temp file. The current extism-js compiler accepts
+	// bundled JavaScript, so compileWithExtismJS runs a pinned/pre-installed
+	// esbuild first instead of passing TypeScript directly to extism-js.
 	srcFile := filepath.Join(tmpDir, "plugin.ts")
 	if err := os.WriteFile(srcFile, []byte(source), 0644); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -3475,7 +3477,7 @@ func (s *Server) handlePluginCompile(w http.ResponseWriter, r *http.Request) {
 		"abi":            manifest.ABI,
 		"compiled":       false,
 		"source":         source,
-		"compile_hint":   "Pre-install the extism-js compiler or compile plugins offline in CI/CLI, then upload the .wasm with /api/v2/plugins/install",
+		"compile_hint":   "Pre-install esbuild and the extism-js compiler, or compile plugins offline in CI/CLI, then upload the .wasm with /api/v2/plugins/install",
 		"compile_output": compileOutput,
 	})
 }
@@ -3489,22 +3491,48 @@ func validPluginName(name string) error {
 	return pluginsystem.ValidatePluginName(name)
 }
 
-// compileWithExtismJS attempts to compile a TS file to WASM using the extism-js CLI.
+// compileWithExtismJS bundles a TS file with esbuild and compiles the resulting
+// CommonJS module to WASM using the current extism-js CLI.
 // Returns the wasm bytes on success, or an error if the tool is unavailable or fails.
 func compileWithExtismJS(tmpDir, srcFile, name string) ([]byte, error) {
 	// Defense in depth: even though the handler validates `name`, ensure the
 	// output path cannot escape tmpDir (TF-3).
 	outFile := filepath.Join(tmpDir, filepath.Base(name)+".wasm")
+	bundleFile := filepath.Join(tmpDir, "plugin.js")
+	interfaceFile := filepath.Join(tmpDir, "plugin.d.ts")
+	if err := os.WriteFile(interfaceFile, []byte("declare module \"main\" {\n  export function transform(): I32;\n}\n"), 0644); err != nil {
+		return nil, fmt.Errorf("write extism-js interface: %w", err)
+	}
+
+	esbuildPath, err := exec.LookPath("esbuild")
+	if err != nil {
+		return nil, fmt.Errorf("esbuild not found: pre-install a pinned esbuild compiler or compile plugins offline")
+	}
+	bundleCmd := exec.Command(
+		esbuildPath,
+		srcFile,
+		"--bundle",
+		"--platform=neutral",
+		"--format=cjs",
+		"--target=es2020",
+		"--outfile="+bundleFile,
+	)
+	bundleCmd.Dir = tmpDir
+	var bundleStderr bytes.Buffer
+	bundleCmd.Stderr = &bundleStderr
+	if err := bundleCmd.Run(); err != nil {
+		return nil, fmt.Errorf("esbuild plugin bundle failed: %v\nstderr: %s", err, bundleStderr.String())
+	}
 
 	// First check if extism-js is available as a pre-installed binary
 	// (preferred — no network fetch, no supply-chain exposure).
 	if extismPath, err := exec.LookPath("extism-js"); err == nil {
-		cmd := exec.Command(extismPath, "compile", srcFile, "-o", outFile)
+		cmd := exec.Command(extismPath, bundleFile, "-i", interfaceFile, "-o", outFile)
 		cmd.Dir = tmpDir
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("extism-js compile failed: %v\nstderr: %s", err, stderr.String())
+			return nil, fmt.Errorf("extism-js compilation failed: %v\nstderr: %s", err, stderr.String())
 		}
 	} else if _, err2 := exec.LookPath("npx"); err2 == nil {
 		if os.Getenv("OPENETL_ALLOW_NPX_PLUGIN_COMPILE") != "true" {
@@ -3518,15 +3546,15 @@ func compileWithExtismJS(tmpDir, srcFile, name string) ([]byte, error) {
 		// extism-js or compile plugins in CI/CLI so request handling never
 		// fetches executable tooling from the network.
 		g.Log().Warningf(context.Background(), "extism-js not pre-installed; development npx fallback enabled with package %s", extismPkg)
-		cmd := exec.Command("npx", "--yes", "-p", extismPkg, "extism-js", "compile", srcFile, "-o", outFile)
+		cmd := exec.Command("npx", "--yes", "-p", extismPkg, "extism-js", bundleFile, "-i", interfaceFile, "-o", outFile)
 		cmd.Dir = tmpDir
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("npx extism-js compile failed: %v\nstderr: %s", err, stderr.String())
+			return nil, fmt.Errorf("npx extism-js compilation failed: %v\nstderr: %s", err, stderr.String())
 		}
 	} else {
-		return nil, fmt.Errorf("extism-js not found: install with 'npm install -g @extism/js-pdk' or compile plugins offline")
+		return nil, fmt.Errorf("extism-js not found: install a pinned compiler from the Extism JS PDK releases or compile plugins offline")
 	}
 
 	wasmBytes, err := os.ReadFile(outFile)

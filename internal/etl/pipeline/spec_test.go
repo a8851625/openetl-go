@@ -41,6 +41,26 @@ func TestValidateSpecRejectsUnknownPlugins(t *testing.T) {
 	}
 }
 
+func TestValidateSpecRequiresExplicitUnsafeOptIn(t *testing.T) {
+	spec := &Spec{
+		Name:                  "kafka-to-file-boundary",
+		Source:                SourceSpec{Type: "kafka"},
+		Sink:                  SinkSpec{Type: "file_sink"},
+		BatchSize:             1,
+		CheckpointIntervalSec: 1,
+		BackpressureBuffer:    1,
+		Retry:                 &RetrySpec{MaxAttempts: 1, InitialIntervalMs: 1, MaxIntervalMs: 1},
+	}
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "unsafe pipeline") {
+		t.Fatalf("ValidateSpec() error = %v, want unsafe pipeline rejection", err)
+	}
+
+	spec.AllowUnsafe = true
+	if err := ValidateSpec(spec); err != nil {
+		t.Fatalf("ValidateSpec() with allow_unsafe = true error = %v", err)
+	}
+}
+
 func TestApplyDefaultsSetsSourceDefaultSchedule(t *testing.T) {
 	spec := &Spec{
 		Name:   "cdc-default",

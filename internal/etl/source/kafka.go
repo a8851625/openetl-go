@@ -287,7 +287,7 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 			rec.Data = data
 
 			h.reader.mu.Lock()
-			if msg.Offset > h.reader.offsets[msg.Partition] {
+			if current, ok := h.reader.offsets[msg.Partition]; !ok || msg.Offset > current {
 				h.reader.offsets[msg.Partition] = msg.Offset
 			}
 			h.reader.mu.Unlock()
@@ -396,7 +396,7 @@ func (r *kafkaReader) CheckpointForRecord(ctx context.Context, rec core.Record) 
 		sess.MarkOffset(r.source.topic, partition, offset+1, "")
 		sess.Commit()
 	}
-	if offset > r.committedOffsets[partition] {
+	if current, ok := r.committedOffsets[partition]; !ok || offset > current {
 		r.committedOffsets[partition] = offset
 	}
 	snapshot := make(map[int32]int64, len(r.committedOffsets))

@@ -14,7 +14,8 @@ RUN go mod download
 COPY . .
 
 # Build binary
-RUN CGO_ENABLED=0 GOOS=linux go build -p 1 -ldflags="-s -w" -o /app/main .
+ARG GO_BUILD_TAGS=""
+RUN CGO_ENABLED=0 GOOS=linux go build -p 1 -tags="${GO_BUILD_TAGS}" -ldflags="-s -w" -o /app/main .
 
 # Runtime stage
 FROM alpine:3.19

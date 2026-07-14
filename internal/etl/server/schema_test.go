@@ -545,7 +545,17 @@ func TestCompileWithExtismJSDisablesNpxFallbackByDefault(t *testing.T) {
 	if err := os.WriteFile(srcFile, []byte("export function transform() {}"), 0644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	t.Setenv("PATH", "")
+	binDir := filepath.Join(tmpDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "esbuild"), []byte("#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in --outfile=*) out=${arg#--outfile=} ;; esac; done\nprintf bundled > \"$out\"\n"), 0755); err != nil {
+		t.Fatalf("write fake esbuild: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "npx"), []byte("#!/bin/sh\nexit 99\n"), 0755); err != nil {
+		t.Fatalf("write fake npx: %v", err)
+	}
+	t.Setenv("PATH", binDir)
 	t.Setenv("OPENETL_ALLOW_NPX_PLUGIN_COMPILE", "")
 
 	_, err := compileWithExtismJS(tmpDir, srcFile, "safe-plugin")
@@ -554,6 +564,9 @@ func TestCompileWithExtismJSDisablesNpxFallbackByDefault(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "npx --yes") {
 		t.Fatalf("compileWithExtismJS() error mentions npx fallback execution: %v", err)
+	}
+	if !strings.Contains(err.Error(), "npx fallback is disabled") {
+		t.Fatalf("compileWithExtismJS() error = %v, want disabled fallback guidance", err)
 	}
 }
 
@@ -570,6 +583,9 @@ func TestCompileWithExtismJSRequiresExplicitNpxPackage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(binDir, "npx"), []byte("#!/bin/sh\nexit 99\n"), 0755); err != nil {
 		t.Fatalf("write fake npx: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(binDir, "esbuild"), []byte("#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in --outfile=*) out=${arg#--outfile=} ;; esac; done\nprintf bundled > \"$out\"\n"), 0755); err != nil {
+		t.Fatalf("write fake esbuild: %v", err)
+	}
 	t.Setenv("PATH", binDir)
 	t.Setenv("OPENETL_ALLOW_NPX_PLUGIN_COMPILE", "true")
 	t.Setenv("OPENETL_EXTISM_JS_PKG", "")
@@ -580,6 +596,48 @@ func TestCompileWithExtismJSRequiresExplicitNpxPackage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "OPENETL_EXTISM_JS_PKG") {
 		t.Fatalf("compileWithExtismJS() error = %v, want explicit package guidance", err)
+	}
+}
+
+func TestCompileWithExtismJSUsesBundledJavaScriptAndCurrentCLI(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "plugin.ts")
+	if err := os.WriteFile(srcFile, []byte("export function transform() {}"), 0644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	binDir := filepath.Join(tmpDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "esbuild"), []byte("#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in --outfile=*) out=${arg#--outfile=} ;; esac; done\nprintf bundled > \"$out\"\n"), 0755); err != nil {
+		t.Fatalf("write fake esbuild: %v", err)
+	}
+	argsFile := filepath.Join(tmpDir, "extism-args")
+	if err := os.WriteFile(filepath.Join(binDir, "extism-js"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGS_FILE\"\nout=\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '-o' ]; then out=$2; break; fi\n  shift\ndone\nprintf wasm-fixture > \"$out\"\n"), 0755); err != nil {
+		t.Fatalf("write fake extism-js: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("ARGS_FILE", argsFile)
+
+	wasm, err := compileWithExtismJS(tmpDir, srcFile, "safe-plugin")
+	if err != nil {
+		t.Fatalf("compileWithExtismJS() error = %v", err)
+	}
+	if string(wasm) != "wasm-fixture" {
+		t.Fatalf("wasm = %q, want fixture bytes", wasm)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read extism args: %v", err)
+	}
+	argText := string(args)
+	if strings.Contains(argText, "\ncompile\n") || strings.HasPrefix(argText, "compile\n") {
+		t.Fatalf("extism-js used removed compile subcommand: %q", argText)
+	}
+	for _, want := range []string{"plugin.js", "-i", "plugin.d.ts", "-o", "safe-plugin.wasm"} {
+		if !strings.Contains(argText, want) {
+			t.Fatalf("extism-js args %q missing %q", argText, want)
+		}
 	}
 }
 

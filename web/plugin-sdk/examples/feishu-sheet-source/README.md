@@ -6,7 +6,7 @@ This proves the full extension path:
 
 ```text
 web/plugin-sdk TypeScript
-  -> offline extism-js compile
+  -> offline esbuild bundle + extism-js compile
   -> POST /api/v2/plugins/install (wasm + manifest)
   -> pipeline type: plugin_feishu-sheet-source
   -> project / type_convert
@@ -44,17 +44,25 @@ Host ABI v1 does not expose arbitrary HTTP from WASM. Live sheet fetch is expect
 
 ```sh
 cd web/plugin-sdk
-npx --yes @extism/js-pdk extism-js compile \
-  examples/feishu-sheet-source/feishu-sheet-source.ts \
-  -o examples/feishu-sheet-source/feishu-sheet-source.wasm
+mkdir -p dist/examples
+esbuild examples/feishu-sheet-source/feishu-sheet-source.ts \
+  --bundle --platform=neutral --format=cjs --target=es2020 \
+  --outfile=dist/examples/feishu-sheet-source.js
+extism-js dist/examples/feishu-sheet-source.js \
+  -i plugin-source.d.ts \
+  -o dist/examples/feishu-sheet-source.wasm
 ```
+
+Use the pinned compiler image from `hack/wasm-compiler.Dockerfile` when these
+tools are not installed locally. The compiler does not support an
+`extism-js compile` subcommand.
 
 Server-side `/api/v2/plugins/compile` is transform-only. Source plugins must be compiled offline.
 
 ## Install
 
 ```sh
-curl -F wasm=@web/plugin-sdk/examples/feishu-sheet-source/feishu-sheet-source.wasm \
+curl -F wasm=@web/plugin-sdk/dist/examples/feishu-sheet-source.wasm \
   -F name=feishu-sheet-source \
   -F kind=source \
   -F version=0.1.0 \
