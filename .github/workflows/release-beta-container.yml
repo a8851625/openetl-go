@@ -1,0 +1,69 @@
+name: Release Beta Container
+
+on:
+  push:
+    tags:
+      - 'v*-beta*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing beta tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish beta container
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve beta tag
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          case "$REQUESTED_TAG" in
+            v*-beta*) ;;
+            *) echo "expected a v*-beta* tag, got: $REQUESTED_TAG" >&2; exit 1 ;;
+          esac
+          echo "tag=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${REQUESTED_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build release binary
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          SKIP_UI=1 ./hack/pack.sh
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath \
+            -ldflags "-s -w -X github.com/a8851625/openetl-go/internal/consts.Version=$VERSION" \
+            -o openetl-go .
+
+      - name: Build and push versioned beta image
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          IMAGE="ghcr.io/a8851625/openetl-go:$VERSION"
+          docker build --platform=linux/amd64 -f Dockerfile.goreleaser -t "$IMAGE" .
+          docker push "$IMAGE"
