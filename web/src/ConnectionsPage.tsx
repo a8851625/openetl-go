@@ -1,6 +1,27 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { TFunc, Lang } from './types';
-import { ConfigForm, buildDefaultConfig, filterFieldsByScope, missingRequiredFields, type PluginSchemaField } from './configFields';
+import {
+  ConfigForm,
+  buildDefaultConfig,
+  filterFieldsByScope,
+  missingRequiredFields,
+  type PluginSchemaField,
+} from './configFields';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
+import { ToneBadge } from '@/components/shared/status-badge';
+import { cn } from '@/lib/utils';
 
 type ConnectorKind = 'source' | 'sink' | 'transform';
 
@@ -32,7 +53,12 @@ type ConnectorDescriptor = {
   registered?: boolean;
 };
 
-function getToken() { return window.localStorage.getItem('etl_api_token') || ''; }
+const selectClass =
+  'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
+function getToken() {
+  return window.localStorage.getItem('etl_api_token') || '';
+}
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();
@@ -70,7 +96,9 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     setLoading(true);
     Promise.all([
       api<{ connections?: ConnectionEntry[] }>('/api/v2/connections'),
-      api<{ descriptors?: ConnectorDescriptor[] }>('/api/v2/connectors/descriptors').catch(() => ({ descriptors: [] })),
+      api<{ descriptors?: ConnectorDescriptor[] }>('/api/v2/connectors/descriptors').catch(() => ({
+        descriptors: [],
+      })),
     ])
       .then(([c, d]) => {
         setConnections(c.connections || []);
@@ -81,21 +109,31 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    refresh();
+  }, []);
 
   const typeOptions = useMemo(() => {
-    const list = descriptors.filter((d) => d.kind === kind && d.registered !== false).map((d) => d.type);
+    const list = descriptors
+      .filter((d) => d.kind === kind && d.registered !== false)
+      .map((d) => d.type);
     return Array.from(new Set(list)).sort();
   }, [descriptors, kind]);
 
   const selectedDescriptor = descriptors.find((d) => d.kind === kind && d.type === type);
-  const selectedFields = filterFieldsByScope(selectedDescriptor?.fields || [], kind === 'transform' ? 'all' : 'connection');
+  const selectedFields = filterFieldsByScope(
+    selectedDescriptor?.fields || [],
+    kind === 'transform' ? 'all' : 'connection',
+  );
   const missingFields = missingRequiredFields(selectedFields, config);
 
   const nextConfigFor = (nextKind: ConnectorKind, nextType: string) => {
     const descriptor = descriptors.find((d) => d.kind === nextKind && d.type === nextType);
     if (descriptor?.fields?.length) {
-      const scoped = filterFieldsByScope(descriptor.fields, nextKind === 'transform' ? 'all' : 'connection');
+      const scoped = filterFieldsByScope(
+        descriptor.fields,
+        nextKind === 'transform' ? 'all' : 'connection',
+      );
       return buildDefaultConfig(scoped);
     }
     return starterConfig[nextKind] || {};
@@ -200,143 +238,237 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     applyConfig(conn.config || {});
   };
 
-  const healthClass = (status?: string) => {
-    if (status === 'ok') return 'badge-emerald';
-    if (status === 'error') return 'badge-rose';
-    return 'badge-slate';
+  const healthTone = (status?: string): 'emerald' | 'rose' | 'slate' => {
+    if (status === 'ok') return 'emerald';
+    if (status === 'error') return 'rose';
+    return 'slate';
   };
 
   return (
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-3">
-        <div className="card card-body">
-          <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{t('conn.saved')}</span>
-          <div className="mt-2 text-3xl font-bold text-indigo-600">{connections.length}</div>
-        </div>
-        <div className="card card-body">
-          <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{t('conn.healthy')}</span>
-          <div className="mt-2 text-3xl font-bold text-emerald-600">{connections.filter((c) => c.last_status === 'ok').length}</div>
-        </div>
-        <div className="card card-body">
-          <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{t('conn.descriptors')}</span>
-          <div className="mt-2 text-3xl font-bold text-blue-600">{descriptors.length}</div>
-        </div>
+        <Card>
+          <CardContent className="p-5">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {t('conn.saved')}
+            </span>
+            <div className="mt-2 text-3xl font-bold text-indigo-600 dark:text-indigo-400">
+              {connections.length}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {t('conn.healthy')}
+            </span>
+            <div className="mt-2 text-3xl font-bold text-emerald-600 dark:text-emerald-400">
+              {connections.filter((c) => c.last_status === 'ok').length}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {t('conn.descriptors')}
+            </span>
+            <div className="mt-2 text-3xl font-bold text-blue-600 dark:text-blue-400">
+              {descriptors.length}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      {error && <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>}
+      {error && <ErrorBox message={error} />}
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="card">
-          <div className="card-header flex items-center justify-between">
-            <h2 className="text-sm font-semibold">{t('conn.catalog')}</h2>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm">{t('conn.catalog')}</CardTitle>
             <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-xs text-slate-500">
-                <input type="checkbox" checked={openOnTest} onChange={(e) => setOpenOnTest(e.target.checked)} />
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={openOnTest}
+                  onChange={(e) => setOpenOnTest(e.target.checked)}
+                  className="h-4 w-4 rounded border-input"
+                />
                 {t('conn.openOnTest')}
               </label>
-              <button className="btn btn-secondary btn-sm" onClick={refresh}>{t('common.refresh')}</button>
+              <Button variant="secondary" size="sm" onClick={refresh}>
+                {t('common.refresh')}
+              </Button>
             </div>
-          </div>
-          <div className="overflow-x-auto">
+          </CardHeader>
+          <CardContent className="p-0">
             {loading && connections.length === 0 ? (
-              <div className="p-8 text-center text-sm text-slate-400">{t('common.loading')}</div>
+              <div className="p-8 text-center text-sm text-muted-foreground">{t('common.loading')}</div>
             ) : connections.length === 0 ? (
-              <div className="p-8">
-                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-10 text-center">
-                  <div className="text-sm text-slate-500">{t('conn.empty')}</div>
-                  <div className="mt-1 text-xs text-slate-400">{t('conn.emptyHint')}</div>
-                </div>
+              <div className="p-6">
+                <EmptyState text={t('conn.empty')} hint={t('conn.emptyHint')} />
               </div>
             ) : (
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <th>{t('common.name')}</th>
-                    <th>{t('plugin.kind')}</th>
-                    <th>{t('conn.type')}</th>
-                    <th>{t('common.status')}</th>
-                    <th>{t('conn.lastTested')}</th>
-                    <th>{t('common.actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t('common.name')}</TableHead>
+                    <TableHead>{t('plugin.kind')}</TableHead>
+                    <TableHead>{t('conn.type')}</TableHead>
+                    <TableHead>{t('common.status')}</TableHead>
+                    <TableHead>{t('conn.lastTested')}</TableHead>
+                    <TableHead>{t('common.actions')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {connections.map((conn) => (
-                    <tr key={conn.name}>
-                      <td className="font-medium">{conn.name}</td>
-                      <td><span className="badge badge-blue">{conn.kind}</span></td>
-                      <td>{conn.type}</td>
-                      <td>
-                        <span className={`badge ${healthClass(conn.last_status)}`}>{conn.last_status || 'unknown'}</span>
-                        {conn.last_error && <div className="mt-1 max-w-xs truncate text-xs text-rose-500">{conn.last_error}</div>}
-                      </td>
-                      <td className="text-xs text-slate-400">{fmtTime(conn.last_tested_at)}</td>
-                      <td>
+                    <TableRow key={conn.name}>
+                      <TableCell className="font-medium">{conn.name}</TableCell>
+                      <TableCell>
+                        <ToneBadge tone="blue">{conn.kind}</ToneBadge>
+                      </TableCell>
+                      <TableCell>{conn.type}</TableCell>
+                      <TableCell>
+                        <ToneBadge tone={healthTone(conn.last_status)}>
+                          {conn.last_status || 'unknown'}
+                        </ToneBadge>
+                        {conn.last_error && (
+                          <div className="mt-1 max-w-xs truncate text-xs text-rose-500">
+                            {conn.last_error}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {fmtTime(conn.last_tested_at)}
+                      </TableCell>
+                      <TableCell>
                         <div className="flex gap-2">
-                          <button className="btn btn-secondary btn-sm" onClick={() => loadConnection(conn)}>{t('conn.load')}</button>
-                          <button className="btn btn-secondary btn-sm" disabled={testing === conn.name} onClick={() => testConnection(conn)}>
+                          <Button variant="secondary" size="sm" onClick={() => loadConnection(conn)}>
+                            {t('conn.load')}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={testing === conn.name}
+                            onClick={() => testConnection(conn)}
+                          >
                             {testing === conn.name ? t('conn.testing') : t('conn.test')}
-                          </button>
-                          <button className="btn btn-danger btn-sm" onClick={() => deleteConnection(conn)}>{t('pipe.delete')}</button>
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => deleteConnection(conn)}
+                          >
+                            {t('pipe.delete')}
+                          </Button>
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             )}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
-        <div className="card">
-          <div className="card-header"><h2 className="text-sm font-semibold">{t('conn.new')}</h2></div>
-          <div className="card-body space-y-4">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">{t('conn.new')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
             <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{t('common.name')}</span>
-              <input className="input w-full" value={name} onChange={(e) => setName(e.target.value)} />
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {t('common.name')}
+              </span>
+              <Input value={name} onChange={(e) => setName(e.target.value)} />
             </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
-                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{t('plugin.kind')}</span>
-                <select className="input w-full" value={kind} onChange={(e) => onKindChange(e.target.value as ConnectorKind)}>
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {t('plugin.kind')}
+                </span>
+                <select
+                  className={selectClass}
+                  value={kind}
+                  onChange={(e) => onKindChange(e.target.value as ConnectorKind)}
+                >
                   <option value="source">source</option>
                   <option value="sink">sink</option>
                   <option value="transform">transform</option>
                 </select>
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{t('conn.type')}</span>
-                <select className="input w-full" value={type} onChange={(e) => applyType(e.target.value)}>
-                  {(typeOptions.length > 0 ? typeOptions : [type]).map((item) => <option key={item} value={item}>{item}</option>)}
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {t('conn.type')}
+                </span>
+                <select
+                  className={selectClass}
+                  value={type}
+                  onChange={(e) => applyType(e.target.value)}
+                >
+                  {(typeOptions.length > 0 ? typeOptions : [type]).map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
                 </select>
               </label>
             </div>
             {selectedDescriptor && (
-              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="space-y-3 rounded-lg border border-border bg-muted/40 p-3">
                 <div className="flex flex-wrap gap-1.5">
-                  <span className={`badge ${selectedDescriptor.maturity === 'production' ? 'badge-emerald' : selectedDescriptor.maturity === 'beta' ? 'badge-blue' : 'badge-amber'}`}>{selectedDescriptor.maturity}</span>
-                  {selectedDescriptor.readiness?.status && <span className="badge badge-blue">{selectedDescriptor.readiness.status}</span>}
-                  {(selectedDescriptor.capabilities || []).slice(0, 6).map((cap) => <span key={cap} className="badge badge-slate">{cap}</span>)}
+                  <ToneBadge
+                    tone={
+                      selectedDescriptor.maturity === 'production'
+                        ? 'emerald'
+                        : selectedDescriptor.maturity === 'beta'
+                          ? 'blue'
+                          : 'amber'
+                    }
+                  >
+                    {selectedDescriptor.maturity}
+                  </ToneBadge>
+                  {selectedDescriptor.readiness?.status && (
+                    <ToneBadge tone="blue">{selectedDescriptor.readiness.status}</ToneBadge>
+                  )}
+                  {(selectedDescriptor.capabilities || []).slice(0, 6).map((cap) => (
+                    <ToneBadge key={cap} tone="slate">
+                      {cap}
+                    </ToneBadge>
+                  ))}
                 </div>
                 {selectedDescriptor.readiness && (
-                  <div className="rounded border border-white/70 bg-white/80 p-2 text-xs text-slate-600">
-                    <div className="mb-1 font-medium text-slate-700">Readiness</div>
-                    {selectedDescriptor.readiness.summary && <div className="mb-1">{selectedDescriptor.readiness.summary}</div>}
+                  <div className="rounded border border-border bg-card p-2 text-xs text-muted-foreground">
+                    <div className="mb-1 font-medium text-foreground">Readiness</div>
+                    {selectedDescriptor.readiness.summary && (
+                      <div className="mb-1">{selectedDescriptor.readiness.summary}</div>
+                    )}
                     <div className="flex flex-wrap gap-1">
                       {(selectedDescriptor.readiness.gates || []).slice(0, 5).map((gate) => (
-                        <span key={gate.code} className={`badge ${gate.status === 'pass' ? 'badge-emerald' : gate.status === 'partial' ? 'badge-blue' : gate.status === 'missing' ? 'badge-rose' : 'badge-slate'}`}>
+                        <ToneBadge
+                          key={gate.code}
+                          tone={
+                            gate.status === 'pass'
+                              ? 'emerald'
+                              : gate.status === 'partial'
+                                ? 'blue'
+                                : gate.status === 'missing'
+                                  ? 'rose'
+                                  : 'slate'
+                          }
+                        >
                           {gate.label}: {gate.status}
-                        </span>
+                        </ToneBadge>
                       ))}
                     </div>
                   </div>
                 )}
-                <div className="grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
+                <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
                   <div>
-                    <div className="font-medium text-slate-600">{t('conn.required')}</div>
+                    <div className="font-medium text-foreground">{t('conn.required')}</div>
                     <div>{(selectedDescriptor.required || []).join(', ') || 'n/a'}</div>
                   </div>
                   <div>
-                    <div className="font-medium text-slate-600">{t('conn.secrets')}</div>
+                    <div className="font-medium text-foreground">{t('conn.secrets')}</div>
                     <div>{(selectedDescriptor.secret_fields || []).join(', ') || 'n/a'}</div>
                   </div>
                 </div>
@@ -344,28 +476,38 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
             )}
             <div data-testid="connection-catalog-config-form">
               <div className="mb-2 flex items-center justify-between">
-                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{t('conn.configTitle')}</span>
-                <button className="text-xs font-medium text-indigo-600 hover:text-indigo-700" onClick={() => applyConfig(nextConfigFor(kind, type))}>
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {t('conn.configTitle')}
+                </span>
+                <button
+                  type="button"
+                  className="text-xs font-medium text-primary hover:underline"
+                  onClick={() => applyConfig(nextConfigFor(kind, type))}
+                >
                   {t('conn.loadDefaults')}
                 </button>
               </div>
               <ConfigForm fields={selectedFields} config={config} onChange={applyConfig} t={t} />
-              <div className="mt-2 text-[11px] text-slate-400">{t('conn.scopeNote')}</div>
+              <div className="mt-2 text-[11px] text-muted-foreground">{t('conn.scopeNote')}</div>
               {missingFields.length > 0 && (
-                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
                   {t('conn.missingRequired')}: {missingFields.join(', ')}
                 </div>
               )}
             </div>
-            <div className="rounded-lg border border-slate-200">
-              <button className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-slate-600" onClick={() => setJsonOpen((v) => !v)}>
+            <div className="rounded-lg border border-border">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-muted-foreground"
+                onClick={() => setJsonOpen((v) => !v)}
+              >
                 <span>{t('conn.advancedJson')}</span>
                 <span>{jsonOpen ? '-' : '+'}</span>
               </button>
               {jsonOpen && (
-                <div className="border-t border-slate-100 p-3">
-                  <textarea
-                    className="input h-52 w-full resize-y py-2 font-mono text-xs leading-relaxed"
+                <div className="border-t border-border p-3">
+                  <Textarea
+                    className={cn('h-52 font-mono text-xs leading-relaxed')}
                     value={configText}
                     onChange={(e) => updateConfigFromJson(e.target.value)}
                   />
@@ -373,11 +515,15 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                 </div>
               )}
             </div>
-            <button className="btn btn-primary w-full" disabled={saving || !!jsonError || missingFields.length > 0} onClick={save}>
+            <Button
+              className="w-full"
+              disabled={saving || !!jsonError || missingFields.length > 0}
+              onClick={save}
+            >
               {saving ? t('ui.starting') : t('conn.save')}
-            </button>
-          </div>
-        </div>
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
@@ -385,5 +531,9 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
 
 function fmtTime(v?: string) {
   if (!v || v.startsWith('0001-') || v.startsWith('1970-')) return 'n/a';
-  try { return new Date(v).toLocaleString(); } catch { return 'n/a'; }
+  try {
+    return new Date(v).toLocaleString();
+  } catch {
+    return 'n/a';
+  }
 }

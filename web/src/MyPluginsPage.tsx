@@ -1,6 +1,28 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import type { TFunc, Lang } from './types';
 import Editor from '@monaco-editor/react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { EmptyState } from '@/components/shared/empty-state';
+import { ToneBadge } from '@/components/shared/status-badge';
+import { showToast as notifyToast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
+import { useTheme } from '@/components/theme-provider';
+
+const selectClass =
+  'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
 type InstalledPlugin = {
   name: string;
@@ -189,11 +211,10 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 // ── Component ────────────────────────────────────────────────────────────
 
 export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
+  const { resolvedTheme } = useTheme();
   const [tab, setTab] = useState<Tab>('installed');
   const [plugins, setPlugins] = useState<InstalledPlugin[]>([]);
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState('');
-
   // Editor state
   const [editorKind, setEditorKind] = useState<PluginKind>('transform');
   const [editorName, setEditorName] = useState('my-transform');
@@ -214,7 +235,7 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const [uploadVersion, setUploadVersion] = useState('1.0.0');
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(''), 4000); }, []);
+  const showToast = useCallback((msg: string) => { notifyToast('info', msg); }, []);
   const editorManifest = JSON.stringify(buildPluginManifest(editorName.trim(), editorKind, editorVersion.trim()), null, 2);
 
   const refresh = useCallback(() => {
@@ -429,126 +450,146 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
 
   // ── Render ──
 
+  const kindTone = (kind: string): 'cyan' | 'emerald' | 'violet' =>
+    kind === 'source' ? 'cyan' : kind === 'sink' ? 'emerald' : 'violet';
+
   return (
     <div className="space-y-6">
-      {toast && (
-        <div className="fixed right-4 top-20 z-50 rounded-lg bg-emerald-600 px-4 py-3 text-sm text-white shadow-lg">{toast}</div>
-      )}
+      <Tabs value={tab} onValueChange={(v) => (v === 'installed' ? switchToInstalled() : switchToEditor())}>
+        <TabsList>
+          <TabsTrigger value="installed">{t('myplugin.tabInstalled')}</TabsTrigger>
+          <TabsTrigger value="editor">{t('myplugin.tabEditor')}</TabsTrigger>
+        </TabsList>
 
-      {/* Tab bar */}
-      <div className="flex gap-1 border-b border-slate-200">
-        <button className={`border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${tab === 'installed' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`} onClick={switchToInstalled}>
-          {t('myplugin.tabInstalled')}
-        </button>
-        <button className={`border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${tab === 'editor' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`} onClick={() => switchToEditor()}>
-          {t('myplugin.tabEditor')}
-        </button>
-      </div>
-
-      {tab === 'installed' && (
-        <>
-          {/* Upload WASM card */}
-          <div className="card">
-            <div className="card-header"><h2 className="text-sm font-semibold">{t('myplugin.upload')}</h2></div>
-            <div className="card-body space-y-4">
+        <TabsContent value="installed" className="mt-4 space-y-6">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">{t('myplugin.upload')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.pluginName')}</label>
-                  <input className="input w-full" value={uploadName} onChange={(e) => setUploadName(e.target.value)} placeholder="my-transform" />
+                  <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.pluginName')}</Label>
+                  <Input value={uploadName} onChange={(e) => setUploadName(e.target.value)} placeholder="my-transform" />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.pluginKind')}</label>
-                  <select className="input w-full" value={uploadKind} onChange={(e) => setUploadKind(e.target.value as PluginKind)}>
-                    {KIND_OPTIONS.map((k) => <option key={k} value={k}>{k}</option>)}
+                  <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.pluginKind')}</Label>
+                  <select className={selectClass} value={uploadKind} onChange={(e) => setUploadKind(e.target.value as PluginKind)}>
+                    {KIND_OPTIONS.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.pluginVersion')}</label>
-                  <input className="input w-full" value={uploadVersion} onChange={(e) => setUploadVersion(e.target.value)} />
+                  <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.pluginVersion')}</Label>
+                  <Input value={uploadVersion} onChange={(e) => setUploadVersion(e.target.value)} />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.selectFile')}</label>
-                  <input ref={fileRef} type="file" accept=".wasm" className="block w-full text-sm text-slate-500 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-indigo-700 hover:file:bg-indigo-100" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
+                  <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.selectFile')}</Label>
+                  <Input
+                    ref={fileRef}
+                    type="file"
+                    accept=".wasm"
+                    className="cursor-pointer file:mr-3 file:rounded-md file:border-0 file:bg-primary/10 file:px-3 file:py-1 file:text-xs file:font-medium file:text-primary"
+                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                  />
                 </div>
                 <div className="flex items-end">
-                  <button className="btn btn-primary w-full" onClick={handleUpload} disabled={!selectedFile || !uploadName}>{t('common.install')}</button>
+                  <Button className="w-full" onClick={handleUpload} disabled={!selectedFile || !uploadName}>
+                    {t('common.install')}
+                  </Button>
                 </div>
               </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
-          {/* Installed Plugins */}
-          <div className="card">
-            <div className="card-header flex items-center justify-between">
-              <h2 className="text-sm font-semibold">{t('myplugin.installed')}</h2>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-sm">{t('myplugin.installed')}</CardTitle>
               <div className="flex items-center gap-2">
-                <button className="btn btn-secondary btn-sm" onClick={refresh}>{t('dlq.refresh')}</button>
-                <button className="btn btn-primary btn-sm" onClick={() => switchToEditor()}>+ {t('myplugin.newPlugin')}</button>
+                <Button variant="secondary" size="sm" onClick={refresh}>
+                  {t('dlq.refresh')}
+                </Button>
+                <Button size="sm" onClick={() => switchToEditor()}>
+                  + {t('myplugin.newPlugin')}
+                </Button>
               </div>
-            </div>
-            <div className="overflow-x-auto">
+            </CardHeader>
+            <CardContent className="p-0">
               {loading ? (
-                <div className="p-8 text-center text-sm text-slate-400">Loading...</div>
+                <div className="p-8 text-center text-sm text-muted-foreground">Loading...</div>
               ) : plugins.length === 0 ? (
-                <div className="p-8">
-                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-10 text-center">
-                    <div className="text-sm text-slate-500">{t('myplugin.noPlugins')}</div>
-                    <div className="mt-1 text-xs text-slate-400">{t('myplugin.emptyHint')}</div>
-                  </div>
+                <div className="p-6">
+                  <EmptyState text={t('myplugin.noPlugins')} hint={t('myplugin.emptyHint')} />
                 </div>
               ) : (
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>{t('common.name')}</th>
-                      <th>{t('common.kind')}</th>
-                      <th>{t('common.version')}</th>
-                      <th>ABI</th>
-                      <th>{t('common.status')}</th>
-                      <th>{t('myplugin.wasmPath')}</th>
-                      <th>{t('common.actions')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t('common.name')}</TableHead>
+                      <TableHead>{t('common.kind')}</TableHead>
+                      <TableHead>{t('common.version')}</TableHead>
+                      <TableHead>ABI</TableHead>
+                      <TableHead>{t('common.status')}</TableHead>
+                      <TableHead>{t('myplugin.wasmPath')}</TableHead>
+                      <TableHead>{t('common.actions')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {plugins.map((p) => (
-                      <tr key={p.name}>
-                        <td className="font-medium">{p.name}</td>
-                        <td><span className={`badge ${p.kind === 'source' ? 'badge-cyan' : p.kind === 'sink' ? 'badge-emerald' : 'badge-violet'}`}>{p.kind}</span></td>
-                        <td className="text-sm">v{p.version}</td>
-                        <td>
+                      <TableRow key={p.name}>
+                        <TableCell className="font-medium">{p.name}</TableCell>
+                        <TableCell>
+                          <ToneBadge tone={kindTone(p.kind)}>{p.kind}</ToneBadge>
+                        </TableCell>
+                        <TableCell className="text-sm">v{p.version}</TableCell>
+                        <TableCell>
                           <div className="flex flex-col gap-1 text-xs">
-                            <span className="text-slate-500">{p.abi || OPENETL_PLUGIN_ABI}</span>
-                            <span className={`badge ${p.manifest_validated ? 'badge-emerald' : 'badge-slate'}`}>{p.manifest_validated ? 'manifest' : 'legacy'}</span>
+                            <span className="text-muted-foreground">{p.abi || OPENETL_PLUGIN_ABI}</span>
+                            <ToneBadge tone={p.manifest_validated ? 'emerald' : 'slate'}>
+                              {p.manifest_validated ? 'manifest' : 'legacy'}
+                            </ToneBadge>
                           </div>
-                        </td>
-                        <td><span className={`badge ${p.enabled ? 'badge-emerald' : 'badge-slate'}`}>{p.enabled ? t('common.enabled') : t('common.disabled')}</span></td>
-                        <td className="max-w-xs truncate text-xs text-slate-400">{p.wasm_path}</td>
-                        <td>
+                        </TableCell>
+                        <TableCell>
+                          <ToneBadge tone={p.enabled ? 'emerald' : 'slate'}>
+                            {p.enabled ? t('common.enabled') : t('common.disabled')}
+                          </ToneBadge>
+                        </TableCell>
+                        <TableCell className="max-w-xs truncate text-xs text-muted-foreground">{p.wasm_path}</TableCell>
+                        <TableCell>
                           <div className="flex gap-1">
-                            <button className="btn btn-secondary btn-sm" onClick={() => editPlugin(p)} title={t('pipe.edit')}>✏️</button>
-                            <button className="btn btn-danger btn-sm" onClick={() => uninstall(p.name)}>{t('common.uninstall')}</button>
+                            <Button variant="secondary" size="sm" onClick={() => editPlugin(p)} title={t('pipe.edit')}>
+                              ✏️
+                            </Button>
+                            <Button variant="destructive" size="sm" onClick={() => uninstall(p.name)}>
+                              {t('common.uninstall')}
+                            </Button>
                           </div>
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               )}
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
-          {/* SDK Info */}
-          <div className="card">
-            <div className="card-header"><h2 className="text-sm font-semibold">{t('myplugin.sdk')}</h2></div>
-            <div className="card-body">
-              <p className="text-sm text-slate-600">{t('myplugin.sdkDesc')}</p>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">{t('myplugin.sdk')}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">{t('myplugin.sdkDesc')}</p>
               <div className="mt-3 rounded-lg bg-slate-900 p-4 text-sm text-slate-300">
                 <div className="text-xs text-slate-500"># Install the SDK &amp; bundler</div>
                 <div className="font-mono">npm install @etl/sdk esbuild</div>
                 <div className="mt-3 text-xs text-slate-500"># Install the extism-js compiler from Extism releases or your CI image</div>
                 <div className="font-mono">extism-js --version</div>
                 <div className="mt-3 text-xs text-slate-500"># Write your plugin (src/transform.ts)</div>
-                <pre className="font-mono text-xs overflow-auto">{`import { createExtismTransformPlugin } from '@etl/sdk';
+                <pre className="overflow-auto font-mono text-xs">{`import { createExtismTransformPlugin } from '@etl/sdk';
 
 const plugin = createExtismTransformPlugin({
   name: 'add-timestamp',
@@ -566,128 +607,140 @@ export const transform = plugin;`}</pre>
                 <div className="font-mono">extism-js dist/transform.js -i plugin-transform.d.ts -o dist/transform.wasm</div>
                 <div className="font-mono mt-1"># Then upload dist/transform.wasm in the UI</div>
               </div>
-            </div>
-          </div>
-        </>
-      )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {tab === 'editor' && (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          {/* Left: Editor */}
-          <div className="xl:col-span-2 space-y-4">
-            {/* Toolbar */}
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold">{t('myplugin.editor')}</span>
-                <span className="text-xs text-slate-400">{t('myplugin.editingFile')} {editorName}.ts</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">
-                  {editorKind}/{editorVersion}
-                </span>
-                <button className="btn btn-ghost btn-sm" onClick={loadTemplate} title={t('ui.loadTemplate')}>{'📄 ' + t('common.template')}</button>
-                <button className="btn btn-ghost btn-sm" onClick={() => loadExample('vip')} title={t('ui.loadExample')}>{'📦 ' + t('common.example')}</button>
-                <button className="btn btn-secondary btn-sm" onClick={() => downloadSource(editorName, editorSource)}>📥 {t('myplugin.downloadSource')}</button>
-                <button className={`btn btn-primary btn-sm ${isCompiling ? 'opacity-50' : ''}`} onClick={handleCompile} disabled={isCompiling}>
-                  {isCompiling ? '⚙ ' + t('myplugin.compiling') : '⚙ ' + t('common.install')}
-                </button>
-              </div>
-            </div>
-
-            {/* Monaco Editor */}
-            <div className="rounded-xl overflow-hidden border border-slate-200" style={{ minHeight: '450px' }}>
-              <Editor
-                height="450px"
-                defaultLanguage="typescript"
-                theme="etl-dark"
-                value={editorSource}
-                onChange={(val) => setEditorSource(val ?? '')}
-                beforeMount={beforeMount}
-                options={{
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  lineNumbers: 'on',
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                  tabSize: 2,
-                  wordWrap: 'on',
-                  suggestOnTriggerCharacters: true,
-                }}
-              />
-            </div>
-
-            {/* Plugin metadata */}
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.pluginName')}</label>
-                <input className="input w-full text-sm" value={editorName} onChange={(e) => setEditorName(e.target.value)} placeholder="my-transform" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.pluginKind')}</label>
-                <select className="input w-full text-sm" value={editorKind} onChange={(e) => handleKindChange(e.target.value as PluginKind)}>
-                  {KIND_OPTIONS.map((k) => <option key={k} value={k}>{k}</option>)}
-                </select>
-                {editorKind !== 'transform' && (
-                  <p className="mt-1 text-xs text-amber-600">{t('myplugin.compileTransformOnly')}</p>
-                )}
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.pluginVersion')}</label>
-                <input className="input w-full text-sm" value={editorVersion} onChange={(e) => setEditorVersion(e.target.value)} />
-              </div>
-            </div>
-          </div>
-
-          {/* Right: Debug panel + Config */}
-          <div className="space-y-4 xl:col-span-1">
-            {/* Debug */}
-            <div className="card">
-              <div className="card-header"><h2 className="text-sm font-semibold">{t('myplugin.debugTitle')}</h2></div>
-              <div className="card-body space-y-3">
-                <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.sampleRecord')}</label>
-                  <textarea className="input w-full font-mono text-xs" rows={8}
-                    value={sampleRecord}
-                    onChange={(e) => setSampleRecord(e.target.value)}
-                    placeholder={t('myplugin.pasteHere')} />
+        <TabsContent value="editor" className="mt-4">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+            <div className="space-y-4 xl:col-span-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold">{t('myplugin.editor')}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {t('myplugin.editingFile')} {editorName}.ts
+                  </span>
                 </div>
-                <button className="btn btn-primary btn-sm w-full" onClick={handleDebug} disabled={debugRunning || !editorName.trim()}>
-                  {debugRunning ? '...' : '▶ ' + t('myplugin.runDebug')}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {editorKind}/{editorVersion}
+                  </span>
+                  <Button variant="ghost" size="sm" onClick={loadTemplate} title={t('ui.loadTemplate')}>
+                    {'📄 ' + t('common.template')}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => loadExample('vip')} title={t('ui.loadExample')}>
+                    {'📦 ' + t('common.example')}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => downloadSource(editorName, editorSource)}>
+                    📥 {t('myplugin.downloadSource')}
+                  </Button>
+                  <Button size="sm" className={cn(isCompiling && 'opacity-50')} onClick={handleCompile} disabled={isCompiling}>
+                    {isCompiling ? '⚙ ' + t('myplugin.compiling') : '⚙ ' + t('common.install')}
+                  </Button>
+                </div>
+              </div>
 
-                {/* Debug output */}
+              <div className="overflow-hidden rounded-xl border border-border" style={{ minHeight: '450px' }}>
+                <Editor
+                  height="450px"
+                  defaultLanguage="typescript"
+                  theme={resolvedTheme === 'dark' ? 'etl-dark' : 'vs-light'}
+                  value={editorSource}
+                  onChange={(val) => setEditorSource(val ?? '')}
+                  beforeMount={beforeMount}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 13,
+                    lineNumbers: 'on',
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                    tabSize: 2,
+                    wordWrap: 'on',
+                    suggestOnTriggerCharacters: true,
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-500">{t('myplugin.debugOutput')}</label>
-                  <div className="rounded-lg bg-slate-900 p-3 font-mono text-xs max-h-64 overflow-auto">
-                    {debugError ? (
-                      <div className="text-rose-400">{debugError}</div>
-                    ) : debugOutput ? (
-                      <pre className="text-slate-300">{JSON.stringify(debugOutput, null, 2)}</pre>
-                    ) : (
-                      <div className="text-slate-600">{t('myplugin.noOutput')}</div>
-                    )}
+                  <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.pluginName')}</Label>
+                  <Input value={editorName} onChange={(e) => setEditorName(e.target.value)} placeholder="my-transform" />
+                </div>
+                <div>
+                  <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.pluginKind')}</Label>
+                  <select className={selectClass} value={editorKind} onChange={(e) => handleKindChange(e.target.value as PluginKind)}>
+                    {KIND_OPTIONS.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                  {editorKind !== 'transform' && (
+                    <p className="mt-1 text-xs text-amber-600">{t('myplugin.compileTransformOnly')}</p>
+                  )}
+                </div>
+                <div>
+                  <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.pluginVersion')}</Label>
+                  <Input value={editorVersion} onChange={(e) => setEditorVersion(e.target.value)} />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 xl:col-span-1">
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm">{t('myplugin.debugTitle')}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div>
+                    <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.sampleRecord')}</Label>
+                    <Textarea
+                      className="font-mono text-xs"
+                      rows={8}
+                      value={sampleRecord}
+                      onChange={(e) => setSampleRecord(e.target.value)}
+                      placeholder={t('myplugin.pasteHere')}
+                    />
                   </div>
-                </div>
-              </div>
-            </div>
+                  <Button className="w-full" size="sm" onClick={handleDebug} disabled={debugRunning || !editorName.trim()}>
+                    {debugRunning ? '...' : '▶ ' + t('myplugin.runDebug')}
+                  </Button>
+                  <div>
+                    <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.debugOutput')}</Label>
+                    <div className="max-h-64 overflow-auto rounded-lg bg-slate-900 p-3 font-mono text-xs">
+                      {debugError ? (
+                        <div className="text-rose-400">{debugError}</div>
+                      ) : debugOutput ? (
+                        <pre className="text-slate-300">{JSON.stringify(debugOutput, null, 2)}</pre>
+                      ) : (
+                        <div className="text-slate-600">{t('myplugin.noOutput')}</div>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
 
-            {/* Config hints */}
-            <div className="card">
-              <div className="card-header"><h2 className="text-sm font-semibold">{t('dag.config')}</h2></div>
-              <div className="card-body text-xs text-slate-500 space-y-2">
-                <p>Plugin config is read at runtime via <code className="text-indigo-400">ctx.config</code>.</p>
-                <p>Define config fields in your pipeline YAML:</p>
-                <pre className="mt-1 rounded bg-slate-900 p-2 text-slate-300 overflow-x-auto">{`transforms:
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm">{t('dag.config')}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-xs text-muted-foreground">
+                  <p>
+                    Plugin config is read at runtime via <code className="text-primary">ctx.config</code>.
+                  </p>
+                  <p>Define config fields in your pipeline YAML:</p>
+                  <pre className="mt-1 overflow-x-auto rounded bg-slate-900 p-2 text-slate-300">{`transforms:
   - type: plugin_${editorName}
     config:
       prefix: "prod"`}</pre>
-                <p className="pt-2">ABI manifest sent with install/compile:</p>
-                <pre className="mt-1 max-h-56 overflow-auto rounded bg-slate-900 p-2 text-slate-300">{editorManifest}</pre>
-              </div>
+                  <p className="pt-2">ABI manifest sent with install/compile:</p>
+                  <pre className="mt-1 max-h-56 overflow-auto rounded bg-slate-900 p-2 text-slate-300">{editorManifest}</pre>
+                </CardContent>
+              </Card>
             </div>
           </div>
-        </div>
-      )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

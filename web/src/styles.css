@@ -61,7 +61,7 @@
   }
 }
 
-/* ── Sidebar (legacy class retained for E2E: .sidebar-item) ── */
+/* ── Sidebar (E2E retained: .sidebar-item) ── */
 .sidebar-item {
   @apply flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition cursor-pointer;
 }
@@ -87,76 +87,7 @@
   @apply text-indigo-400;
 }
 
-/* ── Buttons (legacy) ── */
-.btn {
-  @apply inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3.5 text-sm font-medium transition;
-}
-.btn:disabled {
-  @apply cursor-not-allowed opacity-50;
-}
-.btn-primary {
-  @apply bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 active:bg-indigo-800;
-}
-.btn-secondary {
-  @apply border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 active:bg-slate-100;
-}
-.dark .btn-secondary {
-  @apply border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700 active:bg-slate-600;
-}
-.btn-danger {
-  @apply bg-rose-600 text-white shadow-sm hover:bg-rose-700;
-}
-.btn-warning {
-  @apply border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100;
-}
-.btn-ghost {
-  @apply text-slate-500 hover:bg-slate-100 hover:text-slate-900;
-}
-.dark .btn-ghost {
-  @apply text-slate-400 hover:bg-slate-800 hover:text-slate-100;
-}
-.btn-sm {
-  @apply h-7 px-2.5 text-xs;
-}
-.btn-xs {
-  @apply h-6 px-2 text-[11px];
-}
-
-/* ── Inputs (legacy) ── */
-.input {
-  @apply h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition;
-}
-.dark .input {
-  @apply border-slate-600 bg-slate-900 text-slate-100;
-}
-.input:focus {
-  @apply border-indigo-500 ring-2 ring-indigo-100;
-}
-.dark .input:focus {
-  @apply ring-indigo-900;
-}
-.input::placeholder {
-  @apply text-slate-400;
-}
-
-/* ── Cards (legacy) ── */
-.card {
-  @apply rounded-xl border border-slate-200 bg-white shadow-sm;
-}
-.dark .card {
-  @apply border-slate-700 bg-slate-900;
-}
-.card-header {
-  @apply border-b border-slate-100 px-5 py-4;
-}
-.dark .card-header {
-  @apply border-slate-800;
-}
-.card-body {
-  @apply p-5;
-}
-
-/* ── Status ── */
+/* ── Status dots (StatusDot shared) ── */
 .status-dot {
   @apply inline-block h-2 w-2 rounded-full;
 }
@@ -182,66 +113,7 @@
   @apply bg-rose-600;
 }
 
-/* ── Badges (legacy) ── */
-.badge {
-  @apply inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium;
-}
-.badge-emerald {
-  @apply bg-emerald-50 text-emerald-700;
-}
-.badge-blue {
-  @apply bg-blue-50 text-blue-700;
-}
-.badge-amber {
-  @apply bg-amber-50 text-amber-700;
-}
-.badge-rose {
-  @apply bg-rose-50 text-rose-700;
-}
-.badge-slate {
-  @apply bg-slate-100 text-slate-600;
-}
-.badge-violet {
-  @apply bg-violet-50 text-violet-700;
-}
-.badge-cyan {
-  @apply bg-cyan-50 text-cyan-700;
-}
-.badge-indigo {
-  @apply bg-indigo-50 text-indigo-700;
-}
-.badge-purple {
-  @apply bg-purple-50 text-purple-700;
-}
-.dark .badge-emerald {
-  @apply bg-emerald-950/50 text-emerald-300;
-}
-.dark .badge-blue {
-  @apply bg-blue-950/50 text-blue-300;
-}
-.dark .badge-amber {
-  @apply bg-amber-950/50 text-amber-300;
-}
-.dark .badge-rose {
-  @apply bg-rose-950/50 text-rose-300;
-}
-.dark .badge-slate {
-  @apply bg-slate-800 text-slate-300;
-}
-.dark .badge-violet {
-  @apply bg-violet-950/50 text-violet-300;
-}
-.dark .badge-cyan {
-  @apply bg-cyan-950/50 text-cyan-300;
-}
-.dark .badge-indigo {
-  @apply bg-indigo-950/50 text-indigo-300;
-}
-.dark .badge-purple {
-  @apply bg-purple-950/50 text-purple-300;
-}
-
-/* ── Pipeline row ── */
+/* ── Pipeline row (list selection) ── */
 .pipeline-row {
   @apply flex w-full items-center gap-4 rounded-lg border border-slate-200 bg-white p-4 text-left transition cursor-pointer;
 }
@@ -272,64 +144,96 @@
   @apply h-2 rounded-full transition-all duration-500;
 }
 
-/* ── Toast ── */
-.toast-enter {
-  animation: toast-in 0.3s ease-out;
+/* ── xyflow dark canvas helpers ── */
+.react-flow__controls {
+  @apply overflow-hidden rounded-md border border-border bg-card shadow-sm;
 }
-@keyframes toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.react-flow__controls-button {
+  @apply border-border bg-card fill-foreground;
 }
-
-/* ── Code blocks ── */
-.code-block {
-  @apply rounded-lg bg-slate-900 p-4 font-mono text-xs leading-relaxed text-slate-300;
+.dark .react-flow__controls-button {
+  @apply fill-slate-200;
 }
-.code-block textarea {
-  @apply w-full resize-none bg-transparent text-slate-300 outline-none;
+.react-flow__minimap {
+  @apply overflow-hidden rounded-md border border-border;
 }
 
-/* ── Tables ── */
-.tbl {
-  @apply w-full text-sm;
+/* ── Residual legacy utilities (first-task-wizard 尚未完全 shadcn 化) ── */
+.btn {
+  @apply inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3.5 text-sm font-medium transition;
 }
-.tbl th {
-  @apply border-b border-slate-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500;
+.btn:disabled {
+  @apply cursor-not-allowed opacity-50;
 }
-.dark .tbl th {
-  @apply border-slate-700 text-slate-400;
+.btn-primary {
+  @apply bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 active:bg-indigo-800;
 }
-.tbl td {
-  @apply border-b border-slate-50 px-4 py-3 text-slate-700;
+.btn-secondary {
+  @apply border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 active:bg-slate-100;
 }
-.dark .tbl td {
-  @apply border-slate-800 text-slate-300;
+.dark .btn-secondary {
+  @apply border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700 active:bg-slate-600;
 }
-.tbl tr:hover td {
-  @apply bg-slate-50;
+.btn-danger {
+  @apply bg-rose-600 text-white shadow-sm hover:bg-rose-700;
 }
-.dark .tbl tr:hover td {
-  @apply bg-slate-800/50;
+.btn-ghost {
+  @apply text-slate-500 hover:bg-slate-100 hover:text-slate-900;
 }
-
-/* ── Misc ── */
-.line-clamp-2 {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.dark .btn-ghost {
+  @apply text-slate-400 hover:bg-slate-800 hover:text-slate-100;
 }
-.spin {
-  animation: spin 0.6s linear infinite;
+.btn-sm {
+  @apply h-7 px-2.5 text-xs;
 }
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.input {
+  @apply h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition;
+}
+.dark .input {
+  @apply border-slate-600 bg-slate-900 text-slate-100;
+}
+.input:focus {
+  @apply border-indigo-500 ring-2 ring-indigo-100;
+}
+.dark .input:focus {
+  @apply ring-indigo-900;
+}
+.badge {
+  @apply inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium;
+}
+.badge-emerald {
+  @apply bg-emerald-50 text-emerald-700;
+}
+.badge-blue {
+  @apply bg-blue-50 text-blue-700;
+}
+.badge-amber {
+  @apply bg-amber-50 text-amber-700;
+}
+.badge-rose {
+  @apply bg-rose-50 text-rose-700;
+}
+.badge-slate {
+  @apply bg-slate-100 text-slate-600;
+}
+.badge-indigo {
+  @apply bg-indigo-50 text-indigo-700;
+}
+.dark .badge-emerald {
+  @apply bg-emerald-950/50 text-emerald-300;
+}
+.dark .badge-blue {
+  @apply bg-blue-950/50 text-blue-300;
+}
+.dark .badge-amber {
+  @apply bg-amber-950/50 text-amber-300;
+}
+.dark .badge-rose {
+  @apply bg-rose-950/50 text-rose-300;
+}
+.dark .badge-slate {
+  @apply bg-slate-800 text-slate-300;
+}
+.dark .badge-indigo {
+  @apply bg-indigo-950/50 text-indigo-300;
 }

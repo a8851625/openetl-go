@@ -10,6 +10,17 @@ import YAML from 'yaml';
 import cronstrue from 'cronstrue';
 import type { TFunc, Lang } from './types';
 import { ConfigForm, filterFieldsByScope, type PluginSchemaField } from './configFields';
+import { Button } from '@/components/ui/button';
+import { ToneBadge } from '@/components/shared/status-badge';
+import { cn } from '@/lib/utils';
+import { useTheme } from '@/components/theme-provider';
+
+const selectClass =
+  'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+const fieldClass =
+  'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+const areaClass =
+  'flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -284,41 +295,42 @@ function ScheduleForm({
   return (
     <div className="space-y-3">
       <div>
-        <label className="mb-1 block text-xs font-medium text-slate-500">{t('sched.triggerType')}</label>
+        <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('sched.triggerType')}</label>
         <div className="flex flex-wrap gap-1">
           {types.map((tp) => (
-            <button
+            <Button
               key={tp.value}
-              className={`btn btn-sm ${schedule.type === tp.value ? 'btn-primary' : 'btn-secondary'}`}
+              size="sm"
+              variant={schedule.type === tp.value ? 'default' : 'secondary'}
               onClick={() => updateType(tp.value)}
             >
               {tp.label}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
       {schedule.type === 'cron' && (
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-500">{t('common.cron')}</label>
-          <input className="input w-full font-mono text-sm" value={schedule.cron || ''} onChange={(e) => parseCron(e.target.value)} placeholder="*/5 * * * *" />
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('common.cron')}</label>
+          <input className={cn(fieldClass, "font-mono")} value={schedule.cron || ''} onChange={(e) => parseCron(e.target.value)} placeholder="*/5 * * * *" />
           {cronDesc && <div className={`mt-1 text-xs ${cronDesc.startsWith('⚠') ? 'text-rose-500' : 'text-emerald-600'}`}>{cronDesc}</div>}
           <div className="mt-1 flex flex-wrap gap-1 text-xs">
-            <code className="cursor-pointer rounded bg-slate-100 px-1.5 py-0.5 text-slate-500" onClick={() => parseCron('*/5 * * * *')}>*/5 * * * *</code>
-            <code className="cursor-pointer rounded bg-slate-100 px-1.5 py-0.5 text-slate-500" onClick={() => parseCron('0 */6 * * *')}>0 */6 * * *</code>
-            <code className="cursor-pointer rounded bg-slate-100 px-1.5 py-0.5 text-slate-500" onClick={() => parseCron('0 2 * * *')}>0 2 * * *</code>
+            <code className="cursor-pointer rounded bg-muted px-1.5 py-0.5 text-muted-foreground" onClick={() => parseCron('*/5 * * * *')}>*/5 * * * *</code>
+            <code className="cursor-pointer rounded bg-muted px-1.5 py-0.5 text-muted-foreground" onClick={() => parseCron('0 */6 * * *')}>0 */6 * * *</code>
+            <code className="cursor-pointer rounded bg-muted px-1.5 py-0.5 text-muted-foreground" onClick={() => parseCron('0 2 * * *')}>0 2 * * *</code>
           </div>
         </div>
       )}
       {schedule.type === 'periodic' && (
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-500">{t('common.interval')}</label>
-          <input type="number" className="input w-full text-sm" value={schedule.interval_sec || 60} onChange={(e) => onChange({ ...schedule, interval_sec: parseInt(e.target.value) || 60 })} />
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('common.interval')}</label>
+          <input type="number" className={fieldClass} value={schedule.interval_sec || 60} onChange={(e) => onChange({ ...schedule, interval_sec: parseInt(e.target.value) || 60 })} />
         </div>
       )}
       {schedule.type === 'dependency' && (
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-500">{t('sched.dependsOn')}</label>
-          <input className="input w-full text-sm" value={(schedule.depends_on || []).join(', ')} onChange={(e) => onChange({ ...schedule, depends_on: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('sched.dependsOn')}</label>
+          <input className={fieldClass} value={(schedule.depends_on || []).join(', ')} onChange={(e) => onChange({ ...schedule, depends_on: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
         </div>
       )}
       {schedule.type === 'streaming' && (
@@ -345,6 +357,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   onAction: any;
   editTarget?: string;
 }) {
+  const { resolvedTheme } = useTheme();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<DAGNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -889,41 +902,43 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   return (
     <div className="flex h-[calc(100vh-120px)] flex-col gap-2">
       {/* ── Compact Toolbar ─────────────────────────────────────────── */}
-      <div className="card card-body flex flex-wrap items-center gap-2 py-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3 shadow-sm">
         <div className="flex items-center gap-2">
-          <input className="input w-48 text-sm" value={pipelineName} onChange={(e) => setPipelineName(e.target.value)} placeholder={t('design.name')} />
-          {editTarget && <span className="badge badge-amber text-xs">✏️ {t('dag.editing').replace('{name}', editTarget)}</span>}
+          <input className={cn(fieldClass, "w-48")} value={pipelineName} onChange={(e) => setPipelineName(e.target.value)} placeholder={t('design.name')} />
+          {editTarget && <ToneBadge tone="amber" className="text-xs">✏️ {t('dag.editing').replace('{name}', editTarget)}</ToneBadge>}
         </div>
-        <div className="h-5 w-px bg-slate-200" />
+        <div className="h-5 w-px bg-border" />
         {/* Node palette — icon-only compact */}
         <div className="flex items-center gap-0.5">
           {NODE_PALETTE(t).map((cat) => cat.nodes.map((nd) => {
             const st = KIND_STYLES[nd.kind] || KIND_STYLES.transform;
             const disabled = nd.kind === 'lookup' && !redisStateConfigured;
             return (
-              <button
+              <Button
                 key={nd.kind}
-                className={`btn btn-secondary btn-sm flex items-center gap-1 px-2 ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+                className={cn('flex items-center gap-1 px-2', disabled && 'cursor-not-allowed opacity-50')}
+                variant="secondary"
+                size="sm"
                 title={disabled ? `${cat.catLabel}: ${nd.label} requires Redis state/cache` : `${cat.catLabel}: ${nd.label}`}
                 onClick={() => { if (!disabled) addNode(nd.kind, nd.defaultPlugin); }}
                 disabled={disabled}
               >
                 <span style={{ color: st.color }}>{st.icon}</span>
                 <span className="text-xs">{nd.label}</span>
-              </button>
+              </Button>
             );
           }))}
         </div>
-        <button className="btn btn-danger btn-sm px-2" onClick={deleteSelected} disabled={!selectedNodeId} title={t('dag.deleteNode')}>🗑</button>
+        <Button variant="destructive" size="sm" className="px-2" onClick={deleteSelected} disabled={!selectedNodeId} title={t('dag.deleteNode')}>🗑</Button>
         {/* Drawer tabs */}
         <div className="flex items-center gap-0.5">
-          <button className={`btn btn-sm px-2 ${drawerTab === 'schedule' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('schedule')} title={t('dag.toolbarSchedule')}>📅 <span className="hidden sm:inline">{t('dag.toolbarSchedule')}</span></button>
-          <button className={`btn btn-sm px-2 ${drawerTab === 'hooks' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('hooks')} title={t('dag.toolbarHooks')}>🪝 <span className="hidden sm:inline">{t('dag.toolbarHooks')}</span></button>
-          <button className={`btn btn-sm px-2 ${drawerTab === 'advanced' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('advanced')} title={t('dag.toolbarAdvanced')}>⚙️ <span className="hidden sm:inline">{t('dag.toolbarAdvanced')}</span></button>
-          <button className={`btn btn-sm px-2 ${drawerTab === 'ai' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => toggleDrawer('ai')} title={t('dag.toolbarAI')}>🤖 <span className="hidden sm:inline">{t('dag.toolbarAI')}</span></button>
-          <button className="btn btn-secondary btn-sm px-2" onClick={() => { exportYaml(); setDrawerTab('yaml'); }} title={t('dag.exportYaml')}>📄 <span className="hidden sm:inline">{t('dag.toolbarYaml')}</span></button>
-          <button className="btn btn-secondary btn-sm px-2" onClick={() => validateCurrentSpec().catch(() => {})} title={t('dag.toolbarValidate')} data-testid="dag-validate-preflight">✓ <span className="hidden sm:inline">{t('dag.toolbarValidate')}</span></button>
-          <button className="btn btn-secondary btn-sm px-2" onClick={testNodeConnection} title={t('dag.toolbarTest')} disabled={!selectedNode}>🔌 <span className="hidden sm:inline">{t('dag.toolbarTest')}</span></button>
+          <Button size="sm" className="px-2" variant={drawerTab === 'schedule' ? 'default' : 'secondary'} onClick={() => toggleDrawer('schedule')} title={t('dag.toolbarSchedule')}>📅 <span className="hidden sm:inline">{t('dag.toolbarSchedule')}</span></Button>
+          <Button size="sm" className="px-2" variant={drawerTab === 'hooks' ? 'default' : 'secondary'} onClick={() => toggleDrawer('hooks')} title={t('dag.toolbarHooks')}>🪝 <span className="hidden sm:inline">{t('dag.toolbarHooks')}</span></Button>
+          <Button size="sm" className="px-2" variant={drawerTab === 'advanced' ? 'default' : 'secondary'} onClick={() => toggleDrawer('advanced')} title={t('dag.toolbarAdvanced')}>⚙️ <span className="hidden sm:inline">{t('dag.toolbarAdvanced')}</span></Button>
+          <Button size="sm" className="px-2" variant={drawerTab === 'ai' ? 'default' : 'secondary'} onClick={() => toggleDrawer('ai')} title={t('dag.toolbarAI')}>🤖 <span className="hidden sm:inline">{t('dag.toolbarAI')}</span></Button>
+          <Button variant="secondary" size="sm" className="px-2" onClick={() => { exportYaml(); setDrawerTab('yaml'); }} title={t('dag.exportYaml')}>📄 <span className="hidden sm:inline">{t('dag.toolbarYaml')}</span></Button>
+          <Button variant="secondary" size="sm" className="px-2" onClick={() => validateCurrentSpec().catch(() => {})} title={t('dag.toolbarValidate')} data-testid="dag-validate-preflight">✓ <span className="hidden sm:inline">{t('dag.toolbarValidate')}</span></Button>
+          <Button variant="secondary" size="sm" className="px-2" onClick={testNodeConnection} title={t('dag.toolbarTest')} disabled={!selectedNode}>🔌 <span className="hidden sm:inline">{t('dag.toolbarTest')}</span></Button>
         </div>
         {testResult && (
           <span className={`text-xs ${testResult.startsWith('✅') ? 'text-emerald-600' : testResult.startsWith('⏳') ? 'text-amber-600' : 'text-rose-600'}`}>{testResult}</span>
@@ -931,11 +946,11 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         <div className="ml-auto flex gap-2">
           {editTarget ? (
             <>
-              <button className="btn btn-primary btn-sm" onClick={validateAndCreate}>✏️ {t('dag.updatePipeline')}</button>
-              <button className="btn btn-warning btn-sm" onClick={resetCheckpointAndUpdate}>↻ {t('dag.updateResetCheckpoint')}</button>
+              <Button size="sm" onClick={validateAndCreate}>✏️ {t('dag.updatePipeline')}</Button>
+              <Button size="sm" className="border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300" onClick={resetCheckpointAndUpdate}>↻ {t('dag.updateResetCheckpoint')}</Button>
             </>
           ) : (
-            <button className="btn btn-primary btn-sm" onClick={validateAndCreate}>✓ {t('dag.createPipeline')}</button>
+            <Button size="sm" onClick={validateAndCreate}>✓ {t('dag.createPipeline')}</Button>
           )}
         </div>
       </div>
@@ -949,21 +964,21 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
             <div key={`issue-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
               <div className="font-semibold">{issue.level} · {issue.check}</div>
               <div>{issue.message}</div>
-              {issue.remediation && <div className="mt-1 text-slate-600">Fix: {issue.remediation}</div>}
+              {issue.remediation && <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>}
             </div>
           ))}
           {(validateResult?.preflight?.field_issues || []).map((issue, i) => (
             <div key={`field-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
               <div className="font-semibold">{issue.field} · {issue.check}</div>
               <div>{issue.message}</div>
-              {issue.remediation && <div className="mt-1 text-slate-600">Fix: {issue.remediation}</div>}
+              {issue.remediation && <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>}
             </div>
           ))}
           {(validateResult?.preflight?.guidance || []).map((item, i) => (
             <div key={`guidance-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
               <div className="font-semibold">{item.level} · {item.category} · {item.code}</div>
               <div>{item.message}</div>
-              {item.action && <div className="mt-1 text-slate-600">Action: {item.action}</div>}
+              {item.action && <div className="mt-1 text-muted-foreground">Action: {item.action}</div>}
             </div>
           ))}
           {(validateResult?.preflight?.recommendations || []).map((rec, i) => (
@@ -977,7 +992,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
               <div className="font-semibold">{connector.kind} · {connector.type} · {connector.maturity} · {connector.status}</div>
               {connector.summary && <div>{connector.summary}</div>}
               {(connector.gates || []).filter((gate) => gate.status === 'missing' || gate.status === 'partial').slice(0, 3).map((gate) => (
-                <div key={gate.code} className="mt-1 text-slate-600">
+                <div key={gate.code} className="mt-1 text-muted-foreground">
                   {gate.status} · {gate.label}{gate.remediation ? ` · ${gate.remediation}` : ''}
                 </div>
               ))}
@@ -989,7 +1004,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       {/* ── Main Area: Canvas + Drawer ──────────────────────────────── */}
       <div className="flex min-h-0 flex-1 gap-2">
         {/* DAG Canvas — primary focus, fills available space */}
-        <div className={`card relative overflow-hidden ${drawerTab ? 'flex-1' : 'flex-1'}`}>
+        <div className="relative flex-1 overflow-hidden rounded-xl border border-border bg-slate-50 shadow-sm dark:bg-slate-100">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1006,37 +1021,37 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
               style: { stroke: '#94a3b8', strokeWidth: 2 },
             }}
           >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#cbd5e1" />
+            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={resolvedTheme === "dark" ? "#334155" : "#cbd5e1"} />
             <Controls showInteractive={false} position="bottom-left" />
             <MiniMap
               nodeColor={(n) => KIND_STYLES[(n.data as DAGNodeData)?.kind]?.color || '#94a3b8'}
               nodeStrokeWidth={2}
-              maskColor="rgba(0,0,0,0.05)"
+              maskColor={resolvedTheme === "dark" ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.05)"}
               position="bottom-right"
             />
           </ReactFlow>
 
           {/* ── Node Properties Floating Overlay ──────────────────── */}
           {showNodeProps && selectedNode && (
-            <div className="absolute right-3 top-3 z-20 w-72 max-h-[calc(100%-24px)] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-              <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+            <div className="absolute right-3 top-3 z-20 max-h-[calc(100%-24px)] w-72 overflow-y-auto rounded-xl border border-border bg-card shadow-lg">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <div className="flex items-center gap-2">
-                  <span className={`badge ${selKind === 'source' ? 'badge-cyan' : selKind === 'sink' ? 'badge-emerald' : 'badge-violet'}`}>{selKind}</span>
-                  <span className="text-sm font-semibold text-slate-700">{selectedNode.id}</span>
+                  <ToneBadge tone={selKind === 'source' ? 'cyan' : selKind === 'sink' ? 'emerald' : 'violet'}>{selKind}</ToneBadge>
+                  <span className="text-sm font-semibold text-foreground/80">{selectedNode.id}</span>
                 </div>
-                <button className="text-xs text-slate-400 hover:text-slate-600" onClick={() => setShowNodeProps(false)}>✕</button>
+                <button className="text-xs text-muted-foreground hover:text-muted-foreground" onClick={() => setShowNodeProps(false)}>✕</button>
               </div>
               <div className="space-y-3 p-3">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-500">{t('dag.nodeId')}</label>
-                  <input className="input w-full text-sm" value={selectedNode.data.label || ''} onChange={(e) => updateNodeLabel(e.target.value)} />
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('dag.nodeId')}</label>
+                  <input className={fieldClass} value={selectedNode.data.label || ''} onChange={(e) => updateNodeLabel(e.target.value)} />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-500">{t('dag.plugin')}</label>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('dag.plugin')}</label>
                   {ADVANCED_NODE_KINDS.includes(selKind || '') ? (
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">{selPlugin}</div>
+                    <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground/80">{selPlugin}</div>
                   ) : (
-                    <select className="input w-full text-sm" value={selPlugin} onChange={(e) => updateNodePlugin(e.target.value)}>
+                    <select className={fieldClass} value={selPlugin} onChange={(e) => updateNodePlugin(e.target.value)}>
                       {pluginList.length > 0 ? pluginList.map((p) => <option key={p} value={p}>{p}</option>) : <option value={selPlugin}>{selPlugin}</option>}
                     </select>
                   )}
@@ -1044,7 +1059,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                 {nodeSupportsConnection && (
                   <div>
                     <div className="mb-1 flex items-center justify-between">
-                      <label className="block text-xs font-medium text-slate-500">{t('conn.useSaved')}</label>
+                      <label className="block text-xs font-medium text-muted-foreground">{t('conn.useSaved')}</label>
                       {selectedNode.data.connection && (
                         <button className="text-xs font-medium text-indigo-600 hover:text-indigo-700" onClick={() => updateNodeConnection('')}>
                           {t('conn.useInline')}
@@ -1058,14 +1073,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                             <div className="truncate text-sm font-semibold text-indigo-800">{selectedConnection.name}</div>
                             <div className="text-xs text-indigo-600">{selectedConnection.kind} / {selectedConnection.type}</div>
                           </div>
-                          <span className={`badge ${selectedConnection.last_status === 'ok' ? 'badge-emerald' : selectedConnection.last_status === 'error' ? 'badge-rose' : 'badge-slate'}`}>
+                          <ToneBadge tone={selectedConnection.last_status === 'ok' ? 'emerald' : selectedConnection.last_status === 'error' ? 'rose' : 'slate'}>
                             {selectedConnection.last_status || 'unknown'}
-                          </span>
+                          </ToneBadge>
                         </div>
                         {selectedConnection.last_error && <div className="mt-1 text-xs text-rose-600">{selectedConnection.last_error}</div>}
                       </div>
                     ) : (
-                      <button className="w-full rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-500 hover:border-indigo-300 hover:bg-indigo-50/40" onClick={() => updateNodeConnection('')}>
+                      <button className="w-full rounded-lg border border-dashed border-border bg-white px-3 py-2 text-left text-sm text-muted-foreground hover:border-indigo-300 hover:bg-indigo-50/40" onClick={() => updateNodeConnection('')}>
                         {t('conn.inlineConfig')}
                       </button>
                     )}
@@ -1074,24 +1089,24 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                         {matchingConnections.slice(0, 8).map((conn) => (
                           <button
                             key={conn.name}
-                            className={`w-full rounded-lg border px-2.5 py-2 text-left transition ${conn.name === selectedNode.data.connection ? 'border-indigo-400 bg-indigo-50' : conn.type === selPlugin ? 'border-slate-200 bg-white hover:border-indigo-300' : 'border-slate-200 bg-slate-50 hover:border-slate-300'}`}
+                            className={`w-full rounded-lg border px-2.5 py-2 text-left transition ${conn.name === selectedNode.data.connection ? 'border-indigo-400 bg-indigo-50' : conn.type === selPlugin ? 'border-border bg-white hover:border-indigo-300' : 'border-border bg-muted/40 hover:border-border'}`}
                             onClick={() => updateNodeConnection(conn.name)}
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <span className="truncate text-xs font-semibold text-slate-700">{conn.name}</span>
-                              <span className={`badge ${conn.type === selPlugin ? 'badge-indigo' : 'badge-slate'}`}>{conn.type}</span>
+                              <span className="truncate text-xs font-semibold text-foreground/80">{conn.name}</span>
+                              <ToneBadge tone={conn.type === selPlugin ? 'indigo' : 'slate'}>{conn.type}</ToneBadge>
                             </div>
                           </button>
                         ))}
                       </div>
                     ) : (
-                      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-400">{t('conn.noMatchingSaved')}</div>
+                      <div className="mt-2 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t('conn.noMatchingSaved')}</div>
                     )}
                     {selectedConnectionContext && (
-                      <div className={`mt-2 rounded-lg border p-2.5 text-xs ${selectedConnectionContext.introspection?.ok === false ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-cyan-200 bg-cyan-50 text-slate-600'}`} data-testid="dag-connection-context">
+                      <div className={`mt-2 rounded-lg border p-2.5 text-xs ${selectedConnectionContext.introspection?.ok === false ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-cyan-200 bg-cyan-50 text-muted-foreground'}`} data-testid="dag-connection-context">
                         <div className="mb-1 flex items-center justify-between">
                           <span className="font-semibold">Context</span>
-                          <span className={`badge ${selectedConnectionContext.introspection?.ok === false ? 'badge-rose' : 'badge-blue'}`}>{selectedConnectionContext.introspection?.status || 'ready'}</span>
+                          <ToneBadge tone={selectedConnectionContext.introspection?.ok === false ? 'rose' : 'blue'}>{selectedConnectionContext.introspection?.status || 'ready'}</ToneBadge>
                         </div>
                         {selectedConnectionContext.introspection?.error && <div className="mb-1 text-rose-700">{selectedConnectionContext.introspection.error}</div>}
                         {selectedConnectionContext.recommendations?.length ? (
@@ -1099,7 +1114,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                             {selectedConnectionContext.recommendations.slice(0, 3).map((rec) => {
                               const canApply = Boolean(configPathForConnectionRecommendation(rec));
                               return (
-                                <span key={rec.field} className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-white/80 px-1.5 py-0.5 text-[10px] text-slate-600">
+                                <span key={rec.field} className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-white/80 px-1.5 py-0.5 text-[10px] text-muted-foreground">
                                   <span>{rec.field}: {String(rec.value || 'review')}</span>
                                   {canApply && (
                                     <button
@@ -1133,12 +1148,12 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                   </div>
                 )}
                 <div data-testid="dag-node-config-form">
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     {t('dag.config')}
                     {selectedNode.data.connection ? ` · ${t('field.scopeBehavior')}` : ''}
                   </label>
                   {selectedNode.data.connection && (
-                    <div className="mb-2 text-[11px] text-slate-400">{t('dag.behaviorOnly')}</div>
+                    <div className="mb-2 text-[11px] text-muted-foreground">{t('dag.behaviorOnly')}</div>
                   )}
                   <ConfigForm fields={schemaFields} config={selectedNode.data.config} onChange={updateNodeConfig} t={t} />
                 </div>
@@ -1149,10 +1164,10 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
           {/* ── Empty State Hint ─────────────────────────────────── */}
           {nodes.length === 0 && !selectedNodeId && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="pointer-events-auto rounded-xl border border-dashed border-slate-300 bg-white/80 px-8 py-6 text-center backdrop-blur-sm">
+              <div className="pointer-events-auto rounded-xl border border-dashed border-border bg-card/90 px-8 py-6 text-center backdrop-blur-sm">
                 <div className="mb-2 text-2xl">🎨</div>
-                <div className="text-sm font-medium text-slate-600">{t('dag.emptyHint')}</div>
-                <div className="mt-1 text-xs text-slate-400">{t('dag.emptyHint2')}</div>
+                <div className="text-sm font-medium text-muted-foreground">{t('dag.emptyHint')}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{t('dag.emptyHint2')}</div>
               </div>
             </div>
           )}
@@ -1160,8 +1175,8 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
 
         {/* ── Right Drawer ───────────────────────────────────────── */}
         {drawerTab && (
-          <div className="card w-80 flex-shrink-0 overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2">
+          <div className="w-80 flex-shrink-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+            <div className="flex items-center justify-between border-b border-border px-4 py-2">
               <h3 className="text-sm font-semibold">
                 {drawerTab === 'schedule' && `📅 ${t('nav.schedules')}`}
                 {drawerTab === 'hooks' && `🪝 ${t('drawer.hooks')}`}
@@ -1169,7 +1184,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                 {drawerTab === 'ai' && `🤖 ${t('drawer.ai')}`}
                 {drawerTab === 'yaml' && `📄 ${t('design.yamlSpec')}`}
               </h3>
-              <button className="text-xs text-slate-400 hover:text-slate-600" onClick={() => setDrawerTab(null)}>✕</button>
+              <button className="text-xs text-muted-foreground hover:text-muted-foreground" onClick={() => setDrawerTab(null)}>✕</button>
             </div>
             <div className="max-h-[calc(100%-44px)] overflow-y-auto p-4">
               {/* Schedule */}
@@ -1178,7 +1193,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
               {/* Hooks */}
               {drawerTab === 'hooks' && (
                 <>
-                  <p className="mb-3 text-xs text-slate-500">
+                  <p className="mb-3 text-xs text-muted-foreground">
                     {t('dag.hooksDesc')}
                   </p>
                   <div className="space-y-2">
@@ -1193,27 +1208,27 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                       const h = hooks[hk.key];
                       const enabled = h?.enabled ?? false;
                       return (
-                        <div key={hk.key} className={`rounded-lg border p-2.5 ${enabled ? 'border-indigo-200 bg-indigo-50/30' : 'border-slate-200'}`}>
+                        <div key={hk.key} className={`rounded-lg border p-2.5 ${enabled ? 'border-indigo-200 bg-indigo-50/30' : 'border-border'}`}>
                           <div className="flex items-center justify-between">
                             <div className="flex-1 min-w-0">
                               <span className="text-xs font-semibold">{hk.label}</span>
-                              <span className="ml-1.5 text-[10px] text-slate-400">{hk.desc}</span>
+                              <span className="ml-1.5 text-[10px] text-muted-foreground">{hk.desc}</span>
                             </div>
                             <label className="flex cursor-pointer items-center gap-1 text-[10px]">
-                              <input type="checkbox" checked={enabled} onChange={(e) => updateHook(hk.key, { enabled: e.target.checked })} className="h-3 w-3 rounded border-slate-300 text-indigo-600" />
+                              <input type="checkbox" checked={enabled} onChange={(e) => updateHook(hk.key, { enabled: e.target.checked })} className="h-3 w-3 rounded border-border text-indigo-600" />
                               {enabled ? t('ui.on') : t('ui.off')}
                             </label>
                           </div>
                           {enabled && (
                             <div className="mt-2 space-y-1.5">
-                              <select className="input w-full py-0.5 text-xs" value={h?.type || 'lua'} onChange={(e) => updateHook(hk.key, { type: e.target.value })}>
+                              <select className={cn(selectClass, "h-8 py-0.5 text-xs")} value={h?.type || 'lua'} onChange={(e) => updateHook(hk.key, { type: e.target.value })}>
                                 <option value="lua">Lua (inline)</option>
                                 <option value="webhook">Webhook (HTTP)</option>
                               </select>
                               {h?.type === 'lua' ? (
-                                <textarea className="input w-full font-mono text-xs" rows={2} placeholder="log('hook fired')" value={h?.code || ''} onChange={(e) => updateHook(hk.key, { code: e.target.value })} />
+                                <textarea className={cn(areaClass, "font-mono text-xs")} rows={2} placeholder="log('hook fired')" value={h?.code || ''} onChange={(e) => updateHook(hk.key, { code: e.target.value })} />
                               ) : (
-                                <input className="input w-full text-xs" placeholder="https://alert-svc/notify" value={h?.name || ''} onChange={(e) => updateHook(hk.key, { name: e.target.value })} />
+                                <input className={cn(fieldClass, "text-xs")} placeholder="https://alert-svc/notify" value={h?.name || ''} onChange={(e) => updateHook(hk.key, { name: e.target.value })} />
                               )}
                             </div>
                           )}
@@ -1229,13 +1244,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                 <div className="space-y-4">
                   {/* Parallelism */}
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-500">Parallelism</label>
+                    <label className="mb-1 block text-xs font-medium text-muted-foreground">Parallelism</label>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="mb-1 block text-[11px] font-medium text-slate-400">Logical Shards</label>
+                        <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Logical Shards</label>
                         <input
                           type="number"
-                          className="input w-full text-sm"
+                          className={fieldClass}
                           min={1}
                           max={256}
                           value={parallelism}
@@ -1247,10 +1262,10 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                         />
                       </div>
                       <div>
-                        <label className="mb-1 block text-[11px] font-medium text-slate-400">Active Shards</label>
+                        <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Active Shards</label>
                         <input
                           type="number"
-                          className="input w-full text-sm"
+                          className={fieldClass}
                           min={1}
                           max={parallelism}
                           value={Math.min(maxActiveShards, parallelism)}
@@ -1259,7 +1274,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                       </div>
                     </div>
                     <div className="mt-2 flex gap-1">
-                      <select className="input flex-1 text-sm" value={shardStrategy} onChange={(e) => setShardStrategy(e.target.value)}>
+                      <select className={cn(selectClass, "flex-1")} value={shardStrategy} onChange={(e) => setShardStrategy(e.target.value)}>
                         <option value="round_robin">round_robin</option>
                         <option value="pk_mod">pk_mod (MySQL)</option>
                         <option value="hash_modulo">hash_modulo</option>
@@ -1269,13 +1284,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                       </select>
                     </div>
                     {parallelism > 1 && (
-                      <input className="input mt-1 w-full text-sm" value={shardKey} onChange={(e) => setShardKey(e.target.value)} placeholder="shard key field (optional)" />
+                      <input className={cn(fieldClass, "mt-1")} value={shardKey} onChange={(e) => setShardKey(e.target.value)} placeholder="shard key field (optional)" />
                     )}
                     <div className="mt-2">
-                      <label className="mb-1 block text-[11px] font-medium text-slate-400">Transform Workers</label>
+                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Transform Workers</label>
                       <input
                         type="number"
-                        className="input w-full text-sm"
+                        className={fieldClass}
                         min={1}
                         max={256}
                         value={transformWorkers}
@@ -1283,47 +1298,47 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                       />
                     </div>
                     <div className="mt-2">
-                      <label className="mb-1 block text-[11px] font-medium text-slate-400">Sink Concurrency</label>
+                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Sink Concurrency</label>
                       <input
                         type="number"
-                        className="input w-full text-sm"
+                        className={fieldClass}
                         min={0}
                         max={256}
                         value={sinkConcurrency}
                         onChange={(e) => setSinkConcurrency(Math.max(0, parseInt(e.target.value) || 0))}
                       />
                     </div>
-                    <p className="mt-1 text-xs text-slate-400">{t('dag.parallelInstances').replace('{n}', String(parallelism))}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{t('dag.parallelInstances').replace('{n}', String(parallelism))}</p>
                   </div>
-                  <hr className="border-slate-100" />
+                  <hr className="border-border" />
                   {/* Batch & Flow Control */}
                   <div className="space-y-2.5">
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">📦 Batch Size</label>
-                      <input type="number" className="input w-full text-sm" min={1} max={100000} value={batchSize} onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1000))} />
+                      <label className="mb-1 block text-xs font-medium text-muted-foreground">📦 Batch Size</label>
+                      <input type="number" className={fieldClass} min={1} max={100000} value={batchSize} onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1000))} />
                     </div>
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">⏱ Flush Interval (ms)</label>
-                      <input type="number" className="input w-full text-sm" min={100} max={60000} value={flushIntervalMs} onChange={(e) => setFlushIntervalMs(Math.max(100, parseInt(e.target.value) || 1000))} />
+                      <label className="mb-1 block text-xs font-medium text-muted-foreground">⏱ Flush Interval (ms)</label>
+                      <input type="number" className={fieldClass} min={100} max={60000} value={flushIntervalMs} onChange={(e) => setFlushIntervalMs(Math.max(100, parseInt(e.target.value) || 1000))} />
                     </div>
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">💾 Checkpoint Interval (s)</label>
-                      <input type="number" className="input w-full text-sm" min={1} max={3600} value={checkpointIntervalSec} onChange={(e) => setCheckpointIntervalSec(Math.max(1, parseInt(e.target.value) || 30))} />
+                      <label className="mb-1 block text-xs font-medium text-muted-foreground">💾 Checkpoint Interval (s)</label>
+                      <input type="number" className={fieldClass} min={1} max={3600} value={checkpointIntervalSec} onChange={(e) => setCheckpointIntervalSec(Math.max(1, parseInt(e.target.value) || 30))} />
                     </div>
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">🔄 Backpressure Buffer</label>
-                      <input type="number" className="input w-full text-sm" min={1} max={10000} value={backpressureBuffer} onChange={(e) => setBackpressureBuffer(Math.max(1, parseInt(e.target.value) || 100))} />
+                      <label className="mb-1 block text-xs font-medium text-muted-foreground">🔄 Backpressure Buffer</label>
+                      <input type="number" className={fieldClass} min={1} max={10000} value={backpressureBuffer} onChange={(e) => setBackpressureBuffer(Math.max(1, parseInt(e.target.value) || 100))} />
                     </div>
                   </div>
-                  <hr className="border-slate-100" />
+                  <hr className="border-border" />
                   {/* Tags & Worker Selector */}
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-500">🏷 Tags</label>
-                    <input className="input w-full text-sm" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="production, critical" />
+                    <label className="mb-1 block text-xs font-medium text-muted-foreground">🏷 Tags</label>
+                    <input className={fieldClass} value={tags} onChange={(e) => setTags(e.target.value)} placeholder="production, critical" />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-500">🎯 Worker Selector</label>
-                    <input className="input w-full text-sm" value={workerLabels} onChange={(e) => setWorkerLabels(e.target.value)} placeholder="zone=us-east, gpu=true" />
+                    <label className="mb-1 block text-xs font-medium text-muted-foreground">🎯 Worker Selector</label>
+                    <input className={fieldClass} value={workerLabels} onChange={(e) => setWorkerLabels(e.target.value)} placeholder="zone=us-east, gpu=true" />
                   </div>
                 </div>
               )}
@@ -1332,24 +1347,24 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
               {drawerTab === 'ai' && (
                 <div className="space-y-3">
                   <textarea
-                    className="h-24 w-full rounded-lg border border-slate-300 p-2 text-sm"
+                    className={cn(areaClass, "h-24")}
                     placeholder={t('dag.aiPlaceholder')}
                     value={aiPrompt}
                     onChange={(e) => setAiPrompt(e.target.value)}
                   />
                   {aiError && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{aiError}</div>}
-                  <button className="btn btn-primary btn-sm w-full" onClick={aiGenerate} disabled={aiLoading}>
+                  <Button size="sm" className="w-full" onClick={aiGenerate} disabled={aiLoading}>
                     {aiLoading ? '⏳ ' + t('dag.generating') : '✨ ' + t('dag.generatePipeline')}
-                  </button>
+                  </Button>
                   {aiResult && (
                     <div className="space-y-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs" data-testid="dag-ai-review">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-semibold text-indigo-900">AI draft review</span>
-                        <span className={`badge ${aiResult.validation?.valid === false ? 'badge-rose' : 'badge-blue'}`}>
+                        <ToneBadge tone={aiResult.validation?.valid === false ? 'rose' : 'blue'}>
                           {aiResult.validation?.valid === false ? 'needs fixes' : 'validated'}
-                        </span>
+                        </ToneBadge>
                       </div>
-                      {aiResult.context_pack_version && <div className="text-slate-500">Context: {aiResult.context_pack_version}</div>}
+                      {aiResult.context_pack_version && <div className="text-muted-foreground">Context: {aiResult.context_pack_version}</div>}
                       {(aiResult.validation?.errors || []).map((msg, i) => <div key={`ai-err-${i}`} className="rounded border border-rose-200 bg-white/80 p-2 text-rose-700">{msg}</div>)}
                       {(aiResult.validation?.warnings || []).slice(0, 4).map((msg, i) => <div key={`ai-warn-${i}`} className="rounded border border-amber-200 bg-white/80 p-2 text-amber-800">{msg}</div>)}
                       {(aiResult.review?.missing_fields || []).length > 0 && (
@@ -1364,33 +1379,33 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                           {aiResult.review?.risk_flags?.map((risk, i) => (
                             <div key={i} className={risk.level === 'error' ? 'text-rose-700' : 'text-amber-800'}>
                               {risk.level} · {risk.code}: {risk.message}
-                              {risk.remediation ? <span className="block text-slate-500">Fix: {risk.remediation}</span> : null}
+                              {risk.remediation ? <span className="block text-muted-foreground">Fix: {risk.remediation}</span> : null}
                             </div>
                           ))}
                         </div>
                       )}
                       {(aiResult.review?.requires_confirmation || []).length > 0 && (
-                        <div className="rounded border border-slate-200 bg-white/80 p-2">
-                          <div className="mb-1 font-semibold text-slate-700">Requires confirmation</div>
+                        <div className="rounded border border-border bg-white/80 p-2">
+                          <div className="mb-1 font-semibold text-foreground/80">Requires confirmation</div>
                           {aiResult.review?.requires_confirmation?.slice(0, 6).map((item, i) => <div key={i}>{item.message}</div>)}
                         </div>
                       )}
                       <div className="grid gap-2">
                         <div>
-                          <div className="mb-1 font-semibold text-slate-600">Current YAML</div>
-                          <pre className="max-h-28 overflow-auto rounded bg-white p-2 font-mono text-[11px] text-slate-500">{YAML.stringify(buildSpec())}</pre>
+                          <div className="mb-1 font-semibold text-muted-foreground">Current YAML</div>
+                          <pre className="max-h-28 overflow-auto rounded bg-white p-2 font-mono text-[11px] text-muted-foreground">{YAML.stringify(buildSpec())}</pre>
                         </div>
                         <div>
-                          <div className="mb-1 font-semibold text-slate-600">AI YAML</div>
-                          <pre className="max-h-40 overflow-auto rounded bg-white p-2 font-mono text-[11px] text-slate-700">{aiResult.yaml}</pre>
+                          <div className="mb-1 font-semibold text-muted-foreground">AI YAML</div>
+                          <pre className="max-h-40 overflow-auto rounded bg-white p-2 font-mono text-[11px] text-foreground/80">{aiResult.yaml}</pre>
                         </div>
                       </div>
-                      <button data-testid="dag-ai-apply" className="btn btn-secondary btn-sm w-full" onClick={applyAiGeneratedSpec}>
+                      <Button data-testid="dag-ai-apply" variant="secondary" size="sm" className="w-full" onClick={applyAiGeneratedSpec}>
                         Apply reviewed draft
-                      </button>
+                      </Button>
                     </div>
                   )}
-                  <p className="text-xs text-slate-400">{t('dag.aiDesc')}</p>
+                  <p className="text-xs text-muted-foreground">{t('dag.aiDesc')}</p>
                 </div>
               )}
 
@@ -1398,10 +1413,10 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
               {drawerTab === 'yaml' && (
                 <div className="space-y-2">
                   <div className="grid grid-cols-2 gap-2">
-                    <button className="btn btn-ghost btn-sm w-full" onClick={() => navigator.clipboard.writeText(yamlOutput)}>📋 {t('design.copy')}</button>
-                    <button data-testid="dag-sync-yaml" className="btn btn-secondary btn-sm w-full" onClick={syncYamlToCanvas}>Sync YAML to canvas</button>
+                    <Button variant="ghost" size="sm" className="w-full" onClick={() => navigator.clipboard.writeText(yamlOutput)}>📋 {t('design.copy')}</Button>
+                    <Button data-testid="dag-sync-yaml" variant="secondary" size="sm" className="w-full" onClick={syncYamlToCanvas}>Sync YAML to canvas</Button>
                   </div>
-                  <textarea data-testid="dag-yaml" className="h-96 w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-xs" value={yamlOutput} onChange={(e) => setYamlOutput(e.target.value)} />
+                  <textarea data-testid="dag-yaml" className="h-96 w-full rounded-lg border border-border bg-muted/40 p-2 font-mono text-xs" value={yamlOutput} onChange={(e) => setYamlOutput(e.target.value)} />
                 </div>
               )}
             </div>
