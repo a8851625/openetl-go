@@ -265,7 +265,7 @@ export function AppShell({
                 </TooltipContent>
               </Tooltip>
 
-              <Button variant="ghost" size="sm" onClick={onToggleLang}>
+              <Button variant="ghost" size="sm" onClick={onToggleLang} title="Switch language">
                 {langLabel}
               </Button>
 

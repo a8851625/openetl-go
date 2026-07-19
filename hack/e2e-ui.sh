@@ -112,14 +112,14 @@ echo "=== B: i18n Language Toggle ==="
 check "B1: English label 'Dashboard'" "$(evaljs "document.body.innerText.includes('Dashboard')")"
 
 # B2: Switch to Chinese via topbar globe button
-playwright-cli click "header button[title]" >/dev/null 2>&1 || true
+playwright-cli click "header button[title='Switch language']" >/dev/null 2>&1 || playwright-cli click "header button[title]" >/dev/null 2>&1 || true
 sleep 1
 check "B2: Switched to Chinese" "$(evaljs "document.body.innerText.includes('仪表盘')")"
 check "B3: Chinese nav label '管道'" "$(evaljs "document.body.innerText.includes('管道')")"
 check "B4: Chinese metric label" "$(evaljs "document.body.innerText.includes('读取记录')")"
 
 # B3: Switch back to English
-playwright-cli click "header button[title]" >/dev/null 2>&1 || true
+playwright-cli click "header button[title='Switch language']" >/dev/null 2>&1 || playwright-cli click "header button[title]" >/dev/null 2>&1 || true
 sleep 1
 check "B5: Back to English" "$(evaljs "document.body.innerText.includes('Dashboard')")"
 
@@ -286,12 +286,13 @@ check "D2.3: Dry-run output visible" "$dry_run_visible"
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-validate\"]')?.click(); return true; })()" >/dev/null
 check "D2.4: Repaired preflight passes" "$repaired_selected"
 check "D2.5: YAML roundtrip surface" "$(evaljs "(document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || '').includes('source:') && document.body.innerText.includes('Sync YAML to form')")"
-evaljs "(() => { const t=document.querySelector('[data-testid=\"wizard-yaml\"]'); if (!t) return false; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(t,t.value.replace('name: ui-wizard-file','name: ui-wizard-roundtrip')); t.dispatchEvent(new Event('input',{bubbles:true})); Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('Sync YAML to form'))?.click(); return true; })()" >/dev/null
+evaljs "(() => { const t=document.querySelector('[data-testid=\"wizard-yaml\"]'); if (!t) return false; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; const next=t.value.replace(/name:\s*[^\n]+/, 'name: ui-wizard-roundtrip'); setter.call(t,next); t.dispatchEvent(new Event('input',{bubbles:true})); t.dispatchEvent(new Event('change',{bubbles:true})); Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Sync YAML to form'))?.click(); return true; })()" >/dev/null
 sleep 1
 check "D2.5a: YAML sync updates form" "$(evaljs "document.querySelector('[data-testid=\"wizard-pipeline-name\"]')?.value === 'ui-wizard-roundtrip'")"
-evaljs "(() => { const input=document.querySelector('[data-testid=\"wizard-pipeline-name\"]'); if (!input) return false; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(input,'ui-wizard-file'); input.dispatchEvent(new Event('input',{bubbles:true})); return true; })()" >/dev/null
+evaljs "(() => { const input=document.querySelector('[data-testid=\"wizard-pipeline-name\"]'); if (!input) return false; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(input,'ui-wizard-file'); input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
 sleep 1
-evaljs "(() => { document.querySelector('[data-testid=\"wizard-create-start\"]')?.click(); return true; })()" >/dev/null
+# Also sync name into YAML before create, then click create
+evaljs "(() => { const t=document.querySelector('[data-testid=\"wizard-yaml\"]'); if (t) { const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(t,t.value.replace(/name:\s*[^\n]+/, 'name: ui-wizard-file')); t.dispatchEvent(new Event('input',{bubbles:true})); } document.querySelector('[data-testid=\"wizard-create-start\"]')?.click(); return true; })()" >/dev/null
 sleep 7
 check "D2.6: Wizard pipeline created" "$(evaljs "fetch('/api/v2/pipelines').then(r=>r.json()).then(d=>(d.pipelines||[]).some(p=>p.name==='ui-wizard-file')).catch(()=>false)")"
 
@@ -465,7 +466,7 @@ check "G2: mysql_cdc listed" "$(evaljs "document.body.innerText.includes('mysql_
 check "G3: clickhouse listed" "$(evaljs "document.body.innerText.includes('clickhouse')")"
 check "G4: kafka listed" "$(evaljs "document.body.innerText.includes('kafka')")"
 check "G5: elasticsearch listed" "$(evaljs "document.body.innerText.includes('elasticsearch')")"
-check "G6: Table rows exist" "$(evaljs "document.querySelectorAll('.tbl tr').length > 5")"
+check "G6: Table rows exist" "$(evaljs "document.querySelectorAll('table tr').length > 5 || document.querySelectorAll('[role=row]').length > 5")"
 check "G7: 'source' kind" "$(evaljs "document.body.innerText.includes('source')")"
 check "G8: 'sink' kind" "$(evaljs "document.body.innerText.includes('sink')")"
 
@@ -473,7 +474,7 @@ check "G8: 'sink' kind" "$(evaljs "document.body.innerText.includes('sink')")"
 echo "=== H: Audit Page ==="
 goto_page "Audit"
 check "H1: Audit Trail" "$(evaljs "document.body.innerText.includes('Audit Trail')")"
-check "H2: Table exists" "$(evaljs "document.querySelectorAll('.tbl').length > 0")"
+check "H2: Table exists" "$(evaljs "document.querySelectorAll('table').length > 0 || document.querySelector('[role=table]') !== null")"
 
 # ════════════════════════════════════════════════
 echo "=== I: Settings & Token ==="

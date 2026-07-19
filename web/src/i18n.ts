@@ -347,7 +347,7 @@ const dict: Dict = {
   'field.scopeBehavior': { en: 'task', zh: '任务参数' },
   'field.scopeConnectionHint': { en: 'Connection fields (host/credentials). Prefer saving these in Connections.', zh: '连接字段（主机/凭证）。建议保存在连接目录。' },
   'field.scopeBehaviorHint': { en: 'Task fields (table/topic/write mode). Stay on the pipeline endpoint.', zh: '任务字段（表/主题/写入模式）。保留在管道端点配置中。' },
-  'field.behaviorOnlyHint': { en: 'Showing task parameters only; credentials come from the saved connection.', zh: '仅显示任务参数；凭证来自已保存连接。' },
+  'field.behaviorOnlyHint': { en: 'Showing behavior fields only; credentials come from the saved connection.', zh: '仅显示 behavior 任务参数；凭证来自已保存连接。' },
   'field.fullConfigHint': { en: 'Showing full endpoint config. Select a saved connection to keep credentials in the catalog.', zh: '显示完整端点配置。选择已保存连接可将凭证放在连接目录。' },
 
   'wizard.title': { en: 'Create Pipeline Wizard', zh: '创建管道向导' },
