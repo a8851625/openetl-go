@@ -9,6 +9,9 @@ import { MyPluginsPage } from './MyPluginsPage';
 import { SchedulesPage } from './SchedulesPage';
 import { ConnectionsPage } from './ConnectionsPage';
 import { ConfigForm, buildDefaultConfig, filterFieldsByScope, missingRequiredFields, type PluginSchemaField } from './configFields';
+import { ThemeProvider } from '@/components/theme-provider';
+import { Toaster } from '@/components/ui/sonner';
+import { AppShell, type AppPage } from '@/components/layout/app-shell';
 
 // ════════════════════════════════════════════════
 // Types
@@ -246,32 +249,9 @@ function useLiveUptime(startedAt: string | undefined): string {
 }
 
 // ════════════════════════════════════════════════
-// Icons
-// ════════════════════════════════════════════════
-const Icon = {
-  Dashboard: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
-  Pipeline: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>,
-  Designer: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="3"/></svg>,
-  DLQ: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>,
-  Plugin: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M10 7h4M7 10v4"/></svg>,
-  Audit: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>,
-  Gear: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.3l2-1.5-2-3.4-2.4 1a7 7 0 00-2.2-1.3L16 3h-4l-.3 2.5a7 7 0 00-2.2 1.3l-2.4-1-2 3.4 2 1.5A7 7 0 005 12a7 7 0 00.1 1.3l-2 1.5 2 3.4 2.4-1a7 7 0 002.2 1.3L12 21h4l.3-2.5a7 7 0 002.2-1.3l2.4 1 2-3.4-2-1.5A7 7 0 0019 12z"/></svg>,
-  Globe: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20"/></svg>,
-  Flow: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M7 5h10M5 7v10M19 7v10M7 19h10"/></svg>,
-  Server: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>,
-  Clock: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>,
-};
-const PAGE_ICONS: Record<string, (p: any) => JSX.Element> = {
-  dashboard: Icon.Dashboard, pipelines: Icon.Pipeline, designer: Icon.Flow,
-  dlq: Icon.DLQ, plugins: Icon.Plugin, audit: Icon.Audit,
-  workers: Icon.Server, myPlugins: Icon.Plugin, schedules: Icon.Clock,
-  connections: Icon.Server,
-};
-
-// ════════════════════════════════════════════════
 // App
 // ════════════════════════════════════════════════
-type Page = 'dashboard' | 'pipelines' | 'designer' | 'dlq' | 'plugins' | 'audit' | 'workers' | 'myPlugins' | 'schedules' | 'connections';
+type Page = AppPage;
 type Toast = { id: number; type: 'success' | 'error' | 'info'; msg: string };
 
 function App() {
@@ -350,9 +330,9 @@ function App() {
 
   const switchLang = (l: Lang) => { setLangState(l); setLang(l); };
 
-  const navItems: { id: Page; key: string }[] = [
+  const navItems: { id: Page; key: string; badge?: number }[] = [
     { id: 'dashboard', key: 'nav.dashboard' },
-    { id: 'pipelines', key: 'nav.pipelines' },
+    { id: 'pipelines', key: 'nav.pipelines', badge: totals.running },
     { id: 'connections', key: 'nav.connections' },
     { id: 'designer', key: 'nav.designer' },
     { id: 'dlq', key: 'nav.dlq' },
@@ -363,97 +343,58 @@ function App() {
     { id: 'audit', key: 'nav.audit' },
   ];
 
+  const pageTitle = page === 'dlq' ? t('top.dlqWorkbench') : t(`nav.${page}`);
+
   return (
-    <div className="flex min-h-screen">
-      {/* Sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 flex w-56 flex-col border-r border-slate-200 bg-white">
-        <div className="flex h-16 items-center gap-2.5 border-b border-slate-100 px-5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
-            <Icon.Pipeline className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-sm font-bold text-slate-900">{t('app.title')}</div>
-            <div className="text-xs text-slate-400">{t('app.subtitle')}</div>
-          </div>
+    <>
+      <AppShell
+        title={t('app.title')}
+        subtitle={t('app.subtitle')}
+        page={page}
+        pageTitle={pageTitle}
+        navItems={navItems}
+        t={t}
+        onNavigate={setPage}
+        onOpenSettings={() => { setShowSettings(true); loadLLMConfig(); }}
+        onToggleLang={() => switchLang(lang === 'en' ? 'zh' : 'en')}
+        langLabel={lang === 'en' ? '中文' : 'EN'}
+        onReloadSpecs={() => runAction(t('toast.reloadSpecs'), () => api('/api/v2/specs/reload', { method: 'POST' }))}
+        reloadLabel={t('top.reloadSpecs')}
+        autoRefreshLabel={t('top.autorefresh')}
+        hasRunning={pipelinesList.some((p) => p.status === 'running')}
+      >
+        {page === 'dashboard' && <DashboardPage t={t} lang={lang} totals={totals} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} />}
+        {page === 'pipelines' && <PipelinesPage t={t} lang={lang} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} onAction={runAction} checkpoints={checkpoints} onResetCheckpoint={(ref: string, label?: string) => runAction(`${t('toast.resetCheckpoint')}: ${label || ref}`, () => api(`/api/v2/pipelines/${encodeURIComponent(ref)}/checkpoint/reset`, { method: 'POST' }))} onEdit={editPipeline} refreshKey={refreshKey} onShowToast={toast} plugins={plugins} pluginSchema={pluginSchema} />}
+        {page === 'connections' && <ConnectionsPage t={t} lang={lang} />}
+        {page === 'designer' && <DagEditorPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} onAction={runAction} editTarget={editTarget} />}
+        {page === 'dlq' && <DLQPage t={t} lang={lang} pipelines={pipelines} selected={selected} onSelect={setSelectedPipeline} onAction={runAction} />}
+        {page === 'plugins' && <PluginsPage t={t} lang={lang} plugins={plugins} />}
+        {page === 'myPlugins' && <MyPluginsPage t={t} lang={lang} />}
+        {page === 'workers' && <WorkersPage t={t} lang={lang} />}
+        {page === 'schedules' && <SchedulesPage t={t} lang={lang} pipelines={pipelines} />}
+        {page === 'audit' && <AuditPage t={t} lang={lang} audit={audit} />}
+      </AppShell>
+
+      {/* Legacy toast stack (kept for existing toast() callers); Sonner also mounted at root */}
+      {toasts.length > 0 && (
+        <div className="fixed right-4 top-20 z-50 space-y-2">
+          {toasts.map((ts) => (
+            <div key={ts.id} className={`toast-enter flex items-center gap-2 rounded-lg px-4 py-3 text-sm shadow-lg ${
+              ts.type === 'success' ? 'bg-emerald-600 text-white' : ts.type === 'error' ? 'bg-rose-600 text-white' : 'bg-slate-800 text-white'
+            }`}>
+              <span>{ts.type === 'success' ? '✓' : ts.type === 'error' ? '✗' : 'ℹ'}</span>
+              <span>{ts.msg}</span>
+            </div>
+          ))}
         </div>
-        <nav className="flex-1 space-y-1 p-3">
-          {navItems.map((item) => {
-            const IconComp = PAGE_ICONS[item.id];
-            return (
-              <div key={item.id} className={`sidebar-item ${page === item.id ? 'active' : ''}`} onClick={() => setPage(item.id)}>
-                {IconComp && <IconComp className="sidebar-icon h-4 w-4" />}
-                <span>{t(item.key)}</span>
-                {item.id === 'pipelines' && totals.running > 0 && (
-                  <span className="ml-auto rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">{totals.running}</span>
-                )}
-              </div>
-            );
-          })}
-        </nav>
-        {/* Settings button — opens modal */}
-        <div className="border-t border-slate-100 p-3">
-          <div className="sidebar-item cursor-pointer" onClick={() => { setShowSettings(true); loadLLMConfig(); }}>
-            <Icon.Gear className="h-4 w-4" />
-            <span>{t('nav.settings')}</span>
-          </div>
-        </div>
-      </aside>
+      )}
 
-      {/* Main */}
-      <main className="ml-56 flex-1">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white/80 px-8 backdrop-blur">
-          <h1 className="text-lg font-semibold text-slate-900">
-            {page === 'dlq' ? t('top.dlqWorkbench') : t(`nav.${page}`)}
-          </h1>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-400">{t('top.autorefresh')}</span>
-            <div className={`status-dot ${pipelinesList.some(p => p.status === 'running') ? 'status-running' : 'status-stopped'}`} />
-            {/* Quick lang toggle */}
-            <button className="btn btn-ghost btn-sm flex items-center gap-1" onClick={() => switchLang(lang === 'en' ? 'zh' : 'en')} title={t('settings.language')}>
-              <Icon.Globe className="h-4 w-4" />
-              {lang === 'en' ? '中文' : 'EN'}
-            </button>
-            <button className="btn btn-secondary btn-sm" onClick={() => runAction(t('toast.reloadSpecs'), () => api('/api/v2/specs/reload', { method: 'POST' }))}>
-              {t('top.reloadSpecs')}
-            </button>
-          </div>
-        </header>
-
-        {/* Toasts */}
-        {toasts.length > 0 && (
-          <div className="fixed right-4 top-20 z-50 space-y-2">
-            {toasts.map((ts) => (
-              <div key={ts.id} className={`toast-enter flex items-center gap-2 rounded-lg px-4 py-3 text-sm shadow-lg ${
-                ts.type === 'success' ? 'bg-emerald-600 text-white' : ts.type === 'error' ? 'bg-rose-600 text-white' : 'bg-slate-800 text-white'
-              }`}>
-                <span>{ts.type === 'success' ? '✓' : ts.type === 'error' ? '✗' : 'ℹ'}</span>
-                <span>{ts.msg}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="p-8">
-          {page === 'dashboard' && <DashboardPage t={t} lang={lang} totals={totals} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} />}
-          {page === 'pipelines' && <PipelinesPage t={t} lang={lang} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} onAction={runAction} checkpoints={checkpoints} onResetCheckpoint={(ref: string, label?: string) => runAction(`${t('toast.resetCheckpoint')}: ${label || ref}`, () => api(`/api/v2/pipelines/${encodeURIComponent(ref)}/checkpoint/reset`, { method: 'POST' }))} onEdit={editPipeline} refreshKey={refreshKey} onShowToast={toast} plugins={plugins} pluginSchema={pluginSchema} />}
-          {page === 'connections' && <ConnectionsPage t={t} lang={lang} />}
-          {page === 'designer' && <DagEditorPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} onAction={runAction} editTarget={editTarget} />}
-          {page === 'dlq' && <DLQPage t={t} lang={lang} pipelines={pipelines} selected={selected} onSelect={setSelectedPipeline} onAction={runAction} />}
-          {page === 'plugins' && <PluginsPage t={t} lang={lang} plugins={plugins} />}
-          {page === 'myPlugins' && <MyPluginsPage t={t} lang={lang} />}
-          {page === 'workers' && <WorkersPage t={t} lang={lang} />}
-          {page === 'schedules' && <SchedulesPage t={t} lang={lang} pipelines={pipelines} />}
-          {page === 'audit' && <AuditPage t={t} lang={lang} audit={audit} />}
-        </div>
-      </main>
-
-      {/* Settings Modal */}
       {showSettings && <SettingsModal t={t} lang={lang} token={token} setToken={setToken} switchLang={switchLang} llmConfig={llmConfig} setLLMConfig={setLLMConfig} onClose={() => setShowSettings(false)} onSaveToken={() => { window.localStorage.setItem('etl_api_token', token); setRefreshKey((n) => n + 1); toast('success', t('settings.tokenSaved')); }} onSaveLLM={() => {
         api('/api/v2/settings', { method: 'POST', body: JSON.stringify({ llm_base_url: llmConfig.base_url, llm_model: llmConfig.model, llm_api_key: llmConfig.api_key }) })
           .then(() => toast('success', t('settings.llmSaved')))
           .catch((e) => toast('error', e.message));
       }} />}
-    </div>
+    </>
   );
 }
 
@@ -2701,4 +2642,10 @@ function PipelineLogViewer({ t, name }: { t: (k: string) => string; name: string
   );
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <ThemeProvider defaultTheme="light" storageKey="etl_theme">
+    <App />
+    <Toaster richColors position="top-right" />
+  </ThemeProvider>,
+);
+

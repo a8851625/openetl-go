@@ -4,8 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenETL</title>
-    <script type="module" crossorigin src="/assets/index-0-Hxpn5f.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-9vfBHe_Q.css">
+    <script>
+      (function () {
+        try {
+          var key = 'etl_theme';
+          var stored = localStorage.getItem(key);
+          var theme = stored === 'dark' || stored === 'light' || stored === 'system' ? stored : 'light';
+          var resolved = theme === 'system'
+            ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+            : theme;
+          document.documentElement.classList.add(resolved);
+        } catch (e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-AxQ-eT0U.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Bkzv0Ahx.css">
   </head>
   <body>
     <div id="root"></div>
