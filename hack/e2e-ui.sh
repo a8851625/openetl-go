@@ -75,10 +75,26 @@ open_app() {
   sleep 0.5
 }
 
-# Navigate to a page by clicking sidebar item
+# Navigate to a page by data-nav (preferred) or .sidebar-item label text
+# label may be nav id (dashboard/pipelines/...) or visible text (Dashboard/Pipelines/...)
 goto_page() {
   local label="$1"
-  evaljs "(() => { Array.from(document.querySelectorAll('.sidebar-item')).find(e=>e.textContent.includes('$label'))?.click(); return true; })()" >/dev/null 2>&1 || true
+  local nav_id=""
+  case "$label" in
+    Dashboard|仪表盘) nav_id="dashboard" ;;
+    Pipelines|管道) nav_id="pipelines" ;;
+    Designer|设计器) nav_id="designer" ;;
+    Connections|连接) nav_id="connections" ;;
+    Schedules|调度) nav_id="schedules" ;;
+    Workers) nav_id="workers" ;;
+    Plugins|插件) nav_id="plugins" ;;
+    "My Plugins"|我的插件) nav_id="myPlugins" ;;
+    DLQ) nav_id="dlq" ;;
+    Audit|审计) nav_id="audit" ;;
+    Settings|设置) nav_id="settings" ;;
+    *) nav_id="$label" ;;
+  esac
+  evaljs "(() => { const byNav = document.querySelector('[data-nav=$nav_id]'); if (byNav) { byNav.click(); return true; } const byText = Array.from(document.querySelectorAll('.sidebar-item,[data-nav]')).find(e => (e.textContent || '').includes('$label')); if (byText) { byText.click(); return true; } return false; })()" >/dev/null 2>&1 || true
   sleep 1
 }
 
@@ -86,7 +102,7 @@ goto_page() {
 echo "=== A: Page Structure & Sidebar ==="
 check "A1: Title = OpenETL" "$(evaljs "document.title === 'OpenETL'")"
 check "A2: Sidebar present" "$(evaljs "document.querySelector('aside') !== null")"
-check "A3: 8 nav items" "$(evaljs "document.querySelectorAll('.sidebar-item').length >= 8")"
+check "A3: 8 nav items" "$(evaljs "document.querySelectorAll('.sidebar-item,[data-nav]').length >= 8")"
 check "A4: Brand 'OpenETL'" "$(evaljs "document.body.innerText.includes('OpenETL')")"
 check "A5: Default page = Dashboard" "$(evaljs "document.body.innerText.includes('Pipeline Overview') || document.body.innerText.includes('管道总览')")"
 
@@ -463,7 +479,7 @@ check "H2: Table exists" "$(evaljs "document.querySelectorAll('.tbl').length > 0
 echo "=== I: Settings & Token ==="
 open_app
 # Open settings modal
-evaljs "(() => { Array.from(document.querySelectorAll('.sidebar-item')).find(e=>e.textContent.includes('Settings'))?.click(); return true; })()" >/dev/null 2>&1 || true
+evaljs "(() => { const n=document.querySelector('[data-nav=settings]'); if(n){n.click();return true;} Array.from(document.querySelectorAll('.sidebar-item')).find(e=>e.textContent.includes('Settings'))?.click(); return true; })()" >/dev/null 2>&1 || true
 for _ in $(seq 1 10); do
   settings_open="$(evaljs "document.querySelector('input[placeholder*=API]') !== null")"
   if [[ "$settings_open" == "true" ]]; then break; fi

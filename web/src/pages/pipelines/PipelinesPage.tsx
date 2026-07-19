@@ -688,10 +688,10 @@ export function PipelinesPage({
                         value={String(selectedMetric.dlq_file_count)}
                       />
                     </div>
-                    {selected.stats.last_error && (
+                    {selected?.stats?.last_error && (
                       <ErrorBox message={selected.stats.last_error} />
                     )}
-                    {selected.shard_count && selected.shard_count > 1 && (
+                    {selected?.shard_count && selected.shard_count > 1 && (
                       <>
                         <h3 className="border-t border-border pt-2 text-sm font-semibold">
                           {t('pipe.shardsLabel')} ({selected.shard_count})

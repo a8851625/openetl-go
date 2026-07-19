@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import YAML from 'yaml';
 import { Modal } from '@/components/shared/modal';
-import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { ToneBadge } from '@/components/shared/status-badge';
+import { cn } from '@/lib/utils';
+import { ErrorBox } from '@/components/shared/empty-state';
 import {
   ConfigForm,
   buildDefaultConfig,
@@ -17,6 +22,9 @@ import type {
   ConnectionRecommendation,
   TFunc,
 } from '@/lib/types';
+
+const wizardSelectClass =
+  'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
 // First Task Wizard
 // ════════════════════════════════════════════════
@@ -129,18 +137,11 @@ function defaultSinkConfig(type: string): Record<string, unknown> {
   }
 }
 
-function parseJSONText(text: string, fallback: unknown) {
-  try { return JSON.parse(text); } catch { return fallback; }
-}
 
 function sourceSupportsSampleSchemaHint(type: string): boolean {
   return ['file', 'http', 'kafka'].includes(type);
 }
 
-function parseJSONObject(text: string): Record<string, unknown> {
-  const parsed = parseJSONText(text, {});
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-}
 
 function parseTransformList(text: string): { type: string; config: Record<string, unknown> }[] {
   const parsed = parseJSONText(text, []);
@@ -150,9 +151,6 @@ function parseTransformList(text: string): { type: string; config: Record<string
     .map((item) => ({ type: (item as any).type, config: parseJSONObject(prettyJSON((item as any).config || {})) }));
 }
 
-function prettyJSON(value: unknown) {
-  return JSON.stringify(value, null, 2);
-}
 
 export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc; plugins: any; schema: any; onClose: () => void; onCreated: (name: string) => void }) {
   const [templateId, setTemplateId] = useState('multi-table-sync');
@@ -540,14 +538,14 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
   };
 
   const renderSchemaSummary = (title: string, fields: PluginSchemaField[], maturity: string, capabilities: string[], missing: string[]) => (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <div className="rounded-lg border border-border bg-muted/40 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="text-xs font-semibold text-slate-600">{title}</div>
-        <span className="badge badge-slate">{maturity}</span>
+        <ToneBadge tone="slate">{maturity}</ToneBadge>
       </div>
       <div className="mb-2 flex flex-wrap gap-1">
-        {capabilities.slice(0, 5).map((cap: string) => <span key={cap} className="badge badge-blue text-[10px]">{cap}</span>)}
-        {missing.map((field) => <span key={field} className="badge badge-rose text-[10px]">missing {field}</span>)}
+        {capabilities.slice(0, 5).map((cap: string) => <ToneBadge key={cap} tone="blue" className="text-[10px]">{cap}</ToneBadge>)}
+        {missing.map((field) => <ToneBadge key={field} tone="rose" className="text-[10px]">missing {field}</ToneBadge>)}
       </div>
       <div className="grid gap-1">
         {fields.slice(0, 8).map((field) => (
@@ -573,10 +571,10 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
     setJsonOpen: (open: boolean) => void,
     testId: string,
   ) => (
-    <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid={testId}>
+    <div className="rounded-lg border border-border bg-card p-3" data-testid={testId}>
       <div className="mb-3 flex items-center justify-between gap-2">
         <div className="text-xs font-semibold text-slate-600">{title}</div>
-        <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => setJsonOpen(!jsonOpen)}>{jsonOpen ? 'Hide JSON' : 'Advanced JSON'}</button>
+        <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => setJsonOpen(!jsonOpen)}>{jsonOpen ? 'Hide JSON' : 'Advanced JSON'}</Button>
       </div>
       {title.toLowerCase().includes('source') || title.toLowerCase().includes('sink') ? (
         <div className="mb-2 text-[11px] text-slate-400" data-testid={`${testId}-scope-hint`}>
@@ -587,14 +585,14 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
       ) : null}
       <ConfigForm fields={fields} config={config} onChange={(next) => setConfigText(prettyJSON(next))} t={t} />
       {jsonOpen && (
-        <textarea className="input mt-3 min-h-36 w-full font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
+        <Textarea className="mt-3 min-h-36 font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
       )}
     </div>
   );
 
   const renderConnectionContext = (title: string, ctx: ConnectionContext | null) => {
     if (!ctx) {
-      return <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-400">{title}: select a saved connection to load health, schema, sample, and recommendations.</div>;
+      return <div className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-slate-400">{title}: select a saved connection to load health, schema, sample, and recommendations.</div>;
     }
     const intro = ctx.introspection;
     const schemaRows = intro?.schema || intro?.tables?.find((table) => table.columns?.length)?.columns || [];
@@ -602,7 +600,7 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
       <div className={`rounded-lg border p-3 ${intro?.ok === false ? 'border-rose-200 bg-rose-50' : 'border-cyan-200 bg-cyan-50'}`} data-testid={`${title.toLowerCase().replace(/\s+/g, '-')}-context`}>
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="text-xs font-semibold text-slate-700">{title} context</div>
-          <span className={`badge ${intro?.ok === false ? 'badge-rose' : 'badge-blue'}`}>{intro?.status || 'ready'}</span>
+          <ToneBadge tone={intro?.ok === false ? 'rose' : 'blue'}>{intro?.status || 'ready'}</ToneBadge>
         </div>
         {ctx.connection && (
           <div className="mb-2 text-xs text-slate-600">
@@ -722,15 +720,15 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
   };
 
   return (
-    <Modal title={t('wizard.title')} onClose={onClose} width="max-w-6xl">
+    <Modal title={t('wizard.title')} onClose={onClose} className="sm:max-w-6xl">
       <div className="grid gap-5 xl:grid-cols-[280px_1fr]">
         <div className="space-y-3">
           <div className="px-1 pb-1 text-xs font-medium text-slate-400">{t('wizard.emptyStart')}</div>
           {WIZARD_TEMPLATES.map((tpl) => (
-            <button key={tpl.id} className={`relative w-full rounded-lg border p-3 text-left text-sm transition ${templateId === tpl.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'}`} onClick={() => setTemplateId(tpl.id)}>
+            <button key={tpl.id} className={`relative w-full rounded-lg border p-3 text-left text-sm transition ${templateId === tpl.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-border bg-card text-slate-600 hover:border-indigo-300'}`} onClick={() => setTemplateId(tpl.id)}>
               <div className="flex items-center gap-1.5">
                 <span className="font-semibold">{tpl.title}</span>
-                {tpl.recommended && <span className="badge badge-indigo px-1.5 py-0 text-[10px]">{t('wizard.recommended')}</span>}
+                {tpl.recommended && <ToneBadge tone="indigo" className="px-1.5 py-0 text-[10px]">{t('wizard.recommended')}</ToneBadge>}
               </div>
               <div className="mt-1 text-xs text-slate-400">{tpl.descKey ? t(tpl.descKey) : `${tpl.sourceTypes.join(' / ')} → ${tpl.sinkTypes.join(' / ')}`}</div>
             </button>
@@ -740,37 +738,37 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
           <div className="grid gap-3 md:grid-cols-3">
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">Pipeline name</label>
-              <input data-testid="wizard-pipeline-name" className="input w-full" value={name} onChange={(e) => setName(e.target.value)} />
+              <Input data-testid="wizard-pipeline-name" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">Source</label>
-              <select data-testid="wizard-source-type" className="input w-full" value={sourceType} onChange={(e) => { setSourceType(e.target.value); setSourceConnection(''); setSourceContext(null); setSourceConfigText(prettyJSON(seedSourceConfig(e.target.value))); }}>
+              <select data-testid="wizard-source-type" className={wizardSelectClass} value={sourceType} onChange={(e) => { setSourceType(e.target.value); setSourceConnection(''); setSourceContext(null); setSourceConfigText(prettyJSON(seedSourceConfig(e.target.value))); }}>
                 {template.sourceTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
               </select>
-              <select data-testid="wizard-source-connection" className="input mt-2 w-full text-sm" value={sourceConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSourceConnection(e.target.value)}>
+              <select data-testid="wizard-source-connection" className={cn(wizardSelectClass, "mt-2 text-sm")} value={sourceConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSourceConnection(e.target.value)}>
                 <option value="">Inline source config</option>
                 {sourceConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type} · {conn.last_status || 'untested'}</option>)}
               </select>
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">Sink</label>
-              <select data-testid="wizard-sink-type" className="input w-full" value={sinkType} onChange={(e) => { setSinkType(e.target.value); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig(e.target.value))); }}>
+              <select data-testid="wizard-sink-type" className={wizardSelectClass} value={sinkType} onChange={(e) => { setSinkType(e.target.value); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig(e.target.value))); }}>
                 {template.sinkTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
               </select>
-              <select data-testid="wizard-sink-connection" className="input mt-2 w-full text-sm" value={sinkConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSinkConnection(e.target.value)}>
+              <select data-testid="wizard-sink-connection" className={cn(wizardSelectClass, "mt-2 text-sm")} value={sinkConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSinkConnection(e.target.value)}>
                 <option value="">Inline sink config</option>
                 {sinkConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type} · {conn.last_status || 'untested'}</option>)}
               </select>
               <div className="mt-1 flex flex-wrap gap-1">
                 {template.sinkTypes.includes('maxcompute') && (
-                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('maxcompute'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute'))); setResult(null); }}>
+                  <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => { setSinkType('maxcompute'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute'))); setResult(null); }}>
                     Failure demo
-                  </button>
+                  </Button>
                 )}
                 {template.sinkTypes.includes('file_sink') && (
-                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('file_sink'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('file_sink'))); setResult(null); }}>
+                  <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => { setSinkType('file_sink'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('file_sink'))); setResult(null); }}>
                     Repair to file_sink
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -786,12 +784,12 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
                   <div className="text-xs font-semibold text-slate-700">{t('wizard.tableMapping')}</div>
                   <div className="text-[11px] text-slate-500">{t('wizard.tableMappingHint')}</div>
                 </div>
-                <button className="btn btn-ghost btn-sm text-[11px]" onClick={() => setTableMappingOpen(!tableMappingOpen)}>{tableMappingOpen ? '−' : '+'}</button>
+                <Button variant="ghost" size="sm" className="text-[11px]" onClick={() => setTableMappingOpen(!tableMappingOpen)}>{tableMappingOpen ? '−' : '+'}</Button>
               </div>
               {tableMappingOpen ? (
-                <textarea
+                <Textarea
                   data-testid="wizard-table-mapping-json"
-                  className="input min-h-20 w-full font-mono text-xs"
+                  className="min-h-20 w-full font-mono text-xs"
                   value={tableMappingText}
                   onChange={(e) => setTableMappingText(e.target.value)}
                   placeholder={'{\n  "template": "ods_{source_table}"\n}'}
@@ -805,14 +803,14 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
             {renderConnectionContext('Source', sourceContext)}
             {renderConnectionContext('Sink', sinkContext)}
           </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid="wizard-runtime-safety">
+          <div className="rounded-lg border border-border bg-card p-3" data-testid="wizard-runtime-safety">
             <div className="mb-3 text-xs font-semibold text-slate-600">Runtime safety</div>
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="block text-xs text-slate-500">
                 <span className="mb-1 block font-medium">Batch size</span>
-                <input
+                <Input
                   data-testid="wizard-batch-size"
-                  className="input w-full"
+                  
                   type="number"
                   min={1}
                   value={batchSize}
@@ -821,9 +819,9 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
               </label>
               <label className="block text-xs text-slate-500">
                 <span className="mb-1 block font-medium">Checkpoint sec</span>
-                <input
+                <Input
                   data-testid="wizard-checkpoint-sec"
-                  className="input w-full"
+                  
                   type="number"
                   min={1}
                   value={checkpointIntervalSec}
@@ -844,9 +842,9 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
             <div>
               <div className="mb-1 flex items-center justify-between gap-2">
                 <label className="block text-xs font-medium text-slate-500">Transform chain</label>
-                <button data-testid="wizard-add-transform" className="btn btn-secondary btn-sm text-[11px]" onClick={addTransform}>Add transform</button>
+                <Button data-testid="wizard-add-transform" variant="secondary" size="sm" className="text-[11px]" onClick={addTransform}>Add transform</Button>
               </div>
-              <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3" data-testid="wizard-transform-config-form">
+              <div className="mb-3 rounded-lg border border-border bg-card p-3" data-testid="wizard-transform-config-form">
                 {transformConfigs.length ? (
                   <div className="space-y-4">
                     {transformConfigs.map((item, index) => {
@@ -856,16 +854,16 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <div className="flex min-w-0 flex-1 items-center gap-2">
                               <span className="shrink-0 text-xs font-semibold text-slate-600">{index + 1}.</span>
-                              <select data-testid={`wizard-transform-type-${index}`} className="input h-8 min-w-0 flex-1 text-xs" value={item.type} onChange={(e) => updateTransformType(index, e.target.value)}>
+                              <select data-testid={`wizard-transform-type-${index}`} className={cn(wizardSelectClass, "h-8 min-w-0 flex-1 text-xs")} value={item.type} onChange={(e) => updateTransformType(index, e.target.value)}>
                                 {transformTypes.map((type) => <option key={type} value={type}>{type}</option>)}
                               </select>
-                              <span className="badge badge-slate text-[10px]">{metadata.transforms?.[item.type]?.maturity || 'unknown'}</span>
+                              <ToneBadge tone="slate" className="text-[10px]">{metadata.transforms?.[item.type]?.maturity || 'unknown'}</ToneBadge>
                             </div>
                             <div className="flex shrink-0 gap-1">
-                              <button data-testid={`wizard-transform-move-up-${index}`} className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, -1)} disabled={index === 0} title="Move up">↑</button>
-                              <button data-testid={`wizard-transform-move-down-${index}`} className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, 1)} disabled={index === transformConfigs.length - 1} title="Move down">↓</button>
-                              <button data-testid={`wizard-transform-dry-run-${index}`} className="btn btn-secondary btn-sm px-2" onClick={() => dryRunThroughStage(index)} disabled={busy === `stage-${index}`} title="Dry-run through this stage">▶</button>
-                              <button data-testid={`wizard-transform-remove-${index}`} className="btn btn-danger btn-sm px-2" onClick={() => removeTransform(index)} title="Remove">×</button>
+                              <Button data-testid={`wizard-transform-move-up-${index}`} variant="ghost" size="sm" className="px-2" onClick={() => moveTransform(index, -1)} disabled={index === 0} title="Move up">↑</Button>
+                              <Button data-testid={`wizard-transform-move-down-${index}`} variant="ghost" size="sm" className="px-2" onClick={() => moveTransform(index, 1)} disabled={index === transformConfigs.length - 1} title="Move down">↓</Button>
+                              <Button data-testid={`wizard-transform-dry-run-${index}`} variant="secondary" size="sm" className="px-2" onClick={() => dryRunThroughStage(index)} disabled={busy === `stage-${index}`} title="Dry-run through this stage">▶</Button>
+                              <Button data-testid={`wizard-transform-remove-${index}`} variant="destructive" size="sm" className="px-2" onClick={() => removeTransform(index)} title="Remove">×</Button>
                             </div>
                           </div>
                           <ConfigForm fields={fields} config={item.config || {}} onChange={(next) => updateTransformConfig(index, next)} t={t} emptyText="No config fields for this transform." />
@@ -888,15 +886,15 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
                 ) : (
                   <div className="space-y-2">
                     <div className="text-xs text-slate-400">No valid transforms in the chain.</div>
-                    <button data-testid="wizard-add-transform-empty" className="btn btn-secondary btn-sm" onClick={addTransform}>Add transform</button>
+                    <Button data-testid="wizard-add-transform-empty" variant="secondary" size="sm" onClick={addTransform}>Add transform</Button>
                   </div>
                 )}
               </div>
-              <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => setTransformJsonOpen(!transformJsonOpen)}>
+              <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => setTransformJsonOpen(!transformJsonOpen)}>
                 {transformJsonOpen ? 'Hide chain JSON' : 'Advanced chain JSON'}
-              </button>
+              </Button>
               {transformJsonOpen && (
-                <textarea data-testid="wizard-transform-json" className="input mt-2 min-h-32 w-full font-mono text-xs" value={transformsText} onChange={(e) => setTransformsText(e.target.value)} />
+                <Textarea data-testid="wizard-transform-json" className="mt-2 min-h-32 w-full font-mono text-xs" value={transformsText} onChange={(e) => setTransformsText(e.target.value)} />
               )}
             </div>
             <div>
@@ -904,20 +902,20 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
                 <label className="block text-xs font-medium text-slate-500">Sample record</label>
                 <a className="text-xs text-indigo-600 hover:underline" href="/api/v2/docs" target="_blank" rel="noreferrer">API docs</a>
               </div>
-              <textarea className="input min-h-32 w-full font-mono text-xs" value={sampleText} onChange={(e) => setSampleText(e.target.value)} />
+              <Textarea className="min-h-32 font-mono text-xs" value={sampleText} onChange={(e) => setSampleText(e.target.value)} />
             </div>
           </div>
           <div>
             <div className="mb-1 flex items-center justify-between gap-2">
               <label className="block text-xs font-medium text-slate-500">Generated YAML</label>
-              <button className="btn btn-secondary btn-sm" onClick={syncFromYaml}>Sync YAML to form</button>
+              <Button variant="secondary" size="sm" onClick={syncFromYaml}>Sync YAML to form</Button>
             </div>
-            <textarea data-testid="wizard-yaml" className="input min-h-56 w-full font-mono text-xs" value={yamlText} onChange={(e) => setYamlText(e.target.value)} />
+            <Textarea data-testid="wizard-yaml" className="min-h-56 w-full font-mono text-xs" value={yamlText} onChange={(e) => setYamlText(e.target.value)} />
           </div>
           <div className="flex flex-wrap gap-2">
-            <button data-testid="wizard-dry-run" className="btn btn-secondary" disabled={busy === 'dry-run'} onClick={dryRun}>Transform dry-run</button>
-            <button data-testid="wizard-validate" className="btn btn-secondary" disabled={busy === 'validate'} onClick={() => validate().catch(() => {})}>Validate + preflight</button>
-            <button data-testid="wizard-create-start" className="btn btn-primary" disabled={busy === 'create'} onClick={createAndStart}>Create and start</button>
+            <Button data-testid="wizard-dry-run" variant="secondary" disabled={busy === 'dry-run'} onClick={dryRun}>Transform dry-run</Button>
+            <Button data-testid="wizard-validate" variant="secondary" disabled={busy === 'validate'} onClick={() => validate().catch(() => {})}>Validate + preflight</Button>
+            <Button data-testid="wizard-create-start" disabled={busy === 'create'} onClick={createAndStart}>Create and start</Button>
           </div>
           {error && <ErrorBox message={error} />}
           {dryRunResult !== null && (
@@ -938,7 +936,7 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
                       <div>{rec.reason}</div>
                       <div className="mt-1 font-mono text-slate-500">{prettyJSON(rec.value)}</div>
                     </div>
-                    <button className="btn btn-secondary btn-sm shrink-0 text-[11px]" onClick={() => applyPreflightRecommendation(rec)}>Apply</button>
+                    <Button variant="secondary" size="sm" className="shrink-0 text-[11px]" onClick={() => applyPreflightRecommendation(rec)}>Apply</Button>
                   </div>
                 </div>
               ))}

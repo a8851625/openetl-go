@@ -287,6 +287,18 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     setEditorVersion('1.0.0');
   }, []);
 
+  // ── Download TS Source ──
+
+  const downloadSource = useCallback((name: string, source: string) => {
+    const blob = new Blob([source], { type: 'text/typescript' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name}.ts`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
   // ── Compile ──
 
   const handleCompile = useCallback(async () => {
@@ -328,19 +340,7 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     } finally {
       setIsCompiling(false);
     }
-  }, [editorName, editorSource, editorKind, editorVersion, editorManifest, t, refresh, showToast]);
-
-  // ── Download TS Source ──
-
-  const downloadSource = useCallback((name: string, source: string) => {
-    const blob = new Blob([source], { type: 'text/typescript' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${name}.ts`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, []);
+  }, [editorName, editorSource, editorKind, editorVersion, editorManifest, t, refresh, showToast, downloadSource]);
 
   // ── Upload WASM ──
 

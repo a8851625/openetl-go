@@ -774,10 +774,18 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
 
   // Update a single hook's state
   const updateHook = (key: string, patch: Partial<{ type: string; code: string; name: string; enabled: boolean }>) => {
-    setHooks((prev) => ({
-      ...prev,
-      [key]: { type: 'lua', code: '', name: '', enabled: true, ...prev[key], ...patch },
-    }));
+    setHooks((prev) => {
+      const prevHook = prev[key];
+      return {
+        ...prev,
+        [key]: {
+          type: patch.type ?? prevHook?.type ?? 'lua',
+          code: patch.code ?? prevHook?.code ?? '',
+          name: patch.name ?? prevHook?.name ?? '',
+          enabled: patch.enabled ?? prevHook?.enabled ?? true,
+        },
+      };
+    });
   };
 
   const aiGenerate = async () => {
