@@ -114,7 +114,31 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
   const dlqItems = dlq.data?.items || [];
   const isDAG = Boolean(selected?.dag);
   const missingDagNodeCount = isDAG ? dlqItems.filter((item) => !item.dag_node).length : 0;
-  const bulkReplayDisabled = !selected || missingDagNodeCount > 0;
+  const bulkReplayDisabled = !selected || missingDagNodeCount > 0 || dlqItems.length === 0;
+
+  // Aggregate by error_class / dag_node for issue-class view
+  const aggregates = Object.values(
+    dlqItems.reduce(
+      (acc, item) => {
+        const key = `${item.error_class || 'unknown'}::${item.dag_node || '-'}`;
+        if (!acc[key]) {
+          acc[key] = {
+            key,
+            error_class: item.error_class || 'unknown',
+            dag_node: item.dag_node || '',
+            count: 0,
+            sample: item.error,
+          };
+        }
+        acc[key].count += 1;
+        return acc;
+      },
+      {} as Record<
+        string,
+        { key: string; error_class: string; dag_node: string; count: number; sample: string }
+      >,
+    ),
+  ).sort((a, b) => b.count - a.count);
 
   useEffect(() => {
     setLastReplayResult('');
@@ -195,41 +219,45 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
             >
               {t('dlq.refresh')}
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={bulkReplayDisabled}
-              title={missingDagNodeCount > 0 ? t('dlq.dagBulkBlocked') : t('dlq.replay')}
-              onClick={() =>
-                onAction(`${t('toast.replayDlq')}: ${selected!.name}`, async () => {
-                  const q = filter ? `?contains=${encodeURIComponent(filter)}` : '';
-                  const result = await api<{ replayed?: number }>(
-                    `/api/v2/dlq/${selectedRef}/replay${q}`,
-                    { method: 'POST' },
-                  );
-                  setRefreshKey((n) => n + 1);
-                  return replayResultToast(`${t('toast.replayDlq')}: ${selected!.name}`, result);
-                })
-              }
-            >
-              {t('dlq.replay')}
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={!selected}
-              onClick={() => {
-                if (!confirmAction(t('dlq.confirmDeleteAll'))) return;
-                onAction(`${t('toast.deleteDlq')}: ${selected!.name}`, () => {
-                  const q = filter ? `?contains=${encodeURIComponent(filter)}` : '';
-                  return api(`/api/v2/dlq/${selectedRef}${q}`, { method: 'DELETE' }).then(() =>
-                    setRefreshKey((n) => n + 1),
-                  );
-                });
-              }}
-            >
-              {t('dlq.deleteAll')}
-            </Button>
+            {dlqItems.length > 0 && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={bulkReplayDisabled}
+                title={missingDagNodeCount > 0 ? t('dlq.dagBulkBlocked') : t('dlq.replay')}
+                onClick={() =>
+                  onAction(`${t('toast.replayDlq')}: ${selected!.name}`, async () => {
+                    const q = filter ? `?contains=${encodeURIComponent(filter)}` : '';
+                    const result = await api<{ replayed?: number }>(
+                      `/api/v2/dlq/${selectedRef}/replay${q}`,
+                      { method: 'POST' },
+                    );
+                    setRefreshKey((n) => n + 1);
+                    return replayResultToast(`${t('toast.replayDlq')}: ${selected!.name}`, result);
+                  })
+                }
+              >
+                {t('dlq.replay')}
+              </Button>
+            )}
+            {dlqItems.length > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={!selected}
+                onClick={() => {
+                  if (!confirmAction(t('dlq.confirmDeleteAll'))) return;
+                  onAction(`${t('toast.deleteDlq')}: ${selected!.name}`, () => {
+                    const q = filter ? `?contains=${encodeURIComponent(filter)}` : '';
+                    return api(`/api/v2/dlq/${selectedRef}${q}`, { method: 'DELETE' }).then(() =>
+                      setRefreshKey((n) => n + 1),
+                    );
+                  });
+                }}
+              >
+                {t('dlq.deleteAll')}
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -251,6 +279,34 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
               className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
             >
               {lastReplayResult}
+              <div className="mt-1 text-[11px] opacity-80">
+                {t('dlq.remainingHint')}: {dlqItems.length.toLocaleString()}
+              </div>
+            </div>
+          )}
+          {aggregates.length > 0 && (
+            <div className="mb-4 space-y-2">
+              <div className="text-xs font-semibold text-muted-foreground">{t('dlq.aggregate')}</div>
+              {aggregates.map((g) => (
+                <button
+                  key={g.key}
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-left text-xs transition hover:border-primary/40"
+                  onClick={() => {
+                    setFilter(g.error_class === 'unknown' ? g.sample.slice(0, 40) : g.error_class);
+                    setRefreshKey((n) => n + 1);
+                  }}
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{g.sample}</div>
+                    <div className="mt-0.5 text-muted-foreground">
+                      {g.error_class}
+                      {g.dag_node ? ` · node ${g.dag_node}` : ''}
+                    </div>
+                  </div>
+                  <span className="tabular font-semibold">{g.count}</span>
+                </button>
+              ))}
             </div>
           )}
           {dlq.error ? (

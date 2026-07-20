@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [v0.2.11-beta.1] — 2026-07-21 — 任务型 Web UI 重构（P4 落地）
+
+### 亮点
+
+- 一级导航收敛为任务分组：**总览 / 运行 / 资源 / 系统**；「新建管道」成为一级主动作。
+- **Designer/DAG 降级为高级编辑入口**（非删除）：日常创建走 Source → Transform → Sink 向导；多源/路由/扇出仍经同一 pipeline/DAG spec 的画布编辑。
+- 统一管道健康视图：`healthy` / `degraded` / `failed` / `paused` / `scheduled` / `completed` 等，由运行态、lag、checkpoint、DLQ、最近错误共同派生；总览改为问题优先，不再用「running/总数」冒充健康度。
+- Hash 可分享路由：`#/overview`、`#/pipelines`、`#/pipelines/new`、`#/pipelines/:id/:tab`、`#/issues`、`#/dlq`、`#/connections`、`#/connectors`、`#/designer` 等；刷新/直达不丢上下文。
+- 新增问题中心、连接器目录（与 Connection 实例分离）、管道详情 tabs（Overview / Runs / Issues / Checkpoints / Spec）。
+- DLQ 按 error class / DAG node 聚合；空 backlog 隐藏批量危险操作；replay 反馈剩余积压。
+- 视觉 token：冷灰 canvas + 青绿主色；中英 i18n 覆盖新 IA；standalone 默认不突出 Workers，distributed 再展示集群入口。
+- 设计基线文档：`docs/UI-REDESIGN.zh.md`、`docs/UI-REDESIGN-PROTOTYPE.html`。
+
+### 验证
+
+- `npm --prefix web run typecheck`
+- `npm --prefix web run build`
+- `./hack/e2e-ui.sh` → **107 passed, 0 failed**
+
+### 边界
+
+- 默认语义仍是 **at-least-once**；UI 不引入新的执行模型或独立 UI spec。
+- P4 分步向导重组、部分 connector 字段级 remediation 与完整无障碍矩阵仍可继续收口（见 ROADMAP P4 子阶段）。
+
 ## [v0.2.10-beta.1] — 2026-07-14 — 可靠性认证与真实 WASM 插件链路
 
 ### P1：可靠性认证矩阵收口

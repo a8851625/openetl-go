@@ -16,6 +16,8 @@ import {
   ToneBadge,
   statusLabel,
 } from '@/components/shared/status-badge';
+import { PipelineHealthBadge, HealthDot } from '@/components/shared/pipeline-health-badge';
+import { PipelinePath } from '@/components/shared/pipeline-path';
 import { confirmAction } from '@/components/shared/confirm-dialog';
 import {
   api,
@@ -26,6 +28,11 @@ import {
 } from '@/lib/api';
 import { ratio, fmtTime } from '@/lib/format';
 import { LiveUptimeInline, PipelineRowMeta } from '@/lib/uptime';
+import {
+  deriveModeLabel,
+  derivePipelineHealth,
+  formatLag,
+} from '@/lib/pipeline-health';
 import { cn } from '@/lib/utils';
 import type {
   ApiState,
@@ -35,6 +42,7 @@ import type {
   TFunc,
 } from '@/lib/types';
 import type { ToastFn } from '@/lib/toast';
+import { MoreHorizontal } from 'lucide-react';
 import {
   PipelineDAGModal,
   PipelineLogModal,
@@ -51,6 +59,9 @@ function PipelineActionMenu({
   onEdit,
   onDelete,
   onExport,
+  onStart,
+  onStop,
+  status,
 }: {
   t: TFunc;
   onLogs: () => void;
@@ -58,20 +69,27 @@ function PipelineActionMenu({
   onEdit: () => void;
   onDelete: () => void;
   onExport: () => void;
+  onStart: () => void;
+  onStop: () => void;
+  status: string;
 }) {
   const items = [
-    { icon: '📋', label: t('action.logs'), onClick: onLogs },
-    { icon: '🔀', label: t('action.dagAndLogs'), onClick: onDAG },
-    { icon: '✏️', label: t('action.edit'), onClick: onEdit },
-    { icon: '📤', label: t('action.exportYaml'), onClick: onExport },
-    { icon: '🗑', label: t('action.delete'), onClick: onDelete, danger: true },
+    status !== 'running'
+      ? { label: t('pipe.start'), onClick: onStart }
+      : { label: t('pipe.stop'), onClick: onStop },
+    { label: t('action.logs'), onClick: onLogs },
+    { label: t('action.dagAndLogs'), onClick: onDAG },
+    { label: t('action.edit'), onClick: onEdit },
+    { label: t('action.exportYaml'), onClick: onExport },
+    { label: t('action.delete'), onClick: onDelete, danger: true },
   ];
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm">
-          ⋯<span className="hidden lg:inline"> {t('ui.more')}</span>
+        <Button variant="ghost" size="sm" aria-label={t('ui.more')}>
+          <MoreHorizontal className="h-4 w-4" />
+          <span className="hidden lg:inline"> {t('ui.more')}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
@@ -81,7 +99,6 @@ function PipelineActionMenu({
             className={item.danger ? 'text-rose-600 focus:text-rose-600' : ''}
             onClick={item.onClick}
           >
-            <span className="w-4 text-center">{item.icon}</span>
             <span>{item.label}</span>
           </DropdownMenuItem>
         ))}
@@ -98,6 +115,7 @@ const PipelineRow = React.memo(
     selected,
     t,
     onSelect,
+    onOpenDetail,
     onAction,
     onShowLogs,
     onShowDAG,
@@ -111,6 +129,7 @@ const PipelineRow = React.memo(
     selected: boolean;
     t: TFunc;
     onSelect: (n: string) => void;
+    onOpenDetail?: (n: string) => void;
     onAction: (msg: string, fn: () => Promise<any>) => void;
     onShowLogs: () => void;
     onShowDAG: () => void;
@@ -119,16 +138,36 @@ const PipelineRow = React.memo(
     onDelete: () => void;
   }) {
     const ref = pipelineRef(p);
+    const health = derivePipelineHealth(p, m);
+    const primaryLabel =
+      health === 'failed' || health === 'degraded'
+        ? t('dash.actionView')
+        : t('pipe.openDetail');
     return (
       <div
         className={cn('pipeline-row', compact && 'py-2', selected && 'selected')}
         onClick={() => onSelect(pipelineKey(p))}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSelect(pipelineKey(p));
+          }
+        }}
+        onDoubleClick={() => {
+          onSelect(pipelineKey(p));
+          onOpenDetail?.(pipelineKey(p));
+        }}
       >
-        <StatusDot status={p.status} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 truncate">
+        <HealthDot health={health} />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-semibold">{p.name}</span>
-            <StatusBadge status={p.status} t={t} />
+            <PipelineHealthBadge health={health} t={t} />
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {deriveModeLabel(p, m)}
+            </span>
             {p.parallelism && p.parallelism > 1 && (
               <ToneBadge tone="purple" className="px-1 text-[10px]">
                 ×{p.parallelism}
@@ -136,11 +175,12 @@ const PipelineRow = React.memo(
             )}
             {!compact &&
               (p.tags || []).map((tag) => (
-                <ToneBadge key={tag} tone="blue" className="px-1 text-[10px]">
+                <ToneBadge key={tag} tone="slate" className="px-1 text-[10px]">
                   {tag}
                 </ToneBadge>
               ))}
           </div>
+          {!compact && <PipelinePath pipeline={p} />}
           {!compact && (
             <PipelineRowMeta
               t={t}
@@ -151,55 +191,62 @@ const PipelineRow = React.memo(
             />
           )}
           {compact && m && m.cdc_lag_ms > 0 && (
-            <span className="ml-1 text-[10px] text-amber-600">lag {m.cdc_lag_ms}ms</span>
+            <span className="ml-1 text-[10px] text-amber-600">lag {formatLag(m.cdc_lag_ms)}</span>
           )}
         </div>
-        <div className="hidden items-center gap-1.5 sm:flex">
-          {p.stats.records_failed > 0 && (
-            <ToneBadge tone="rose" className="px-1 text-[10px]">
-              {p.stats.records_failed}
-            </ToneBadge>
-          )}
-          {m && m.dlq_file_count > 0 && (
-            <ToneBadge tone="amber" className="px-1 text-[10px]">
-              {m.dlq_file_count}
-            </ToneBadge>
-          )}
-          {!compact && p.stats.records_written > 0 && (
-            <ToneBadge tone="emerald" className="px-1 text-[10px]">
-              {p.stats.records_written}
-            </ToneBadge>
+        <div className="hidden min-w-[88px] flex-col items-end sm:flex">
+          {p.stats.records_dlq > 0 ? (
+            <>
+              <span className="tabular text-xs font-semibold text-rose-600">
+                {p.stats.records_dlq.toLocaleString()}
+              </span>
+              <span className="text-[10px] text-muted-foreground">DLQ</span>
+            </>
+          ) : p.stats.records_failed > 0 ? (
+            <>
+              <span className="tabular text-xs font-semibold text-rose-600">
+                {p.stats.records_failed.toLocaleString()}
+              </span>
+              <span className="text-[10px] text-muted-foreground">{t('dash.failed')}</span>
+            </>
+          ) : m && m.cdc_lag_ms > 0 ? (
+            <>
+              <span className="tabular text-xs font-semibold">{formatLag(m.cdc_lag_ms)}</span>
+              <span className="text-[10px] text-muted-foreground">CDC lag</span>
+            </>
+          ) : (
+            <>
+              <span className="tabular text-xs font-semibold">
+                {(p.stats.records_written || 0).toLocaleString()}
+              </span>
+              <span className="text-[10px] text-muted-foreground">{t('pipe.written')}</span>
+            </>
           )}
         </div>
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
           <Button
             size="sm"
-            variant={p.status === 'running' ? 'ghost' : 'secondary'}
-            className={p.status === 'running' ? 'opacity-40' : ''}
-            disabled={p.status === 'running'}
-            onClick={() =>
+            variant={health === 'failed' || health === 'degraded' ? 'default' : 'secondary'}
+            onClick={() => {
+              onSelect(pipelineKey(p));
+              onOpenDetail?.(pipelineKey(p));
+            }}
+          >
+            {primaryLabel}
+          </Button>
+          <PipelineActionMenu
+            t={t}
+            status={p.status}
+            onStart={() =>
               onAction(`Start ${p.name}`, () =>
                 api(`/api/v2/pipelines/${ref}/start`, { method: 'POST' }),
               )
             }
-          >
-            ▶
-          </Button>
-          <Button
-            size="sm"
-            variant={p.status !== 'running' ? 'ghost' : 'secondary'}
-            className={p.status !== 'running' ? 'opacity-40' : ''}
-            disabled={p.status !== 'running'}
-            onClick={() =>
+            onStop={() =>
               onAction(`Stop ${p.name}`, () =>
                 api(`/api/v2/pipelines/${ref}/stop`, { method: 'POST' }),
               )
             }
-          >
-            ⏹
-          </Button>
-          <PipelineActionMenu
-            t={t}
             onLogs={onShowLogs}
             onDAG={onShowDAG}
             onEdit={onEdit}
@@ -247,6 +294,8 @@ type Props = {
   selected?: Pipeline;
   selectedMetric?: MetricsPipeline;
   onSelect: (n: string) => void;
+  onOpenDetail?: (key: string) => void;
+  onOpenWizard?: () => void;
   onAction: (label: string, fn: () => Promise<unknown>) => void;
   checkpoints: ApiState<{ checkpoints: Checkpoint[] }>;
   onResetCheckpoint: (ref: string, label?: string) => void;
@@ -255,6 +304,9 @@ type Props = {
   onShowToast?: ToastFn;
   plugins: ApiState<any>;
   pluginSchema: ApiState<any>;
+  /** When true, open wizard from external route (#/pipelines/new) */
+  forceWizard?: boolean;
+  onWizardClose?: () => void;
 };
 
 export function PipelinesPage({
@@ -264,6 +316,8 @@ export function PipelinesPage({
   selected,
   selectedMetric,
   onSelect,
+  onOpenDetail,
+  onOpenWizard,
   onAction,
   checkpoints,
   onResetCheckpoint,
@@ -272,12 +326,18 @@ export function PipelinesPage({
   onShowToast,
   plugins,
   pluginSchema,
+  forceWizard = false,
+  onWizardClose,
 }: Props) {
   const [showLogs, setShowLogs] = useState(false);
   const [showDAG, setShowDAG] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [showWizard, setShowWizard] = useState(false);
+  const [showWizard, setShowWizard] = useState(forceWizard);
+
+  useEffect(() => {
+    if (forceWizard) setShowWizard(true);
+  }, [forceWizard]);
   const [tagFilter, setTagFilter] = useState('');
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState('name');
@@ -413,10 +473,14 @@ export function PipelinesPage({
           t={t}
           plugins={plugins}
           schema={pluginSchema}
-          onClose={() => setShowWizard(false)}
+          onClose={() => {
+            setShowWizard(false);
+            onWizardClose?.();
+          }}
           onCreated={(name) => {
             onShowToast?.('success', `Pipeline created: ${name}`);
             setShowWizard(false);
+            onWizardClose?.();
           }}
         />
       )}
@@ -494,12 +558,15 @@ export function PipelinesPage({
                 <Button
                   data-testid="open-first-task-wizard"
                   size="sm"
-                  onClick={() => setShowWizard(true)}
+                  onClick={() => {
+                    if (onOpenWizard) onOpenWizard();
+                    else setShowWizard(true);
+                  }}
                 >
-                  ✨ {t('pipe.createWizard')}
+                  {t('pipe.createWizard')}
                 </Button>
                 <Button variant="secondary" size="sm" onClick={() => setShowImport(true)}>
-                  📥 {t('pipe.import')}
+                  {t('pipe.import')}
                 </Button>
               </div>
             </CardHeader>
@@ -523,7 +590,7 @@ export function PipelinesPage({
                 className="text-xs"
                 onClick={() => batchAction('start', (p) => p.status !== 'running')}
               >
-                {'▶ ' + t('pipe.startAll')}
+                ▶ {t('pipe.startAll')}
               </Button>
               <Button
                 variant="ghost"
@@ -531,7 +598,7 @@ export function PipelinesPage({
                 className="text-xs"
                 onClick={() => batchAction('stop', (p) => p.status === 'running')}
               >
-                {'⏹ ' + t('pipe.stopAll')}
+                ⏹ {t('pipe.stopAll')}
               </Button>
             </div>
 
@@ -549,6 +616,7 @@ export function PipelinesPage({
                     selected={pipelineKey(selected) === pipelineKey(p)}
                     t={t}
                     onSelect={onSelect}
+                    onOpenDetail={onOpenDetail}
                     onAction={onAction}
                     onShowLogs={() => {
                       onSelect(pipelineKey(p));
@@ -579,9 +647,12 @@ export function PipelinesPage({
                     <Button
                       data-testid="empty-open-wizard"
                       size="sm"
-                      onClick={() => setShowWizard(true)}
+                      onClick={() => {
+                        if (onOpenWizard) onOpenWizard();
+                        else setShowWizard(true);
+                      }}
                     >
-                      ✨ {t('pipe.createWizard')}
+                      {t('pipe.createWizard')}
                     </Button>
                   )}
                 </EmptyState>
@@ -596,14 +667,31 @@ export function PipelinesPage({
                   {t('pipe.details')} {selected?.name ? `· ${selected.name}` : ''}
                 </CardTitle>
                 <div className="flex flex-wrap gap-1.5">
+                  {selected?.name && onOpenDetail && (
+                    <Button
+                      size="sm"
+                      onClick={() => onOpenDetail(pipelineKey(selected))}
+                    >
+                      {t('pipe.openDetail')}
+                    </Button>
+                  )}
                   {selected?.name && (
                     <Button variant="secondary" size="sm" onClick={() => setShowDAG(true)}>
-                      {'🔀 ' + t('pipe.dagBtn')}
+                      {t('pipe.dagBtn')}
                     </Button>
                   )}
                   {selected?.name && (
                     <Button variant="secondary" size="sm" onClick={() => setShowVersions(true)}>
-                      📜 {t('pipe.versions')}
+                      {t('pipe.versions')}
+                    </Button>
+                  )}
+                  {selected?.name && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onEdit(pipelineKey(selected))}
+                    >
+                      {t('pipe.advancedDag')}
                     </Button>
                   )}
                 </div>

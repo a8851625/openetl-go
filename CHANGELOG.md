@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [v0.2.11-beta.1] — 2026-07-21 — Task-oriented Web UI redesign (P4 landing)
+
+### Highlights
+
+- Primary navigation is now task-grouped: **Overview / Run / Resources / System**, with **New pipeline** as the primary action.
+- **Designer/DAG is demoted, not removed**: day-to-day create uses the Source → Transform → Sink wizard; multi-source/router/fanout still use the same pipeline/DAG canvas for advanced edit.
+- Shared pipeline health view-model: `healthy` / `degraded` / `failed` / `paused` / `scheduled` / `completed` derived from runtime state, lag, checkpoint age, DLQ, and last error. Overview is issue-first and no longer treats running/total as health.
+- Shareable hash routes: `#/overview`, `#/pipelines`, `#/pipelines/new`, `#/pipelines/:id/:tab`, `#/issues`, `#/dlq`, `#/connections`, `#/connectors`, `#/designer`, and more.
+- New Issues center, Connector catalog (separated from Connection instances), and pipeline detail tabs (Overview / Runs / Issues / Checkpoints / Spec).
+- DLQ aggregates by error class / DAG node; bulk destructive actions stay hidden on empty backlog; replay reports remaining backlog.
+- Visual tokens (cool canvas + teal accent), bilingual IA copy, and progressive disclosure of Workers only in distributed mode.
+- Design baseline: `docs/UI-REDESIGN.zh.md`, `docs/UI-REDESIGN-PROTOTYPE.html`.
+
+### Validation
+
+- `npm --prefix web run typecheck`
+- `npm --prefix web run build`
+- `./hack/e2e-ui.sh` → **107 passed, 0 failed**
+
+### Boundary
+
+- Default delivery remains **at-least-once**; the UI does not introduce a separate execution model or UI-only spec.
+- Remaining P4 work (step-wizard reorganization, some field-level remediation, fuller a11y matrix) stays tracked in the roadmap.
+
 ## [v0.2.10-beta.1] — 2026-07-14 — Reliability certification and real WASM plugin path
 
 ### P1: Reliability certification closure

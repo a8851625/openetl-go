@@ -725,7 +725,7 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
         <div className="space-y-3">
           <div className="px-1 pb-1 text-xs font-medium text-slate-400">{t('wizard.emptyStart')}</div>
           {WIZARD_TEMPLATES.map((tpl) => (
-            <button key={tpl.id} className={`relative w-full rounded-lg border p-3 text-left text-sm transition ${templateId === tpl.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-border bg-card text-slate-600 hover:border-indigo-300'}`} onClick={() => setTemplateId(tpl.id)}>
+            <button key={tpl.id} className={`relative w-full rounded-lg border p-3 text-left text-sm transition ${templateId === tpl.id ? 'border-primary bg-accent text-primary' : 'border-border bg-card text-muted-foreground hover:border-primary/40'}`} onClick={() => setTemplateId(tpl.id)}>
               <div className="flex items-center gap-1.5">
                 <span className="font-semibold">{tpl.title}</span>
                 {tpl.recommended && <ToneBadge tone="indigo" className="px-1.5 py-0 text-[10px]">{t('wizard.recommended')}</ToneBadge>}
@@ -759,18 +759,45 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
                 <option value="">Inline sink config</option>
                 {sinkConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type} · {conn.last_status || 'untested'}</option>)}
               </select>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {template.sinkTypes.includes('maxcompute') && (
-                  <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => { setSinkType('maxcompute'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute'))); setResult(null); }}>
-                    Failure demo
-                  </Button>
-                )}
-                {template.sinkTypes.includes('file_sink') && (
-                  <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => { setSinkType('file_sink'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('file_sink'))); setResult(null); }}>
-                    Repair to file_sink
-                  </Button>
-                )}
-              </div>
+              {/* E2E-only remediation shortcuts (P4.2: hidden in production UI). */}
+              {typeof window !== 'undefined' &&
+                (window.location.search.includes('e2e=') ||
+                  window.localStorage.getItem('etl_e2e') === '1') && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {template.sinkTypes.includes('maxcompute') && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="text-[11px]"
+                      onClick={() => {
+                        setSinkType('maxcompute');
+                        setSinkConnection('');
+                        setSinkContext(null);
+                        setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute')));
+                        setResult(null);
+                      }}
+                    >
+                      Failure demo
+                    </Button>
+                  )}
+                  {template.sinkTypes.includes('file_sink') && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="text-[11px]"
+                      onClick={() => {
+                        setSinkType('file_sink');
+                        setSinkConnection('');
+                        setSinkContext(null);
+                        setSinkConfigText(prettyJSON(seedSinkConfig('file_sink')));
+                        setResult(null);
+                      }}
+                    >
+                      Repair to file_sink
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
