@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23157a68%22/><text x=%2216%22 y=%2222%22 text-anchor=%22middle%22 font-size=%2218%22 fill=%22white%22>O</text></svg>">
+  <title>OpenETL UI 重构草案 · 全页面</title>
+  <style>
+    :root{
+      --bg:#f4f7f6;--surface:#fff;--ink:#17211f;--muted:#66736f;--line:#dce5e2;
+      --accent:#157a68;--soft:#e7f3ef;--bad:#c74646;--warn:#a96918;--ok:#157a68;
+      --nav:#101a18;--nav-hover:#21312e;--chip:#edf2f0;--shadow:0 10px 30px rgba(16,26,24,.08)
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:Geist,"Noto Sans SC",system-ui,sans-serif}
+    button,input,select,textarea{font:inherit}
+    .app{min-height:100dvh;display:grid;grid-template-columns:248px 1fr}
+    .nav{position:sticky;top:0;height:100dvh;background:var(--nav);color:#d7e3df;padding:22px 14px;display:flex;flex-direction:column;overflow:auto}
+    .brand{display:flex;gap:10px;align-items:center;padding:0 8px 22px}
+    .mark{width:34px;height:34px;border-radius:10px;background:#45b59e;display:grid;place-items:center;color:#07110f;font-weight:900}
+    .brand b{display:block;color:#fff;letter-spacing:-.02em}
+    .brand small{color:#8fa39d}
+    .group{margin:14px 9px 6px;color:#71857f;font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+    .nav button{border:0;background:transparent;color:inherit;padding:10px 12px;border-radius:8px;text-align:left;font-size:14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;width:100%;transition:background .16s,color .16s}
+    .nav button:hover,.nav button.active{background:var(--nav-hover);color:#fff}
+    .nav button:focus-visible{outline:2px solid #45b59e;outline-offset:2px}
+    .nav .create{margin:4px 0 8px;background:#45b59e;color:#081411;font-weight:700}
+    .nav .create:hover{background:#5fc4ad;color:#04100e}
+    .badge{min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:#c74646;color:#fff;font:700 11px/20px ui-monospace,monospace;text-align:center}
+    .bottom{margin-top:auto;padding-top:16px}
+    .main{min-width:0}
+    .top{height:64px;background:rgba(255,255,255,.84);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:3;gap:16px}
+    .crumb{font-size:13px;color:var(--muted)}.crumb b{color:var(--ink)}
+    .top-actions{display:flex;align-items:center;gap:10px}
+    .top input{width:260px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:#f9fbfa}
+    .icon-btn{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 12px;cursor:pointer;color:var(--ink)}
+    .page{display:none;max-width:1520px;margin:0 auto;padding:28px 32px 72px}
+    .page.active{display:block}
+    .titlebar{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:22px}
+    .eyebrow{font-size:12px;color:var(--accent);font-weight:700;letter-spacing:.08em}
+    .titlebar h1{font-size:28px;letter-spacing:-.04em;margin:6px 0 4px;text-wrap:balance}
+    .titlebar p,.meta{margin:0;color:var(--muted);font-size:13px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .primary,.secondary,.ghost,.danger{border:0;border-radius:8px;padding:10px 14px;font-weight:650;cursor:pointer;transition:transform .16s,background .16s,opacity .16s}
+    .primary:hover,.secondary:hover,.ghost:hover,.danger:hover{transform:translateY(-1px)}
+    .primary:active,.secondary:active,.ghost:active,.danger:active{transform:scale(.98)}
+    .primary{background:var(--accent);color:#fff}
+    .secondary{background:var(--chip);color:var(--ink)}
+    .ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+    .danger{background:#f7e8e8;color:var(--bad)}
+    .grid-2{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(280px,.85fr);gap:16px}
+    .grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+    .grid-main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px}
+    .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px}
+    .panelhead{padding:16px 18px 12px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+    .panelhead h2{font-size:15px;margin:0}
+    .count{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px}
+    .issue,.pipe,.rowline,.conn,.dlq-item,.audit-row,.worker-row{display:grid;gap:12px;align-items:center;padding:14px 18px;border-top:1px solid var(--line)}
+    .issue{grid-template-columns:10px minmax(0,1fr) auto}
+    .pipe{grid-template-columns:minmax(180px,.9fr) minmax(260px,1.4fr) 110px 120px 110px}
+    .conn{grid-template-columns:minmax(180px,1fr) 120px 140px 160px 100px}
+    .dlq-item{grid-template-columns:minmax(0,1.2fr) 120px 100px 120px}
+    .audit-row{grid-template-columns:140px 100px minmax(0,1fr) 120px}
+    .worker-row{grid-template-columns:minmax(160px,1fr) 100px 100px 120px 100px}
+    .dot{width:9px;height:9px;border-radius:50%;background:var(--bad);display:inline-block}
+    .dot.warn{background:var(--warn)}.dot.ok{background:var(--ok)}.dot.muted{background:#91a19c}
+    .name{display:flex;gap:10px;align-items:center}
+    .path{display:flex;align-items:center;gap:6px;font-size:12px;flex-wrap:wrap}
+    .node{background:var(--chip);padding:6px 8px;border-radius:6px;white-space:nowrap}
+    .arrow{color:#91a19c}
+    .metric{font:600 12px ui-monospace,monospace;font-variant-numeric:tabular-nums}
+    .metric em{display:block;font:12px system-ui;color:var(--muted);margin-top:3px;font-style:normal}
+    .tag{font-size:11px;padding:4px 7px;border-radius:5px;background:#f7e8e8;color:var(--bad);font-weight:700;display:inline-block}
+    .tag.warn{background:#f7eddf;color:var(--warn)}
+    .tag.ok{background:var(--soft);color:var(--accent)}
+    .tag.muted{background:var(--chip);color:var(--muted)}
+    .tag.sq{border-radius:4px}
+    .health{padding:18px}
+    .score{font:700 40px/1 ui-monospace,monospace;letter-spacing:-.05em}
+    .score small{font:500 13px system-ui;color:var(--muted)}
+    .bar{height:8px;background:#edf2f0;border-radius:5px;overflow:hidden;margin:16px 0}
+    .bar i{display:block;height:100%;background:var(--accent)}
+    .legend{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px}
+    .legend span{color:var(--muted)}
+    .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+    .filters input,.filters select,.field input,.field select,.field textarea{border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:#fff;min-width:0}
+    .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 8px;margin-bottom:0;overflow:auto}
+    .tabs button{border:0;background:transparent;padding:12px 14px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+    .tabs button.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
+    .detail-head{padding:18px 18px 8px}
+    .detail-head h1{margin:4px 0 8px;font-size:24px;letter-spacing:-.03em}
+    .sli{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:8px 18px 18px}
+    .sli .card{background:#f9fbfa;border:1px solid var(--line);border-radius:10px;padding:12px}
+    .sli .card b{display:block;font:700 18px/1.1 ui-monospace,monospace;margin-top:6px}
+    .sli .card span{color:var(--muted);font-size:12px}
+    .wizard{display:grid;grid-template-columns:210px minmax(0,1fr) 270px;min-height:620px}
+    .steps{border-right:1px solid var(--line);padding:18px}
+    .step{padding:10px;border-radius:8px;color:var(--muted);font-size:13px;margin-bottom:4px}
+    .step.active{background:var(--soft);color:var(--accent);font-weight:700}
+    .step.done{color:var(--ink)}
+    .form{padding:26px}
+    .form h2{margin:0 0 8px}
+    .choice{border:1px solid var(--line);border-radius:10px;padding:14px;margin:10px 0;cursor:pointer;transition:border-color .16s,box-shadow .16s}
+    .choice:hover{border-color:#b7cfc7}
+    .choice.selected{border-color:var(--accent);box-shadow:0 0 0 2px var(--soft)}
+    .summary{border-left:1px solid var(--line);background:#f9fbfa;padding:20px}
+    .summary h3{font-size:13px;margin:0 0 12px}
+    .summary .node{margin:8px 0;display:block}
+    .footnote{margin-top:16px;color:var(--muted);font-size:12px;line-height:1.5}
+    .field{display:grid;gap:6px;margin:12px 0}
+    .field label{font-size:12px;color:var(--muted);font-weight:600}
+    .split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .table{width:100%;border-collapse:collapse;font-size:13px}
+    .table th,.table td{padding:11px 14px;border-top:1px solid var(--line);text-align:left}
+    .table th{color:var(--muted);font-weight:600;font-size:12px;background:#fafcfb}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+    .canvas-shell{display:grid;grid-template-columns:220px minmax(0,1fr) 300px;min-height:640px}
+    .palette,.props{padding:14px;overflow:auto}
+    .palette{border-right:1px solid var(--line)}
+    .props{border-left:1px solid var(--line);background:#f9fbfa}
+    .canvas{position:relative;background:
+      linear-gradient(rgba(220,229,226,.55) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(220,229,226,.55) 1px,transparent 1px);
+      background-size:24px 24px;min-height:640px;padding:28px}
+    .nbox{position:absolute;width:168px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;box-shadow:var(--shadow)}
+    .nbox.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--soft),var(--shadow)}
+    .nbox small{display:block;color:var(--muted);margin-top:4px}
+    .edge{position:absolute;height:2px;background:#91a19c;transform-origin:left center}
+    .toolbar{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);gap:10px;flex-wrap:wrap}
+    .empty{padding:48px 24px;text-align:center;color:var(--muted)}
+    .empty h3{color:var(--ink);margin:0 0 8px}
+    .note{margin-top:10px;padding:10px 12px;border-radius:8px;background:#f3f7f5;color:var(--muted);font-size:12px;line-height:1.5}
+    .callout{border-left:3px solid var(--accent);background:var(--soft);padding:12px 14px;border-radius:0 10px 10px 0;font-size:13px;margin:12px 0}
+    .stack{display:grid;gap:12px}
+    .kv{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:8px 0;border-bottom:1px solid var(--line)}
+    .kv:last-child{border-bottom:0}
+    .muted{color:var(--muted)}
+    .link{color:var(--accent);font-weight:700;cursor:pointer;background:none;border:0;padding:0}
+    .confirm{border:1px solid #f0c9c9;background:#fff8f8;border-radius:12px;padding:16px}
+    .skel{height:12px;background:linear-gradient(90deg,#edf2f0,#f7faf9,#edf2f0);background-size:200% 100%;border-radius:6px;animation:shimmer 1.2s linear infinite}
+    @keyframes shimmer{to{background-position:-200% 0}}
+    @media(max-width:1100px){
+      .pipe,.conn,.dlq-item,.audit-row,.worker-row,.sli{grid-template-columns:1fr 1fr}
+      .grid-2,.grid-main,.wizard,.canvas-shell{grid-template-columns:1fr}
+      .summary,.props{display:none}
+      .steps{display:flex;gap:6px;overflow:auto;border-right:0;border-bottom:1px solid var(--line)}
+      .step{white-space:nowrap}
+    }
+    @media(max-width:780px){
+      .app{display:block}
+      .nav{display:none}
+      .top{padding:0 16px}
+      .top input{width:140px}
+      .page{padding:20px 16px 80px}
+      .pipe,.conn,.dlq-item,.audit-row,.worker-row,.sli,.grid-3{grid-template-columns:1fr}
+      .titlebar{align-items:flex-start;flex-direction:column}
+      .titlebar h1{font-size:24px}
+      .mobile-nav{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(4,1fr);background:#fff;border-top:1px solid var(--line);z-index:5}
+      .mobile-nav button{border:0;background:#fff;padding:10px 4px;font-size:11px;color:var(--muted)}
+      .mobile-nav button.active{color:var(--accent);font-weight:700}
+    }
+    @media(min-width:781px){.mobile-nav{display:none}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="nav" aria-label="主导航">
+    <div class="brand"><span class="mark">O</span><div><b>OpenETL</b><small>runtime console</small></div></div>
+    <button class="active" data-page="overview"><span>总览</span></button>
+    <button class="create" data-page="wizard"><span>＋ 新建管道</span></button>
+    <div class="group">运行</div>
+    <button data-page="pipelines"><span>管道</span></button>
+    <button data-page="issues"><span>问题中心</span><span class="badge">3</span></button>
+    <button data-page="dlq"><span>DLQ</span></button>
+    <div class="group">资源</div>
+    <button data-page="connections"><span>Connections</span></button>
+    <button data-page="connectors"><span>Connector catalog</span></button>
+    <div class="group">系统</div>
+    <button data-page="audit"><span>审计</span></button>
+    <button data-page="workers"><span>Cluster</span></button>
+    <button data-page="settings" class="bottom"><span>设置</span></button>
+  </aside>
+
+  <main class="main">
+    <header class="top">
+      <div class="crumb" id="crumb">production / <b>总览</b></div>
+      <div class="top-actions">
+        <input aria-label="全局搜索" placeholder="搜索管道、连接、运行…">
+        <button class="icon-btn" type="button" aria-label="通知">通知 · 3</button>
+        <button class="icon-btn" type="button" aria-label="用户菜单">admin ▾</button>
+      </div>
+    </header>
+
+    <!-- 1. Overview -->
+    <section id="overview" class="page active" data-title="总览">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">MONDAY · PRODUCTION</div>
+          <h1>先处理影响数据交付的问题</h1>
+          <p>3 个问题需要关注，12 条管道中 8 条健康运行。累计吞吐降为二级信息。</p>
+        </div>
+        <div class="row">
+          <select aria-label="时间范围"><option>最近 15 分钟</option><option>最近 24 小时</option><option>累计</option></select>
+          <button class="primary" data-page="wizard">新建管道</button>
+        </div>
+      </div>
+      <div class="grid-2">
+        <article class="panel">
+          <div class="panelhead"><h2>需要处理</h2><span class="count">3 open</span></div>
+          <div class="issue"><i class="dot"></i><div><b>orders-cdc → ClickHouse 写入失败</b><div class="meta">影响 18,420 条 · 12 分钟前 · sink.clickhouse</div></div><button class="link" data-page="detail">查看修复 →</button></div>
+          <div class="issue"><i class="dot warn"></i><div><b>customer-profile CDC lag 持续升高</b><div class="meta">当前 4m 32s · checkpoint 7 分钟未提交</div></div><button class="link" data-page="detail">诊断 →</button></div>
+          <div class="issue"><i class="dot warn"></i><div><b>inventory-mysql connection 不可用</b><div class="meta">被 2 条管道引用 · 最后成功测试 36 分钟前</div></div><button class="link" data-page="connections">测试连接 →</button></div>
+        </article>
+        <article class="panel health">
+          <div class="panelhead" style="padding:0"><h2>运行健康</h2><span class="count">最近 15 分钟</span></div>
+          <div class="score">8 <small>/ 12 healthy</small></div>
+          <div class="bar"><i style="width:67%"></i></div>
+          <div class="legend">
+            <div><b class="mono">8</b> <span>健康</span></div>
+            <div><b class="mono">2</b> <span>降级</span></div>
+            <div><b class="mono">1</b> <span>失败</span></div>
+            <div><b class="mono">1</b> <span>已暂停</span></div>
+          </div>
+          <div class="note">健康度由期望状态、实际状态、lag、checkpoint、DLQ 与最近错误共同派生，不再用 running/total。</div>
+        </article>
+      </div>
+      <article class="panel" style="margin-top:16px">
+        <div class="panelhead"><h2>关键管道</h2><button class="link" data-page="pipelines">查看全部管道 →</button></div>
+        <div class="pipe">
+          <div class="name"><i class="dot"></i><div><b>orders-cdc</b><div class="meta">失败 · 12 分钟</div></div></div>
+          <div class="path"><span class="node">MySQL CDC</span><span class="arrow">→</span><span class="node">type convert</span><span class="arrow">→</span><span class="node">ClickHouse</span></div>
+          <div class="metric">18,420<em>DLQ backlog</em></div>
+          <span class="tag">查看问题</span>
+        </div>
+        <div class="pipe">
+          <div class="name"><i class="dot warn"></i><div><b>customer-profile</b><div class="meta">降级 · CDC</div></div></div>
+          <div class="path"><span class="node">Kafka</span><span class="arrow">→</span><span class="node">lookup</span><span class="arrow">→</span><span class="node">PostgreSQL</span></div>
+          <div class="metric">4m 32s<em>CDC lag</em></div>
+          <span class="tag warn">诊断</span>
+        </div>
+        <div class="pipe">
+          <div class="name"><i class="dot ok"></i><div><b>payments-batch</b><div class="meta">健康 · batch · hourly</div></div></div>
+          <div class="path"><span class="node">MySQL batch</span><span class="arrow">→</span><span class="node">project</span><span class="arrow">→</span><span class="node">MySQL upsert</span></div>
+          <div class="metric">2.4k/min<em>written · 15m</em></div>
+          <span class="tag ok">稳定</span>
+        </div>
+      </article>
+    </section>
+
+    <!-- 2. Pipelines list -->
+    <section id="pipelines" class="page" data-title="管道">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">PIPELINES</div>
+          <h1>管道</h1>
+          <p>每行直接表达数据路径、运行方式、健康与最近问题。</p>
+        </div>
+        <div class="row">
+          <button class="secondary">批量操作</button>
+          <button class="primary" data-page="wizard">新建管道</button>
+        </div>
+      </div>
+      <div class="filters">
+        <input placeholder="搜索名称 / 标签 / 连接" style="min-width:220px">
+        <select><option>全部状态</option><option>failed</option><option>degraded</option><option>healthy</option><option>paused</option><option>scheduled</option></select>
+        <select><option>全部模式</option><option>CDC</option><option>batch</option><option>streaming</option></select>
+        <select><option>全部 connector</option><option>mysql_cdc</option><option>kafka</option><option>clickhouse</option></select>
+      </div>
+      <article class="panel">
+        <div class="pipe" style="border-top:0;color:var(--muted);font-size:12px;font-weight:600">
+          <div>管道 / 健康</div><div>Source → Transform → Sink</div><div>模式</div><div>信号</div><div>动作</div>
+        </div>
+        <div class="pipe">
+          <div class="name"><i class="dot"></i><div><b>orders-cdc</b><div class="meta">prod · team-data</div></div></div>
+          <div class="path"><span class="node">MySQL CDC</span><span class="arrow">→</span><span class="node">type_convert</span><span class="arrow">→</span><span class="node">ClickHouse upsert</span></div>
+          <div><span class="tag muted sq">CDC</span><div class="meta" style="margin-top:4px">streaming</div></div>
+          <div class="metric">18,420 DLQ<div class="meta">value out of range</div></div>
+          <button class="secondary" data-page="detail">查看问题</button>
+        </div>
+        <div class="pipe">
+          <div class="name"><i class="dot warn"></i><div><b>customer-profile</b><div class="meta">prod · crm</div></div></div>
+          <div class="path"><span class="node">Kafka</span><span class="arrow">→</span><span class="node">lookup</span><span class="arrow">→</span><span class="node">PostgreSQL</span></div>
+          <div><span class="tag muted sq">CDC</span><div class="meta" style="margin-top:4px">streaming</div></div>
+          <div class="metric">lag 4m 32s<div class="meta">checkpoint stale</div></div>
+          <button class="secondary" data-page="detail">打开详情</button>
+        </div>
+        <div class="pipe">
+          <div class="name"><i class="dot ok"></i><div><b>inventory-sync</b><div class="meta">prod · ops</div></div></div>
+          <div class="path"><span class="node">MySQL batch</span><span class="arrow">→</span><span class="node">—</span><span class="arrow">→</span><span class="node">S3 parquet</span></div>
+          <div><span class="tag muted sq">batch</span><div class="meta" style="margin-top:4px">cron 0 * * *</div></div>
+          <div class="metric">last ok 08:00<div class="meta">next 09:00</div></div>
+          <button class="ghost" data-page="detail">打开详情</button>
+        </div>
+        <div class="pipe">
+          <div class="name"><i class="dot muted"></i><div><b>nightly-agg</b><div class="meta">prod · analytics</div></div></div>
+          <div class="path"><span class="node">PostgreSQL</span><span class="arrow">→</span><span class="node">window</span><span class="arrow">→</span><span class="node">ClickHouse</span></div>
+          <div><span class="tag muted sq">scheduled</span><div class="meta" style="margin-top:4px">daily 02:00</div></div>
+          <div class="metric">paused by user<div class="meta">—</div></div>
+          <button class="ghost" data-page="detail">打开详情</button>
+        </div>
+      </article>
+      <div class="note">Start/Stop 不占据每一行主位；进入上下文菜单。默认主动作是「查看问题」或「打开详情」。</div>
+    </section>
+
+    <!-- 3. Pipeline detail -->
+    <section id="detail" class="page" data-title="管道详情">
+      <div class="row" style="margin-bottom:12px">
+        <button class="ghost" data-page="pipelines">← 管道</button>
+        <span class="tag">failed</span>
+        <span class="tag muted sq">CDC</span>
+        <span class="tag muted sq">prod</span>
+      </div>
+      <article class="panel">
+        <div class="detail-head">
+          <div class="titlebar" style="margin:0">
+            <div>
+              <div class="eyebrow">/pipelines/orders-cdc</div>
+              <h1>orders-cdc</h1>
+              <div class="path"><span class="node">MySQL CDC · commerce.orders</span><span class="arrow">→</span><span class="node">type_convert</span><span class="arrow">→</span><span class="node">ClickHouse · orders_rt</span></div>
+            </div>
+            <div class="row">
+              <button class="secondary">Run now</button>
+              <button class="danger">Stop</button>
+              <button class="ghost" data-page="dag">高级 DAG 编辑</button>
+              <button class="primary" data-page="issues">处理问题</button>
+            </div>
+          </div>
+        </div>
+        <div class="tabs" role="tablist">
+          <button class="active" data-tab="ov">Overview</button>
+          <button data-tab="runs">Runs</button>
+          <button data-tab="iss">Issues</button>
+          <button data-tab="cp">Checkpoints</button>
+          <button data-tab="spec">Spec & versions</button>
+        </div>
+        <div id="tab-ov" class="tabpane">
+          <div class="sli">
+            <div class="card"><span>最近 15 分钟写入</span><b class="mono">0</b></div>
+            <div class="card"><span>失败记录</span><b class="mono">18,420</b></div>
+            <div class="card"><span>DLQ backlog</span><b class="mono">18,420</b></div>
+            <div class="card"><span>CDC lag</span><b class="mono">—</b></div>
+          </div>
+          <div class="grid-main" style="padding:0 18px 18px">
+            <div class="stack">
+              <div class="panel" style="border-style:dashed">
+                <div class="panelhead"><h2>最近问题</h2><button class="link" data-page="issues">全部 Issues →</button></div>
+                <div class="issue" style="border-top:0"><i class="dot"></i><div><b>ClickHouse UInt32 溢出</b><div class="meta">sink · amount_cents · 12 分钟前</div></div><button class="link" data-page="dlq">去 DLQ →</button></div>
+              </div>
+              <div class="panel" style="border-style:dashed">
+                <div class="panelhead"><h2>写入语义</h2></div>
+                <div style="padding:0 18px 16px" class="stack">
+                  <div class="kv"><span>模式</span><b>upsert</b></div>
+                  <div class="kv"><span>主键</span><b class="mono">order_id</b></div>
+                  <div class="kv"><span>replay 边界</span><b>可能重复，依赖主键吸收</b></div>
+                </div>
+              </div>
+            </div>
+            <div class="panel" style="border-style:dashed">
+              <div class="panelhead"><h2>调度 / 生命周期</h2></div>
+              <div style="padding:0 18px 16px" class="stack">
+                <div class="kv"><span>schedule</span><b>streaming</b></div>
+                <div class="kv"><span>期望状态</span><b>running</b></div>
+                <div class="kv"><span>实际状态</span><b style="color:var(--bad)">failed</b></div>
+                <div class="note">Schedule 属于 pipeline 生命周期，不再作为一级独立产品页主导航项；全局列表仍可在运维场景保留。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="tab-runs" class="tabpane" hidden>
+          <table class="table">
+            <thead><tr><th>开始时间</th><th>结果</th><th>读取</th><th>写入</th><th>失败</th><th>checkpoint</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">20:41:08</td><td><span class="tag">failed</span></td><td class="mono">19,102</td><td class="mono">682</td><td class="mono">18,420</td><td class="mono">binlog 4/1832</td></tr>
+              <tr><td class="mono">19:02:11</td><td><span class="tag ok">ok</span></td><td class="mono">8,441</td><td class="mono">8,441</td><td class="mono">0</td><td class="mono">binlog 4/1201</td></tr>
+              <tr><td class="mono">18:11:44</td><td><span class="tag ok">ok</span></td><td class="mono">6,208</td><td class="mono">6,208</td><td class="mono">0</td><td class="mono">binlog 4/991</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="tab-iss" class="tabpane" hidden>
+          <div class="issue" style="border-top:0"><i class="dot"></i><div><b>value out of range for column amount_cents</b><div class="meta">node: sink.clickhouse · field: amount_cents · 18,420 records</div></div><button class="primary" data-page="dlq">修复并 replay</button></div>
+          <div class="issue"><i class="dot warn"></i><div><b>preflight 警告：源端无 version 字段</b><div class="meta">recommendation · 可能影响幂等吸收</div></div><button class="ghost">查看建议</button></div>
+        </div>
+        <div id="tab-cp" class="tabpane" hidden>
+          <div style="padding:18px" class="stack">
+            <div class="kv"><span>当前位置</span><b class="mono">mysql-bin.000004 / 1832</b></div>
+            <div class="kv"><span>年龄</span><b>12m</b></div>
+            <div class="kv"><span>最后提交</span><b class="mono">2026-07-20 20:41:02</b></div>
+            <div class="confirm">
+              <b>Reset checkpoint</b>
+              <p class="meta" style="margin:8px 0 12px">危险动作。重置后将从更早位点重放；sink 为 upsert 时可吸收重复，insert-only 会扩大重复边界。</p>
+              <div class="row">
+                <input placeholder="键入管道名称确认" style="min-width:220px;border:1px solid var(--line);border-radius:8px;padding:9px 11px">
+                <button class="danger">确认 reset</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="tab-spec" class="tabpane" hidden>
+          <div class="tabs" style="border:0;padding:12px 12px 0">
+            <button class="active">表单</button>
+            <button>YAML</button>
+            <button>Diff / versions</button>
+          </div>
+          <div style="padding:16px 18px" class="split">
+            <div class="field"><label>name</label><input value="orders-cdc"></div>
+            <div class="field"><label>write_mode</label><select><option>upsert</option><option>insert</option><option>pre_write</option></select></div>
+            <div class="field"><label>source.table</label><input value="commerce.orders" class="mono"></div>
+            <div class="field"><label>sink.table</label><input value="orders_rt" class="mono"></div>
+          </div>
+          <div class="note" style="margin:0 18px 18px">表单/YAML 双视图保证隐藏字段往返；高级 DAG 拓扑在「高级 DAG 编辑」中修改，仍写入同一份 pipeline spec。</div>
+        </div>
+      </article>
+    </section>
+
+    <!-- 4. Wizard -->
+    <section id="wizard" class="page" data-title="新建管道">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">NEW PIPELINE · /pipelines/new?step=source</div>
+          <h1>创建数据管道</h1>
+          <p>每一步基于同一份 pipeline spec；高级 DAG 不是创建主路径，确认页可切换到画布编辑。</p>
+        </div>
+        <button class="secondary" data-page="overview">保存草稿并退出</button>
+      </div>
+      <article class="panel wizard">
+        <aside class="steps">
+          <div class="step done">1　同步场景</div>
+          <div class="step active">2　Source</div>
+          <div class="step">3　Sink</div>
+          <div class="step">4　Transform</div>
+          <div class="step">5　安全检查</div>
+          <div class="step">6　确认启动</div>
+        </aside>
+        <div class="form">
+          <div class="eyebrow">STEP 2 OF 6</div>
+          <h2>Source 连接与数据范围</h2>
+          <p class="meta">选择已测试 Connection，再确认库表/topic 与 checkpoint 能力。</p>
+          <div class="choice selected"><b>orders-mysql-prod</b><div class="meta">MySQL · healthy · 2 分钟前测试</div></div>
+          <div class="choice"><b>选择库表</b><div class="meta">commerce.orders · 28 columns · 主键 order_id</div></div>
+          <div class="choice"><b>Schema 与样例</b><div class="meta">Schema 已读取 · sample 20 rows · checkpoint supported</div></div>
+          <div class="row" style="justify-content:space-between;margin-top:24px">
+            <button class="secondary">上一步</button>
+            <button class="primary">继续配置 Sink →</button>
+          </div>
+        </div>
+        <aside class="summary">
+          <h3>管道摘要</h3>
+          <span class="node">Source　orders-mysql-prod</span>
+          <div class="meta">commerce.orders · CDC</div>
+          <div style="text-align:center;color:#91a19c;margin:10px">↓</div>
+          <span class="node" style="opacity:.55">Transform　可选</span>
+          <div style="text-align:center;color:#91a19c;margin:10px">↓</div>
+          <span class="node" style="opacity:.55">Sink　待配置</span>
+          <p class="footnote">草稿自动保存。多源/多 sink 或条件路由时，在确认页打开「高级 DAG 编辑」——不是删除能力，而是从创建主路径挪到高级工作区。</p>
+        </aside>
+      </article>
+    </section>
+
+    <!-- 5. Issues -->
+    <section id="issues" class="page" data-title="问题中心">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">OPS · /issues</div>
+          <h1>问题中心</h1>
+          <p>顺序固定：failed → degraded → DLQ backlog → lag/checkpoint → connection/worker。</p>
+        </div>
+        <select><option>全部环境</option><option>production</option></select>
+      </div>
+      <div class="grid-3" style="margin-bottom:16px">
+        <article class="panel health"><span class="muted">blocking</span><div class="score" style="font-size:32px;margin-top:8px">1</div></article>
+        <article class="panel health"><span class="muted">degraded</span><div class="score" style="font-size:32px;margin-top:8px;color:var(--warn)">2</div></article>
+        <article class="panel health"><span class="muted">DLQ backlog</span><div class="score" style="font-size:32px;margin-top:8px">18.4k</div></article>
+      </div>
+      <article class="panel">
+        <div class="issue" style="border-top:0"><i class="dot"></i><div><b>orders-cdc · ClickHouse 写入失败</b><div class="meta">影响 18,420 · sink.clickhouse.amount_cents · 建议：修正类型后 replay</div></div><div class="row"><button class="ghost" data-page="detail">定位</button><button class="primary" data-page="dlq">去修复</button></div></div>
+        <div class="issue"><i class="dot warn"></i><div><b>customer-profile · CDC lag</b><div class="meta">4m 32s · checkpoint 7m 未提交 · 建议：检查 source 吞吐与 lookup 延迟</div></div><div class="row"><button class="ghost" data-page="detail">诊断</button></div></div>
+        <div class="issue"><i class="dot warn"></i><div><b>inventory-mysql · connection down</b><div class="meta">引用管道 2 · 最后成功 36m · 建议：测试连接 / 轮换凭据</div></div><div class="row"><button class="ghost" data-page="connections">测试连接</button></div></div>
+      </article>
+    </section>
+
+    <!-- 6. DLQ -->
+    <section id="dlq" class="page" data-title="DLQ">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">OPS · /dlq</div>
+          <h1>死信队列</h1>
+          <p>按 error class / node / time 聚合；先修复再 replay，确认页声明重复边界。</p>
+        </div>
+        <div class="row">
+          <button class="secondary">导出</button>
+          <button class="danger">清空筛选结果</button>
+        </div>
+      </div>
+      <div class="filters">
+        <select><option>orders-cdc</option><option>全部管道</option></select>
+        <select><option>error class: value_range</option></select>
+        <select><option>node: sink.clickhouse</option></select>
+        <select><option>最近 24 小时</option></select>
+      </div>
+      <div class="grid-main">
+        <article class="panel">
+          <div class="panelhead"><h2>聚合视图</h2><span class="count">1 class · 18,420 records</span></div>
+          <div class="dlq-item" style="border-top:0">
+            <div><b>value out of range for column amount_cents</b><div class="meta">node sink.clickhouse · field amount_cents · first 20:29 · last 20:41</div></div>
+            <div class="metric">18,420<em>records</em></div>
+            <span class="tag">blocking</span>
+            <button class="primary">展开样本</button>
+          </div>
+          <div class="panelhead"><h2>样本记录</h2></div>
+          <table class="table">
+            <thead><tr><th>time</th><th>pk</th><th>field</th><th>value</th><th>error</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">20:41:02</td><td class="mono">ord_9182</td><td>amount_cents</td><td class="mono">5123456789</td><td>UInt32 overflow</td></tr>
+              <tr><td class="mono">20:40:58</td><td class="mono">ord_9177</td><td>amount_cents</td><td class="mono">4988123401</td><td>UInt32 overflow</td></tr>
+              <tr><td class="mono">20:40:51</td><td class="mono">ord_9160</td><td>amount_cents</td><td class="mono">6000000001</td><td>UInt32 overflow</td></tr>
+            </tbody>
+          </table>
+        </article>
+        <article class="panel" style="padding:16px">
+          <h2 style="font-size:15px;margin:0 0 12px">Replay 确认</h2>
+          <div class="kv"><span>目标记录数</span><b class="mono">18,420</b></div>
+          <div class="kv"><span>筛选范围</span><b>value_range · 24h</b></div>
+          <div class="kv"><span>sink 幂等</span><b>upsert · order_id</b></div>
+          <div class="kv"><span>重复边界</span><b>可能重复，主键吸收</b></div>
+          <div class="callout">执行结果会显示成功 / 失败 / 剩余 backlog，不只发 toast。</div>
+          <div class="row" style="margin-top:14px">
+            <button class="ghost">仅 dry-run</button>
+            <button class="primary">确认 replay</button>
+          </div>
+          <div class="note">空 backlog 时隐藏「重放/全删」主按钮，避免空态暴露危险动作。</div>
+        </article>
+      </div>
+    </section>
+
+    <!-- 7. Connections -->
+    <section id="connections" class="page" data-title="Connections">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">RESOURCES · /connections</div>
+          <h1>Connections</h1>
+          <p>只管理实例：health、引用管道、最后测试。能力说明去 Connector catalog。</p>
+        </div>
+        <button class="primary">新建连接</button>
+      </div>
+      <article class="panel">
+        <div class="conn" style="border-top:0;color:var(--muted);font-size:12px;font-weight:600">
+          <div>实例</div><div>类型</div><div>健康</div><div>引用 / 最后测试</div><div>动作</div>
+        </div>
+        <div class="conn">
+          <div><b>orders-mysql-prod</b><div class="meta mono">mysql://db.prod:3306</div></div>
+          <div><span class="tag muted sq">mysql</span></div>
+          <div><span class="tag ok">healthy</span></div>
+          <div class="metric">4 pipelines<em>2m ago</em></div>
+          <button class="ghost">测试</button>
+        </div>
+        <div class="conn">
+          <div><b>inventory-mysql</b><div class="meta mono">mysql://inv.prod:3306</div></div>
+          <div><span class="tag muted sq">mysql</span></div>
+          <div><span class="tag warn">down</span></div>
+          <div class="metric">2 pipelines<em>36m ago</em></div>
+          <button class="secondary">测试</button>
+        </div>
+        <div class="conn">
+          <div><b>analytics-ch</b><div class="meta mono">clickhouse://ch.prod:9000</div></div>
+          <div><span class="tag muted sq">clickhouse</span></div>
+          <div><span class="tag ok">healthy</span></div>
+          <div class="metric">6 pipelines<em>1m ago</em></div>
+          <button class="ghost">测试</button>
+        </div>
+      </article>
+    </section>
+
+    <!-- 8. Connector catalog -->
+    <section id="connectors" class="page" data-title="Connector catalog">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">RESOURCES · /connectors</div>
+          <h1>Connector catalog</h1>
+          <p>展示支持的 source/sink、成熟度与能力，不与连接实例表单挤在同一屏。</p>
+        </div>
+        <input placeholder="搜索 connector" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+      </div>
+      <div class="grid-3">
+        <article class="panel" style="padding:16px">
+          <div class="row" style="justify-content:space-between"><b>mysql_cdc</b><span class="tag ok sq">GA</span></div>
+          <p class="meta" style="margin:10px 0">Source · binlog · checkpoint · schema sample</p>
+          <div class="path"><span class="node">CDC</span><span class="node">DDL policy</span><span class="node">GTID</span></div>
+        </article>
+        <article class="panel" style="padding:16px">
+          <div class="row" style="justify-content:space-between"><b>clickhouse</b><span class="tag ok sq">GA</span></div>
+          <p class="meta" style="margin:10px 0">Sink · native/HTTP · auto-create · upsert 语义</p>
+          <div class="path"><span class="node">auto DDL</span><span class="node">ReplacingMT</span></div>
+        </article>
+        <article class="panel" style="padding:16px">
+          <div class="row" style="justify-content:space-between"><b>kafka</b><span class="tag ok sq">GA</span></div>
+          <p class="meta" style="margin:10px 0">Source & Sink · offset · idempotent producer</p>
+          <div class="path"><span class="node">consumer group</span><span class="node">Debezium</span></div>
+        </article>
+        <article class="panel" style="padding:16px">
+          <div class="row" style="justify-content:space-between"><b>elasticsearch</b><span class="tag warn sq">beta</span></div>
+          <p class="meta" style="margin:10px 0">Sink · bulk · mapping conflict → item DLQ</p>
+          <div class="path"><span class="node">bulk</span><span class="node">429 retry</span></div>
+        </article>
+        <article class="panel" style="padding:16px">
+          <div class="row" style="justify-content:space-between"><b>maxcompute</b><span class="tag muted sq">experimental</span></div>
+          <p class="meta" style="margin:10px 0">Sink · 描述符/preflight 可用；writer 未生产就绪</p>
+          <div class="path"><span class="node">schema only</span></div>
+        </article>
+        <article class="panel" style="padding:16px">
+          <div class="row" style="justify-content:space-between"><b>s3 / file_sink</b><span class="tag ok sq">GA</span></div>
+          <p class="meta" style="margin:10px 0">Sink · multipart · Parquet · content-addressed replay</p>
+          <div class="path"><span class="node">MinIO</span><span class="node">Parquet</span></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- 9. Audit -->
+    <section id="audit" class="page" data-title="审计">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">SYSTEM · /audit</div>
+          <h1>审计</h1>
+          <p>谁在何时对 pipeline / connection / plugin / worker 做了什么。</p>
+        </div>
+        <div class="row">
+          <input placeholder="过滤 actor / action" style="border:1px solid var(--line);border-radius:8px;padding:9px 11px">
+          <button class="secondary">导出</button>
+        </div>
+      </div>
+      <article class="panel">
+        <div class="audit-row" style="border-top:0;color:var(--muted);font-size:12px;font-weight:600">
+          <div>时间</div><div>Actor</div><div>动作</div><div>结果</div>
+        </div>
+        <div class="audit-row"><div class="mono">20:41:18</div><div>admin</div><div>pipeline.stop · orders-cdc</div><div><span class="tag ok">ok</span></div></div>
+        <div class="audit-row"><div class="mono">20:12:03</div><div>admin</div><div>dlq.replay · orders-cdc · 1,200 records</div><div><span class="tag warn">partial</span></div></div>
+        <div class="audit-row"><div class="mono">19:48:55</div><div>ci-bot</div><div>specs.reload</div><div><span class="tag ok">ok</span></div></div>
+        <div class="audit-row"><div class="mono">19:02:11</div><div>admin</div><div>connection.test · orders-mysql-prod</div><div><span class="tag ok">ok</span></div></div>
+      </article>
+    </section>
+
+    <!-- 10. Workers / Cluster -->
+    <section id="workers" class="page" data-title="Cluster">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">SYSTEM · /cluster · distributed only</div>
+          <h1>Cluster / Workers</h1>
+          <p>standalone 模式不在主导航暴露本页；distributed 才显示 slot、心跳与分片。</p>
+        </div>
+        <button class="secondary">刷新</button>
+      </div>
+      <div class="callout">产品决策：Worker 不是日常任务入口。能力保留，按运行模式渐进披露，避免 standalone 用户理解平台实现细节。</div>
+      <article class="panel">
+        <div class="worker-row" style="border-top:0;color:var(--muted);font-size:12px;font-weight:600">
+          <div>Worker</div><div>状态</div><div>Slots</div><div>最后心跳</div><div>任务</div>
+        </div>
+        <div class="worker-row"><div><b>worker-a</b><div class="meta mono">10.0.2.11</div></div><span class="tag ok">online</span><div class="mono">3 / 8</div><div class="mono">12s</div><div class="mono">2</div></div>
+        <div class="worker-row"><div><b>worker-b</b><div class="meta mono">10.0.2.18</div></div><span class="tag ok">online</span><div class="mono">1 / 8</div><div class="mono">9s</div><div class="mono">1</div></div>
+        <div class="worker-row"><div><b>worker-c</b><div class="meta mono">10.0.2.21</div></div><span class="tag warn">stale</span><div class="mono">0 / 8</div><div class="mono">2m 11s</div><div class="mono">0</div></div>
+      </article>
+    </section>
+
+    <!-- 11. Advanced DAG editor -->
+    <section id="dag" class="page" data-title="高级 DAG 编辑">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">PIPELINE WORKSPACE · 非一级导航</div>
+          <h1>高级 DAG 编辑</h1>
+          <p>DAG 编排没有删除。它从「与仪表盘同级的产品入口」降级为 pipeline 的高级工作区。</p>
+        </div>
+        <div class="row">
+          <button class="ghost" data-page="detail">← 返回详情</button>
+          <button class="secondary">YAML</button>
+          <button class="primary">验证并保存</button>
+        </div>
+      </div>
+      <div class="callout">
+        <b>为什么不再做一级「DAG 编排」页？</b>
+        产品主表面是 <b>Source → Transform → Sink</b> 管道；YAML / API / UI 操作同一份 spec。
+        DAG、调度、分片、master-worker 是该模型的扩展，不形成独立产品线。
+        一级导航放 Designer/DAG 会让新手先面对节点库，而不是「创建成功、稳定运行、快速修复」。
+        多源、条件路由、fanout 等能力仍在此画布完成，并写回同一 pipeline。
+      </div>
+      <article class="panel">
+        <div class="toolbar">
+          <div class="row">
+            <b>orders-cdc</b>
+            <span class="tag muted sq">undo / redo</span>
+            <span class="meta">选中节点后才显示删除</span>
+          </div>
+          <div class="row">
+            <button class="ghost">Schedule</button>
+            <button class="ghost">Hooks</button>
+            <button class="ghost">AI 辅助</button>
+            <button class="secondary">校验</button>
+          </div>
+        </div>
+        <div class="canvas-shell">
+          <aside class="palette">
+            <input placeholder="搜索节点" style="width:100%;margin-bottom:12px;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+            <div class="group" style="margin:0 0 8px">Source</div>
+            <div class="choice" style="margin:0 0 8px;padding:10px"><b>mysql_cdc</b><div class="meta">binlog · checkpoint</div></div>
+            <div class="choice" style="margin:0 0 8px;padding:10px"><b>kafka</b><div class="meta">offset · group</div></div>
+            <div class="group" style="margin:12px 0 8px">Transform</div>
+            <div class="choice" style="margin:0 0 8px;padding:10px"><b>type_convert</b></div>
+            <div class="choice" style="margin:0 0 8px;padding:10px"><b>lookup</b></div>
+            <div class="choice" style="margin:0 0 8px;padding:10px"><b>router / fanout</b></div>
+            <div class="group" style="margin:12px 0 8px">Sink</div>
+            <div class="choice" style="margin:0 0 8px;padding:10px"><b>clickhouse</b></div>
+            <div class="choice" style="margin:0;padding:10px"><b>postgres</b></div>
+          </aside>
+          <div class="canvas" aria-label="DAG 画布">
+            <div class="nbox" style="left:40px;top:120px"><b>src_orders</b><small>mysql_cdc</small></div>
+            <div class="nbox active" style="left:280px;top:120px"><b>cast_amount</b><small>type_convert · selected</small></div>
+            <div class="nbox" style="left:520px;top:60px"><b>sink_ch</b><small>clickhouse</small></div>
+            <div class="nbox" style="left:520px;top:200px;opacity:.75"><b>dlq_side</b><small>router → file_sink</small></div>
+            <div class="note" style="position:absolute;left:40px;bottom:24px;right:40px;margin:0">
+              空画布时提供「从 Source 开始」与模板，不展示一排彩色节点按钮。
+              Schedule / YAML / AI 进入二级面板；顶部只保留返回、名称、undo/redo、验证、保存。
+            </div>
+          </div>
+          <aside class="props">
+            <h3 style="margin:0 0 12px;font-size:14px">节点属性 · cast_amount</h3>
+            <div class="field"><label>type</label><input value="type_convert" class="mono" readonly></div>
+            <div class="field"><label>field</label><input value="amount_cents" class="mono"></div>
+            <div class="field"><label>to</label><select><option>Int64</option><option>UInt32</option><option>String</option></select></div>
+            <div class="field"><label>on_error</label><select><option>dlq</option><option>skip</option><option>fail</option></select></div>
+            <button class="danger" style="width:100%;margin-top:8px">删除节点</button>
+            <p class="footnote">删除仅在选中节点后出现，避免工具条误触。</p>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <!-- 12. Settings -->
+    <section id="settings" class="page" data-title="设置">
+      <div class="titlebar">
+        <div>
+          <div class="eyebrow">SYSTEM · /settings</div>
+          <h1>设置</h1>
+          <p>语言、主题、API token、审计开关、配置重载从顶栏挪入此处，避免抢占日常操作。</p>
+        </div>
+      </div>
+      <div class="grid-2">
+        <article class="panel" style="padding:18px">
+          <h2 style="font-size:15px;margin:0 0 12px">外观与语言</h2>
+          <div class="field"><label>语言</label><select><option>中文</option><option>English</option></select></div>
+          <div class="field"><label>主题</label><select><option>跟随系统</option><option>浅色</option><option>深色</option></select></div>
+          <div class="field"><label>时间范围默认值</label><select><option>最近 15 分钟</option><option>最近 24 小时</option></select></div>
+        </article>
+        <article class="panel" style="padding:18px">
+          <h2 style="font-size:15px;margin:0 0 12px">运行时</h2>
+          <div class="field"><label>API Token</label><input type="password" value="••••••••••••" class="mono"></div>
+          <div class="field"><label>审计日志</label><select><option>启用</option><option>关闭</option></select></div>
+          <div class="row" style="margin-top:8px">
+            <button class="secondary">重载 specs</button>
+            <button class="primary">保存</button>
+          </div>
+        </article>
+      </div>
+      <div class="empty panel" style="margin-top:16px">
+        <h3>Extensions（WASM）</h3>
+        <p>内置 connector 与 WASM 插件不再同权平铺在主导航；扩展管理收在系统设置或独立 Extensions 子页。</p>
+        <button class="secondary" style="margin-top:12px">管理 WASM 插件</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<nav class="mobile-nav" aria-label="移动主导航">
+  <button class="active" data-page="overview">总览</button>
+  <button data-page="pipelines">管道</button>
+  <button data-page="issues">问题</button>
+  <button data-page="settings">更多</button>
+</nav>
+
+<script>
+  const titles = {
+    overview: '总览',
+    pipelines: '管道',
+    detail: '管道详情',
+    wizard: '新建管道',
+    issues: '问题中心',
+    dlq: 'DLQ',
+    connections: 'Connections',
+    connectors: 'Connector catalog',
+    audit: '审计',
+    workers: 'Cluster',
+    dag: '高级 DAG 编辑',
+    settings: '设置'
+  };
+
+  function go(page) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    const el = document.getElementById(page);
+    if (!el) return;
+    el.classList.add('active');
+    document.querySelectorAll('.nav button[data-page], .mobile-nav button[data-page]').forEach(b => {
+      b.classList.toggle('active', b.dataset.page === page);
+    });
+    // detail/wizard/dag are not primary nav items
+    if (['detail', 'wizard', 'dag'].includes(page)) {
+      document.querySelectorAll('.nav button[data-page]').forEach(b => b.classList.remove('active'));
+      if (page === 'wizard') document.querySelector('.nav .create')?.classList.add('active');
+      if (page === 'detail' || page === 'dag') document.querySelector('.nav button[data-page="pipelines"]')?.classList.add('active');
+    }
+    document.getElementById('crumb').innerHTML = `production / <b>${titles[page] || page}</b>`;
+    scrollTo(0, 0);
+  }
+
+  document.querySelectorAll('[data-page]').forEach(el => {
+    el.addEventListener('click', e => {
+      e.preventDefault();
+      go(el.dataset.page);
+    });
+  });
+
+  // detail tabs
+  document.querySelectorAll('#detail .tabs [data-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('#detail .tabs [data-tab]').forEach(b => b.classList.toggle('active', b === btn));
+      ['ov', 'runs', 'iss', 'cp', 'spec'].forEach(id => {
+        const pane = document.getElementById('tab-' + id);
+        if (pane) pane.hidden = id !== tab;
+      });
+    });
+  });
+</script>
+</body>
+</html>

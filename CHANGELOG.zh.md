@@ -4,6 +4,50 @@
 
 ## [Unreleased]
 
+## [v0.2.11-beta.2] — 2026-07-22 — UI 原型对齐与信息架构收口
+
+### 亮点
+
+- **管道列表**：全宽列表（去掉 master-detail 右栏）；hash 筛选；批量选择工具条；行操作右对齐；Start/Stop 在更多菜单。
+- **新建向导**：`#/pipelines/new` 全页 6 步 + 摘要 + 草稿；e2e 跳过草稿恢复。
+- **DLQ 闭环**：三栏布局；左侧管道筛选/仅积压/排序；右侧 Replay 确认面板（目标数/幂等/dry-run）；Lucide + aria-label。
+- **管道详情**：写入语义/生命周期卡；**Logs** 页签（卡片式日志，非终端风格）；**Topology** 只读 DAG；调度在详情弹窗编辑；拓扑写入口只保留设计器。
+- **IA 收口**：去掉列表「DAG+日志」复合弹窗；连接器目录合并内置矩阵；调度总览共用弹窗；减少重复编辑入口。
+- **AppShell**：顶栏搜索/自动刷新/语言切换/重载锚点；扩展区仅 WASM 我的插件。
+
+### 验证
+
+- `npm --prefix web run build`
+- `./hack/e2e-ui.sh` → **108 passed, 0 failed**
+
+### Residual
+
+- DAG 空画布模板、小屏表格信息行、截图刷新、多 run 历史深度。详见 `docs/UI-REDESIGN-TODO.zh.md`。
+
+## [v0.2.11-beta.1] — 2026-07-21 — 任务型 Web UI 重构（P4 落地）
+
+### 亮点
+
+- 一级导航收敛为任务分组：**总览 / 运行 / 资源 / 系统**；「新建管道」成为一级主动作。
+- **Designer/DAG 降级为高级编辑入口**（非删除）：日常创建走 Source → Transform → Sink 向导；多源/路由/扇出仍经同一 pipeline/DAG spec 的画布编辑。
+- 统一管道健康视图：`healthy` / `degraded` / `failed` / `paused` / `scheduled` / `completed` 等，由运行态、lag、checkpoint、DLQ、最近错误共同派生；总览改为问题优先，不再用「running/总数」冒充健康度。
+- Hash 可分享路由：`#/overview`、`#/pipelines`、`#/pipelines/new`、`#/pipelines/:id/:tab`、`#/issues`、`#/dlq`、`#/connections`、`#/connectors`、`#/designer` 等；刷新/直达不丢上下文。
+- 新增问题中心、连接器目录（与 Connection 实例分离）、管道详情 tabs（Overview / Runs / Issues / Checkpoints / Spec）。
+- DLQ 按 error class / DAG node 聚合；空 backlog 隐藏批量危险操作；replay 反馈剩余积压。
+- 视觉 token：冷灰 canvas + 青绿主色；中英 i18n 覆盖新 IA；standalone 默认不突出 Workers，distributed 再展示集群入口。
+- 设计基线文档：`docs/UI-REDESIGN.zh.md`、`docs/UI-REDESIGN-PROTOTYPE.html`。
+
+### 验证
+
+- `npm --prefix web run typecheck`
+- `npm --prefix web run build`
+- `./hack/e2e-ui.sh` → **107 passed, 0 failed**
+
+### 边界
+
+- 默认语义仍是 **at-least-once**；UI 不引入新的执行模型或独立 UI spec。
+- P4 分步向导重组、部分 connector 字段级 remediation 与完整无障碍矩阵仍可继续收口（见 ROADMAP P4 子阶段）。
+
 ## [v0.2.10-beta.1] — 2026-07-14 — 可靠性认证与真实 WASM 插件链路
 
 ### P1：可靠性认证矩阵收口

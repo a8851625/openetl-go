@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import YAML from 'yaml';
 import './styles.css';
 import { getLang, setLang, translate, type Lang } from './i18n';
 import { DagEditorPage } from './DagEditorPage';
@@ -8,283 +7,46 @@ import { WorkersPage } from './WorkersPage';
 import { MyPluginsPage } from './MyPluginsPage';
 import { SchedulesPage } from './SchedulesPage';
 import { ConnectionsPage } from './ConnectionsPage';
-import { ConfigForm, buildDefaultConfig, filterFieldsByScope, missingRequiredFields, type PluginSchemaField } from './configFields';
-
-// ════════════════════════════════════════════════
-// Types
-// ════════════════════════════════════════════════
-type PipelineStats = {
-  records_read: number; records_written: number; records_failed: number; records_dlq: number;
-  last_error?: string; last_checkpoint?: string; started_at?: string; uptime?: string;
-  bytes_read?: number; bytes_written?: number; dlq_replay_count?: number; dlq_delete_count?: number;
-};
-type MetricsPipeline = PipelineStats & {
-  id?: string; name: string; status: string;
-  checkpoint_age_seconds: number; source_read_latency_ms: number; sink_write_latency_ms: number;
-  last_batch_size: number; avg_batch_size: number; batch_count: number; cdc_lag_ms: number;
-  dlq_file_count: number;
-};
-type Pipeline = { id?: string; name: string; status: string; stats: PipelineStats; dag?: boolean; parallelism?: number; shard_strategy?: string; shard_count?: number; shards?: { index: number; status: string; stats: PipelineStats }[]; tags?: string[] };
-type ShardInfo = { index: number; status: string; stats: PipelineStats; logs?: PipelineLogEntry[]; logs_last_seq?: number };
-type PluginResponse = { sources: string[]; sinks: string[]; transforms: string[]; metadata?: Record<string, Record<string, PluginInfo>> };
-type PluginInfo = { required?: string[]; capabilities?: string[]; maturity?: string };
-type Checkpoint = { id: string; job_name: string; source: string; position: unknown; timestamp: string };
-type DLQItem = { id?: number; job_name: string; record: { operation: string; data: Record<string, unknown> }; error: string; timestamp: string; error_class?: string; record_hash?: string; pipeline_version?: number; dag_node?: string };
-type AuditEvent = { timestamp?: string; action?: string; target?: string; method?: string; path?: string };
-type PipelineLogEntry = { timestamp: string; message: string; level: string; seq: number };
-
-function zeroPipelineStats(raw: any = {}): PipelineStats {
-  return {
-    records_read: Number(raw.records_read) || 0,
-    records_written: Number(raw.records_written) || 0,
-    records_failed: Number(raw.records_failed) || 0,
-    records_dlq: Number(raw.records_dlq) || 0,
-    last_error: typeof raw.last_error === 'string' ? raw.last_error : undefined,
-    last_checkpoint: typeof raw.last_checkpoint === 'string' ? raw.last_checkpoint : undefined,
-    started_at: typeof raw.started_at === 'string' ? raw.started_at : undefined,
-    uptime: typeof raw.uptime === 'string' ? raw.uptime : undefined,
-    bytes_read: Number(raw.bytes_read) || 0,
-    bytes_written: Number(raw.bytes_written) || 0,
-    dlq_replay_count: Number(raw.dlq_replay_count) || 0,
-    dlq_delete_count: Number(raw.dlq_delete_count) || 0,
-  };
-}
-
-function normalizePipeline(raw: unknown): Pipeline | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const p = raw as any;
-  const name = typeof p.name === 'string' ? p.name.trim() : '';
-  if (!name) return null;
-  const id = typeof p.id === 'string' ? p.id.trim() : '';
-  return {
-    ...p,
-    id: id || undefined,
-    name,
-    status: typeof p.status === 'string' && p.status ? p.status : 'unknown',
-    stats: zeroPipelineStats(p.stats),
-    tags: Array.isArray(p.tags) ? p.tags.filter((tag: unknown): tag is string => typeof tag === 'string' && tag.trim() !== '') : [],
-    shards: Array.isArray(p.shards) ? p.shards.map((s: any) => ({ ...s, stats: zeroPipelineStats(s?.stats) })) : undefined,
-  };
-}
-
-function pipelineRef(p?: Pick<Pipeline, 'id' | 'name'> | null): string {
-  return encodeURIComponent((p?.id || p?.name || '').trim());
-}
-
-function pipelineKey(p?: Pick<Pipeline, 'id' | 'name'> | null): string {
-  return (p?.id || p?.name || '').trim();
-}
-
-function normalizePipelines(data?: { pipelines?: Pipeline[] | null }): Pipeline[] {
-  if (!Array.isArray(data?.pipelines)) return [];
-  return data.pipelines.map(normalizePipeline).filter((p): p is Pipeline => p !== null);
-}
-
-// New types for version management, DAG preview, and runtime preview
-type PipelineVersion = { id: number; pipeline: string; version: number; spec_yaml: string; created_at: string };
-type DAGNode = { id: string; kind: string; plugin: string; config?: Record<string, unknown>; x?: number; y?: number };
-type DAGEdge = { id?: string; from: string; to: string; condition?: { field: string; operator: string; value: unknown } };
-type DAGResponse = {
-  dag: { nodes: DAGNode[]; edges: DAGEdge[] };
-  node_configs: { id: string; kind: string; plugin: string; config?: Record<string, unknown> }[];
-  schedule?: { type: string; cron?: string };
-  execution?: Record<string, unknown>;
-  retry?: Record<string, unknown>;
-};
-type PreviewResponse = {
-  stages: Record<string, PipelineLogEntry[]>;
-  shard_logs: { shard: number; entries: PipelineLogEntry[] }[];
-  total_logs: number;
-};
-type ConnectionEntry = {
-  name: string;
-  kind: 'source' | 'sink' | 'transform';
-  type: string;
-  last_status?: string;
-  last_error?: string;
-  last_tested_at?: string;
-  config?: Record<string, unknown>;
-};
-type ConnectionContext = {
-  connection?: ConnectionEntry;
-  recommendations?: { field: string; value: unknown; reason: string }[];
-  introspection?: {
-    ok?: boolean;
-    status?: string;
-    error?: string;
-    databases?: string[];
-    tables?: { name: string; database?: string; schema?: string; columns?: { name: string; data_type?: string; nullable?: boolean }[]; primary_key?: string[] }[];
-    topics?: { name: string; partitions?: { id: number; oldest_offset?: number; newest_offset?: number; leader?: number }[] }[];
-    targets?: { kind: string; location: string; prefix?: string; format?: string; exists?: boolean; writable?: boolean }[];
-    schema?: { name: string; data_type?: string; nullable?: boolean }[];
-    sample?: Record<string, unknown>[];
-    warnings?: string[];
-    checked_at?: string;
-  };
-};
-type ConnectionRecommendation = { field: string; value: unknown; reason: string };
-
-function normalizeConnectionEntry(raw: any): ConnectionEntry | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const name = String(raw.name || raw.Name || '').trim();
-  const kind = String(raw.kind || raw.Kind || '').trim();
-  const type = String(raw.type || raw.Type || '').trim();
-  if (!name || !kind || !type) return null;
-  if (kind !== 'source' && kind !== 'sink' && kind !== 'transform') return null;
-  return {
-    name,
-    kind,
-    type,
-    last_status: raw.last_status || raw.LastStatus,
-    last_error: raw.last_error || raw.LastError,
-    last_tested_at: raw.last_tested_at || raw.LastTestedAt,
-    config: raw.config || raw.Config,
-  };
-}
-
-// ════════════════════════════════════════════════
-// API helpers
-// ════════════════════════════════════════════════
-function getToken() { return window.localStorage.getItem('etl_api_token') || ''; }
-
-async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = getToken();
-  const headers = new Headers(init.headers);
-  headers.set('Content-Type', headers.get('Content-Type') || 'application/json');
-  if (token) headers.set('X-API-Token', token);
-  const res = await fetch(path, { ...init, headers });
-  if (!res.ok) throw new Error((await res.text()) || `${res.status} ${res.statusText}`);
-  return res.json();
-}
-
-function useApi<T>(path: string, refreshKey: number) {
-  const [state, setState] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true });
-  const firstRender = useRef(true);
-  useEffect(() => {
-    let cancelled = false;
-    // Only show loading spinner on the very first fetch; on subsequent
-    // refreshes, keep existing data visible to avoid UI flicker.
-    if (firstRender.current) {
-      setState((p) => ({ ...p, loading: true }));
-    }
-    api<T>(path).then((d) => {
-      if (!cancelled) {
-        firstRender.current = false;
-        setState({ data: d, loading: false });
-      }
-    }).catch((e) => {
-      if (!cancelled) {
-        firstRender.current = false;
-        setState((p) => ({ ...p, error: e.message, loading: false }));
-      }
-    });
-    return () => { cancelled = true; };
-  }, [path, refreshKey]);
-  return state;
-}
-
-// PipelineUptime displays a live-updating uptime for a single pipeline.
-// Must be a separate component so the useLiveUptime hook is called at
-// the top level (not inside a .map() callback).
-function PipelineUptime({ label, startedAt, fallback }: { label: string; startedAt?: string; fallback: string }) {
-  const uptime = useLiveUptime(startedAt);
-  return <div className="text-xs text-slate-400">{label} {startedAt ? uptime : fallback}</div>;
-}
-
-// PipelineRowMeta shows the compact meta line for a pipeline row with
-// live-updating uptime.
-function PipelineRowMeta({ t, startedAt, uptimeFallback, written, cdcLagMs }: {
-  t: TFunc; startedAt?: string; uptimeFallback: string; written: number; cdcLagMs?: number;
-}) {
-  const uptime = useLiveUptime(startedAt);
-  return (
-    <div className="mt-0.5 text-xs text-slate-400">
-      {t('dash.uptime')} {startedAt ? uptime : uptimeFallback} · {written} {t('pipe.written')}
-      {cdcLagMs && cdcLagMs > 0 ? ` · lag ${cdcLagMs}ms` : ''}
-    </div>
-  );
-}
-
-// LiveUptimeInline returns just the uptime span (no wrapper div) for
-// inline display within existing layouts.
-function LiveUptimeInline({ startedAt, fallback }: { startedAt?: string; fallback: string }) {
-  const uptime = useLiveUptime(startedAt);
-  return <>{startedAt ? uptime : fallback}</>;
-}
-function formatDuration(seconds: number): string {
-  if (seconds < 0 || !isFinite(seconds)) return 'N/A';
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
-
-// parseStartedAt extracts a timestamp (ms since epoch) from a pipeline's
-// started_at field, which may be an ISO string or a Go time string.
-function parseStartedAt(startedAt: string | undefined): number | null {
-  if (!startedAt) return null;
-  const t = new Date(startedAt).getTime();
-  return isNaN(t) ? null : t;
-}
-
-// useLiveUptime returns a live-updating duration string computed from the
-// given started_at timestamp. Updates every second on the client so the
-// displayed uptime is always accurate, not stale from the last API refresh.
-function useLiveUptime(startedAt: string | undefined): string {
-  const [, force] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => force((n) => n + 1), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  const startMs = parseStartedAt(startedAt);
-  if (startMs === null) return 'N/A';
-  return formatDuration((Date.now() - startMs) / 1000);
-}
-
-// ════════════════════════════════════════════════
-// Icons
-// ════════════════════════════════════════════════
-const Icon = {
-  Dashboard: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
-  Pipeline: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>,
-  Designer: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="3"/></svg>,
-  DLQ: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>,
-  Plugin: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M10 7h4M7 10v4"/></svg>,
-  Audit: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>,
-  Gear: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.3l2-1.5-2-3.4-2.4 1a7 7 0 00-2.2-1.3L16 3h-4l-.3 2.5a7 7 0 00-2.2 1.3l-2.4-1-2 3.4 2 1.5A7 7 0 005 12a7 7 0 00.1 1.3l-2 1.5 2 3.4 2.4-1a7 7 0 002.2 1.3L12 21h4l.3-2.5a7 7 0 002.2-1.3l2.4 1 2-3.4-2-1.5A7 7 0 0019 12z"/></svg>,
-  Globe: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20"/></svg>,
-  Flow: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M7 5h10M5 7v10M19 7v10M7 19h10"/></svg>,
-  Server: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>,
-  Clock: (p: any) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>,
-};
-const PAGE_ICONS: Record<string, (p: any) => JSX.Element> = {
-  dashboard: Icon.Dashboard, pipelines: Icon.Pipeline, designer: Icon.Flow,
-  dlq: Icon.DLQ, plugins: Icon.Plugin, audit: Icon.Audit,
-  workers: Icon.Server, myPlugins: Icon.Plugin, schedules: Icon.Clock,
-  connections: Icon.Server,
-};
-
-// ════════════════════════════════════════════════
-// App
-// ════════════════════════════════════════════════
-type Page = 'dashboard' | 'pipelines' | 'designer' | 'dlq' | 'plugins' | 'audit' | 'workers' | 'myPlugins' | 'schedules' | 'connections';
-type Toast = { id: number; type: 'success' | 'error' | 'info'; msg: string };
+import { ThemeProvider } from '@/components/theme-provider';
+import { Toaster } from '@/components/ui/sonner';
+import { AppShell, type AppPage, type NavGroup } from '@/components/layout/app-shell';
+import { api, getToken, normalizePipelines, pipelineKey, useApi } from '@/lib/api';
+import { showToast, type ToastFn } from '@/lib/toast';
+import {
+  navigate,
+  parseHash,
+  routeToNavPage,
+  type AppRoute,
+  type DetailTab,
+} from '@/lib/routing';
+import { deriveIssues } from '@/lib/pipeline-health';
+import type {
+  AuditEvent,
+  Checkpoint,
+  MetricsPipeline,
+  Pipeline,
+  PluginResponse,
+} from '@/lib/types';
+import { DashboardPage } from '@/pages/DashboardPage';
+import { PipelinesPage } from '@/pages/pipelines/PipelinesPage';
+import { PipelineDetailPage } from '@/pages/pipelines/PipelineDetailPage';
+import { FirstTaskWizard } from '@/pages/pipelines/first-task-wizard';
+import { IssuesPage } from '@/pages/IssuesPage';
+import { DLQPage } from '@/pages/DLQPage';
+import { AuditPage } from '@/pages/AuditPage';
+import { SettingsModal } from '@/pages/SettingsPage';
+import { ConnectorsPage } from '@/pages/ConnectorsPage';
 
 function App() {
   const [lang, setLangState] = useState<Lang>(getLang());
-  const [page, setPage] = useState<Page>('dashboard');
+  const [route, setRoute] = useState<AppRoute>(() => parseHash());
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedPipeline, setSelectedPipeline] = useState('');
-  const [editTarget, setEditTarget] = useState(''); // pipeline name to load into designer
+  const [editTarget, setEditTarget] = useState('');
   const [token, setToken] = useState(getToken());
-  const [toasts, setToasts] = useState<Toast[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [llmConfig, setLLMConfig] = useState({ base_url: '', model: '', api_key: '' });
-  const toastId = useRef(0);
+  const [distributedHint, setDistributedHint] = useState(false);
   const autoRefresh = useRef(setInterval(() => {}, 99999));
 
   const t = useCallback((key: string) => translate(key, lang), [lang]);
@@ -296,22 +58,66 @@ function App() {
   const checkpoints = useApi<{ checkpoints: Checkpoint[] }>('/api/v2/checkpoints', refreshKey);
   const audit = useApi<{ events: AuditEvent[] }>('/api/v2/audit?limit=50', refreshKey);
 
-  // Defend against API returning {pipelines: null} (Go nil slice → JSON null).
-  // Optional chaining only short-circuits on undefined, not on a present-but-null
-  // field, so `(d?.pipelines)` evaluates to null and `.find` would throw.
   const pipelinesList = normalizePipelines(pipelines.data);
   const metricsList = metrics.data?.pipelines || [];
-  const selected = pipelinesList.find((p) => pipelineKey(p) === selectedPipeline || p.name === selectedPipeline) || pipelinesList[0];
-  const selectedMetric = metricsList.find((p) => (p.id && p.id === selected?.id) || p.name === selected?.name);
+  const selected =
+    pipelinesList.find(
+      (p) => pipelineKey(p) === selectedPipeline || p.name === selectedPipeline,
+    ) || pipelinesList[0];
+  const selectedMetric = metricsList.find(
+    (p) => (p.id && p.id === selected?.id) || p.name === selected?.name,
+  );
+
+  const issueCount = useMemo(
+    () => deriveIssues(pipelinesList, metricsList).length,
+    [pipelinesList, metricsList],
+  );
 
   const totals = useMemo(() => {
     const list = normalizePipelines(pipelines.data);
-    return list.reduce((a, p) => ({
-      read: a.read + p.stats.records_read, written: a.written + p.stats.records_written,
-      failed: a.failed + p.stats.records_failed, dlq: a.dlq + p.stats.records_dlq,
-      running: a.running + (p.status === 'running' ? 1 : 0),
-    }), { read: 0, written: 0, failed: 0, dlq: 0, running: 0 });
+    return list.reduce(
+      (a, p) => ({
+        read: a.read + p.stats.records_read,
+        written: a.written + p.stats.records_written,
+        failed: a.failed + p.stats.records_failed,
+        dlq: a.dlq + p.stats.records_dlq,
+        running: a.running + (p.status === 'running' ? 1 : 0),
+      }),
+      { read: 0, written: 0, failed: 0, dlq: 0, running: 0 },
+    );
   }, [pipelines.data]);
+
+  // Hash routing
+  useEffect(() => {
+    const onHash = () => {
+      const next = parseHash();
+      setRoute(next);
+      if (next.page === 'pipeline-detail') {
+        setSelectedPipeline(next.id);
+      }
+      if (next.page === 'designer' && next.editTarget) {
+        setEditTarget(next.editTarget);
+      }
+      if (next.page === 'settings') {
+        setShowSettings(true);
+        loadLLMConfig();
+      }
+    };
+    window.addEventListener('hashchange', onHash);
+    onHash();
+    return () => window.removeEventListener('hashchange', onHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Detect multi-worker / distributed for Cluster nav
+  useEffect(() => {
+    api<{ workers?: { id: string }[] }>('/api/v2/workers')
+      .then((d) => {
+        const n = d.workers?.length || 0;
+        setDistributedHint(n > 1);
+      })
+      .catch(() => setDistributedHint(false));
+  }, [refreshKey]);
 
   useEffect(() => {
     clearInterval(autoRefresh.current);
@@ -319,2386 +125,377 @@ function App() {
     return () => clearInterval(autoRefresh.current);
   }, []);
 
-  const toast = useCallback((type: Toast['type'], msg: string) => {
-    const id = ++toastId.current;
-    setToasts((ts) => [...ts, { id, type, msg }]);
-    setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 4000);
+  const toast: ToastFn = useCallback((type, msg) => {
+    showToast(type, msg);
   }, []);
 
-  const runAction = useCallback(async (label: string, fn: () => Promise<unknown>) => {
-    try {
-      const result = await fn();
-      const toastMessage = result && typeof result === 'object' && 'toastMessage' in result && typeof (result as any).toastMessage === 'string'
-        ? (result as any).toastMessage
-        : label;
-      toast('success', toastMessage);
-      setRefreshKey((n) => n + 1);
-    }
-    catch (e) { toast('error', `${label}: ${e instanceof Error ? e.message : String(e)}`); }
-  }, [toast]);
+  const runAction = useCallback(
+    async (label: string, fn: () => Promise<unknown>) => {
+      try {
+        const result = await fn();
+        const toastMessage =
+          result &&
+          typeof result === 'object' &&
+          'toastMessage' in result &&
+          typeof (result as any).toastMessage === 'string'
+            ? (result as any).toastMessage
+            : label;
+        toast('success', toastMessage);
+        setRefreshKey((n) => n + 1);
+      } catch (e) {
+        toast('error', `${label}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [toast],
+  );
 
   const editPipeline = useCallback((ref: string) => {
     setEditTarget(ref);
-    setPage('designer');
+    navigate({ page: 'designer', editTarget: ref });
   }, []);
 
   const loadLLMConfig = useCallback(() => {
     api<{ llm_base_url?: string; llm_model?: string; llm_api_key?: string }>('/api/v2/settings')
-      .then((d) => setLLMConfig({ base_url: d.llm_base_url || '', model: d.llm_model || '', api_key: d.llm_api_key || '' }))
+      .then((d) =>
+        setLLMConfig({
+          base_url: d.llm_base_url || '',
+          model: d.llm_model || '',
+          api_key: d.llm_api_key || '',
+        }),
+      )
       .catch(() => {});
   }, []);
 
-  const switchLang = (l: Lang) => { setLangState(l); setLang(l); };
-
-  const navItems: { id: Page; key: string }[] = [
-    { id: 'dashboard', key: 'nav.dashboard' },
-    { id: 'pipelines', key: 'nav.pipelines' },
-    { id: 'connections', key: 'nav.connections' },
-    { id: 'designer', key: 'nav.designer' },
-    { id: 'dlq', key: 'nav.dlq' },
-    { id: 'plugins', key: 'nav.plugins' },
-    { id: 'myPlugins', key: 'nav.myPlugins' },
-    { id: 'workers', key: 'nav.workers' },
-    { id: 'schedules', key: 'nav.schedules' },
-    { id: 'audit', key: 'nav.audit' },
-  ];
-
-  return (
-    <div className="flex min-h-screen">
-      {/* Sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 flex w-56 flex-col border-r border-slate-200 bg-white">
-        <div className="flex h-16 items-center gap-2.5 border-b border-slate-100 px-5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
-            <Icon.Pipeline className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-sm font-bold text-slate-900">{t('app.title')}</div>
-            <div className="text-xs text-slate-400">{t('app.subtitle')}</div>
-          </div>
-        </div>
-        <nav className="flex-1 space-y-1 p-3">
-          {navItems.map((item) => {
-            const IconComp = PAGE_ICONS[item.id];
-            return (
-              <div key={item.id} className={`sidebar-item ${page === item.id ? 'active' : ''}`} onClick={() => setPage(item.id)}>
-                {IconComp && <IconComp className="sidebar-icon h-4 w-4" />}
-                <span>{t(item.key)}</span>
-                {item.id === 'pipelines' && totals.running > 0 && (
-                  <span className="ml-auto rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">{totals.running}</span>
-                )}
-              </div>
-            );
-          })}
-        </nav>
-        {/* Settings button — opens modal */}
-        <div className="border-t border-slate-100 p-3">
-          <div className="sidebar-item cursor-pointer" onClick={() => { setShowSettings(true); loadLLMConfig(); }}>
-            <Icon.Gear className="h-4 w-4" />
-            <span>{t('nav.settings')}</span>
-          </div>
-        </div>
-      </aside>
-
-      {/* Main */}
-      <main className="ml-56 flex-1">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white/80 px-8 backdrop-blur">
-          <h1 className="text-lg font-semibold text-slate-900">
-            {page === 'dlq' ? t('top.dlqWorkbench') : t(`nav.${page}`)}
-          </h1>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-400">{t('top.autorefresh')}</span>
-            <div className={`status-dot ${pipelinesList.some(p => p.status === 'running') ? 'status-running' : 'status-stopped'}`} />
-            {/* Quick lang toggle */}
-            <button className="btn btn-ghost btn-sm flex items-center gap-1" onClick={() => switchLang(lang === 'en' ? 'zh' : 'en')} title={t('settings.language')}>
-              <Icon.Globe className="h-4 w-4" />
-              {lang === 'en' ? '中文' : 'EN'}
-            </button>
-            <button className="btn btn-secondary btn-sm" onClick={() => runAction(t('toast.reloadSpecs'), () => api('/api/v2/specs/reload', { method: 'POST' }))}>
-              {t('top.reloadSpecs')}
-            </button>
-          </div>
-        </header>
-
-        {/* Toasts */}
-        {toasts.length > 0 && (
-          <div className="fixed right-4 top-20 z-50 space-y-2">
-            {toasts.map((ts) => (
-              <div key={ts.id} className={`toast-enter flex items-center gap-2 rounded-lg px-4 py-3 text-sm shadow-lg ${
-                ts.type === 'success' ? 'bg-emerald-600 text-white' : ts.type === 'error' ? 'bg-rose-600 text-white' : 'bg-slate-800 text-white'
-              }`}>
-                <span>{ts.type === 'success' ? '✓' : ts.type === 'error' ? '✗' : 'ℹ'}</span>
-                <span>{ts.msg}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="p-8">
-          {page === 'dashboard' && <DashboardPage t={t} lang={lang} totals={totals} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} />}
-          {page === 'pipelines' && <PipelinesPage t={t} lang={lang} pipelines={pipelines} metrics={metrics} selected={selected} selectedMetric={selectedMetric} onSelect={setSelectedPipeline} onAction={runAction} checkpoints={checkpoints} onResetCheckpoint={(ref: string, label?: string) => runAction(`${t('toast.resetCheckpoint')}: ${label || ref}`, () => api(`/api/v2/pipelines/${encodeURIComponent(ref)}/checkpoint/reset`, { method: 'POST' }))} onEdit={editPipeline} refreshKey={refreshKey} onShowToast={toast} plugins={plugins} pluginSchema={pluginSchema} />}
-          {page === 'connections' && <ConnectionsPage t={t} lang={lang} />}
-          {page === 'designer' && <DagEditorPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} onAction={runAction} editTarget={editTarget} />}
-          {page === 'dlq' && <DLQPage t={t} lang={lang} pipelines={pipelines} selected={selected} onSelect={setSelectedPipeline} onAction={runAction} />}
-          {page === 'plugins' && <PluginsPage t={t} lang={lang} plugins={plugins} />}
-          {page === 'myPlugins' && <MyPluginsPage t={t} lang={lang} />}
-          {page === 'workers' && <WorkersPage t={t} lang={lang} />}
-          {page === 'schedules' && <SchedulesPage t={t} lang={lang} pipelines={pipelines} />}
-          {page === 'audit' && <AuditPage t={t} lang={lang} audit={audit} />}
-        </div>
-      </main>
-
-      {/* Settings Modal */}
-      {showSettings && <SettingsModal t={t} lang={lang} token={token} setToken={setToken} switchLang={switchLang} llmConfig={llmConfig} setLLMConfig={setLLMConfig} onClose={() => setShowSettings(false)} onSaveToken={() => { window.localStorage.setItem('etl_api_token', token); setRefreshKey((n) => n + 1); toast('success', t('settings.tokenSaved')); }} onSaveLLM={() => {
-        api('/api/v2/settings', { method: 'POST', body: JSON.stringify({ llm_base_url: llmConfig.base_url, llm_model: llmConfig.model, llm_api_key: llmConfig.api_key }) })
-          .then(() => toast('success', t('settings.llmSaved')))
-          .catch((e) => toast('error', e.message));
-      }} />}
-    </div>
-  );
-}
-
-type TFunc = (key: string) => string;
-
-// ════════════════════════════════════════════════
-// Settings Modal
-// ════════════════════════════════════════════════
-function SettingsModal({ t, lang, token, setToken, switchLang, llmConfig, setLLMConfig, onClose, onSaveToken, onSaveLLM }: {
-  t: TFunc; lang: Lang; token: string; setToken: (v: string) => void; switchLang: (l: Lang) => void;
-  llmConfig: { base_url: string; model: string; api_key: string };
-  setLLMConfig: (c: { base_url: string; model: string; api_key: string }) => void;
-  onClose: () => void; onSaveToken: () => void; onSaveLLM: () => void;
-}) {
-  const [tab, setTab] = useState<'general' | 'llm' | 'worker'>('general');
-  const [workerLabels, setWorkerLabels] = useState('');
-
-  // Load worker labels from API
-  useEffect(() => {
-    api<{ labels?: Record<string, string> }>('/api/v2/workers/standalone-worker').then((d: any) => {
-      if (d?.labels) setWorkerLabels(Object.entries(d.labels).map(([k, v]) => `${k}=${v}`).join(', '));
-    }).catch(() => {});
-  }, []);
-
-  const saveWorkerLabels = () => {
-    const labels: Record<string, string> = {};
-    workerLabels.split(',').forEach((pair) => {
-      const [k, v] = pair.trim().split('=');
-      if (k && v) labels[k.trim()] = v.trim();
-    });
-    api('/api/v2/workers', { method: 'POST', body: JSON.stringify({ id: 'standalone-worker', host: 'localhost', port: 0, slots: 4, labels }) })
-      .then(() => alert(t('settings.workerLabelsSaved')))
-      .catch((e) => alert(e.message));
+  const switchLang = (l: Lang) => {
+    setLangState(l);
+    setLang(l);
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-          <h2 className="text-base font-semibold text-slate-900">{t('nav.settings')}</h2>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
-        </div>
-        {/* Tabs */}
-        <div className="flex gap-1 border-b border-slate-200 px-6">
-          {([
-            { id: 'general', label: t('settings.tabGeneral') },
-            { id: 'llm', label: t('settings.tabLLM') },
-            { id: 'worker', label: t('settings.tabWorker') },
-          ] as const).map((tb) => (
-            <button key={tb.id} className={`border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${tab === tb.id ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`} onClick={() => setTab(tb.id)}>
-              {tb.label}
-            </button>
-          ))}
-        </div>
-        {/* Content */}
-        <div className="max-h-[60vh] overflow-y-auto px-6 py-5">
-          {tab === 'general' && (
-            <div className="space-y-5">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-slate-700">{t('settings.language')}</label>
-                <div className="flex gap-2">
-                  <button className={`btn btn-sm flex-1 ${lang === 'en' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => switchLang('en')}>English</button>
-                  <button className={`btn btn-sm flex-1 ${lang === 'zh' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => switchLang('zh')}>中文</button>
-                </div>
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-slate-700">{t('settings.apiToken')}</label>
-                <input className="input w-full" value={token} onChange={(e) => setToken(e.target.value)} placeholder={t('settings.tokenPlaceholder')} />
-                <button className="btn btn-secondary btn-sm mt-2" onClick={onSaveToken}>{t('settings.saveToken')}</button>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="text-xs font-medium text-slate-600">💡 {t('settings.runtimeHint')}</div>
-              </div>
-            </div>
-          )}
-          {tab === 'llm' && (
-            <div className="space-y-4">
-              <p className="text-sm text-slate-500">{t('settings.llmDesc')}</p>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">{t('settings.llmBaseUrl')}</label>
-                <input className="input w-full" value={llmConfig.base_url} onChange={(e) => setLLMConfig({ ...llmConfig, base_url: e.target.value })} placeholder="https://api.openai.com/v1" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">{t('settings.llmModel')}</label>
-                <input className="input w-full" value={llmConfig.model} onChange={(e) => setLLMConfig({ ...llmConfig, model: e.target.value })} placeholder="gpt-4o" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">{t('settings.llmApiKey')}</label>
-                <input className="input w-full" type="password" value={llmConfig.api_key} onChange={(e) => setLLMConfig({ ...llmConfig, api_key: e.target.value })} placeholder="sk-..." />
-              </div>
-              <div className="rounded-lg bg-indigo-50 px-4 py-3 text-xs text-indigo-600">
-                💡 {t('settings.llmHint')}
-              </div>
-              <button className="btn btn-primary" onClick={onSaveLLM}>{t('settings.llmSave')}</button>
-            </div>
-          )}
-          {tab === 'worker' && (
-            <div className="space-y-4">
-              <p className="text-sm text-slate-500">{t('settings.workerDesc')}</p>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">{t('settings.workerLabels')}</label>
-                <input className="input w-full" value={workerLabels} onChange={(e) => setWorkerLabels(e.target.value)} placeholder="zone=us-east, gpu=true, highmem=true" />
-                <p className="mt-1 text-xs text-slate-400">{t('settings.workerLabelsHint')}</p>
-              </div>
-              <button className="btn btn-primary" onClick={saveWorkerLabels}>{t('settings.workerLabelsSave')}</button>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Dashboard
-// ════════════════════════════════════════════════
-function DashboardPage({ t, totals, pipelines, selected, selectedMetric, onSelect }: { t: TFunc; lang: Lang; totals: any; pipelines: any; metrics: any; selected: any; selectedMetric: any; onSelect: (n: string) => void }) {
-  const pList = normalizePipelines(pipelines.data);
-  const runningCount = pList.filter((p: Pipeline) => p.status === 'running').length;
-  const failedCount = pList.filter((p: Pipeline) => p.status === 'failed').length;
-  const health = pList.length > 0 ? Math.round((runningCount / pList.length) * 100) : 100;
-  const cards = [
-    { label: t('dash.running'), value: totals.running, sub: `${pList.length} ${t('dash.totalPipelines')} · ${health}% healthy`, color: 'text-emerald-600', dot: 'bg-emerald-500', icon: '🟢' },
-    { label: t('dash.recordsRead'), value: totals.read, sub: t('dash.allTime'), color: 'text-blue-600', dot: 'bg-blue-500', icon: '📖' },
-    { label: t('dash.recordsWritten'), value: totals.written, sub: t('dash.allTime'), color: 'text-indigo-600', dot: 'bg-indigo-500', icon: '✅' },
-    { label: t('dash.failed'), value: totals.failed, sub: totals.failed > 0 ? `${failedCount} pipeline(s) failed` : t('dash.healthy'), color: totals.failed > 0 ? 'text-rose-600' : 'text-slate-600', dot: totals.failed > 0 ? 'bg-rose-500' : 'bg-slate-300', icon: totals.failed > 0 ? '🚨' : '✅' },
-    { label: t('dash.dlq'), value: totals.dlq, sub: totals.dlq > 0 ? t('dash.needsAttention') : t('dash.empty'), color: totals.dlq > 0 ? 'text-amber-600' : 'text-slate-600', dot: totals.dlq > 0 ? 'bg-amber-500' : 'bg-slate-300', icon: totals.dlq > 0 ? '📦' : '✓' },
-  ];
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
-        {cards.map((c) => (
-          <div key={c.label} className="card card-body hover:shadow-md transition-shadow">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{c.label}</span>
-              <span className="text-lg">{c.icon}</span>
-            </div>
-            <div className={`mt-2 text-3xl font-bold ${c.color}`}>{c.value.toLocaleString()}</div>
-            <div className="mt-1 text-xs text-slate-400">{c.sub}</div>
-          </div>
-        ))}
-      </div>
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="card lg:col-span-2">
-          <div className="card-header"><h2 className="text-sm font-semibold">{t('dash.pipelineOverview')}</h2></div>
-          <div className="card-body space-y-2">
-            {pList.map((p: Pipeline) => (
-              <div key={pipelineKey(p)} className={`pipeline-row ${pipelineKey(selected) === pipelineKey(p) ? 'selected' : ''}`} onClick={() => onSelect(pipelineKey(p))}>
-                <span className={`status-dot status-${p.status}`} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 truncate">
-                    <span className="text-sm font-medium">{p.name}</span>
-                    <span className={`badge text-[10px] px-1.5 ${
-                      p.status === 'running' ? 'badge-emerald' : p.status === 'failed' ? 'badge-rose' : p.status === 'completed' ? 'badge-blue' : 'badge-slate'
-                    }`}>{p.status === 'running' ? t('status.running') : p.status === 'failed' ? t('status.failed') : p.status === 'completed' ? t('ui.done') : p.status}</span>
-                  </div>
-                  <PipelineUptime label={t('dash.uptime')} startedAt={p.stats.started_at} fallback={p.stats.uptime || t('common.na')} />
-                </div>
-                <div className="hidden items-center gap-2 sm:flex">
-                  <span className="badge badge-blue">{p.stats.records_written} {t('pipe.written')}</span>
-                  {p.stats.records_failed > 0 && <span className="badge badge-rose">{p.stats.records_failed} {t('dash.failed')}</span>}
-                  {p.stats.records_dlq > 0 && <span className="badge badge-amber">{p.stats.records_dlq} {t('dash.dlq')}</span>}
-                </div>
-              </div>
-            ))}
-            {!pList.length && <Empty text={t('dash.noPipelines')} />}
-          </div>
-        </div>
-        <div className="card">
-          <div className="card-header"><h2 className="text-sm font-semibold">{t('dash.keyMetrics')} {selected?.name ? `· ${selected.name}` : ''}</h2></div>
-          <div className="card-body space-y-4">
-            {selectedMetric ? (
-              <>
-                <Progress label={t('metric.writeSuccess')} value={ratio(selectedMetric.records_written, selectedMetric.records_written + selectedMetric.records_failed)} />
-                <div className="grid grid-cols-2 gap-3">
-                  <Mini label={t('metric.readLatency')} value={`${selectedMetric.source_read_latency_ms.toFixed(1)}ms`} />
-                  <Mini label={t('metric.writeLatency')} value={`${selectedMetric.sink_write_latency_ms.toFixed(1)}ms`} />
-                  <Mini label={t('metric.avgBatch')} value={String(selectedMetric.avg_batch_size)} />
-                  <Mini label={t('metric.cpAge')} value={`${selectedMetric.checkpoint_age_seconds}s`} />
-                  {selectedMetric.cdc_lag_ms > 0 && <Mini label={t('metric.cdcLag')} value={`${selectedMetric.cdc_lag_ms}ms`} />}
-                  <Mini label={t('metric.dlqFiles')} value={String(selectedMetric.dlq_file_count)} />
-                </div>
-              </>
-            ) : <Empty text={t('dash.selectPipeline')} />}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Reusable Modal
-// ════════════════════════════════════════════════
-function Modal({ title, onClose, children, width = 'max-w-3xl' }: { title: string; onClose: () => void; children: React.ReactNode; width?: string }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div className={`w-full ${width} rounded-2xl bg-white shadow-2xl flex flex-col max-h-[85vh]`} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 shrink-0">
-          <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
-        </div>
-        <div className="overflow-y-auto px-6 py-5 flex-1">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Pipeline Log Modal (independent modal, co-located with start/stop)
-// ════════════════════════════════════════════════
-function PipelineLogModal({ t, name, refId, onClose }: { t: (k: string) => string; name: string; refId: string; onClose: () => void }) {
-  return (
-    <Modal title={`${t('pipe.logs')} · ${name}`} onClose={onClose} width="max-w-4xl">
-      <div style={{ height: '60vh' }}>
-        <PipelineLogDrawer t={t} name={refId} />
-      </div>
-    </Modal>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Pipeline Runtime Preview Modal (node-level data)
-// ════════════════════════════════════════════════
-function PipelinePreviewModal({ t, name, refId, onClose }: { t: (k: string) => string; name: string; refId: string; onClose: () => void }) {
-  const { data, error, loading } = useApi<PreviewResponse>(`/api/v2/pipelines/${refId}/preview`, 0);
-
-  const renderStage = (title: string, entries?: PipelineLogEntry[]) => (
-    <div className="card">
-      <div className="card-header py-2"><h3 className="text-xs font-semibold">{title}</h3></div>
-      <div className="card-body p-0 max-h-48 overflow-y-auto bg-slate-900 font-mono text-xs">
-        {entries && entries.length > 0 ? entries.map((e, i) => (
-          <div key={i} className="flex gap-2 px-3 py-1 hover:bg-white/5 border-b border-slate-800">
-            <span className="text-slate-500 shrink-0">{e.timestamp.slice(11, 23)}</span>
-            <span className={`shrink-0 w-10 ${e.level === 'ERROR' ? 'text-rose-400' : e.level === 'WARN' ? 'text-amber-300' : 'text-emerald-400'}`}>{e.level}</span>
-            <span className="text-slate-300 truncate">{e.message}</span>
-          </div>
-        )) : <div className="text-slate-600 text-center py-6">—</div>}
-      </div>
-    </div>
-  );
-
-  return (
-    <Modal title={`${t('pipe.previewTitle')} · ${name}`} onClose={onClose} width="max-w-4xl">
-      {loading ? <Empty text={t('common.loading')} /> :
-       error ? <ErrorBox message={error} /> :
-       !data || (data.total_logs === 0 && (data.shard_logs?.length ?? 0) === 0) ? <Empty text={t('pipe.noPreview')} /> :
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {renderStage(t('pipe.previewSource'), data.stages?.source)}
-            {renderStage(t('pipe.previewTransform'), data.stages?.transform)}
-            {renderStage(t('pipe.previewSink'), data.stages?.sink)}
-          </div>
-          <div className="text-xs text-slate-400">{t('pipe.previewShardLogs')} ({data.shard_logs?.length || 0})</div>
-          {data.shard_logs?.map((s, i) => (
-            <div key={i} className="card">
-              <div className="card-header py-2"><h3 className="text-xs font-semibold">#{s.shard}</h3></div>
-              <div className="card-body p-0 max-h-32 overflow-y-auto bg-slate-900 font-mono text-xs">
-                {s.entries?.map((e, j) => (
-                  <div key={j} className="flex gap-2 px-3 py-1 border-b border-slate-800">
-                    <span className="text-slate-500">{e.timestamp.slice(11, 23)}</span>
-                    <span className="text-slate-300">{e.message}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      }
-    </Modal>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Pipeline DAG + Logs Combined Modal (replaces Preview + DAG)
-// ════════════════════════════════════════════════
-function PipelineDAGModal({ t, name, refId, onClose }: { t: (k: string) => string; name: string; refId: string; onClose: () => void }) {
-  const { data, error, loading } = useApi<DAGResponse>(`/api/v2/pipelines/${refId}/dag`, 0);
-  const [selectedNode, setSelectedNode] = useState<DAGNode | null>(null);
-  const [tab, setTab] = useState<'dag' | 'logs'>('dag');
-
-  const kindColor: Record<string, string> = {
-    source:       'bg-sky-100 text-sky-700 border-sky-300',
-    transform:    'bg-violet-100 text-violet-700 border-violet-300',
-    sink:         'bg-emerald-100 text-emerald-700 border-emerald-300',
-    fanout:       'bg-amber-100 text-amber-700 border-amber-300',
-    router:       'bg-rose-100 text-rose-700 border-rose-300',
-    tap:          'bg-cyan-100 text-cyan-700 border-cyan-300',
-    rate_limiter: 'bg-lime-100 text-lime-700 border-lime-300',
-    enricher:     'bg-pink-100 text-pink-700 border-pink-300',
-    lookup:       'bg-purple-100 text-purple-700 border-purple-300',
-  };
-
-  return (
-    <Modal title={`${t('pipe.dagTitle')} · ${name}`} onClose={onClose} width="max-w-5xl">
-      {/* Tabs */}
-      <div className="mb-4 flex gap-1 border-b border-slate-200">
-        <button className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${tab === 'dag' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`} onClick={() => setTab('dag')}>
-          🔀 {t('pipe.dag')}
-        </button>
-        <button className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${tab === 'logs' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`} onClick={() => setTab('logs')}>
-          📋 {t('pipe.logs')}
-        </button>
-      </div>
-
-      {tab === 'dag' ? (
-        loading ? <Empty text={t('common.loading')} /> :
-        error ? <ErrorBox message={error} /> : !data ? <Empty text={t('ui.noData')} /> : (
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
-            {/* DAG visualization */}
-            <div className="space-y-3">
-              <div className="flex gap-4 text-xs">
-                <span>📊 {data.dag.nodes?.length || 0} {t('pipe.dagNodes')}</span>
-                <span>🔗 {data.dag.edges?.length || 0} {t('pipe.dagEdges')}</span>
-                {data.schedule && <span>⏰ {data.schedule.type}{data.schedule.cron ? `: ${data.schedule.cron}` : ''}</span>}
-              </div>
-              {/* Nodes */}
-              <div className="flex flex-wrap gap-2">
-                {(data.dag.nodes || []).map((n) => (
-                  <div key={n.id}
-                    className={`cursor-pointer rounded-lg border-2 px-3 py-2 text-xs font-medium transition-all hover:shadow-md ${kindColor[n.kind] || 'bg-slate-100 border-slate-300'} ${selectedNode?.id === n.id ? 'ring-2 ring-indigo-400' : ''}`}
-                    onClick={() => setSelectedNode(n)}>
-                    <div className="font-bold">{n.id}</div>
-                    <div className="opacity-70">{n.kind} · {n.plugin}</div>
-                  </div>
-                ))}
-              </div>
-              {/* Edges */}
-              {(data.dag.edges || []).length > 0 && (
-                <div className="card">
-                  <div className="card-header py-2"><h3 className="text-xs font-semibold">{t('pipe.dagEdges')}</h3></div>
-                  <div className="card-body space-y-1">
-                    {(data.dag.edges || []).map((e, i) => (
-                      <div key={i} className="text-xs text-slate-600">
-                        <span className="font-mono">{e.from}</span>
-                        <span className="mx-2 text-slate-400">→</span>
-                        <span className="font-mono">{e.to}</span>
-                        {e.condition && <span className="ml-2 badge badge-amber text-[10px]">{e.condition.field} {e.condition.operator} {String(e.condition.value)}</span>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            {/* Node config inspector */}
-            <div className="card">
-              <div className="card-header py-2"><h3 className="text-xs font-semibold">{t('pipe.dagConfig')}</h3></div>
-              <div className="card-body">
-                {selectedNode ? (
-                  <div className="space-y-2">
-                    <div className="text-sm font-bold text-slate-900">{selectedNode.id}</div>
-                    <div className="text-xs text-slate-500">{selectedNode.kind} · {selectedNode.plugin}</div>
-                    <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-300 max-h-64">
-{JSON.stringify(selectedNode.config || {}, null, 2)}
-                    </pre>
-                  </div>
-                ) : <Empty text={t('pipe.dagNoConfig')} />}
-              </div>
-            </div>
-          </div>
-        )
-      ) : (
-        /* Logs tab — embedded real-time log viewer */
-        <div style={{ height: '55vh' }}>
-          <PipelineLogDrawer t={t} name={refId} />
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Pipeline Version Management Modal
-// ════════════════════════════════════════════════
-function PipelineVersionsModal({ t, name, refId, onClose, onAction }: { t: (k: string) => string; name: string; refId: string; onClose: () => void; onAction: (label: string, fn: () => Promise<unknown>) => void }) {
-  const { data, error, loading } = useApi<{ versions: PipelineVersion[] }>(`/api/v2/pipelines/${refId}/versions`, 0);
-  const [diffData, setDiffData] = useState<{ version: number; current: string; historical: string } | null>(null);
-
-  const doRollback = async (version: number) => {
-    if (!confirm(t('pipe.confirmRollback').replace('{version}', String(version)))) return;
-    onAction(t('pipe.rolledBack').replace('{version}', String(version)), () =>
-      api(`/api/v2/pipelines/${refId}/versions/${version}/rollback`, { method: 'POST' })
-    );
-    onClose();
-  };
-
-  const doDiff = async (version: number) => {
-    try {
-      const d = await api<{ version: { version: number; spec_yaml: string }; current: string; historical: string }>(
-        `/api/v2/pipelines/${refId}/versions/${version}/diff`
-      );
-      setDiffData({ version: d.version.version, current: d.current, historical: d.version.spec_yaml });
-    } catch { /* ignore */ }
-  };
-
-  return (
-    <Modal title={`${t('pipe.versionsTitle')} · ${name}`} onClose={onClose} width="max-w-4xl">
-      {loading ? <Empty text={t('common.loading')} /> :
-       error ? <ErrorBox message={error} /> :
-       !data?.versions?.length ? <Empty text={t('pipe.noVersions')} /> :
-        <div className="space-y-3">
-          {diffData && (
-            <div className="card border-indigo-200">
-              <div className="card-header py-2 flex items-center justify-between">
-                <h3 className="text-xs font-semibold">{t('pipe.versionDiff')} · v{diffData.version}</h3>
-                <button className="btn btn-ghost btn-sm" onClick={() => setDiffData(null)}>✕</button>
-              </div>
-              <div className="card-body grid grid-cols-2 gap-3">
-                <div>
-                  <div className="text-xs font-semibold text-slate-500 mb-1">{t('pipe.diffHistorical')} (v{diffData.version})</div>
-                  <pre className="overflow-x-auto rounded-lg bg-rose-50 p-2 text-xs max-h-64 overflow-y-auto">{diffData.historical || '(empty)'}</pre>
-                </div>
-                <div>
-                  <div className="text-xs font-semibold text-slate-500 mb-1">{t('pipe.diffCurrent')}</div>
-                  <pre className="overflow-x-auto rounded-lg bg-emerald-50 p-2 text-xs max-h-64 overflow-y-auto">{diffData.current || '(empty)'}</pre>
-                </div>
-              </div>
-            </div>
-          )}
-          {(data.versions || []).map((v) => (
-            <div key={v.version} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5">
-              <div>
-                <div className="text-sm font-semibold">v{v.version}</div>
-                <div className="text-xs text-slate-400">{fmtTime(v.created_at)}</div>
-              </div>
-              <div className="flex gap-2">
-                <button className="btn btn-secondary btn-sm" onClick={() => doDiff(v.version)}>{t('pipe.versionDiff')}</button>
-                <button className="btn btn-danger btn-sm" onClick={() => doRollback(v.version)}>{t('pipe.rollback')}</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      }
-    </Modal>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Spec Import Modal
-// ════════════════════════════════════════════════
-function SpecImportModal({ t, onClose, onImported }: { t: (k: string) => string; onClose: () => void; onImported: (name: string) => void }) {
-  const [yamlText, setYamlText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const doImport = async () => {
-    setBusy(true); setErr('');
-    try {
-      const res = await fetch('/api/v2/specs/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain', ...(getToken() ? { 'X-API-Token': getToken() } : {}) },
-        body: yamlText,
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      onImported(data.name || '');
-      onClose();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setYamlText(String(reader.result || ''));
-    reader.readAsText(file);
-  };
-
-  return (
-    <Modal title={t('pipe.importTitle')} onClose={onClose} width="max-w-2xl">
-      <div className="space-y-4">
-        <div>
-          <input ref={fileRef} type="file" accept=".yaml,.yml" className="hidden" onChange={onFileChange} />
-          <button className="btn btn-secondary btn-sm" onClick={() => fileRef.current?.click()}>📁 {t('pipe.importSelectFile')}</button>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-500">{t('pipe.importOrPaste')}</label>
-          <textarea className="input w-full font-mono text-xs" rows={14} value={yamlText}
-            onChange={(e) => setYamlText(e.target.value)}
-            placeholder={'name: my-pipeline\nsource:\n  type: file\n  config:\n    path: ./input.csv\nsink:\n  type: file\n  config:\n    path: ./output.csv'} />
-        </div>
-        {err && <ErrorBox message={err} />}
-        <button className="btn btn-primary" onClick={doImport} disabled={busy || !yamlText.trim()}>
-          {busy ? '...' : t('pipe.importBtn')}
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-// ════════════════════════════════════════════════
-// First Task Wizard
-// ════════════════════════════════════════════════
-type WizardTemplate = {
-  id: string;
-  title: string;
-  descKey?: string;
-  recommended?: boolean;
-  sourceTypes: string[];
-  sinkTypes: string[];
-  transforms: { type: string; config: Record<string, unknown> }[];
-  sample: Record<string, unknown>;
-  tableMapping?: { template?: string; rules?: Record<string, string> };
-  hideSinkTable?: boolean;
-};
-
-type ValidateResult = {
-  valid?: boolean;
-  warnings?: string[];
-  preflight?: {
-    passed?: boolean;
-    summary?: string;
-    issues?: { level: string; check: string; message: string; remediation?: string }[];
-    field_issues?: { level: string; field: string; check: string; message: string; remediation?: string }[];
-    ddl_preview?: { dialect: string; table: string; statements?: string[]; warnings?: string[] };
-    guidance?: { level: string; category: string; code: string; message: string; action?: string }[];
-    readiness?: {
-      kind: string;
-      type: string;
-      maturity: string;
-      status: string;
-      summary?: string;
-      gates?: { code: string; label: string; status: string; evidence?: string; remediation?: string }[];
-    }[];
-    recommendations?: { path: string; value: unknown; reason: string; safety?: string }[];
-  };
-  errors?: string[];
-};
-
-const WIZARD_TEMPLATES: WizardTemplate[] = [
-  {
-    id: 'multi-table-sync',
-    title: 'multi-table-sync',
-    descKey: 'wizard.multiTableSyncDesc',
-    recommended: true,
-    sourceTypes: ['mysql_snapshot_cdc', 'mysql_cdc'],
-    sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'],
-    transforms: [{ type: 'identity', config: {} }],
-    sample: { operation: 'INSERT', data: { id: 1, name: 'Alice', updated_at: '2026-06-27T10:00:00Z' }, metadata: { source: 'wizard', table: 'customers' } },
-    tableMapping: { template: 'ods_{source_table}' },
-    hideSinkTable: true,
-  },
-  {
-    id: 'cdc-wide-table',
-    title: 'cdc-wide-table',
-    descKey: 'wizard.cdcWideTableDesc',
-    recommended: true,
-    sourceTypes: ['mysql_cdc'],
-    sinkTypes: ['clickhouse', 'mysql', 'postgresql'],
-    transforms: [
-      { type: 'cdc_policy', config: { include_tables: ['orders'], skip_tombstone: true } },
-      { type: 'lookup', config: { join_key: 'customer_id', dim_key: 'id', fields: ['name', 'tier', 'region'], on_miss: 'null', on_refresh_error: 'pass', refresh_interval_sec: 60 } },
-      { type: 'rename', config: { mappings: { name: 'user_name', tier: 'user_tier', region: 'user_region' } } },
-      { type: 'add_field', config: { field: '_version', value: '1' } },
-    ],
-    sample: { operation: 'INSERT', data: { id: 1001, customer_id: 42, amount: 19.5 }, metadata: { source: 'wizard', table: 'orders' } },
-    tableMapping: { rules: { orders: 'order_detail_wide' } },
-  },
-  { id: 'database-sync', title: 'database-sync', descKey: 'wizard.databaseSync', sourceTypes: ['mysql_batch', 'mysql_cdc', 'mysql_snapshot_cdc'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'Alice', updated_at: '2026-06-27T10:00:00Z' }, metadata: { source: 'wizard', table: 'customers' } } },
-  { id: 'kafka-detail', title: 'kafka-detail', descKey: 'wizard.kafkaDetail', sourceTypes: ['kafka'], sinkTypes: ['clickhouse', 'mysql', 'postgresql'], transforms: [{ type: 'project', config: { fields: ['id', 'user_id', 'amount', 'dt'] } }, { type: 'deduplicate', config: { key_fields: ['id'] } }], sample: { operation: 'INSERT', data: { id: 1001, user_id: 42, amount: 19.5, dt: '20260627' }, metadata: { source: 'kafka', table: 'orders' } } },
-  { id: 'debezium-cdc', title: 'debezium-cdc', descKey: 'wizard.debeziumCdc', sourceTypes: ['kafka'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'debezium_cdc', config: { skip_snapshot: true } }, { type: 'cdc_policy', config: { skip_delete: false, dangerous_ddl: 'reject' } }], sample: { operation: 'INSERT', data: { payload: { op: 'c', source: { db: 'app', table: 'orders' }, after: { id: 1, amount: 29.9 } } }, metadata: { source: 'debezium', table: 'orders' } } },
-  { id: 'kafka-parser', title: 'kafka-parser', descKey: 'wizard.kafkaParser', sourceTypes: ['kafka'], sinkTypes: ['kafka', 'clickhouse', 'file_sink'], transforms: [{ type: 'flat_map', config: { script: 'return { { data = { id = record.data.id, value = record.data.value } } }' } }, { type: 'project', config: { fields: ['id', 'value'] } }], sample: { operation: 'INSERT', data: { id: 'raw-1', value: 7, payload: '010203' }, metadata: { source: 'kafka', table: 'raw' } } },
-  { id: 'file-http-landing', title: 'file-http-landing', descKey: 'wizard.fileHttp', sourceTypes: ['file', 'http'], sinkTypes: ['file_sink', 's3', 'maxcompute'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'UI Wizard', dt: '20260627' }, metadata: { source: 'wizard', table: 'landing' } } },
-];
-
-function defaultSourceConfig(type: string): Record<string, unknown> {
-  switch (type) {
-    case 'mysql_batch':
-    case 'mysql_cdc':
-    case 'mysql_snapshot_cdc':
-      return { host: 'host.docker.internal', port: 13306, user: 'sync_user', password: 'sync_password_123', database: 'dzh3136_go', table: 'customers', tables: ['customers'], pk_column: 'id', server_id: 12001 };
-    case 'kafka':
-      return { brokers: ['host.docker.internal:19092'], topic: 'orders', group_id: 'openetl-ui-wizard', format: 'json' };
-    case 'http':
-      return { url: 'http://host.docker.internal:18080/customers', method: 'GET', format: 'json' };
-    case 'file':
-    default:
-      return { path: '/app/testdata/files/customers.jsonl', format: 'json' };
-  }
-}
-
-function defaultSinkConfig(type: string): Record<string, unknown> {
-  switch (type) {
-    case 'mysql':
-    case 'postgresql':
-      return { host: 'host.docker.internal', port: type === 'mysql' ? 13306 : 15432, user: 'sync_user', password: 'sync_password_123', database: 'dzh3136_go', table: 'wizard_output', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
-    case 'clickhouse':
-      return { host: 'host.docker.internal', port: 9000, database: 'default', table: 'wizard_output', username: 'default', password: 'dzh123456', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
-    case 'doris':
-      return { host: 'host.docker.internal', port: 9030, http_port: 8030, user: 'root', database: 'dzh3136_go', table: 'wizard_output', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
-    case 'kafka':
-      return { brokers: ['host.docker.internal:19092'], topic: 'ods.orders', format: 'json' };
-    case 's3':
-      return { endpoint: 'http://host.docker.internal:9001', bucket: 'openetl', prefix: 'wizard/', access_key: 'minioadmin', secret_key: 'minioadmin', format: 'jsonl' };
-    case 'maxcompute':
-      return { endpoint: 'http://127.0.0.1:1/api', project: 'demo_project', table: 'wizard_output', access_key_id: 'replace-me', access_key_secret: 'replace-me', columns: { id: 'BIGINT', name: 'STRING', dt: 'STRING' }, partition_fields: ['dt'] };
-    case 'file_sink':
-    default:
-      return { output_dir: '/app/data/output/ui-wizard', format: 'jsonl', prefix: 'wizard_' };
-  }
-}
-
-function parseJSONText(text: string, fallback: unknown) {
-  try { return JSON.parse(text); } catch { return fallback; }
-}
-
-function sourceSupportsSampleSchemaHint(type: string): boolean {
-  return ['file', 'http', 'kafka'].includes(type);
-}
-
-function parseJSONObject(text: string): Record<string, unknown> {
-  const parsed = parseJSONText(text, {});
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-}
-
-function parseTransformList(text: string): { type: string; config: Record<string, unknown> }[] {
-  const parsed = parseJSONText(text, []);
-  if (!Array.isArray(parsed)) return [];
-  return parsed
-    .filter((item) => item && typeof item === 'object' && typeof (item as any).type === 'string')
-    .map((item) => ({ type: (item as any).type, config: parseJSONObject(prettyJSON((item as any).config || {})) }));
-}
-
-function prettyJSON(value: unknown) {
-  return JSON.stringify(value, null, 2);
-}
-
-function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc; plugins: any; schema: any; onClose: () => void; onCreated: (name: string) => void }) {
-  const [templateId, setTemplateId] = useState('multi-table-sync');
-  const template = WIZARD_TEMPLATES.find((tpl) => tpl.id === templateId) || WIZARD_TEMPLATES[0];
-  const [name, setName] = useState('ui-wizard-multi-table');
-  const [sourceType, setSourceType] = useState(template.sourceTypes[0]);
-  const [sinkType, setSinkType] = useState(template.sinkTypes[0]);
-  const [sourceConfigText, setSourceConfigText] = useState(prettyJSON(defaultSourceConfig(sourceType)));
-  const [sinkConfigText, setSinkConfigText] = useState(prettyJSON(defaultSinkConfig(sinkType)));
-  const [transformsText, setTransformsText] = useState(prettyJSON(template.transforms));
-  const [sampleText, setSampleText] = useState(prettyJSON(template.sample));
-  const [yamlText, setYamlText] = useState('');
-  const [sourceJsonOpen, setSourceJsonOpen] = useState(false);
-  const [sinkJsonOpen, setSinkJsonOpen] = useState(false);
-  const [transformJsonOpen, setTransformJsonOpen] = useState(false);
-  const [tableMappingOpen, setTableMappingOpen] = useState(false);
-  const [tableMappingText, setTableMappingText] = useState(template.tableMapping ? prettyJSON(template.tableMapping) : '');
-  const [result, setResult] = useState<ValidateResult | null>(null);
-  const [dryRunResult, setDryRunResult] = useState<unknown>(null);
-  const [stageDryRunResult, setStageDryRunResult] = useState<{ index: number; result?: unknown; error?: string } | null>(null);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState('');
-  const [connections, setConnections] = useState<ConnectionEntry[]>([]);
-  const [sourceConnection, setSourceConnection] = useState('');
-  const [sinkConnection, setSinkConnection] = useState('');
-  const [sourceContext, setSourceContext] = useState<ConnectionContext | null>(null);
-  const [sinkContext, setSinkContext] = useState<ConnectionContext | null>(null);
-  const [batchSize, setBatchSize] = useState(100);
-  const [checkpointIntervalSec, setCheckpointIntervalSec] = useState(1);
-  const [dlqEnabled, setDlqEnabled] = useState(true);
-
-  const allSourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
-  const allSinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
-  const sourceFields = filterFieldsByScope(allSourceFields, sourceConnection ? 'behavior' : 'all');
-  const sinkFields = filterFieldsByScope(allSinkFields, sinkConnection ? 'behavior' : 'all');
-  const sourceConfig = parseJSONObject(sourceConfigText);
-  const sinkConfig = parseJSONObject(sinkConfigText);
-  const transformConfigs = parseTransformList(transformsText);
-  const sourceMissing = sourceConnection
-    ? missingRequiredFields(sourceFields, sourceConfig)
-    : missingRequiredFields(allSourceFields, sourceConfig);
-  const sinkMissing = sinkConnection
-    ? missingRequiredFields(sinkFields, sinkConfig)
-    : missingRequiredFields(allSinkFields, sinkConfig);
-  const metadata = plugins?.data?.metadata || {};
-  const transformTypes = Object.keys(schema?.data?.transforms || {}).sort();
-  const sourceMaturity = metadata.sources?.[sourceType]?.maturity || 'unknown';
-  const sinkMaturity = metadata.sinks?.[sinkType]?.maturity || 'unknown';
-  const sourceCapabilities = metadata.sources?.[sourceType]?.capabilities || [];
-  const sinkCapabilities = metadata.sinks?.[sinkType]?.capabilities || [];
-  const sourceConnections = connections.filter((conn) => conn.kind === 'source');
-  const sinkConnections = connections.filter((conn) => conn.kind === 'sink');
-  const recommendationValue = (field: string, fallback: number) => {
-    const rec = sourceContext?.recommendations?.find((item) => item.field === field);
-    return typeof rec?.value === 'number' ? rec.value : fallback;
-  };
-  const recommendationNumber = (recommendations: ConnectionRecommendation[] | undefined, field: string, fallback: number) => {
-    const rec = recommendations?.find((item) => item.field === field);
-    return typeof rec?.value === 'number' ? rec.value : fallback;
-  };
-  const positiveIntValue = (value: string, fallback: number) => {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-  };
-  const refreshConnections = useCallback(() => {
-    return api<{ connections?: ConnectionEntry[] }>('/api/v2/connections')
-      .then((data) => setConnections((data.connections || []).map(normalizeConnectionEntry).filter((conn): conn is ConnectionEntry => conn !== null)))
-      .catch(() => setConnections([]));
-  }, []);
-
-  const seedSourceConfig = useCallback((type: string) => {
-    const fields = filterFieldsByScope((schema?.data?.sources?.[type] || []) as PluginSchemaField[], 'all');
-    return { ...buildDefaultConfig(fields), ...defaultSourceConfig(type) };
-  }, [schema?.data]);
-
-  const seedSinkConfig = useCallback((type: string) => {
-    const fields = filterFieldsByScope((schema?.data?.sinks?.[type] || []) as PluginSchemaField[], 'all');
-    return { ...buildDefaultConfig(fields), ...defaultSinkConfig(type) };
-  }, [schema?.data]);
-
-  const seedBehaviorConfig = useCallback((kind: 'source' | 'sink', type: string) => {
-    const group = kind === 'source' ? schema?.data?.sources : schema?.data?.sinks;
-    const fields = filterFieldsByScope((group?.[type] || []) as PluginSchemaField[], 'behavior');
-    return buildDefaultConfig(fields);
-  }, [schema?.data]);
-
-  const buildSpec = useCallback(() => {
-    const sourceConfigForSpec = parseJSONText(sourceConfigText, {}) as Record<string, unknown>;
-    if (sourceSupportsSampleSchemaHint(sourceType) && !sourceConfigForSpec.schema && !sourceConfigForSpec.sample) {
-      sourceConfigForSpec.sample = parseJSONText(sampleText, template.sample);
-    }
-    const source: Record<string, unknown> = { type: sourceType, config: sourceConfigForSpec };
-    const sinkConfigForSpec = parseJSONText(sinkConfigText, {}) as Record<string, unknown>;
-    if (template.hideSinkTable) {
-      delete sinkConfigForSpec.table;
-    }
-    const sink: Record<string, unknown> = { type: sinkType, config: sinkConfigForSpec };
-    if (sourceConnection) source.connection = sourceConnection;
-    if (sinkConnection) sink.connection = sinkConnection;
-    const spec: Record<string, unknown> = {
-      name: name.trim(),
-      source,
-      transforms: parseJSONText(transformsText, []),
-      sink,
-      batch_size: batchSize,
-      checkpoint_interval_sec: checkpointIntervalSec,
-      backpressure_buffer: 100,
-      retry: { max_attempts: 3, initial_interval_ms: 100, max_interval_ms: 1000 },
-      dlq: { enable: dlqEnabled },
-      tags: ['ui-wizard', template.id],
-    };
-    const tm = parseJSONText(tableMappingText, null);
-    if (tm && typeof tm === 'object' && !Array.isArray(tm) && Object.keys(tm).length > 0) {
-      spec.table_mapping = tm;
-    }
-    return spec;
-  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, batchSize, checkpointIntervalSec, dlqEnabled, template.id, template.sample, template.hideSinkTable, tableMappingText]);
-
-  useEffect(() => {
-    refreshConnections();
-    const timer = window.setInterval(refreshConnections, 3000);
-    return () => window.clearInterval(timer);
-  }, [refreshConnections]);
-
-  useEffect(() => {
-    const nextTemplate = WIZARD_TEMPLATES.find((tpl) => tpl.id === templateId) || WIZARD_TEMPLATES[0];
-    const nextSource = nextTemplate.sourceTypes[0];
-    const nextSink = nextTemplate.sinkTypes[0];
-    setSourceType(nextSource);
-    setSinkType(nextSink);
-    setSourceConfigText(prettyJSON(seedSourceConfig(nextSource)));
-    setSinkConfigText(prettyJSON(seedSinkConfig(nextSink)));
-    setSourceConnection('');
-    setSinkConnection('');
-    setSourceContext(null);
-    setSinkContext(null);
-    setBatchSize(100);
-    setCheckpointIntervalSec(1);
-    setDlqEnabled(true);
-    setTransformsText(prettyJSON(nextTemplate.transforms));
-    setSampleText(prettyJSON(nextTemplate.sample));
-    setTableMappingText(nextTemplate.tableMapping ? prettyJSON(nextTemplate.tableMapping) : '');
-    setName(`ui-wizard-${nextTemplate.id}`);
-    setSourceJsonOpen(false);
-    setSinkJsonOpen(false);
-    setTransformJsonOpen(false);
-    setResult(null);
-    setDryRunResult(null);
-    setStageDryRunResult(null);
-  }, [templateId]);
-
-  useEffect(() => {
-    if (!sourceContext) return;
-    setBatchSize(recommendationValue('batch_size', batchSize));
-    setCheckpointIntervalSec(recommendationValue('checkpoint_interval_sec', checkpointIntervalSec));
-  }, [sourceContext]);
-
-  useEffect(() => {
-    setYamlText(YAML.stringify(buildSpec()));
-  }, [buildSpec]);
-
-  const loadConnectionContext = useCallback(async (name: string, target: 'source' | 'sink') => {
-    if (!name) {
-      if (target === 'source') setSourceContext(null);
-      if (target === 'sink') setSinkContext(null);
+  const go = useCallback((page: AppPage) => {
+    if (page === 'settings') {
+      setShowSettings(true);
+      loadLLMConfig();
+      navigate({ page: 'settings' });
       return;
     }
-    const data = await api<ConnectionContext>(`/api/v2/connections/${encodeURIComponent(name)}/context`);
-    if (target === 'source') {
-      if (data.connection?.type) setSourceType(data.connection.type);
-      setSourceConfigText(prettyJSON(seedBehaviorConfig('source', data.connection?.type || sourceType)));
-      const firstSample = data.introspection?.sample?.[0];
-      if (firstSample) setSampleText(prettyJSON(firstSample));
-      setBatchSize(recommendationNumber(data.recommendations, 'batch_size', batchSize));
-      setCheckpointIntervalSec(recommendationNumber(data.recommendations, 'checkpoint_interval_sec', checkpointIntervalSec));
-      setSourceContext(data);
-    } else {
-      if (data.connection?.type) setSinkType(data.connection.type);
-      setSinkConfigText(prettyJSON(seedBehaviorConfig('sink', data.connection?.type || sinkType)));
-      setSinkContext(data);
-    }
-  }, [batchSize, checkpointIntervalSec, seedBehaviorConfig, sourceType, sinkType]);
+    navigate({ page } as AppRoute);
+  }, [loadLLMConfig]);
 
-  const selectSourceConnection = async (connName: string) => {
-    setSourceConnection(connName);
-    setResult(null);
-    setError('');
-    try {
-      await loadConnectionContext(connName, 'source');
-    } catch (e) {
-      setSourceContext({ introspection: { ok: false, error: e instanceof Error ? e.message : String(e) } });
-    }
-  };
-
-  const selectSinkConnection = async (connName: string) => {
-    setSinkConnection(connName);
-    setResult(null);
-    setError('');
-    try {
-      await loadConnectionContext(connName, 'sink');
-    } catch (e) {
-      setSinkContext({ introspection: { ok: false, error: e instanceof Error ? e.message : String(e) } });
-    }
-  };
-
-  const validate = async (throwOnInvalid = false) => {
-    setBusy('validate'); setError(''); setResult(null);
-    try {
-      const spec = YAML.parse(yamlText);
-      const res = await fetch('/api/v2/specs/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(getToken() ? { 'X-API-Token': getToken() } : {}) },
-        body: JSON.stringify({ spec }),
-      });
-      const data = await res.json();
-      setResult(data);
-      if (!res.ok) throw new Error((data.errors || data.warnings || ['validation failed']).join('\n'));
-      if (data.valid === false) {
-        const message = (data.errors || data.warnings || ['preflight failed']).join('\n');
-        setError(message);
-        if (throwOnInvalid) throw new Error(message);
-      }
-      return data as ValidateResult;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      throw e;
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const dryRun = async () => {
-    setBusy('dry-run'); setError(''); setDryRunResult(null); setStageDryRunResult(null);
-    try {
-      const data = await api('/api/v2/transforms/dry-run', {
-        method: 'POST',
-        body: JSON.stringify({ transforms: parseJSONText(transformsText, []), record: parseJSONText(sampleText, template.sample) }),
-      });
-      setDryRunResult(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const createAndStart = async () => {
-    setBusy('create'); setError('');
-    try {
-      const checked = await validate(true);
-      if (checked.valid === false) throw new Error((checked.errors || checked.warnings || ['preflight failed']).join('\n'));
-      const spec = YAML.parse(yamlText);
-      const created = await api<{ id?: string; name: string }>('/api/v2/pipelines', { method: 'POST', body: JSON.stringify({ spec }) });
-      await api(`/api/v2/pipelines/${encodeURIComponent(created.id || created.name || spec.name)}/start`, { method: 'POST' });
-      onCreated(created.name || spec.name);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const syncFromYaml = () => {
-    try {
-      const spec = YAML.parse(yamlText);
-      setName(spec.name || name);
-      if (spec.source?.type) {
-        setSourceType(spec.source.type);
-        setSourceConfigText(prettyJSON(spec.source.config || {}));
-      }
-      if (spec.sink?.type) {
-        setSinkType(spec.sink.type);
-        setSinkConfigText(prettyJSON(spec.sink.config || {}));
-      }
-      if (typeof spec.batch_size === 'number') setBatchSize(spec.batch_size);
-      if (typeof spec.checkpoint_interval_sec === 'number') setCheckpointIntervalSec(spec.checkpoint_interval_sec);
-      if (typeof spec.dlq?.enable === 'boolean') setDlqEnabled(spec.dlq.enable);
-      setTransformsText(prettyJSON(spec.transforms || []));
-      setError('');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const setValueAtPath = (target: Record<string, unknown>, path: string, value: unknown) => {
-    const parts = path.split('.').filter(Boolean);
-    let cursor: Record<string, unknown> = target;
-    parts.forEach((part, index) => {
-      if (index === parts.length - 1) {
-        cursor[part] = value;
-        return;
-      }
-      const next = cursor[part];
-      if (!next || typeof next !== 'object' || Array.isArray(next)) cursor[part] = {};
-      cursor = cursor[part] as Record<string, unknown>;
-    });
-  };
-
-  const applyPreflightRecommendation = (rec: { path: string; value: unknown; reason: string; safety?: string }) => {
-    try {
-      const spec = (YAML.parse(yamlText) || buildSpec()) as Record<string, unknown>;
-      setValueAtPath(spec, rec.path, rec.value);
-      if (rec.path.startsWith('source.config.')) {
-        const next = parseJSONObject(sourceConfigText);
-        setValueAtPath(next, rec.path.replace('source.config.', ''), rec.value);
-        setSourceConfigText(prettyJSON(next));
-      }
-      if (rec.path.startsWith('sink.config.')) {
-        const next = parseJSONObject(sinkConfigText);
-        setValueAtPath(next, rec.path.replace('sink.config.', ''), rec.value);
-        setSinkConfigText(prettyJSON(next));
-      }
-      if (rec.path === 'transforms') {
-        setTransformsText(prettyJSON(Array.isArray(rec.value) ? rec.value : []));
-      }
-      if (rec.path === 'batch_size' && typeof rec.value === 'number') {
-        setBatchSize(rec.value);
-      }
-      if (rec.path === 'checkpoint_interval_sec' && typeof rec.value === 'number') {
-        setCheckpointIntervalSec(rec.value);
-      }
-      if (rec.path === 'dlq.enable' && typeof rec.value === 'boolean') {
-        setDlqEnabled(rec.value);
-      }
-      setYamlText(YAML.stringify(spec));
-      setResult(null);
-      setError('');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const configPathForConnectionRecommendation = (title: string, rec: ConnectionRecommendation): string | null => {
-    if (rec.value === 'review' || rec.value === '') return null;
-    const scope = title.toLowerCase() === 'sink' ? 'sink' : 'source';
-    const scopedPrefix = `${scope}.config.`;
-    if (rec.field.startsWith(scopedPrefix)) return rec.field.slice(scopedPrefix.length);
-    if (scope === 'source' && !rec.field.includes('.') && !['batch_size', 'checkpoint_interval_sec'].includes(rec.field)) {
-      return rec.field;
-    }
-    return null;
-  };
-
-  const canApplyConnectionRecommendation = (title: string, rec: ConnectionRecommendation): boolean => {
-    if (configPathForConnectionRecommendation(title, rec)) return true;
-    return title.toLowerCase() === 'source' && ['batch_size', 'checkpoint_interval_sec'].includes(rec.field) && typeof rec.value === 'number';
-  };
-
-  const applyConnectionRecommendation = (title: string, rec: ConnectionRecommendation) => {
-    const configPath = configPathForConnectionRecommendation(title, rec);
-    const scope = title.toLowerCase() === 'sink' ? 'sink' : 'source';
-    if (!configPath) {
-      if (scope === 'source' && rec.field === 'batch_size' && typeof rec.value === 'number') {
-        setBatchSize(rec.value);
-        setResult(null);
-        setError('');
-      }
-      if (scope === 'source' && rec.field === 'checkpoint_interval_sec' && typeof rec.value === 'number') {
-        setCheckpointIntervalSec(rec.value);
-        setResult(null);
-        setError('');
-      }
+  const openPipelineDetail = useCallback((key: string, tab: DetailTab | string = 'overview') => {
+    if (!key) {
+      navigate({ page: 'pipelines' });
       return;
     }
-    const next = title.toLowerCase() === 'sink' ? parseJSONObject(sinkConfigText) : parseJSONObject(sourceConfigText);
-    setValueAtPath(next, configPath, rec.value);
-    try {
-      const spec = (YAML.parse(yamlText) || buildSpec()) as Record<string, unknown>;
-      const endpoint = (spec[scope] && typeof spec[scope] === 'object' ? spec[scope] : {}) as Record<string, unknown>;
-      const endpointConfig = (endpoint.config && typeof endpoint.config === 'object' && !Array.isArray(endpoint.config) ? endpoint.config : {}) as Record<string, unknown>;
-      setValueAtPath(endpointConfig, configPath, rec.value);
-      endpoint.config = endpointConfig;
-      spec[scope] = endpoint;
-      setYamlText(YAML.stringify(spec));
-    } catch {
-      // The form state below remains authoritative if the YAML editor is temporarily invalid.
-    }
-    if (scope === 'sink') {
-      setSinkConfigText(prettyJSON(next));
-    } else {
-      setSourceConfigText(prettyJSON(next));
-    }
-    setResult(null);
-    setError('');
-  };
-
-  const renderSchemaSummary = (title: string, fields: PluginSchemaField[], maturity: string, capabilities: string[], missing: string[]) => (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold text-slate-600">{title}</div>
-        <span className="badge badge-slate">{maturity}</span>
-      </div>
-      <div className="mb-2 flex flex-wrap gap-1">
-        {capabilities.slice(0, 5).map((cap: string) => <span key={cap} className="badge badge-blue text-[10px]">{cap}</span>)}
-        {missing.map((field) => <span key={field} className="badge badge-rose text-[10px]">missing {field}</span>)}
-      </div>
-      <div className="grid gap-1">
-        {fields.slice(0, 8).map((field) => (
-          <div key={field.name} className="flex items-center gap-2 text-xs text-slate-500">
-            <span className="font-mono text-slate-700">{field.name}</span>
-            <span>{field.type}</span>
-            {field.required && <span className="text-rose-500">required</span>}
-            {field.secret && <span className="text-amber-600">secret</span>}
-          </div>
-        ))}
-        {!fields.length && <div className="text-xs text-slate-400">No schema fields returned.</div>}
-      </div>
-    </div>
-  );
-
-  const renderConfigEditor = (
-    title: string,
-    fields: PluginSchemaField[],
-    config: Record<string, unknown>,
-    configText: string,
-    setConfigText: (text: string) => void,
-    jsonOpen: boolean,
-    setJsonOpen: (open: boolean) => void,
-    testId: string,
-  ) => (
-    <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid={testId}>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold text-slate-600">{title}</div>
-        <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => setJsonOpen(!jsonOpen)}>{jsonOpen ? 'Hide JSON' : 'Advanced JSON'}</button>
-      </div>
-      {title.toLowerCase().includes('source') || title.toLowerCase().includes('sink') ? (
-        <div className="mb-2 text-[11px] text-slate-400" data-testid={`${testId}-scope-hint`}>
-          {fields.every((f) => f.scope === 'behavior')
-            ? t('field.behaviorOnlyHint')
-            : t('field.fullConfigHint')}
-        </div>
-      ) : null}
-      <ConfigForm fields={fields} config={config} onChange={(next) => setConfigText(prettyJSON(next))} t={t} />
-      {jsonOpen && (
-        <textarea className="input mt-3 min-h-36 w-full font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
-      )}
-    </div>
-  );
-
-  const renderConnectionContext = (title: string, ctx: ConnectionContext | null) => {
-    if (!ctx) {
-      return <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-400">{title}: select a saved connection to load health, schema, sample, and recommendations.</div>;
-    }
-    const intro = ctx.introspection;
-    const schemaRows = intro?.schema || intro?.tables?.find((table) => table.columns?.length)?.columns || [];
-    return (
-      <div className={`rounded-lg border p-3 ${intro?.ok === false ? 'border-rose-200 bg-rose-50' : 'border-cyan-200 bg-cyan-50'}`} data-testid={`${title.toLowerCase().replace(/\s+/g, '-')}-context`}>
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="text-xs font-semibold text-slate-700">{title} context</div>
-          <span className={`badge ${intro?.ok === false ? 'badge-rose' : 'badge-blue'}`}>{intro?.status || 'ready'}</span>
-        </div>
-        {ctx.connection && (
-          <div className="mb-2 text-xs text-slate-600">
-            {ctx.connection.name} · {ctx.connection.type}
-            {ctx.connection.last_status ? ` · last ${ctx.connection.last_status}` : ''}
-            {ctx.connection.last_error ? ` · ${ctx.connection.last_error}` : ''}
-          </div>
-        )}
-        {intro?.error && <div className="mb-2 text-xs text-rose-700">{intro.error}</div>}
-        {ctx.recommendations?.length ? (
-          <div className="mb-2 flex flex-wrap gap-1">
-            {ctx.recommendations.map((rec) => {
-              const canApply = canApplyConnectionRecommendation(title, rec);
-              return (
-                <span key={rec.field} className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-white/80 px-2 py-0.5 text-[10px] text-slate-600">
-                  <span>{rec.field}: {String(rec.value || 'review')}</span>
-                  {canApply && (
-                    <button
-                      type="button"
-                      data-testid="connection-recommendation-apply"
-                      className="font-semibold text-indigo-600 hover:text-indigo-800"
-                      onClick={() => applyConnectionRecommendation(title, rec)}
-                    >
-                      Apply
-                    </button>
-                  )}
-                </span>
-              );
-            })}
-          </div>
-        ) : null}
-        {intro?.tables?.length ? (
-          <div className="mb-2 text-xs text-slate-600">
-            Tables: {intro.tables.slice(0, 6).map((table) => table.schema ? `${table.schema}.${table.name}` : table.name).join(', ')}
-            {intro.tables.length > 6 ? ` +${intro.tables.length - 6}` : ''}
-          </div>
-        ) : null}
-        {intro?.topics?.length ? (
-          <div className="mb-2 text-xs text-slate-600">
-            Topics: {intro.topics.slice(0, 6).map((topic) => `${topic.name}${topic.partitions?.length ? `(${topic.partitions.length})` : ''}`).join(', ')}
-            {intro.topics.length > 6 ? ` +${intro.topics.length - 6}` : ''}
-          </div>
-        ) : null}
-        {intro?.targets?.length ? (
-          <div className="mb-2 text-xs text-slate-600">
-            Targets: {intro.targets.slice(0, 4).map((target) => `${target.kind}:${target.location}${target.prefix ? `/${target.prefix}` : ''}${target.writable === false ? ' (not writable)' : ''}`).join(', ')}
-            {intro.targets.length > 4 ? ` +${intro.targets.length - 4}` : ''}
-          </div>
-        ) : null}
-        {schemaRows.length ? (
-          <div className="mb-2 grid grid-cols-2 gap-1 text-xs sm:grid-cols-3">
-            {schemaRows.slice(0, 9).map((col) => <div key={col.name} className="truncate rounded bg-white/80 px-2 py-1 font-mono text-slate-600">{col.name}<span className="ml-1 text-slate-400">{col.data_type}</span></div>)}
-          </div>
-        ) : null}
-        {intro?.sample?.length ? (
-          <pre className="max-h-32 overflow-auto rounded bg-white/80 p-2 text-xs">{prettyJSON(intro.sample[0])}</pre>
-        ) : null}
-        {intro?.warnings?.map((warning, i) => <div key={i} className="mt-1 text-xs text-amber-700">{warning}</div>)}
-      </div>
-    );
-  };
-
-  const updateTransformConfig = (index: number, nextConfig: Record<string, unknown>) => {
-    const next = transformConfigs.map((item, i) => i === index ? { ...item, config: nextConfig } : item);
-    setTransformsText(prettyJSON(next));
-  };
-
-  const updateTransformType = (index: number, type: string) => {
-    const fields = (schema?.data?.transforms?.[type] || []) as PluginSchemaField[];
-    const next = transformConfigs.map((item, i) => i === index ? { type, config: buildDefaultConfig(fields) } : item);
-    setTransformsText(prettyJSON(next));
-    setStageDryRunResult(null);
-  };
-
-  const addTransform = () => {
-    const type = transformTypes.includes('project') ? 'project' : transformTypes[0] || 'identity';
-    const fields = (schema?.data?.transforms?.[type] || []) as PluginSchemaField[];
-    setTransformsText(prettyJSON([...transformConfigs, { type, config: buildDefaultConfig(fields) }]));
-    setStageDryRunResult(null);
-  };
-
-  const removeTransform = (index: number) => {
-    setTransformsText(prettyJSON(transformConfigs.filter((_, i) => i !== index)));
-    setStageDryRunResult(null);
-  };
-
-  const moveTransform = (index: number, direction: -1 | 1) => {
-    const target = index + direction;
-    if (target < 0 || target >= transformConfigs.length) return;
-    const next = [...transformConfigs];
-    [next[index], next[target]] = [next[target], next[index]];
-    setTransformsText(prettyJSON(next));
-    setStageDryRunResult(null);
-  };
-
-  const dryRunThroughStage = async (index: number) => {
-    setBusy(`stage-${index}`); setError(''); setStageDryRunResult(null);
-    try {
-      const data = await api('/api/v2/transforms/dry-run', {
-        method: 'POST',
-        body: JSON.stringify({ transforms: transformConfigs.slice(0, index + 1), record: parseJSONText(sampleText, template.sample) }),
-      });
-      if ((data as any)?.partial_error) {
-        const message = prettyJSON((data as any).errors || data);
-        setStageDryRunResult({ index, error: message });
-        setError(`Stage ${index + 1} failed: ${message}`);
-        return;
-      }
-      setStageDryRunResult({ index, result: data });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setStageDryRunResult({ index, error: message });
-      setError(`Stage ${index + 1} failed: ${message}`);
-    } finally {
-      setBusy('');
-    }
-  };
-
-  return (
-    <Modal title={t('wizard.title')} onClose={onClose} width="max-w-6xl">
-      <div className="grid gap-5 xl:grid-cols-[280px_1fr]">
-        <div className="space-y-3">
-          <div className="px-1 pb-1 text-xs font-medium text-slate-400">{t('wizard.emptyStart')}</div>
-          {WIZARD_TEMPLATES.map((tpl) => (
-            <button key={tpl.id} className={`relative w-full rounded-lg border p-3 text-left text-sm transition ${templateId === tpl.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'}`} onClick={() => setTemplateId(tpl.id)}>
-              <div className="flex items-center gap-1.5">
-                <span className="font-semibold">{tpl.title}</span>
-                {tpl.recommended && <span className="badge badge-indigo px-1.5 py-0 text-[10px]">{t('wizard.recommended')}</span>}
-              </div>
-              <div className="mt-1 text-xs text-slate-400">{tpl.descKey ? t(tpl.descKey) : `${tpl.sourceTypes.join(' / ')} → ${tpl.sinkTypes.join(' / ')}`}</div>
-            </button>
-          ))}
-        </div>
-        <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">Pipeline name</label>
-              <input data-testid="wizard-pipeline-name" className="input w-full" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">Source</label>
-              <select data-testid="wizard-source-type" className="input w-full" value={sourceType} onChange={(e) => { setSourceType(e.target.value); setSourceConnection(''); setSourceContext(null); setSourceConfigText(prettyJSON(seedSourceConfig(e.target.value))); }}>
-                {template.sourceTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
-              </select>
-              <select data-testid="wizard-source-connection" className="input mt-2 w-full text-sm" value={sourceConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSourceConnection(e.target.value)}>
-                <option value="">Inline source config</option>
-                {sourceConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type} · {conn.last_status || 'untested'}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">Sink</label>
-              <select data-testid="wizard-sink-type" className="input w-full" value={sinkType} onChange={(e) => { setSinkType(e.target.value); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig(e.target.value))); }}>
-                {template.sinkTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
-              </select>
-              <select data-testid="wizard-sink-connection" className="input mt-2 w-full text-sm" value={sinkConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSinkConnection(e.target.value)}>
-                <option value="">Inline sink config</option>
-                {sinkConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type} · {conn.last_status || 'untested'}</option>)}
-              </select>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {template.sinkTypes.includes('maxcompute') && (
-                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('maxcompute'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute'))); setResult(null); }}>
-                    Failure demo
-                  </button>
-                )}
-                {template.sinkTypes.includes('file_sink') && (
-                  <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => { setSinkType('file_sink'); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig('file_sink'))); setResult(null); }}>
-                    Repair to file_sink
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            {renderSchemaSummary(`Descriptor schema: ${sourceType}`, sourceFields, sourceMaturity, sourceCapabilities, sourceMissing)}
-            {renderSchemaSummary(`Descriptor schema: ${sinkType}`, sinkFields, sinkMaturity, sinkCapabilities, sinkMissing)}
-          </div>
-          {(template.tableMapping || tableMappingOpen) && (
-            <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3" data-testid="wizard-table-mapping">
-              <div className="mb-2 flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-semibold text-slate-700">{t('wizard.tableMapping')}</div>
-                  <div className="text-[11px] text-slate-500">{t('wizard.tableMappingHint')}</div>
-                </div>
-                <button className="btn btn-ghost btn-sm text-[11px]" onClick={() => setTableMappingOpen(!tableMappingOpen)}>{tableMappingOpen ? '−' : '+'}</button>
-              </div>
-              {tableMappingOpen ? (
-                <textarea
-                  data-testid="wizard-table-mapping-json"
-                  className="input min-h-20 w-full font-mono text-xs"
-                  value={tableMappingText}
-                  onChange={(e) => setTableMappingText(e.target.value)}
-                  placeholder={'{\n  "template": "ods_{source_table}"\n}'}
-                />
-              ) : (
-                <pre className="overflow-auto rounded bg-white/70 p-2 text-xs text-slate-600">{tableMappingText || '—'}</pre>
-              )}
-            </div>
-          )}
-          <div className="grid gap-3 lg:grid-cols-2">
-            {renderConnectionContext('Source', sourceContext)}
-            {renderConnectionContext('Sink', sinkContext)}
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid="wizard-runtime-safety">
-            <div className="mb-3 text-xs font-semibold text-slate-600">Runtime safety</div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <label className="block text-xs text-slate-500">
-                <span className="mb-1 block font-medium">Batch size</span>
-                <input
-                  data-testid="wizard-batch-size"
-                  className="input w-full"
-                  type="number"
-                  min={1}
-                  value={batchSize}
-                  onChange={(e) => setBatchSize(positiveIntValue(e.target.value, batchSize))}
-                />
-              </label>
-              <label className="block text-xs text-slate-500">
-                <span className="mb-1 block font-medium">Checkpoint sec</span>
-                <input
-                  data-testid="wizard-checkpoint-sec"
-                  className="input w-full"
-                  type="number"
-                  min={1}
-                  value={checkpointIntervalSec}
-                  onChange={(e) => setCheckpointIntervalSec(positiveIntValue(e.target.value, checkpointIntervalSec))}
-                />
-              </label>
-              <label className="flex items-center gap-2 rounded border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
-                <input data-testid="wizard-dlq-enabled" type="checkbox" checked={dlqEnabled} onChange={(e) => setDlqEnabled(e.target.checked)} />
-                DLQ enabled
-              </label>
-            </div>
-          </div>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {renderConfigEditor('Source config', sourceFields, sourceConfig, sourceConfigText, setSourceConfigText, sourceJsonOpen, setSourceJsonOpen, 'wizard-source-config-form')}
-            {renderConfigEditor('Sink config', sinkFields, sinkConfig, sinkConfigText, setSinkConfigText, sinkJsonOpen, setSinkJsonOpen, 'wizard-sink-config-form')}
-          </div>
-          <div className="grid gap-3 lg:grid-cols-2">
-            <div>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="block text-xs font-medium text-slate-500">Transform chain</label>
-                <button data-testid="wizard-add-transform" className="btn btn-secondary btn-sm text-[11px]" onClick={addTransform}>Add transform</button>
-              </div>
-              <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3" data-testid="wizard-transform-config-form">
-                {transformConfigs.length ? (
-                  <div className="space-y-4">
-                    {transformConfigs.map((item, index) => {
-                      const fields = (schema?.data?.transforms?.[item.type] || []) as PluginSchemaField[];
-                      return (
-                        <div key={`${item.type}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-3" data-testid={`wizard-transform-stage-${index}`}>
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <div className="flex min-w-0 flex-1 items-center gap-2">
-                              <span className="shrink-0 text-xs font-semibold text-slate-600">{index + 1}.</span>
-                              <select data-testid={`wizard-transform-type-${index}`} className="input h-8 min-w-0 flex-1 text-xs" value={item.type} onChange={(e) => updateTransformType(index, e.target.value)}>
-                                {transformTypes.map((type) => <option key={type} value={type}>{type}</option>)}
-                              </select>
-                              <span className="badge badge-slate text-[10px]">{metadata.transforms?.[item.type]?.maturity || 'unknown'}</span>
-                            </div>
-                            <div className="flex shrink-0 gap-1">
-                              <button data-testid={`wizard-transform-move-up-${index}`} className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, -1)} disabled={index === 0} title="Move up">↑</button>
-                              <button data-testid={`wizard-transform-move-down-${index}`} className="btn btn-ghost btn-sm px-2" onClick={() => moveTransform(index, 1)} disabled={index === transformConfigs.length - 1} title="Move down">↓</button>
-                              <button data-testid={`wizard-transform-dry-run-${index}`} className="btn btn-secondary btn-sm px-2" onClick={() => dryRunThroughStage(index)} disabled={busy === `stage-${index}`} title="Dry-run through this stage">▶</button>
-                              <button data-testid={`wizard-transform-remove-${index}`} className="btn btn-danger btn-sm px-2" onClick={() => removeTransform(index)} title="Remove">×</button>
-                            </div>
-                          </div>
-                          <ConfigForm fields={fields} config={item.config || {}} onChange={(next) => updateTransformConfig(index, next)} t={t} emptyText="No config fields for this transform." />
-                          {stageDryRunResult?.index === index && stageDryRunResult.result !== undefined && (
-                            <div data-testid={`wizard-transform-stage-result-${index}`} className="mt-2 rounded border border-emerald-100 bg-white p-2">
-                              <div className="mb-1 text-[11px] font-semibold text-emerald-700">Stage {index + 1} output</div>
-                              <pre className="max-h-36 overflow-auto text-xs text-slate-700">{prettyJSON(stageDryRunResult.result)}</pre>
-                            </div>
-                          )}
-                          {stageDryRunResult?.index === index && stageDryRunResult.error && (
-                            <div data-testid={`wizard-transform-stage-error-${index}`} className="mt-2 rounded border border-rose-100 bg-white p-2 text-xs text-rose-700">
-                              <div className="mb-1 font-semibold">Stage {index + 1} failed</div>
-                              <pre className="max-h-36 overflow-auto whitespace-pre-wrap">{stageDryRunResult.error}</pre>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="text-xs text-slate-400">No valid transforms in the chain.</div>
-                    <button data-testid="wizard-add-transform-empty" className="btn btn-secondary btn-sm" onClick={addTransform}>Add transform</button>
-                  </div>
-                )}
-              </div>
-              <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => setTransformJsonOpen(!transformJsonOpen)}>
-                {transformJsonOpen ? 'Hide chain JSON' : 'Advanced chain JSON'}
-              </button>
-              {transformJsonOpen && (
-                <textarea data-testid="wizard-transform-json" className="input mt-2 min-h-32 w-full font-mono text-xs" value={transformsText} onChange={(e) => setTransformsText(e.target.value)} />
-              )}
-            </div>
-            <div>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="block text-xs font-medium text-slate-500">Sample record</label>
-                <a className="text-xs text-indigo-600 hover:underline" href="/api/v2/docs" target="_blank" rel="noreferrer">API docs</a>
-              </div>
-              <textarea className="input min-h-32 w-full font-mono text-xs" value={sampleText} onChange={(e) => setSampleText(e.target.value)} />
-            </div>
-          </div>
-          <div>
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <label className="block text-xs font-medium text-slate-500">Generated YAML</label>
-              <button className="btn btn-secondary btn-sm" onClick={syncFromYaml}>Sync YAML to form</button>
-            </div>
-            <textarea data-testid="wizard-yaml" className="input min-h-56 w-full font-mono text-xs" value={yamlText} onChange={(e) => setYamlText(e.target.value)} />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button data-testid="wizard-dry-run" className="btn btn-secondary" disabled={busy === 'dry-run'} onClick={dryRun}>Transform dry-run</button>
-            <button data-testid="wizard-validate" className="btn btn-secondary" disabled={busy === 'validate'} onClick={() => validate().catch(() => {})}>Validate + preflight</button>
-            <button data-testid="wizard-create-start" className="btn btn-primary" disabled={busy === 'create'} onClick={createAndStart}>Create and start</button>
-          </div>
-          {error && <ErrorBox message={error} />}
-          {dryRunResult !== null && (
-            <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3">
-              <div className="mb-2 text-xs font-semibold text-cyan-700">Dry-run output</div>
-              <pre className="max-h-56 overflow-auto text-xs text-cyan-950">{prettyJSON(dryRunResult)}</pre>
-            </div>
-          )}
-          {result && (
-            <div data-testid="wizard-preflight-result" className={`rounded-lg border p-3 ${result.valid === false ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
-              <div className="mb-2 text-sm font-semibold">{result.valid === false ? 'Preflight failed' : 'Preflight passed'} · {result.preflight?.summary || 'validation complete'}</div>
-              {(result.warnings || result.errors || []).map((msg, i) => <div key={i} className="text-xs text-slate-700">{msg}</div>)}
-              {(result.preflight?.recommendations || []).map((rec, i) => (
-                <div key={`recommendation-${rec.path}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="font-semibold">{rec.safety || 'review'} · {rec.path}</div>
-                      <div>{rec.reason}</div>
-                      <div className="mt-1 font-mono text-slate-500">{prettyJSON(rec.value)}</div>
-                    </div>
-                    <button className="btn btn-secondary btn-sm shrink-0 text-[11px]" onClick={() => applyPreflightRecommendation(rec)}>Apply</button>
-                  </div>
-                </div>
-              ))}
-              {(result.preflight?.issues || []).map((issue, i) => (
-                <div key={`issue-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="font-semibold">{issue.level} · {issue.check}</div>
-                  <div>{issue.message}</div>
-                  {issue.remediation && <div className="mt-1 text-slate-500">Fix: {issue.remediation}</div>}
-                </div>
-              ))}
-              {(result.preflight?.field_issues || []).map((issue, i) => (
-                <div key={`field-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="font-semibold">{issue.field} · {issue.check}</div>
-                  <div>{issue.message}</div>
-                  {issue.remediation && <div className="mt-1 text-slate-500">Fix: {issue.remediation}</div>}
-                </div>
-              ))}
-              {(result.preflight?.guidance || []).map((item, i) => (
-                <div key={`guidance-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="font-semibold">{item.level} · {item.category} · {item.code}</div>
-                  <div>{item.message}</div>
-                  {item.action && <div className="mt-1 text-slate-500">Action: {item.action}</div>}
-                </div>
-              ))}
-              {(result.preflight?.readiness || []).map((connector, i) => (
-                <div key={`readiness-${connector.kind}-${connector.type}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="font-semibold">{connector.kind} · {connector.type} · {connector.maturity} · {connector.status}</div>
-                  {connector.summary && <div>{connector.summary}</div>}
-                  {(connector.gates || []).filter((gate) => gate.status === 'missing' || gate.status === 'partial').slice(0, 3).map((gate) => (
-                    <div key={gate.code} className="mt-1 text-slate-600">
-                      {gate.status} · {gate.label}{gate.remediation ? ` · ${gate.remediation}` : ''}
-                    </div>
-                  ))}
-                </div>
-              ))}
-              {result.preflight?.ddl_preview?.statements?.length ? (
-                <pre className="mt-2 max-h-40 overflow-auto rounded bg-white/80 p-2 text-xs">{result.preflight.ddl_preview.statements.join('\n')}</pre>
-              ) : null}
-            </div>
-          )}
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Pipeline Action Dropdown Menu
-// ════════════════════════════════════════════════
-function PipelineActionMenu({ p: _p, t, onLogs, onDAG, onEdit, onDelete, onExport }: {
-  p: Pipeline;
-  t: TFunc;
-  onLogs: () => void; onDAG: () => void; onEdit: () => void; onDelete: () => void; onExport: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    setSelectedPipeline(key);
+    const safeTab = (
+      ['overview', 'runs', 'issues', 'checkpoints', 'logs', 'topology', 'spec'].includes(tab)
+        ? tab
+        : 'overview'
+    ) as DetailTab;
+    navigate({ page: 'pipeline-detail', id: key, tab: safeTab });
   }, []);
 
-  const items = [
-    { icon: '📋', label: t('action.logs'), onClick: onLogs },
-    { icon: '🔀', label: t('action.dagAndLogs'), onClick: onDAG },
-    { icon: '✏️', label: t('action.edit'), onClick: onEdit },
-    { icon: '📤', label: t('action.exportYaml'), onClick: onExport },
-    { icon: '🗑', label: t('action.delete'), onClick: onDelete, danger: true },
-  ];
+  const openWizard = useCallback(() => {
+    navigate({ page: 'pipeline-new' });
+  }, []);
 
-  return (
-    <div className="relative" ref={ref}>
-      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
-        ⋯<span className="hidden lg:inline"> {t('ui.more')}</span>
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-          {items.map((item) => (
-            <button
-              key={item.label}
-              className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm transition-colors hover:bg-slate-50 ${item.danger ? 'text-rose-600 hover:bg-rose-50' : 'text-slate-700'}`}
-              onClick={() => { setOpen(false); item.onClick(); }}
-            >
-              <span className="w-4 text-center">{item.icon}</span>
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+  const openDLQ = useCallback((key: string) => {
+    if (key) setSelectedPipeline(key);
+    navigate({ page: 'dlq' });
+  }, []);
 
-// ════════════════════════════════════════════════
-// Pipelines
-// ════════════════════════════════════════════════
+  const navPage = routeToNavPage(route);
 
-// Constants hoisted out of the component to avoid re-creation on every render.
-const STATUS_BADGE: Record<string, string> = {
-  running: 'badge-emerald', completed: 'badge-blue', failed: 'badge-rose',
-  stopped: 'badge-slate', starting: 'badge-amber', paused: 'badge-amber',
-  error: 'badge-rose',
-};
-const STATUS_LABEL: Record<string, string> = {
-  running: 'Running', completed: 'Completed', failed: 'Failed',
-  stopped: 'Stopped', starting: 'Starting...', paused: 'Paused',
-  error: 'Error',
-};
-function statusLabel(t: TFunc, status: string): string {
-  const key = `status.${status}`;
-  const translated = t(key);
-  return translated !== key ? translated : STATUS_LABEL[status] || status;
-}
+  const navGroups: NavGroup[] = useMemo(() => {
+    return [
+      {
+        id: 'primary',
+        items: [{ id: 'dashboard', key: 'nav.dashboard', dataNav: 'dashboard' }],
+      },
+      {
+        id: 'run',
+        labelKey: 'nav.groupRun',
+        items: [
+          { id: 'pipelines', key: 'nav.pipelines', dataNav: 'pipelines' },
+          {
+            id: 'issues',
+            key: 'nav.issues',
+            dataNav: 'issues',
+            badge: issueCount,
+          },
+          { id: 'dlq', key: 'nav.dlq', dataNav: 'dlq' },
+        ],
+      },
+      {
+        id: 'resources',
+        labelKey: 'nav.groupResources',
+        items: [
+          { id: 'connections', key: 'nav.connections', dataNav: 'connections' },
+          // Built-in matrix merged into connector catalog (single capability surface).
+          { id: 'connectors', key: 'nav.connectors', dataNav: 'connectors' },
+        ],
+      },
+      {
+        id: 'system',
+        labelKey: 'nav.groupSystem',
+        items: [
+          { id: 'audit', key: 'nav.audit', dataNav: 'audit' },
+          // Schedule *editing* lives on pipeline detail dialog; this page is fleet overview.
+          {
+            id: 'schedules',
+            key: 'nav.schedules',
+            dataNav: 'schedules',
+          },
+          {
+            id: 'workers',
+            key: 'nav.workers',
+            dataNav: 'workers',
+            // Prefer progressive disclosure: hide when clearly standalone (0–1 workers)
+            hidden: !distributedHint,
+          },
+        ],
+      },
+      {
+        id: 'extensions',
+        labelKey: 'nav.groupExtensions',
+        items: [
+          // WASM / custom only — built-in matrix is under Connector catalog.
+          { id: 'myPlugins', key: 'nav.myPlugins', dataNav: 'myPlugins' },
+        ],
+      },
+    ];
+  }, [issueCount, distributedHint]);
 
-// PipelineRow is memoized so it only re-renders when its props actually change,
-// not when the parent PipelinesPage re-renders due to 5s API refresh.
-// Custom comparison: compare by value (name, status, key stats) instead of
-// object reference, so that a 5s API refresh that returns equivalent data
-// does NOT trigger a DOM re-render of unchanged rows.
-const PipelineRow = React.memo(function PipelineRow({ p, m, compact, selected, t, onSelect, onAction, onShowLogs, onShowDAG, onEdit, onExport, onDelete }: {
-  p: Pipeline; m?: MetricsPipeline; compact: boolean; selected: boolean; t: TFunc;
-  onSelect: (n: string) => void; onAction: (msg: string, fn: () => Promise<any>) => void;
-  onShowLogs: () => void; onShowDAG: () => void; onEdit: () => void; onExport: () => void; onDelete: () => void;
-}) {
-  const ref = pipelineRef(p);
-  return (
-    <div className={`pipeline-row ${compact ? 'py-2' : ''} ${selected ? 'selected' : ''}`} onClick={() => onSelect(pipelineKey(p))}>
-      <span className={`status-dot status-${p.status}`} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 truncate">
-          <span className="text-sm font-semibold">{p.name}</span>
-          <span className={`badge text-[10px] px-1.5 ${STATUS_BADGE[p.status] || 'badge-slate'}`}>{statusLabel(t, p.status)}</span>
-          {p.parallelism && p.parallelism > 1 && <span className="badge badge-purple text-[10px] px-1">×{p.parallelism}</span>}
-          {!compact && (p.tags || []).map((tag: string) => <span key={tag} className="badge badge-blue text-[10px] px-1">{tag}</span>)}
-        </div>
-        {!compact && <PipelineRowMeta t={t} startedAt={p.stats.started_at} uptimeFallback={p.stats.uptime || 'N/A'} written={p.stats.records_written} cdcLagMs={m?.cdc_lag_ms} />}
-        {compact && m && m.cdc_lag_ms > 0 && <span className="text-[10px] text-amber-600 ml-1">lag {m.cdc_lag_ms}ms</span>}
-      </div>
-      <div className="hidden items-center gap-1.5 sm:flex">
-        {p.stats.records_failed > 0 && <span className="badge badge-rose text-[10px] px-1">{p.stats.records_failed}</span>}
-        {m && m.dlq_file_count > 0 && <span className="badge badge-amber text-[10px] px-1">{m.dlq_file_count}</span>}
-        {!compact && p.stats.records_written > 0 && <span className="badge badge-emerald text-[10px] px-1">{p.stats.records_written}</span>}
-      </div>
-      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-        <button className={`btn btn-sm ${p.status === 'running' ? 'btn-ghost opacity-40' : 'btn-secondary'}`} disabled={p.status === 'running'} onClick={() => onAction(`Start ${p.name}`, () => api(`/api/v2/pipelines/${ref}/start`, { method: 'POST' }))}>
-          ▶
-        </button>
-        <button className={`btn btn-sm ${p.status !== 'running' ? 'btn-ghost opacity-40' : 'btn-secondary'}`} disabled={p.status !== 'running'} onClick={() => onAction(`Stop ${p.name}`, () => api(`/api/v2/pipelines/${ref}/stop`, { method: 'POST' }))}>
-          ⏹
-        </button>
-        <PipelineActionMenu p={p} t={t} onLogs={onShowLogs} onDAG={onShowDAG} onEdit={onEdit} onDelete={onDelete} onExport={onExport} />
-      </div>
-    </div>
-  );
-}, (prev, next) => {
-  // Custom comparison: skip re-render if the data that affects the DOM
-  // hasn't meaningfully changed, even if object references differ.
-  const p1 = prev.p, p2 = next.p;
-  if (p1.name !== p2.name ||
-      p1.id !== p2.id ||
-      p1.status !== p2.status ||
-      p1.stats.records_written !== p2.stats.records_written ||
-      p1.stats.records_failed !== p2.stats.records_failed ||
-      p1.stats.started_at !== p2.stats.started_at ||
-      p1.parallelism !== p2.parallelism ||
-      prev.selected !== next.selected ||
-      prev.compact !== next.compact ||
-      prev.t !== next.t) {
-    return false; // re-render
-  }
-  // Compare metrics that affect display
-  const m1 = prev.m, m2 = next.m;
-  if ((m1?.cdc_lag_ms || 0) !== (m2?.cdc_lag_ms || 0) ||
-      (m1?.dlq_file_count || 0) !== (m2?.dlq_file_count || 0)) {
-    return false; // re-render
-  }
-  return true; // skip re-render — data is equivalent
-});
+  const pageTitle = (() => {
+    if (route.page === 'pipeline-detail') return selected?.name || t('nav.pipelines');
+    if (route.page === 'pipeline-new') return t('nav.createPipeline');
+    if (route.page === 'dlq') return t('top.dlqWorkbench');
+    if (route.page === 'designer') return t('nav.dagEditor');
+    return t(`nav.${navPage}`);
+  })();
 
-function PipelinesPage({ t, pipelines, metrics, selected, selectedMetric, onSelect, onAction, checkpoints, onResetCheckpoint, onEdit, refreshKey, onShowToast, plugins, pluginSchema }: any) {
-  const [showLogs, setShowLogs] = useState(false);
-  const [showDAG, setShowDAG] = useState(false);
-  const [showVersions, setShowVersions] = useState(false);
-  const [showImport, setShowImport] = useState(false);
-  const [showWizard, setShowWizard] = useState(false);
-  const [tagFilter, setTagFilter] = useState('');
-  const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState('name');
-  const [compact, setCompact] = useState(false);
-
-  const allTags = useMemo(() => {
-    const s = new Set<string>();
-    normalizePipelines(pipelines.data).forEach((p: Pipeline) => (p.tags || []).forEach((tag) => s.add(tag)));
-    return Array.from(s).sort();
-  }, [pipelines.data]);
-
-  const filteredPipelines = useMemo(() => {
-    let list = normalizePipelines(pipelines.data);
-    if (tagFilter) list = list.filter((p: Pipeline) => (p.tags || []).includes(tagFilter));
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter((p: Pipeline) => p.name.toLowerCase().includes(q));
-    }
-    // Sort
-    list = [...list].sort((a: Pipeline, b: Pipeline) => {
-      const mA = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => (x.id && x.id === a.id) || x.name === a.name);
-      const mB = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => (x.id && x.id === b.id) || x.name === b.name);
-      switch (sortKey) {
-        case 'name': return a.name.localeCompare(b.name);
-        case 'status': return a.status.localeCompare(b.status);
-        case 'written': return (b.stats.records_written || 0) - (a.stats.records_written || 0);
-        case 'latency': return ((mB?.sink_write_latency_ms || 0) - (mA?.sink_write_latency_ms || 0));
-        case 'uptime': return (b.stats.uptime || '').localeCompare(a.stats.uptime || '');
-        default: return 0;
-      }
-    });
-    return list;
-  }, [pipelines.data, tagFilter, search, sortKey, metrics.data]);
-
-  useEffect(() => { setShowLogs(false); setShowDAG(false); setShowVersions(false); }, [selected?.id, selected?.name]);
-
-  const handleDelete = (p: Pipeline) => {
-    if (!confirm(t('pipe.confirmDelete').replace('{name}', p.name))) return;
-    onAction(t('pipe.deleted').replace('{name}', p.name), () =>
-      api(`/api/v2/pipelines/${pipelineRef(p)}`, { method: 'DELETE' })
-    );
-  };
-
-  const handleExport = async (p: Pipeline) => {
-    try {
-      const token = getToken();
-      const headers: Record<string, string> = {};
-      if (token) headers['X-API-Token'] = token;
-      const res = await fetch(`/api/v2/pipelines/${pipelineRef(p)}/export`, { headers });
-      if (!res.ok) throw new Error(await res.text());
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `${p.name}.yaml`; a.click();
-      URL.revokeObjectURL(url);
-      onShowToast?.('success', t('pipe.exportDownload').replace('{name}', p.name));
-    } catch (e) {
-      onShowToast?.('error', String(e));
-    }
-  };
-
-  const batchAction = (action: 'start' | 'stop', filter: (p: Pipeline) => boolean) => {
-    const targets = filteredPipelines.filter(filter);
-    if (!targets.length) return;
-    onShowToast?.('info', `${action === 'start' ? t('ui.starting') : t('ui.stopping')} ${targets.length} ${t('ui.pipelines')}...`);
-    targets.forEach((p: Pipeline) => {
-      onAction(`${action} ${p.name}`, () => api(`/api/v2/pipelines/${pipelineRef(p)}/${action}`, { method: 'POST' }));
-    });
-  };
-
-  const loading = pipelines.loading || metrics.loading;
-  const runningCount = filteredPipelines.filter((p: Pipeline) => p.status === 'running').length;
-  const stoppedCount = filteredPipelines.filter((p: Pipeline) => p.status !== 'running').length;
+  const crumb =
+    route.page === 'pipeline-detail'
+      ? `pipelines / ${selected?.name || route.id}`
+      : route.page === 'pipeline-new'
+        ? 'pipelines / new'
+        : route.page === 'designer'
+          ? 'pipelines / advanced DAG'
+          : undefined;
 
   return (
     <>
-    {showLogs && selected?.name && <PipelineLogModal t={t} name={selected.name} refId={pipelineRef(selected)} onClose={() => setShowLogs(false)} />}
-    {showDAG && selected?.name && <PipelineDAGModal t={t} name={selected.name} refId={pipelineRef(selected)} onClose={() => setShowDAG(false)} />}
-    {showVersions && selected?.name && <PipelineVersionsModal t={t} name={selected.name} refId={pipelineRef(selected)} onClose={() => setShowVersions(false)} onAction={onAction} />}
-    {showImport && <SpecImportModal t={t} onClose={() => setShowImport(false)} onImported={(name: string) => onShowToast?.('success', t('pipe.importSuccess').replace('{name}', name))} />}
-    {showWizard && <FirstTaskWizard t={t} plugins={plugins} schema={pluginSchema} onClose={() => setShowWizard(false)} onCreated={(name: string) => { onShowToast?.('success', `Pipeline created: ${name}`); setShowWizard(false); }} />}
+      <AppShell
+        title={t('app.title')}
+        subtitle={t('app.subtitle')}
+        page={navPage}
+        pageTitle={pageTitle}
+        crumb={crumb}
+        navGroups={navGroups}
+        t={t}
+        onNavigate={go}
+        onCreatePipeline={openWizard}
+        onOpenSettings={() => {
+          setShowSettings(true);
+          loadLLMConfig();
+        }}
+        onToggleLang={() => switchLang(lang === 'en' ? 'zh' : 'en')}
+        langLabel={lang === 'en' ? '中文' : 'EN'}
+        onReloadSpecs={() =>
+          runAction(t('toast.reloadSpecs'), () => api('/api/v2/specs/reload', { method: 'POST' }))
+        }
+        reloadLabel={t('top.reloadSpecs')}
+        autoRefreshLabel={t('top.autorefresh')}
+        hasRunning={pipelinesList.some((p) => p.status === 'running')}
+        issueCount={issueCount}
+      >
+        {(route.page === 'dashboard') && (
+          <DashboardPage
+            t={t}
+            lang={lang}
+            totals={totals}
+            pipelines={pipelines}
+            metrics={metrics}
+            selected={selected}
+            selectedMetric={selectedMetric}
+            onSelect={setSelectedPipeline}
+            onOpenPipeline={openPipelineDetail}
+            onOpenIssues={() => navigate({ page: 'issues' })}
+            onOpenDLQ={openDLQ}
+            onCreatePipeline={openWizard}
+            onOpenConnections={() => navigate({ page: 'connections' })}
+          />
+        )}
 
-    {loading && !pipelines.data && (
-      <div className="grid gap-6 xl:grid-cols-[1fr_400px]">
-        <div className="card">
-          <div className="card-body space-y-3 p-6">
-            {[1,2,3,4,5].map((i) => (<div key={i} className="h-14 rounded-lg bg-slate-100 animate-pulse" />))}
-          </div>
-        </div>
-        <div className="space-y-6">
-          <div className="card"><div className="card-body p-6"><div className="h-48 rounded-lg bg-slate-100 animate-pulse" /></div></div>
-          <div className="card"><div className="card-body p-6"><div className="h-32 rounded-lg bg-slate-100 animate-pulse" /></div></div>
-        </div>
-      </div>
-    )}
+        {route.page === 'pipelines' && (
+          <PipelinesPage
+            t={t}
+            lang={lang}
+            pipelines={pipelines}
+            metrics={metrics}
+            selected={selected}
+            selectedMetric={selectedMetric}
+            onSelect={setSelectedPipeline}
+            onOpenDetail={(key, tab) => openPipelineDetail(key, tab || 'overview')}
+            onOpenWizard={openWizard}
+            onAction={runAction}
+            checkpoints={checkpoints}
+            onResetCheckpoint={(ref: string, label?: string) =>
+              runAction(`${t('toast.resetCheckpoint')}: ${label || ref}`, () =>
+                api(`/api/v2/pipelines/${encodeURIComponent(ref)}/checkpoint/reset`, {
+                  method: 'POST',
+                }),
+              )
+            }
+            onEdit={editPipeline}
+            refreshKey={refreshKey}
+            onShowToast={toast}
+            plugins={plugins}
+            pluginSchema={pluginSchema}
+          />
+        )}
 
-    {!loading && (
-    <div className="grid gap-6 xl:grid-cols-[1fr_400px]">
-      <div className="card" style={{ overflow: 'auto' }}>
-        <div className="card-header flex items-center justify-between flex-wrap gap-2">
-          <h2 className="text-sm font-semibold">{t('pipe.allPipelines')}</h2>
-          <div className="flex items-center gap-2 flex-wrap">
-            <input className="input w-36 text-xs py-1.5" placeholder={'🔍 ' + t('pipe.search')} value={search} onChange={(e) => setSearch(e.target.value)} />
-            {allTags.length > 0 && (
-              <select className="input w-32 text-xs py-1" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
-                <option value="">🏷 {t('pipe.allTags')}</option>
-                {allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
-              </select>
-            )}
-            <select className="input w-28 text-xs py-1" value={sortKey} onChange={(e) => setSortKey(e.target.value)}>
-              <option value="name">{'↕ ' + t('pipe.sortName')}</option>
-              <option value="status">{'↕ ' + t('pipe.sortStatus')}</option>
-              <option value="written">{'↕ ' + t('pipe.sortWritten')}</option>
-              <option value="latency">{'↕ ' + t('pipe.sortLatency')}</option>
-              <option value="uptime">{'↕ ' + t('pipe.sortUptime')}</option>
-            </select>
-            <button className={`btn btn-ghost btn-sm text-xs ${compact ? 'text-indigo-600' : ''}`} onClick={() => setCompact(!compact)} title={t(compact ? 'pipe.expandedMode' : 'pipe.compactMode')}>
-              {compact ? '⛶' : '⊞'}
-            </button>
-            <button data-testid="open-first-task-wizard" className="btn btn-primary btn-sm" onClick={() => setShowWizard(true)}>✨ {t('pipe.createWizard')}</button>
-            <button className="btn btn-secondary btn-sm" onClick={() => setShowImport(true)}>📥 {t('pipe.import')}</button>
-          </div>
-        </div>
-        {/* Batch actions bar */}
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-100 bg-slate-50/50">
-          <span className="text-xs text-slate-400">{filteredPipelines.length} {t('pipe.pipelines')}</span>
-          <span className="text-[11px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">{runningCount} {t('pipe.running')}</span>
-          {stoppedCount > 0 && <span className="text-[11px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full">{stoppedCount} {t('pipe.stopped')}</span>}
-          <div className="flex-1" />
-          <button className="btn btn-ghost btn-sm text-xs" onClick={() => batchAction('start', (p: Pipeline) => p.status !== 'running')}>{'▶ ' + t('pipe.startAll')}</button>
-          <button className="btn btn-ghost btn-sm text-xs" onClick={() => batchAction('stop', (p: Pipeline) => p.status === 'running')}>{'⏹ ' + t('pipe.stopAll')}</button>
-        </div>
-        <div className="card-body space-y-1.5">
-          {filteredPipelines.map((p: Pipeline) => {
-            const m = (metrics.data?.pipelines || []).find((x: MetricsPipeline) => (x.id && x.id === p.id) || x.name === p.name);
-            return (
-              <PipelineRow
-                key={pipelineKey(p)}
-                p={p}
-                m={m}
-                compact={compact}
-                selected={pipelineKey(selected) === pipelineKey(p)}
-                t={t}
-                onSelect={onSelect}
-                onAction={onAction}
-                onShowLogs={() => { onSelect(pipelineKey(p)); setShowLogs(true); }}
-                onShowDAG={() => { onSelect(pipelineKey(p)); setShowDAG(true); }}
-                onEdit={() => onEdit(pipelineKey(p))}
-                onExport={() => handleExport(p)}
-                onDelete={() => handleDelete(p)}
-              />
-            );
-          })}
-          {!filteredPipelines.length && <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center">
-            <div className="text-sm font-semibold text-slate-600">{search ? `No pipelines matching "${search}"` : tagFilter ? `No pipelines with tag "${tagFilter}"` : t('pipe.emptyTitle')}</div>
-            <div className="mt-1 text-xs text-slate-400">{search || tagFilter ? '' : t('pipe.emptyHint')}</div>
-            {!search && !tagFilter && <button data-testid="empty-open-wizard" className="btn btn-primary btn-sm mt-3" onClick={() => setShowWizard(true)}>✨ {t('pipe.createWizard')}</button>}
-          </div>}
-        </div>
-      </div>
+        {route.page === 'pipeline-new' && (
+          <FirstTaskWizard
+            t={t}
+            plugins={plugins}
+            schema={pluginSchema}
+            initialStep={route.step}
+            onClose={() => navigate({ page: 'pipelines' })}
+            onCreated={(name) => {
+              toast('success', `Pipeline created: ${name}`);
+              setRefreshKey((n) => n + 1);
+              openPipelineDetail(name, 'overview');
+            }}
+            onOpenDesigner={editPipeline}
+          />
+        )}
 
-      {/* Details Panel */}
-      <div className="space-y-6">
-        <div className="card">
-          <div className="card-header flex items-center justify-between flex-wrap gap-2">
-            <h2 className="text-sm font-semibold">{t('pipe.details')} {selected?.name ? `· ${selected.name}` : ''}</h2>
-            <div className="flex gap-1.5 flex-wrap">
-              {selected?.name && <button className="btn btn-secondary btn-sm" onClick={() => setShowDAG(true)}>{'🔀 ' + t('pipe.dagBtn')}</button>}
-              {selected?.name && <button className="btn btn-secondary btn-sm" onClick={() => setShowVersions(true)}>📜 {t('pipe.versions')}</button>}
-            </div>
-          </div>
-          <div className="card-body">
-            {selectedMetric ? (
-              <div className="space-y-4">
-                {/* Status and uptime bar */}
-                {selected && (
-                  <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
-                    <span className={`status-dot status-${selected.status}`} />
-                    <div>
-                      <div className="text-sm font-semibold">{statusLabel(t, selected.status)}</div>
-                      <div className="text-xs text-slate-400">{t('pipe.uptimeLabel')} <LiveUptimeInline startedAt={selected.stats.started_at} fallback={selected.stats.uptime || t('common.na')} /></div>
-                    </div>
-                    <div className="flex-1" />
-                    <div className="text-right text-xs text-slate-400">
-                      <div>{t('pipe.readLabel')} {selected.stats.records_read || 0}</div>
-                      <div>{t('pipe.writtenLabel')} {selected.stats.records_written || 0}</div>
-                    </div>
-                  </div>
-                )}
-                <Progress label={t('metric.writeSuccessRate')} value={ratio(selectedMetric.records_written, selectedMetric.records_written + selectedMetric.records_failed)} />
-                <Progress label={t('metric.dlqPressure')} value={ratio(selectedMetric.records_dlq, Math.max(1, selectedMetric.records_read))} danger />
-                <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4">
-                  <Mini label={t('metric.readLatency')} value={`${selectedMetric.source_read_latency_ms.toFixed(1)}ms`} />
-                  <Mini label={t('metric.writeLatency')} value={`${selectedMetric.sink_write_latency_ms.toFixed(1)}ms`} />
-                  <Mini label={t('metric.lastBatch')} value={String(selectedMetric.last_batch_size)} />
-                  <Mini label={t('metric.avgBatch')} value={String(selectedMetric.avg_batch_size)} />
-                  <Mini label={t('metric.batchCount')} value={String(selectedMetric.batch_count)} />
-                  <Mini label={t('metric.cpAge')} value={`${selectedMetric.checkpoint_age_seconds}s`} />
-                  {selectedMetric.cdc_lag_ms > 0 && <Mini label={t('metric.cdcLag')} value={`${selectedMetric.cdc_lag_ms}ms`} />}
-                  <Mini label={t('metric.dlqFiles')} value={String(selectedMetric.dlq_file_count)} />
-                </div>
-                {selected.stats.last_error && <ErrorBox message={selected.stats.last_error} />}
+        {route.page === 'pipeline-detail' && (
+          <PipelineDetailPage
+            t={t}
+            lang={lang}
+            pipeline={
+              pipelinesList.find((p) => pipelineKey(p) === route.id || p.name === route.id) ||
+              selected
+            }
+            metric={
+              metricsList.find(
+                (m) =>
+                  m.name === route.id ||
+                  m.id === route.id ||
+                  (selected && ((m.id && m.id === selected.id) || m.name === selected.name)),
+              ) || selectedMetric
+            }
+            checkpoints={checkpoints.data?.checkpoints || []}
+            tab={route.tab}
+            onTabChange={(tab) => openPipelineDetail(route.id, tab)}
+            onBack={() => navigate({ page: 'pipelines' })}
+            onAction={runAction}
+            onResetCheckpoint={(ref: string, label?: string) =>
+              runAction(`${t('toast.resetCheckpoint')}: ${label || ref}`, () =>
+                api(`/api/v2/pipelines/${encodeURIComponent(ref)}/checkpoint/reset`, {
+                  method: 'POST',
+                }),
+              )
+            }
+            onOpenDesigner={editPipeline}
+            onOpenDLQ={openDLQ}
+          />
+        )}
 
-                {selected.shard_count && selected.shard_count > 1 && (
-                  <>
-                    <h3 className="text-sm font-semibold pt-2 border-t">{t('pipe.shardsLabel')} ({selected.shard_count})</h3>
-                    <ShardsInline t={t} name={pipelineRef(selected)} refreshKey={refreshKey} />
-                  </>
-                )}
-              </div>
-            ) : <Empty text={t('dash.selectPipeline')} />}
-          </div>
-        </div>
-        {/* Checkpoints */}
-        <div className="card">
-          <div className="card-header">
-            <h2 className="text-sm font-semibold">{t('pipe.checkpoints')} {selected?.name ? `· ${selected.name}` : ''}</h2>
-          </div>
-          <div className="card-body space-y-2">
-            {selected?.name ? (
-              (() => {
-                const selectedJob = pipelineKey(selected);
-                const selCps = (checkpoints.data?.checkpoints || []).filter((cp: Checkpoint) => cp.job_name === selectedJob);
-                return selCps.length > 0 ? selCps.map((cp: Checkpoint) => (
-                  <div key={cp.job_name} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{cp.job_name}</div>
-                      <div className="text-xs text-slate-400">{cp.source} · {fmtTime(cp.timestamp)}</div>
-                    </div>
-                    <button className="btn btn-ghost btn-sm" onClick={() => onResetCheckpoint(cp.job_name, selected.name)}>{t('pipe.reset')}</button>
-                  </div>
-                )) : <Empty text={t('pipe.noCheckpoints')} />;
-              })()
-            ) : <Empty text={t('dash.selectPipeline')} />}
-          </div>
-        </div>
-      </div>
-    </div>
-    )}
+        {route.page === 'issues' && (
+          <IssuesPage
+            t={t}
+            pipelines={pipelines}
+            metrics={metrics}
+            onSelect={setSelectedPipeline}
+            onOpenPipeline={openPipelineDetail}
+            onOpenDLQ={openDLQ}
+            onOpenConnections={() => navigate({ page: 'connections' })}
+          />
+        )}
+
+        {route.page === 'connections' && <ConnectionsPage t={t} lang={lang} />}
+        {route.page === 'connectors' && (
+          <ConnectorsPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} />
+        )}
+        {route.page === 'designer' && (
+          <DagEditorPage
+            t={t}
+            lang={lang}
+            plugins={plugins}
+            schema={pluginSchema}
+            onAction={runAction}
+            editTarget={editTarget}
+          />
+        )}
+        {route.page === 'dlq' && (
+          <DLQPage
+            t={t}
+            lang={lang}
+            pipelines={pipelines}
+            selected={selected}
+            onSelect={setSelectedPipeline}
+            onAction={runAction}
+          />
+        )}
+        {/* Built-in matrix merged into Connector catalog; keep route for deep links / e2e. */}
+        {route.page === 'plugins' && (
+          <ConnectorsPage
+            t={t}
+            lang={lang}
+            plugins={plugins}
+            schema={pluginSchema}
+            initialView="matrix"
+          />
+        )}
+        {route.page === 'myPlugins' && <MyPluginsPage t={t} lang={lang} />}
+        {route.page === 'workers' && <WorkersPage t={t} lang={lang} />}
+        {route.page === 'schedules' && (
+          <SchedulesPage t={t} lang={lang} pipelines={pipelines} />
+        )}
+        {route.page === 'audit' && <AuditPage t={t} lang={lang} audit={audit} />}
+      </AppShell>
+
+      <SettingsModal
+        t={t}
+        lang={lang}
+        token={token}
+        setToken={setToken}
+        switchLang={switchLang}
+        llmConfig={llmConfig}
+        setLLMConfig={setLLMConfig}
+        open={showSettings}
+        onClose={() => {
+          setShowSettings(false);
+          if (route.page === 'settings') navigate({ page: 'dashboard' });
+        }}
+        onSaveToken={() => {
+          window.localStorage.setItem('etl_api_token', token);
+          setRefreshKey((n) => n + 1);
+          toast('success', t('settings.tokenSaved'));
+        }}
+        onSaveLLM={() => {
+          api('/api/v2/settings', {
+            method: 'POST',
+            body: JSON.stringify({
+              llm_base_url: llmConfig.base_url,
+              llm_model: llmConfig.model,
+              llm_api_key: llmConfig.api_key,
+            }),
+          })
+            .then(() => toast('success', t('settings.llmSaved')))
+            .catch((e) => toast('error', e.message));
+        }}
+      />
     </>
   );
 }
 
-// ════════════════════════════════════════════════
-// Inline Shards (for details panel)
-// ════════════════════════════════════════════════
-function ShardsInline({ t, name, refreshKey }: { t: (k: string) => string; name: string; refreshKey: number }) {
-  const shards = useApi<{ shards: ShardInfo[] }>(`/api/v2/pipelines/${name}/shards`, refreshKey);
-  return (
-    <div className="space-y-2">
-      {(shards.data?.shards || []).map((s) => (
-        <div key={s.index} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold">#{s.index}</span>
-            <span className={`status-dot status-${s.status}`} />
-            <span className="text-xs text-slate-500">{s.status}</span>
-          </div>
-          <div className="flex gap-1.5">
-            <span className="badge badge-blue text-[10px]">{s.stats.records_written} w</span>
-            <span className="badge badge-slate text-[10px]">{s.stats.records_read} r</span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-// ════════════════════════════════════════════════
-// Pipeline Log Drawer (full-height log viewer)
-// ════════════════════════════════════════════════
-function PipelineLogDrawer({ t, name }: { t: (k: string) => string; name: string }) {
-  const [entries, setEntries] = useState<PipelineLogEntry[]>([]);
-  const lastSeq = useRef(0);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [paused, setPaused] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    const fetchLogs = async () => {
-      try {
-        const data = await api<{ entries: PipelineLogEntry[]; last_seq: number }>(
-          `/api/v2/pipelines/${name}/log?since=${lastSeq.current}`
-        );
-        if (!active) return;
-        if (data.entries?.length) setEntries((prev) => [...prev.slice(-2000), ...data.entries]);
-        lastSeq.current = data.last_seq;
-      } catch { /* retry */ }
-    };
-    setEntries([]); lastSeq.current = 0;
-    fetchLogs();
-    const timer = setInterval(() => { if (!paused) fetchLogs(); }, 1000);
-    return () => { active = false; clearInterval(timer); };
-  }, [name, paused]);
-
-  useEffect(() => {
-    if (!paused && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [entries, paused]);
-
-  const levelColor = (lvl: string) => {
-    switch (lvl) {
-      case 'ERROR': return 'text-rose-400';
-      case 'WARN':  return 'text-amber-300';
-      case 'DEBUG': return 'text-slate-500';
-      default:      return 'text-emerald-400';
-    }
-  };
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-4 py-1.5 border-b border-slate-100 bg-slate-900">
-        <button className={`text-xs px-2 py-0.5 rounded ${paused ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-300'}`}
-          onClick={() => setPaused(!paused)}>{paused ? '▶ ' + t('log.resume') : '⏸ ' + t('log.pause')}</button>
-        <button className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300"
-          onClick={() => { setEntries([]); lastSeq.current = 0; }}>{'✕ ' + t('log.clear')}</button>
-        <span className="text-xs text-slate-500 ml-auto">{entries.length} {t('log.lines')}</span>
-      </div>
-      <div ref={scrollRef} className="flex-1 bg-slate-900 text-xs font-mono p-3 overflow-y-auto leading-relaxed">
-        {entries.length === 0 ? (
-          <div className="text-slate-500 text-center py-10">{t('pipe.noLogs')}</div>
-        ) : (
-          entries.map((e, i) => (
-            <div key={i} className="flex gap-2 hover:bg-white/5">
-              <span className="text-slate-600 shrink-0">{e.timestamp.slice(11, 23)}</span>
-              <span className={`shrink-0 w-12 ${levelColor(e.level)}`}>{e.level.padEnd(5)}</span>
-              <span className={levelColor(e.level)}>{e.message}</span>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-// DLQRow displays a single dead-letter queue entry with expandable record data.
-function DLQRow({ item, onDelete, onReplay, replayDisabled, replayDisabledReason, t }: { item: DLQItem; onDelete: () => void; onReplay: () => void; replayDisabled?: boolean; replayDisabledReason?: string; t: TFunc }) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div className="rounded-lg border border-slate-200 p-3 hover:border-slate-300 transition">
-      <div className="flex items-center gap-3">
-        <span className="badge badge-slate">{item.record.operation}</span>
-        {item.id && <span className="badge badge-slate">#{item.id}</span>}
-        {item.error_class && <span className="badge badge-amber">{item.error_class}</span>}
-        {item.dag_node && <span className="badge badge-slate">{t('dlq.dagNode')} {item.dag_node}</span>}
-        <span className="text-xs text-slate-400">{fmtTime(item.timestamp)}</span>
-        <div className="flex-1 min-w-0">
-          <div className="truncate text-xs font-mono text-rose-600">{item.error}</div>
-        </div>
-        <button className="btn btn-ghost btn-sm text-xs" onClick={() => setExpanded(!expanded)}>{expanded ? '▲' : '▼'} {t('dlq.data')}</button>
-        <button className="btn btn-secondary btn-sm text-xs" disabled={replayDisabled} onClick={onReplay} title={replayDisabledReason || t('dlq.replayRecord')}>↻</button>
-        <button className="btn btn-danger btn-sm text-xs" onClick={onDelete} title={t('dlq.deleteRecord')}>🗑</button>
-      </div>
-      {replayDisabledReason && (
-        <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          {replayDisabledReason}
-        </div>
-      )}
-      {expanded && (
-        <div className="mt-2 rounded-lg bg-slate-50 p-3">
-          <div className="mb-2 grid gap-1 text-[11px] text-slate-500 md:grid-cols-3">
-            {item.record_hash && <div className="truncate font-mono">hash {item.record_hash}</div>}
-            {!!item.pipeline_version && <div>version {item.pipeline_version}</div>}
-            {item.dag_node && <div>{t('dlq.dagNode')} {item.dag_node}</div>}
-          </div>
-          <pre className="text-xs overflow-x-auto whitespace-pre-wrap break-all">{JSON.stringify(item.record.data, null, 2)}</pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════
-// DLQ
-// ════════════════════════════════════════════════
-function DLQPage({ t, pipelines, selected, onSelect, onAction }: any) {
-  const [filter, setFilter] = useState('');
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [lastReplayResult, setLastReplayResult] = useState('');
-  const query = filter ? `limit=50&contains=${encodeURIComponent(filter)}` : 'limit=50';
-  const selectedRef = pipelineRef(selected);
-  const dlq = useApi<{ items: DLQItem[] }>(selected ? `/api/v2/dlq/${selectedRef}?${query}` : '/api/v2/dlq/_missing', selected ? refreshKey : -1);
-  const dlqItems = dlq.data?.items || [];
-  const isDAG = Boolean(selected?.dag);
-  const missingDagNodeCount = isDAG ? dlqItems.filter((item) => !item.dag_node).length : 0;
-  const bulkReplayDisabled = !selected || missingDagNodeCount > 0;
-
-  useEffect(() => { setLastReplayResult(''); }, [selectedRef]);
-
-  const replayResultToast = (label: string, result: { replayed?: number }) => {
-    const message = `${label} · ${t('dlq.replayed')}: ${Number(result.replayed) || 0}`;
-    setLastReplayResult(message);
-    return { toastMessage: message };
-  };
-
-  const deleteOne = async (item: DLQItem) => {
-    try {
-      if (item.id) {
-        await api(`/api/v2/dlq/${selectedRef}/${item.id}`, { method: 'DELETE' });
-      } else {
-        await api(`/api/v2/dlq/${selectedRef}?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`, { method: 'DELETE' });
-      }
-      setRefreshKey((n) => n + 1);
-    } catch (e) { /* ignore */ }
-  };
-
-  return (
-    <div className="grid gap-6 xl:grid-cols-[300px_1fr]">
-      <div className="card">
-        <div className="card-header"><h2 className="text-sm font-semibold">{t('dlq.selectPipeline')}</h2></div>
-        <div className="card-body space-y-1">
-          {normalizePipelines(pipelines.data).map((p: Pipeline) => (
-            <div key={pipelineKey(p)} className={`pipeline-row ${pipelineKey(selected) === pipelineKey(p) ? 'selected' : ''} !p-3`} onClick={() => { onSelect(pipelineKey(p)); setRefreshKey(n => n + 1); }}>
-              <span className={`status-dot status-${p.status}`} />
-              <span className="truncate text-sm">{p.name}</span>
-              {p.stats.records_dlq > 0 && <span className="badge badge-rose ml-auto">{p.stats.records_dlq}</span>}
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="card">
-        <div className="card-header flex items-center justify-between gap-4">
-          <h2 className="text-sm font-semibold">{t('dlq.title')} {selected?.name ? `· ${selected.name}` : ''}</h2>
-          <div className="flex items-center gap-2">
-            <input className="input w-56" placeholder={t('dlq.filter')} value={filter} onChange={(e) => { setFilter(e.target.value); setRefreshKey(n => n + 1); }} />
-            <button className="btn btn-secondary btn-sm" onClick={() => { setRefreshKey(n => n + 1); }}>{t('dlq.refresh')}</button>
-            <button className="btn btn-secondary btn-sm" disabled={bulkReplayDisabled} title={missingDagNodeCount > 0 ? t('dlq.dagBulkBlocked') : t('dlq.replay')} onClick={() => onAction(`${t('toast.replayDlq')}: ${selected.name}`, async () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; const result = await api<{ replayed?: number }>(`/api/v2/dlq/${selectedRef}/replay${q}`, { method: 'POST' }); setRefreshKey(n => n + 1); return replayResultToast(`${t('toast.replayDlq')}: ${selected.name}`, result); })}>{t('dlq.replay')}</button>
-            <button className="btn btn-danger btn-sm" disabled={!selected} onClick={() => { if (confirm(t('dlq.confirmDeleteAll'))) { onAction(`${t('toast.deleteDlq')}: ${selected.name}`, () => { const q = filter ? `?contains=${encodeURIComponent(filter)}` : ''; return api(`/api/v2/dlq/${selectedRef}${q}`, { method: 'DELETE' }).then(() => setRefreshKey(n => n + 1)); }); } }}>{t('dlq.deleteAll')}</button>
-          </div>
-        </div>
-        <div className="card-body">
-          {isDAG && (
-            <div className={`mb-3 rounded border px-3 py-2 text-xs ${missingDagNodeCount > 0 ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
-              {missingDagNodeCount > 0 ? t('dlq.dagNodeMissing') : t('dlq.dagReplaySupported')}
-            </div>
-          )}
-          {lastReplayResult && (
-            <div data-testid="dlq-replay-result" className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-              {lastReplayResult}
-            </div>
-          )}
-          {dlq.error ? <ErrorBox message={dlq.error} /> :
-            dlqItems.length ? (
-              <div className="space-y-2">
-                {dlqItems.map((item, i) => {
-                  const replayDisabledReason = isDAG && !item.dag_node ? t('dlq.dagNodeMissingRecord') : undefined;
-                  return (
-                  <DLQRow key={item.id || i} t={t} item={item} onDelete={() => deleteOne(item)} onReplay={() => onAction(`${t('toast.replayDlq')}: ${selected.name}${item.id ? ` #${item.id}` : ''}`, async () => {
-                    const url = item.id ? `/api/v2/dlq/${selectedRef}/${item.id}/replay` : `/api/v2/dlq/${selectedRef}/replay?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`;
-                    const result = await api<{ replayed?: number }>(url, { method: 'POST' });
-                    setRefreshKey(n => n + 1);
-                    return replayResultToast(`${t('toast.replayDlq')}: ${selected.name}${item.id ? ` #${item.id}` : ''}`, result);
-                  })} replayDisabled={Boolean(replayDisabledReason)} replayDisabledReason={replayDisabledReason} />
-                  );
-                })}
-              </div>
-            ) : <div className="rounded-lg border border-dashed border-emerald-200 bg-emerald-50/40 py-8 text-center">
-              <div className="text-sm font-medium text-emerald-700">{t('dlq.noRecords')}</div>
-              <div className="mt-1 text-xs text-slate-500">{t('dlq.emptyHint')}</div>
-            </div>
-          }
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Plugins
-// ════════════════════════════════════════════════
-function PluginsPage({ t, plugins }: any) {
-  const meta = plugins.data?.metadata;
-  if (!meta) return <div className="card card-body"><Empty text={t('plugin.loading')} /></div>;
-  const rows = [
-    ...Object.entries(meta.sources || {}).map(([n, i]) => ({ kind: 'source', name: n, info: i })),
-    ...Object.entries(meta.sinks || {}).map(([n, i]) => ({ kind: 'sink', name: n, info: i })),
-    ...Object.entries(meta.transforms || {}).map(([n, i]) => ({ kind: 'transform', name: n, info: i })),
-  ];
-  const kindTone: Record<string, string> = { source: 'badge-cyan', sink: 'badge-emerald', transform: 'badge-violet' };
-  return (
-    <div className="card">
-      <div className="card-header flex items-center justify-between">
-        <h2 className="text-sm font-semibold">{t('plugin.matrix')}</h2>
-        <div className="flex gap-3 text-xs text-slate-400">
-          <span>{plugins.data?.sources.length || 0} {t('plugin.sources')}</span>
-          <span>{plugins.data?.sinks.length || 0} {t('plugin.sinks')}</span>
-          <span>{plugins.data?.transforms.length || 0} {t('plugin.transforms')}</span>
-        </div>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="tbl">
-          <thead><tr><th>{t('plugin.kind')}</th><th>{t('plugin.plugin')}</th><th>{t('plugin.maturity')}</th><th>{t('plugin.requiredFields')}</th><th>{t('plugin.capabilities')}</th></tr></thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={`${r.kind}-${r.name}`}>
-                <td><span className={`badge ${kindTone[r.kind]}`}>{r.kind}</span></td>
-                <td className="font-medium">{r.name}</td>
-                <td><span className={`badge ${r.info.maturity === 'production' ? 'badge-emerald' : r.info.maturity === 'beta' ? 'badge-blue' : r.info.maturity === 'experimental' ? 'badge-amber' : 'badge-slate'}`}>{r.info.maturity || 'unknown'}</span></td>
-                <td><div className="flex flex-wrap gap-1">{(r.info.required || []).map((f: string) => <span key={f} className="badge badge-rose">{f}</span>)}</div></td>
-                <td><div className="flex flex-wrap gap-1">{(r.info.capabilities || []).map((c: string) => <span key={c} className="badge badge-slate">{c}</span>)}</div></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Audit
-// ════════════════════════════════════════════════
-function AuditPage({ t, audit }: any) {
-  return (
-    <div className="card">
-      <div className="card-header"><h2 className="text-sm font-semibold">{t('audit.trail')}</h2></div>
-      <div className="overflow-x-auto">
-        <table className="tbl">
-          <thead><tr><th>{t('audit.action')}</th><th>{t('audit.method')}</th><th>{t('audit.path')}</th><th>{t('audit.time')}</th></tr></thead>
-          <tbody>
-            {(audit.data?.events || []).map((e: AuditEvent, i: number) => (
-              <tr key={i}>
-                <td><span className="badge badge-indigo">{e.action || 'event'}</span></td>
-                <td><span className="badge badge-slate">{e.method || t('common.na')}</span></td>
-                <td className="text-xs">{e.target || e.path || t('common.na')}</td>
-                <td className="text-xs text-slate-400">{fmtTime(e.timestamp)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!audit.data?.events?.length && <div className="p-8"><div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-8 text-center">
-          <div className="text-sm text-slate-500">{t('audit.noEvents')}</div>
-          <div className="mt-1 text-xs text-slate-400">{t('audit.emptyHint')}</div>
-        </div></div>}
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════
-// Shared
-// ════════════════════════════════════════════════
-function Progress({ label, value, danger }: { label: string; value: number; danger?: boolean }) {
-  const pct = Math.max(0, Math.min(100, Math.round(value * 100)));
-  return (
-    <div>
-      <div className="mb-1.5 flex justify-between text-xs">
-        <span className="font-medium text-slate-600">{label}</span>
-        <span className="text-slate-400">{pct}%</span>
-      </div>
-      <div className="progress-track">
-        <div className={`progress-fill ${danger ? 'bg-amber-500' : 'bg-indigo-500'}`} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function Mini({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-xs text-slate-400">{label}</div><div className="mt-0.5 text-sm font-semibold text-slate-700">{value}</div></div>;
-}
-
-function Empty({ text }: { text: string }) {
-  return <div className="rounded-lg border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">{text}</div>;
-}
-
-function ErrorBox({ message }: { message: string }) {
-  return <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700">{message}</div>;
-}
-
-function ratio(a: number, b: number) { return b <= 0 ? 0 : a / b; }
-function fmtTime(v?: string) { if (!v || v.startsWith('0001-')) return 'n/a'; return new Date(v).toLocaleString(); }
-
-// ════════════════════════════════════════════════
-// Pipeline Log Viewer
-// ════════════════════════════════════════════════
-function PipelineLogViewer({ t, name }: { t: (k: string) => string; name: string }) {
-  const [entries, setEntries] = useState<PipelineLogEntry[]>([]);
-  const lastSeq = useRef(0);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [paused, setPaused] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    const fetchLogs = async () => {
-      try {
-        const data = await api<{ entries: PipelineLogEntry[]; last_seq: number }>(
-          `/api/v2/pipelines/${name}/log?since=${lastSeq.current}`
-        );
-        if (!active) return;
-        if (data.entries?.length) {
-          setEntries((prev) => [...prev, ...data.entries]);
-        }
-        lastSeq.current = data.last_seq;
-      } catch { /* retry */ }
-    };
-    fetchLogs();
-    const timer = setInterval(() => { if (!paused) fetchLogs(); }, 1000);
-    return () => { active = false; clearInterval(timer); };
-  }, [name, paused]);
-
-  useEffect(() => {
-    if (!paused && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [entries, paused]);
-
-  const levelColor = (lvl: string) => {
-    switch (lvl) {
-      case 'ERROR': return 'text-rose-400';
-      case 'WARN':  return 'text-amber-400';
-      case 'DEBUG': return 'text-slate-500';
-      default:      return 'text-emerald-400';
-    }
-  };
-
-  return (
-    <div className="card">
-      <div className="card-header flex items-center justify-between">
-        <h2 className="text-sm font-semibold">{t('pipe.logs')}</h2>
-        <div className="flex gap-2">
-          <button className={`btn btn-ghost btn-xs ${paused ? 'text-amber-500' : ''}`} onClick={() => setPaused(!paused)}>
-            {paused ? '▶' : '⏸'}
-          </button>
-          <button className="btn btn-ghost btn-xs" onClick={() => { setEntries([]); lastSeq.current = 0; }}>✕</button>
-        </div>
-      </div>
-      <div ref={scrollRef} className="bg-slate-900 text-xs font-mono rounded-lg p-3 h-40 overflow-y-auto space-y-0.5">
-        {entries.length === 0 ? (
-          <div className="text-slate-500 text-center py-6">{t('pipe.noLogs')}</div>
-        ) : (
-          entries.map((e, i) => (
-            <div key={i} className="flex gap-2 leading-relaxed">
-              <span className="text-slate-600 shrink-0">{e.timestamp.slice(11, 19)}</span>
-              <span className={`shrink-0 w-10 ${levelColor(e.level)}`}>{e.level}</span>
-              <span className={levelColor(e.level)}>{e.message}</span>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <ThemeProvider defaultTheme="light" storageKey="etl_theme">
+    <App />
+    <Toaster richColors position="top-right" />
+  </ThemeProvider>,
+);

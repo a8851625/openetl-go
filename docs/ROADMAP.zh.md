@@ -1,8 +1,8 @@
 # OpenETL-Go Roadmap
 
-> 当前基线：v0.2.10-beta.1（2026-07-14）
+> 当前基线：v0.2.11-beta.2（2026-07-22）
 >
-> 最后核对：2026-07-14
+> 最后核对：2026-07-22
 
 本文只维护尚未完成、可以验收的产品和工程工作。已经交付的功能、测试命令和版本说明进入 [CHANGELOG.zh.md](../CHANGELOG.zh.md)；本文末尾只保留必要的证据索引，不再重复完整实现日志。
 
@@ -124,22 +124,60 @@ Roadmap 状态只使用以下值：
 
 ### P4：首次任务体验残留收口
 
-状态：`queued`
+状态：`in_progress`（2026-07-21 原型对齐批次已落地主路径；见 `docs/UI-REDESIGN-TODO.zh.md` residual）
 
-现有向导和上下文闭环已经交付，本项只处理有证据的残留，不重新建设一套 UI。
+现有向导和上下文闭环已经交付，但 2026-07-20 产品走查确认当前 Web UI 仍更接近“能力完整的工程控制台”，尚未完全收敛为围绕“创建成功、稳定运行、快速修复”的任务型产品。主要证据包括：一级导航平铺构建、运维和系统对象；首次任务向导在单个长弹窗中同时暴露模板、连接、descriptor、运行参数、transform、样例、YAML 和 preflight；运行状态、健康度和累计指标存在口径混用；页面状态没有可分享 URL；部分危险操作、国际化和无障碍表达不一致。
+
+**2026-07-21 已交付（证据）**：全宽管道列表 + URL 筛选；`#/pipelines/new` 全页三段式向导 + 草稿；DLQ 聚合主视图 + Replay 确认面板；详情写入语义/生命周期；总览时间范围切换；Connections 抽屉；问题中心固定排序；顶栏用户菜单与扩展分组；e2e/文档区分「路由可达」与「原型对齐」。Residual：DAG 空画布模板、小屏信息行、截图刷新、多 run 历史。
+
+本项在现有 React UI、connector descriptor/introspection/preflight 和同一份 pipeline spec 上渐进收口，不另建独立 UI 语义、设计器模型或服务端执行模型。内部按以下顺序实施；同一时间只推进一个子阶段：
+
+#### P4.1：状态语义与交互可信度
+
+- 建立统一的展示状态：`healthy`、`degraded`、`failed`、`paused`、`scheduled`、`completed`，由期望状态、实际运行状态、lag、checkpoint、DLQ 和最近错误共同派生；不得再使用“running 数量 / pipeline 总数”作为健康度。
+- 区分失败 pipeline 数、失败记录累计值、当前 DLQ backlog 和历史 DLQ/replay 计数；所有卡片、列表和详情使用相同口径并标明时间范围。
+- `failed` 不计入 `stopped`，主动暂停、等待调度和一次性完成不得显示为不健康。
+- 统一批量启动/停止、立即运行、禁用调度、checkpoint reset、连接删除、worker deregister、DLQ 删除/replay 等高影响操作的目标数量、风险说明、确认和结果反馈；连接删除需提示被引用的 pipeline。
+- 补齐关键页面中硬编码的中英文混用，统一 Lucide 图标、文本标签和状态颜色；可点击行、图标按钮和状态提示具备键盘、ARIA 和非颜色表达。
+- API Token 默认遮挡；AI/LLM 明确为可选能力，任何 AI 入口仍必须经过 validate/preflight，不能成为创建或启动 pipeline 的旁路。
+
+#### P4.2：首次任务分步闭环
+
+- 将现有长弹窗重组为同一向导内的渐进步骤：场景选择 -> Source 连接与数据选择 -> Sink 与写入语义 -> 可选 Transform -> 安全检查 -> 确认并启动。
+- 默认流程只展示完成当前步骤所需字段；connector maturity/readiness、原始 JSON、完整 YAML、批量和 checkpoint 等高级参数使用渐进披露，但不得因此丢失或重写隐藏字段。
+- Source 步骤展示真实 connection health、库表/topic、schema 和 sample；Sink 步骤展示目标、auto-create/DDL preview、主键、insert/upsert/pre_write 等写入语义和 replay 重复边界。
+- Transform 默认可跳过；新增、排序、删除和逐阶段 dry-run 保留，并把失败定位到具体 stage/field。
+- Preflight 问题靠近对应步骤和字段展示，并提供可执行 remediation；修复后可重新验证。生产 UI 移除 `Failure demo`、`Repair to file_sink` 等 e2e/demo 专用控制。
+- 最终确认页以 `Source -> Transform -> Sink` 摘要展示连接、数据范围、调度、幂等策略、DDL、checkpoint、DLQ 和已知重放风险，再执行创建和启动。
+
+#### P4.3：任务型信息架构与可分享上下文
+
+- 一级信息架构收敛为总览、管道、运维、资源和系统等任务分组；Designer 作为创建/编辑 pipeline 的入口，Schedule 作为 pipeline 生命周期配置，同时保留必要的全局运维视图。
+- Connector 能力/成熟度目录与已保存 Connection 实例分开表达；WASM 编辑/编译归入扩展或开发者能力，不与日常运行入口同权展示。
+- standalone 模式不突出 worker 实现细节；worker/cluster 管理只在对应运行模式或系统分组下展示。
+- 引入可刷新、可返回、可分享的 URL，至少覆盖 `/pipelines`、`/pipelines/:id`、`/pipelines/:id/runs`、`/pipelines/:id/dlq` 和 `/connections/:name`；刷新和浏览器前进/后退不得丢失选择上下文。
+- 总览从累计数字陈列收敛为可操作的待处理事项入口，优先呈现 failed/degraded pipeline、DLQ backlog、CDC lag、过期 checkpoint、异常 connection 和离线 worker；点击后定位到对应对象和修复上下文。
+- Pipeline 列表直接展示 Source -> Transform -> Sink 摘要、batch/CDC 模式、schedule、sink 写入模式和最近错误；详情按 Overview、Runs、Issues、Checkpoints、Spec/Versions 组织。
+- DLQ 按 error class、DAG node 和时间范围聚合，并形成“定位问题 -> 编辑修复 -> replay -> 核对剩余记录”的闭环；replay 前继续明确 at-least-once 和可能重复的边界。
 
 范围：
 
 - 补齐仍为 partial 的 connector schema/sample/DDL preview 和字段级 remediation。
 - 将 schedule 重跑风险与 sink 幂等性 warning 串联，而不污染 source capability 定义。
 - 统一 pipeline、DAG node、字段、风险、修复动作和是否可 replay 的错误表达。
-- 使用 Playwright 保持向导、YAML 往返、preflight 修复、创建启动和 DLQ replay 的关键路径。
+- 使用 Playwright 保持分步向导、URL/deep-link、YAML 往返、preflight 修复、创建启动、状态口径和 DLQ replay 的关键路径。
 
 验收标准：
 
 - 新增 UI 工作必须由真实 connector descriptor/introspection/preflight 驱动，不使用独立静态执行语义。
 - 同一 spec 在 UI、YAML 和 API 间往返不丢失隐藏字段。
 - 错误提示可以定位到具体 pipeline/node/field，并给出可执行 remediation。
+- 主动暂停、等待调度、一次性完成、运行失败和 degraded 状态在总览、列表、详情和指标中口径一致，并有自动化覆盖证明失败记录数、失败 pipeline 数和 DLQ backlog 未混用。
+- 用户可以从空环境沿分步向导完成 connection 选择、schema/sample 确认、transform dry-run、sink 幂等/DDL 检查、preflight 修复、创建启动；默认路径不要求编辑 JSON/YAML。
+- 关键对象具有稳定 URL，刷新、前进/后退和直接打开 deep link 后仍能恢复同一 pipeline/tab/filter 上下文。
+- failed/degraded/DLQ 入口能从总览或 pipeline 详情定位到具体错误，并完成修复后的 replay 或重启；结果反馈包含成功数、失败数和剩余 backlog。
+- 高影响操作具备一致确认和影响说明；关键中文路径不出现未翻译的产品文案，图标按钮与可点击行通过键盘和无障碍检查。
+- standalone 与 distributed 模式分别验证导航和系统入口，日常 pipeline 用户不需要理解 worker/plugin 编译等实现细节即可完成首次任务和故障处理。
 
 ### P5：轻量运行与生产运维收口
 
@@ -200,7 +238,7 @@ Roadmap 状态只使用以下值：
 ## 跟踪指标
 
 - 可靠性：失败记录可见率、DLQ 写入失败次数、replay 成功率、crash/rebalance e2e 通过率、checkpoint 恢复耗时。
-- 易用性：首次成功任务耗时、向导完成率、preflight 拦截率、修复后成功率。
+- 易用性：首次成功任务耗时、向导完成率、preflight 拦截率、修复后成功率、deep-link 上下文恢复率、从 failed/degraded/DLQ 入口到修复或 replay 的耗时。
 - 数据处理：Kafka/CDC lag、lookup hit/miss、window emit、重复吸收率。
 - 扩展性：descriptor/schema/preflight 覆盖率、production connector 认证率、Plugin ABI 兼容测试通过率。
 - 轻量性：镜像/二进制大小、启动耗时、空闲内存、外部依赖数量和 checkpoint 延迟。

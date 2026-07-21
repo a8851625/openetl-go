@@ -1,5 +1,11 @@
 import React from 'react';
 import type { TFunc } from './types';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { ToneBadge } from '@/components/shared/status-badge';
+import { cn } from '@/lib/utils';
 
 export type PluginSchemaField = {
   name: string;
@@ -75,6 +81,9 @@ function mapText(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
+const selectClass =
+  'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
 export function ConfigForm({
   fields,
   config,
@@ -89,7 +98,7 @@ export function ConfigForm({
   emptyText?: string;
 }) {
   if (!fields || fields.length === 0) {
-    return <div className="text-xs text-slate-400">{emptyText || t('conn.noConfigFields')}</div>;
+    return <div className="text-xs text-muted-foreground">{emptyText || t('conn.noConfigFields')}</div>;
   }
 
   const update = (name: string, value: unknown) => {
@@ -110,29 +119,33 @@ export function ConfigForm({
         let input: React.ReactNode;
         if (field.enum && field.enum.length > 0) {
           input = (
-            <select className="input w-full text-sm" value={String(value)} onChange={(e) => update(field.name, e.target.value)}>
+            <select
+              className={selectClass}
+              value={String(value)}
+              onChange={(e) => update(field.name, e.target.value)}
+            >
               {!field.required && <option value="">{t('conn.leaveDefault')}</option>}
-              {field.enum.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              {field.enum.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
             </select>
           );
         } else if (field.type === 'bool') {
           input = (
-            <label className="flex h-9 items-center gap-2">
-              <input
-                type="checkbox"
-                checked={!!value}
-                onChange={(e) => update(field.name, e.target.checked)}
-                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-              />
-              <span className="text-xs text-slate-500">{value ? t('common.enabled') : t('common.disabled')}</span>
-            </label>
+            <div className="flex h-9 items-center gap-2">
+              <Switch checked={!!value} onCheckedChange={(checked) => update(field.name, checked)} />
+              <span className="text-xs text-muted-foreground">
+                {value ? t('common.enabled') : t('common.disabled')}
+              </span>
+            </div>
           );
         } else if (field.type === 'int' || field.type === 'float') {
           input = (
-            <input
+            <Input
               type="number"
               step={field.type === 'float' ? '0.01' : '1'}
-              className="input w-full text-sm"
               value={value === undefined ? '' : String(value)}
               onChange={(e) => update(field.name, parseNumber(e.target.value, field.type))}
               placeholder={placeholder}
@@ -140,17 +153,24 @@ export function ConfigForm({
           );
         } else if (field.type === 'string_array') {
           input = (
-            <input
-              className="input w-full text-sm"
+            <Input
               value={Array.isArray(value) ? value.join(', ') : String(value || '')}
-              onChange={(e) => update(field.name, e.target.value.split(',').map((s) => s.trim()).filter(Boolean))}
+              onChange={(e) =>
+                update(
+                  field.name,
+                  e.target.value
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                )
+              }
               placeholder={placeholder || 'value1, value2'}
             />
           );
         } else if (field.type === 'map') {
           input = (
-            <textarea
-              className="input min-h-24 w-full resize-y py-2 font-mono text-xs leading-relaxed"
+            <Textarea
+              className="min-h-24 font-mono text-xs leading-relaxed"
               value={mapText(value)}
               onChange={(e) => update(field.name, parseMapInput(e.target.value))}
               placeholder={placeholder || '{"key": "value"}'}
@@ -159,16 +179,15 @@ export function ConfigForm({
         } else {
           const multiline = ['query', 'script', 'code', 'rules', 'body'].includes(field.name);
           input = multiline ? (
-            <textarea
-              className="input min-h-20 w-full resize-y py-2 font-mono text-xs leading-relaxed"
+            <Textarea
+              className="min-h-20 font-mono text-xs leading-relaxed"
               value={String(value || '')}
               onChange={(e) => update(field.name, e.target.value)}
               placeholder={placeholder}
             />
           ) : (
-            <input
+            <Input
               type={field.secret ? 'password' : 'text'}
-              className="input w-full text-sm"
               value={String(value || '')}
               onChange={(e) => update(field.name, e.target.value)}
               placeholder={placeholder}
@@ -178,16 +197,34 @@ export function ConfigForm({
 
         return (
           <div key={field.name}>
-            <label className="mb-1 flex items-center gap-1 text-xs font-medium text-slate-600">
+            <Label className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
               <span>{field.name}</span>
               {field.required && <span className="text-rose-500">*</span>}
-              {field.secret && <span className="badge badge-amber px-1.5 py-0 text-[10px]">{t('ui.secret')}</span>}
-              {field.scope === 'behavior' && <span className="badge badge-slate px-1.5 py-0 text-[10px]">{t('field.scopeBehavior')}</span>}
-              {field.scope === 'connection' && <span className="badge badge-blue px-1.5 py-0 text-[10px]">{t('field.scopeConnection')}</span>}
-              {field.default !== undefined && <span className="ml-auto text-[10px] text-slate-400">{t('conn.default')}: {exampleText(field.default)}</span>}
-            </label>
+              {field.secret && (
+                <ToneBadge tone="amber" className="px-1.5 py-0 text-[10px]">
+                  {t('ui.secret')}
+                </ToneBadge>
+              )}
+              {field.scope === 'behavior' && (
+                <ToneBadge tone="slate" className="px-1.5 py-0 text-[10px]">
+                  {t('field.scopeBehavior')}
+                </ToneBadge>
+              )}
+              {field.scope === 'connection' && (
+                <ToneBadge tone="blue" className="px-1.5 py-0 text-[10px]">
+                  {t('field.scopeConnection')}
+                </ToneBadge>
+              )}
+              {field.default !== undefined && (
+                <span className="ml-auto text-[10px] text-muted-foreground/80">
+                  {t('conn.default')}: {exampleText(field.default)}
+                </span>
+              )}
+            </Label>
             {input}
-            {field.description && <div className="mt-1 text-xs text-slate-400">{field.description}</div>}
+            {field.description && (
+              <div className={cn('mt-1 text-xs text-muted-foreground')}>{field.description}</div>
+            )}
           </div>
         );
       })}

@@ -1,5 +1,18 @@
 import React, { useState } from 'react';
 import type { TFunc, Lang } from './types';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
+import { ToneBadge } from '@/components/shared/status-badge';
+import { cn } from '@/lib/utils';
 
 type WorkerInfo = {
   id: string;
@@ -12,7 +25,9 @@ type WorkerInfo = {
   registered_at: string;
 };
 
-function getToken() { return window.localStorage.getItem('etl_api_token') || ''; }
+function getToken() {
+  return window.localStorage.getItem('etl_api_token') || '';
+}
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();
@@ -32,7 +47,10 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const refresh = () => {
     setLoading(true);
     api<{ workers: WorkerInfo[] }>('/api/v2/workers')
-      .then((d) => { setWorkers(d.workers || []); setError(''); })
+      .then((d) => {
+        setWorkers(d.workers || []);
+        setError('');
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   };
@@ -45,7 +63,9 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
 
   const deregister = (id: string) => {
     api(`/api/v2/workers/${id}/deregister`, { method: 'DELETE' })
-      .then(() => { refresh(); })
+      .then(() => {
+        refresh();
+      })
       .catch((e) => setError(e.message));
   };
 
@@ -53,98 +73,134 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const onlineCount = workers.filter((w) => w.status === 'online').length;
 
   const cards = [
-    { label: t('worker.registered'), value: workers.length, sub: `${onlineCount} ${t('worker.online')}`, color: 'text-indigo-600' },
-    { label: t('worker.totalSlots'), value: totalSlots, sub: `${workers.length} ${t('worker.registered')}`, color: 'text-blue-600' },
-    { label: t('worker.online'), value: onlineCount, sub: `${workers.length - onlineCount} ${t('worker.offline')}`, color: 'text-emerald-600' },
+    {
+      label: t('worker.registered'),
+      value: workers.length,
+      sub: `${onlineCount} ${t('worker.online')}`,
+      color: 'text-primary dark:text-indigo-400',
+    },
+    {
+      label: t('worker.totalSlots'),
+      value: totalSlots,
+      sub: `${workers.length} ${t('worker.registered')}`,
+      color: 'text-blue-600 dark:text-blue-400',
+    },
+    {
+      label: t('worker.online'),
+      value: onlineCount,
+      sub: `${workers.length - onlineCount} ${t('worker.offline')}`,
+      color: 'text-emerald-600 dark:text-emerald-400',
+    },
   ];
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {cards.map((c) => (
-          <div key={c.label} className="card card-body">
-            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{c.label}</span>
-            <div className={`mt-2 text-3xl font-bold ${c.color}`}>{c.value}</div>
-            <div className="mt-1 text-xs text-slate-400">{c.sub}</div>
-          </div>
+          <Card key={c.label} className="transition-shadow hover:shadow-md">
+            <CardContent className="p-5">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {c.label}
+              </span>
+              <div className={cn('mt-2 text-3xl font-bold', c.color)}>{c.value}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{c.sub}</div>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
-      <div className="card">
-        <div className="card-header flex items-center justify-between">
-          <h2 className="text-sm font-semibold">{t('worker.registered')}</h2>
-          <button className="btn btn-secondary btn-sm" onClick={refresh}>{t('common.refresh')}</button>
-        </div>
-        <div className="overflow-x-auto">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <CardTitle className="text-sm">{t('worker.registered')}</CardTitle>
+          <Button variant="secondary" size="sm" onClick={refresh}>
+            {t('common.refresh')}
+          </Button>
+        </CardHeader>
+        <CardContent className="p-0">
           {error ? (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+            <div className="p-4">
+              <ErrorBox message={error} />
+            </div>
           ) : loading && workers.length === 0 ? (
-            <div className="p-8 text-center text-sm text-slate-400">{t('common.loading')}</div>
+            <div className="p-8 text-center text-sm text-muted-foreground">{t('common.loading')}</div>
           ) : workers.length === 0 ? (
             <div className="p-8">
-              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-10 text-center">
-                <div className="text-sm text-slate-500">{t('worker.noWorkers')}</div>
-              </div>
+              <EmptyState text={t('worker.noWorkers')} />
             </div>
           ) : (
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>{t('worker.id')}</th>
-                  <th>{t('common.host')}</th>
-                  <th>{t('common.slots')}</th>
-                  <th>{t('common.labels')}</th>
-                  <th>{t('common.status')}</th>
-                  <th>{t('worker.lastHeartbeat')}</th>
-                  <th>{t('common.actions')}</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('worker.id')}</TableHead>
+                  <TableHead>{t('common.host')}</TableHead>
+                  <TableHead>{t('common.slots')}</TableHead>
+                  <TableHead>{t('common.labels')}</TableHead>
+                  <TableHead>{t('common.status')}</TableHead>
+                  <TableHead>{t('worker.lastHeartbeat')}</TableHead>
+                  <TableHead>{t('common.actions')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {workers.map((w) => (
-                  <tr key={w.id}>
-                    <td className="font-medium">{w.id}</td>
-                    <td className="text-sm">{w.host}:{w.port}</td>
-                    <td><span className="badge badge-blue">{w.slots}</span></td>
-                    <td>
+                  <TableRow key={w.id}>
+                    <TableCell className="font-medium">{w.id}</TableCell>
+                    <TableCell className="text-sm">
+                      {w.host}:{w.port}
+                    </TableCell>
+                    <TableCell>
+                      <ToneBadge tone="blue">{w.slots}</ToneBadge>
+                    </TableCell>
+                    <TableCell>
                       {w.labels && Object.keys(w.labels).length > 0 ? (
-                        Object.entries(w.labels).map(([k, v]) => (
-                          <span key={k} className="badge badge-violet mr-1">{k}={v}</span>
-                        ))
+                        <div className="flex flex-wrap gap-1">
+                          {Object.entries(w.labels).map(([k, v]) => (
+                            <ToneBadge key={k} tone="violet">
+                              {k}={v}
+                            </ToneBadge>
+                          ))}
+                        </div>
                       ) : (
-                        <span className="text-xs text-slate-300">—</span>
+                        <span className="text-xs text-muted-foreground">—</span>
                       )}
-                    </td>
-                    <td>
-                      <span className={`badge ${w.status === 'online' ? 'badge-emerald' : 'badge-slate'}`}>
+                    </TableCell>
+                    <TableCell>
+                      <ToneBadge tone={w.status === 'online' ? 'emerald' : 'slate'}>
                         {w.status === 'online' ? t('worker.online') : t('worker.offline')}
-                      </span>
-                    </td>
-                    <td className="text-xs text-slate-400">{fmtTime(w.last_heartbeat)}</td>
-                    <td>
-                      <button className="btn btn-danger btn-sm" onClick={() => deregister(w.id)}>{t('worker.deregister')}</button>
-                    </td>
-                  </tr>
+                      </ToneBadge>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {fmtTime(w.last_heartbeat)}
+                    </TableCell>
+                    <TableCell>
+                      <Button variant="destructive" size="sm" onClick={() => deregister(w.id)}>
+                        {t('worker.deregister')}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        <div className="card-header"><h2 className="text-sm font-semibold">{t('worker.runningTasks')}</h2></div>
-        <div className="card-body">
-          <div className="rounded-lg border border-dashed border-slate-200 py-8 text-center text-sm text-slate-400">
-            {t('worker.noWorkers')}
-          </div>
-        </div>
-      </div>
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">{t('worker.runningTasks')}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <EmptyState text={t('worker.noWorkers')} />
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
 function fmtTime(v?: string) {
-  if (!v || v.startsWith('0001-') || v.startsWith('1970-')) return t_na();
-  try { return new Date(v).toLocaleString(); } catch { return t_na(); }
+  if (!v || v.startsWith('0001-') || v.startsWith('1970-')) return 'n/a';
+  try {
+    return new Date(v).toLocaleString();
+  } catch {
+    return 'n/a';
+  }
 }
-function t_na() { return 'n/a'; }
