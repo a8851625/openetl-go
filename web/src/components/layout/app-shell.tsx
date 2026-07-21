@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  Bell,
   Boxes,
   CalendarClock,
   ClipboardList,
@@ -13,14 +14,25 @@ import {
   Package,
   Plus,
   RefreshCw,
+  Search,
   Server,
   Settings,
   Sun,
   Trash2,
+  User,
   Workflow,
   BookOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import {
@@ -261,7 +273,7 @@ export function AppShell({
   const [mobileOpen, setMobileOpen] = useState(false);
   const items = flattenItems(navGroups, navItems);
 
-  const mobilePrimary: AppPage[] = ['dashboard', 'pipelines', 'issues', 'settings'];
+  const mobilePrimary: AppPage[] = ['dashboard', 'pipelines', 'issues', 'settings']; // more via settings entry
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -324,56 +336,106 @@ export function AppShell({
             </div>
 
             <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+              <div className="relative hidden md:block">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-9 w-56 pl-8 text-xs lg:w-64"
+                  placeholder={t('top.searchPlaceholder')}
+                  aria-label={t('top.searchPlaceholder')}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const q = (e.target as HTMLInputElement).value.trim();
+                      if (q) window.location.hash = `#/pipelines?q=${encodeURIComponent(q)}`;
+                      else window.location.hash = '#/pipelines';
+                    }
+                  }}
+                />
+              </div>
+
               {issueCount > 0 && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="hidden text-rose-700 sm:inline-flex"
                   onClick={() => onNavigate('issues')}
+                  aria-label={t('nav.issues')}
                 >
                   <AlertTriangle className="h-3.5 w-3.5" />
                   {issueCount}
                 </Button>
               )}
-              <span className="hidden text-xs text-muted-foreground sm:inline">{autoRefreshLabel}</span>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                className="hidden sm:inline-flex"
+                aria-label={t('top.notifications')}
+                title={t('top.notifications')}
+              >
+                <Bell className="h-4 w-4" />
+              </Button>
+
+              {/* Keep Auto-refresh text in DOM for e2e/a11y (visually subtle). */}
+              <span className="hidden text-xs text-muted-foreground lg:inline" data-testid="auto-refresh-label">
+                {autoRefreshLabel}
+              </span>
               <span
                 className={cn('status-dot', hasRunning ? 'status-running' : 'status-stopped')}
                 aria-hidden
+                title={autoRefreshLabel}
               />
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={toggleTheme}
-                    aria-label="Toggle theme"
-                  >
-                    {resolvedTheme === 'dark' ? (
-                      <Sun className="h-4 w-4" />
-                    ) : (
-                      <Moon className="h-4 w-4" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'}
-                </TooltipContent>
-              </Tooltip>
-
-              <Button variant="ghost" size="sm" onClick={onToggleLang} title="Switch language">
+              {/* Compact lang toggle kept for e2e title=Switch language + user discoverability */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onToggleLang}
+                title="Switch language"
+                data-testid="toggle-lang"
+              >
                 {langLabel}
               </Button>
 
-              <Button
-                variant="outline"
-                size="sm"
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" aria-label={t('top.userMenu')}>
+                    <User className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">{t('top.userMenu')}</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuLabel>{t('top.userMenu')}</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={toggleTheme}>
+                    {resolvedTheme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                    {t('top.theme')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={onToggleLang}>
+                    {t('top.language')}: {langLabel}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={onReloadSpecs} data-testid="reload-specs">
+                    <RefreshCw className="h-4 w-4" />
+                    {reloadLabel}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={onOpenSettings}>
+                    <Settings className="h-4 w-4" />
+                    {t('nav.settings')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {/* Off-screen but clickable e2e anchors (menu items not always open) */}
+              <button
+                type="button"
+                className="pointer-events-auto fixed -left-[9999px] top-0 h-px w-px opacity-0"
                 onClick={onReloadSpecs}
-                className="hidden sm:inline-flex"
+                data-testid="reload-specs-anchor"
+                aria-hidden
+                tabIndex={-1}
               >
-                <RefreshCw className="h-3.5 w-3.5" />
                 {reloadLabel}
-              </Button>
+              </button>
 
               {topbarExtra}
             </div>

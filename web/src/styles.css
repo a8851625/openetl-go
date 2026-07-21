@@ -125,9 +125,11 @@
   @apply bg-violet-500;
 }
 
-/* ── Pipeline row ── */
+/* ── Pipeline row ──
+   Layout (flex/grid) is owned by the page component so action columns can
+   right-align with grid-cols / justify-self-end. Keep only surface chrome here. */
 .pipeline-row {
-  @apply flex w-full items-center gap-4 rounded-[14px] border border-border bg-card p-4 text-left transition cursor-pointer;
+  @apply w-full rounded-[14px] border border-border bg-card p-4 text-left transition cursor-pointer;
 }
 .pipeline-row:hover {
   @apply border-primary/40 bg-accent/40;

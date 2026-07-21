@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import YAML from 'yaml';
-import { Modal } from '@/components/shared/modal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -16,12 +15,39 @@ import {
 } from '@/configFields';
 import { api, getToken, normalizeConnectionEntry } from '@/lib/api';
 import { parseJSONObject, parseJSONText, prettyJSON } from '@/lib/format';
+import { navigate } from '@/lib/routing';
 import type {
   ConnectionContext,
   ConnectionEntry,
   ConnectionRecommendation,
   TFunc,
 } from '@/lib/types';
+import { ArrowLeft, ArrowRight, Check, GitBranch, Save } from 'lucide-react';
+
+const WIZARD_DRAFT_KEY = 'etl_wizard_draft_v1';
+const WIZARD_STEPS = [
+  { id: 'scenario', labelKey: 'wizard.stepScenario' },
+  { id: 'source', labelKey: 'wizard.stepSource' },
+  { id: 'sink', labelKey: 'wizard.stepSink' },
+  { id: 'transform', labelKey: 'wizard.stepTransform' },
+  { id: 'safety', labelKey: 'wizard.stepSafety' },
+  { id: 'confirm', labelKey: 'wizard.stepConfirm' },
+] as const;
+
+type WizardStepId = (typeof WIZARD_STEPS)[number]['id'];
+
+function readStepFromHash(): WizardStepId {
+  const raw = (window.location.hash || '').split('?')[1] || '';
+  const step = new URLSearchParams(raw).get('step') || 'scenario';
+  return (WIZARD_STEPS.some((s) => s.id === step) ? step : 'scenario') as WizardStepId;
+}
+
+function writeStepToHash(step: WizardStepId) {
+  const next = `#/pipelines/new?step=${encodeURIComponent(step)}`;
+  if (window.location.hash !== next) {
+    window.history.replaceState(null, '', next);
+  }
+}
 
 const wizardSelectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -152,35 +178,89 @@ function parseTransformList(text: string): { type: string; config: Record<string
 }
 
 
-export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t: TFunc; plugins: any; schema: any; onClose: () => void; onCreated: (name: string) => void }) {
-  const [templateId, setTemplateId] = useState('multi-table-sync');
+export function FirstTaskWizard({
+  t,
+  plugins,
+  schema,
+  onClose,
+  onCreated,
+  initialStep,
+  onOpenDesigner,
+}: {
+  t: TFunc;
+  plugins: any;
+  schema: any;
+  onClose: () => void;
+  onCreated: (name: string) => void;
+  initialStep?: string;
+  onOpenDesigner?: (ref: string) => void;
+}) {
+  const restored = useMemo(() => {
+    try {
+      // E2E runs start clean so form defaults stay deterministic.
+      if (
+        typeof window !== 'undefined' &&
+        (window.location.search.includes('e2e=') ||
+          window.localStorage.getItem('etl_e2e') === '1')
+      ) {
+        localStorage.removeItem(WIZARD_DRAFT_KEY);
+        return null;
+      }
+      const raw = localStorage.getItem(WIZARD_DRAFT_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }, []);
+  const [step, setStep] = useState<WizardStepId>(
+    () => (initialStep as WizardStepId) || readStepFromHash(),
+  );
+  const [templateId, setTemplateId] = useState(restored?.templateId || 'multi-table-sync');
   const template = WIZARD_TEMPLATES.find((tpl) => tpl.id === templateId) || WIZARD_TEMPLATES[0];
-  const [name, setName] = useState('ui-wizard-multi-table');
-  const [sourceType, setSourceType] = useState(template.sourceTypes[0]);
-  const [sinkType, setSinkType] = useState(template.sinkTypes[0]);
-  const [sourceConfigText, setSourceConfigText] = useState(prettyJSON(defaultSourceConfig(sourceType)));
-  const [sinkConfigText, setSinkConfigText] = useState(prettyJSON(defaultSinkConfig(sinkType)));
-  const [transformsText, setTransformsText] = useState(prettyJSON(template.transforms));
-  const [sampleText, setSampleText] = useState(prettyJSON(template.sample));
-  const [yamlText, setYamlText] = useState('');
+  const [name, setName] = useState(restored?.name || 'ui-wizard-multi-table');
+  const [sourceType, setSourceType] = useState(restored?.sourceType || template.sourceTypes[0]);
+  const [sinkType, setSinkType] = useState(restored?.sinkType || template.sinkTypes[0]);
+  const [sourceConfigText, setSourceConfigText] = useState(
+    restored?.sourceConfigText || prettyJSON(defaultSourceConfig(sourceType)),
+  );
+  const [sinkConfigText, setSinkConfigText] = useState(
+    restored?.sinkConfigText || prettyJSON(defaultSinkConfig(sinkType)),
+  );
+  const [transformsText, setTransformsText] = useState(
+    restored?.transformsText || prettyJSON(template.transforms),
+  );
+  const [sampleText, setSampleText] = useState(
+    restored?.sampleText || prettyJSON(template.sample),
+  );
+  const [yamlText, setYamlText] = useState(restored?.yamlText || '');
   const [sourceJsonOpen, setSourceJsonOpen] = useState(false);
   const [sinkJsonOpen, setSinkJsonOpen] = useState(false);
   const [transformJsonOpen, setTransformJsonOpen] = useState(false);
   const [tableMappingOpen, setTableMappingOpen] = useState(false);
-  const [tableMappingText, setTableMappingText] = useState(template.tableMapping ? prettyJSON(template.tableMapping) : '');
+  const [tableMappingText, setTableMappingText] = useState(
+    restored?.tableMappingText ||
+      (template.tableMapping ? prettyJSON(template.tableMapping) : ''),
+  );
   const [result, setResult] = useState<ValidateResult | null>(null);
   const [dryRunResult, setDryRunResult] = useState<unknown>(null);
-  const [stageDryRunResult, setStageDryRunResult] = useState<{ index: number; result?: unknown; error?: string } | null>(null);
+  const [stageDryRunResult, setStageDryRunResult] = useState<{
+    index: number;
+    result?: unknown;
+    error?: string;
+  } | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [connections, setConnections] = useState<ConnectionEntry[]>([]);
-  const [sourceConnection, setSourceConnection] = useState('');
-  const [sinkConnection, setSinkConnection] = useState('');
+  const [sourceConnection, setSourceConnection] = useState(restored?.sourceConnection || '');
+  const [sinkConnection, setSinkConnection] = useState(restored?.sinkConnection || '');
   const [sourceContext, setSourceContext] = useState<ConnectionContext | null>(null);
   const [sinkContext, setSinkContext] = useState<ConnectionContext | null>(null);
-  const [batchSize, setBatchSize] = useState(100);
-  const [checkpointIntervalSec, setCheckpointIntervalSec] = useState(1);
-  const [dlqEnabled, setDlqEnabled] = useState(true);
+  const [batchSize, setBatchSize] = useState(restored?.batchSize ?? 100);
+  const [checkpointIntervalSec, setCheckpointIntervalSec] = useState(
+    restored?.checkpointIntervalSec ?? 1,
+  );
+  const [dlqEnabled, setDlqEnabled] = useState(restored?.dlqEnabled ?? true);
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
 
   const allSourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
   const allSinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
@@ -276,9 +356,65 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
   }, [refreshConnections]);
 
   useEffect(() => {
-    const nextTemplate = WIZARD_TEMPLATES.find((tpl) => tpl.id === templateId) || WIZARD_TEMPLATES[0];
+    writeStepToHash(step);
+  }, [step]);
+
+  useEffect(() => {
+    if (initialStep && WIZARD_STEPS.some((s) => s.id === initialStep)) {
+      setStep(initialStep as WizardStepId);
+    }
+  }, [initialStep]);
+
+  // Auto-save draft
+  useEffect(() => {
+    const draft = {
+      templateId,
+      name,
+      sourceType,
+      sinkType,
+      sourceConfigText,
+      sinkConfigText,
+      transformsText,
+      sampleText,
+      yamlText,
+      tableMappingText,
+      sourceConnection,
+      sinkConnection,
+      batchSize,
+      checkpointIntervalSec,
+      dlqEnabled,
+      step,
+    };
+    try {
+      localStorage.setItem(WIZARD_DRAFT_KEY, JSON.stringify(draft));
+      setDraftSavedAt(new Date().toISOString());
+    } catch {
+      /* ignore quota */
+    }
+  }, [
+    templateId,
+    name,
+    sourceType,
+    sinkType,
+    sourceConfigText,
+    sinkConfigText,
+    transformsText,
+    sampleText,
+    yamlText,
+    tableMappingText,
+    sourceConnection,
+    sinkConnection,
+    batchSize,
+    checkpointIntervalSec,
+    dlqEnabled,
+    step,
+  ]);
+
+  const applyTemplate = (nextId: string) => {
+    const nextTemplate = WIZARD_TEMPLATES.find((tpl) => tpl.id === nextId) || WIZARD_TEMPLATES[0];
     const nextSource = nextTemplate.sourceTypes[0];
     const nextSink = nextTemplate.sinkTypes[0];
+    setTemplateId(nextId);
     setSourceType(nextSource);
     setSinkType(nextSink);
     setSourceConfigText(prettyJSON(seedSourceConfig(nextSource)));
@@ -300,7 +436,25 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
     setResult(null);
     setDryRunResult(null);
     setStageDryRunResult(null);
-  }, [templateId]);
+  };
+
+  const stepIndex = WIZARD_STEPS.findIndex((s) => s.id === step);
+  const goNext = () => {
+    if (stepIndex < WIZARD_STEPS.length - 1) setStep(WIZARD_STEPS[stepIndex + 1].id);
+  };
+  const goBack = () => {
+    if (stepIndex > 0) setStep(WIZARD_STEPS[stepIndex - 1].id);
+  };
+  const saveDraftAndExit = () => {
+    onClose();
+  };
+  const clearDraft = () => {
+    try {
+      localStorage.removeItem(WIZARD_DRAFT_KEY);
+    } catch {
+      /* ignore */
+    }
+  };
 
   useEffect(() => {
     if (!sourceContext) return;
@@ -405,6 +559,7 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
       const spec = YAML.parse(yamlText);
       const created = await api<{ id?: string; name: string }>('/api/v2/pipelines', { method: 'POST', body: JSON.stringify({ spec }) });
       await api(`/api/v2/pipelines/${encodeURIComponent(created.id || created.name || spec.name)}/start`, { method: 'POST' });
+      clearDraft();
       onCreated(created.name || spec.name);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -597,7 +752,7 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
     const intro = ctx.introspection;
     const schemaRows = intro?.schema || intro?.tables?.find((table) => table.columns?.length)?.columns || [];
     return (
-      <div className={`rounded-lg border p-3 ${intro?.ok === false ? 'border-rose-200 bg-rose-50' : 'border-cyan-200 bg-cyan-50'}`} data-testid={`${title.toLowerCase().replace(/\s+/g, '-')}-context`}>
+      <div className={`rounded-lg border p-3 ${intro?.ok === false ? 'border-rose-200 bg-rose-50' : 'border-primary/20 bg-accent'}`} data-testid={`${title.toLowerCase().replace(/\s+/g, '-')}-context`}>
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="text-xs font-semibold text-slate-700">{title} context</div>
           <ToneBadge tone={intro?.ok === false ? 'rose' : 'blue'}>{intro?.status || 'ready'}</ToneBadge>
@@ -621,7 +776,7 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
                     <button
                       type="button"
                       data-testid="connection-recommendation-apply"
-                      className="font-semibold text-indigo-600 hover:text-indigo-800"
+                      className="font-semibold text-primary hover:text-primary/80"
                       onClick={() => applyConnectionRecommendation(title, rec)}
                     >
                       Apply
@@ -719,157 +874,307 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
     }
   };
 
+  const summaryPath = `${sourceType}${sourceConnection ? ` (${sourceConnection})` : ''} → ${transformConfigs.map((x) => x.type).join(' · ') || '—'} → ${sinkType}${sinkConnection ? ` (${sinkConnection})` : ''}`;
+
   return (
-    <Modal title={t('wizard.title')} onClose={onClose} className="sm:max-w-6xl">
-      <div className="grid gap-5 xl:grid-cols-[280px_1fr]">
-        <div className="space-y-3">
-          <div className="px-1 pb-1 text-xs font-medium text-slate-400">{t('wizard.emptyStart')}</div>
-          {WIZARD_TEMPLATES.map((tpl) => (
-            <button key={tpl.id} className={`relative w-full rounded-lg border p-3 text-left text-sm transition ${templateId === tpl.id ? 'border-primary bg-accent text-primary' : 'border-border bg-card text-muted-foreground hover:border-primary/40'}`} onClick={() => setTemplateId(tpl.id)}>
-              <div className="flex items-center gap-1.5">
-                <span className="font-semibold">{tpl.title}</span>
-                {tpl.recommended && <ToneBadge tone="indigo" className="px-1.5 py-0 text-[10px]">{t('wizard.recommended')}</ToneBadge>}
-              </div>
-              <div className="mt-1 text-xs text-slate-400">{tpl.descKey ? t(tpl.descKey) : `${tpl.sourceTypes.join(' / ')} → ${tpl.sinkTypes.join(' / ')}`}</div>
-            </button>
-          ))}
+    <div className="space-y-4" data-testid="wizard-fullpage">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label={t('wizard.back')}>
+            <ArrowLeft className="h-4 w-4" /> {t('wizard.back')}
+          </Button>
+          <div>
+            <div className="text-xs font-bold uppercase tracking-[0.08em] text-primary">{t('wizard.eyebrow')}</div>
+            <h2 className="text-xl font-semibold tracking-tight">{t('wizard.title')}</h2>
+          </div>
         </div>
-        <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">Pipeline name</label>
-              <Input data-testid="wizard-pipeline-name" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">Source</label>
-              <select data-testid="wizard-source-type" className={wizardSelectClass} value={sourceType} onChange={(e) => { setSourceType(e.target.value); setSourceConnection(''); setSourceContext(null); setSourceConfigText(prettyJSON(seedSourceConfig(e.target.value))); }}>
-                {template.sourceTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
-              </select>
-              <select data-testid="wizard-source-connection" className={cn(wizardSelectClass, "mt-2 text-sm")} value={sourceConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSourceConnection(e.target.value)}>
-                <option value="">Inline source config</option>
-                {sourceConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type} · {conn.last_status || 'untested'}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">Sink</label>
-              <select data-testid="wizard-sink-type" className={wizardSelectClass} value={sinkType} onChange={(e) => { setSinkType(e.target.value); setSinkConnection(''); setSinkContext(null); setSinkConfigText(prettyJSON(seedSinkConfig(e.target.value))); }}>
-                {template.sinkTypes.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
-              </select>
-              <select data-testid="wizard-sink-connection" className={cn(wizardSelectClass, "mt-2 text-sm")} value={sinkConnection} onFocus={() => refreshConnections()} onChange={(e) => selectSinkConnection(e.target.value)}>
-                <option value="">Inline sink config</option>
-                {sinkConnections.map((conn) => <option key={conn.name} value={conn.name}>{conn.name} · {conn.type} · {conn.last_status || 'untested'}</option>)}
-              </select>
-              {/* E2E-only remediation shortcuts (P4.2: hidden in production UI). */}
-              {typeof window !== 'undefined' &&
-                (window.location.search.includes('e2e=') ||
-                  window.localStorage.getItem('etl_e2e') === '1') && (
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {template.sinkTypes.includes('maxcompute') && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="text-[11px]"
-                      onClick={() => {
-                        setSinkType('maxcompute');
-                        setSinkConnection('');
-                        setSinkContext(null);
-                        setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute')));
-                        setResult(null);
-                      }}
-                    >
-                      Failure demo
-                    </Button>
-                  )}
-                  {template.sinkTypes.includes('file_sink') && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="text-[11px]"
-                      onClick={() => {
-                        setSinkType('file_sink');
-                        setSinkConnection('');
-                        setSinkContext(null);
-                        setSinkConfigText(prettyJSON(seedSinkConfig('file_sink')));
-                        setResult(null);
-                      }}
-                    >
-                      Repair to file_sink
-                    </Button>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            {renderSchemaSummary(`Descriptor schema: ${sourceType}`, sourceFields, sourceMaturity, sourceCapabilities, sourceMissing)}
-            {renderSchemaSummary(`Descriptor schema: ${sinkType}`, sinkFields, sinkMaturity, sinkCapabilities, sinkMissing)}
-          </div>
-          {(template.tableMapping || tableMappingOpen) && (
-            <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3" data-testid="wizard-table-mapping">
-              <div className="mb-2 flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-semibold text-slate-700">{t('wizard.tableMapping')}</div>
-                  <div className="text-[11px] text-slate-500">{t('wizard.tableMappingHint')}</div>
-                </div>
-                <Button variant="ghost" size="sm" className="text-[11px]" onClick={() => setTableMappingOpen(!tableMappingOpen)}>{tableMappingOpen ? '−' : '+'}</Button>
-              </div>
-              {tableMappingOpen ? (
-                <Textarea
-                  data-testid="wizard-table-mapping-json"
-                  className="min-h-20 w-full font-mono text-xs"
-                  value={tableMappingText}
-                  onChange={(e) => setTableMappingText(e.target.value)}
-                  placeholder={'{\n  "template": "ods_{source_table}"\n}'}
-                />
-              ) : (
-                <pre className="overflow-auto rounded bg-white/70 p-2 text-xs text-slate-600">{tableMappingText || '—'}</pre>
-              )}
-            </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {draftSavedAt && (
+            <span className="text-[11px] text-muted-foreground">{t('wizard.draftSaved')}</span>
           )}
-          <div className="grid gap-3 lg:grid-cols-2">
-            {renderConnectionContext('Source', sourceContext)}
-            {renderConnectionContext('Sink', sinkContext)}
-          </div>
-          <div className="rounded-lg border border-border bg-card p-3" data-testid="wizard-runtime-safety">
-            <div className="mb-3 text-xs font-semibold text-slate-600">Runtime safety</div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <label className="block text-xs text-slate-500">
-                <span className="mb-1 block font-medium">Batch size</span>
-                <Input
-                  data-testid="wizard-batch-size"
-                  
-                  type="number"
-                  min={1}
-                  value={batchSize}
-                  onChange={(e) => setBatchSize(positiveIntValue(e.target.value, batchSize))}
-                />
-              </label>
-              <label className="block text-xs text-slate-500">
-                <span className="mb-1 block font-medium">Checkpoint sec</span>
-                <Input
-                  data-testid="wizard-checkpoint-sec"
-                  
-                  type="number"
-                  min={1}
-                  value={checkpointIntervalSec}
-                  onChange={(e) => setCheckpointIntervalSec(positiveIntValue(e.target.value, checkpointIntervalSec))}
-                />
-              </label>
-              <label className="flex items-center gap-2 rounded border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
-                <input data-testid="wizard-dlq-enabled" type="checkbox" checked={dlqEnabled} onChange={(e) => setDlqEnabled(e.target.checked)} />
-                DLQ enabled
-              </label>
+          <Button variant="outline" size="sm" onClick={saveDraftAndExit} data-testid="wizard-save-draft">
+            <Save className="h-3.5 w-3.5" /> {t('wizard.saveDraftExit')}
+          </Button>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-[14px] border border-border bg-card">
+        <div className="grid min-h-[620px] gap-0 xl:grid-cols-[210px_minmax(0,1fr)_270px]">
+          {/* Left steps */}
+          <aside className="border-b border-border p-4 xl:border-b-0 xl:border-r" data-testid="wizard-steps">
+            <div className="mb-3 text-xs font-semibold text-muted-foreground">{t('wizard.progress')}</div>
+            <div className="flex gap-2 overflow-x-auto xl:flex-col xl:overflow-visible">
+              {WIZARD_STEPS.map((s, i) => {
+                const active = s.id === step;
+                const done = i < stepIndex;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    data-testid={`wizard-step-${s.id}`}
+                    className={cn(
+                      'rounded-lg px-3 py-2.5 text-left text-sm transition whitespace-nowrap',
+                      active && 'bg-accent font-semibold text-primary',
+                      done && !active && 'text-foreground',
+                      !active && !done && 'text-muted-foreground',
+                    )}
+                    onClick={() => {
+                      setStep(s.id);
+                      document.getElementById(`wizard-section-${s.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }}
+                  >
+                    <span className="mr-2 tabular text-xs opacity-70">{i + 1}</span>
+                    {t(s.labelKey)}
+                    {done && <Check className="ml-1 inline h-3 w-3 text-primary" />}
+                  </button>
+                );
+              })}
             </div>
-          </div>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {renderConfigEditor('Source config', sourceFields, sourceConfig, sourceConfigText, setSourceConfigText, sourceJsonOpen, setSourceJsonOpen, 'wizard-source-config-form')}
-            {renderConfigEditor('Sink config', sinkFields, sinkConfig, sinkConfigText, setSinkConfigText, sinkJsonOpen, setSinkJsonOpen, 'wizard-sink-config-form')}
-          </div>
-          <div className="grid gap-3 lg:grid-cols-2">
-            <div>
+          </aside>
+
+          {/* Center form */}
+          <div className="space-y-4 p-5 md:p-6" data-testid="wizard-step-body">
+            {/* Scenario */}
+            <div id="wizard-section-scenario" className={cn(step === 'scenario' && 'ring-1 ring-primary/20 rounded-lg')}>
+              <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepScenario')}</h3>
+              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.emptyStart')}</p>
+              <div className="mb-4">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Pipeline name</label>
+                <Input data-testid="wizard-pipeline-name" value={name} onChange={(e) => setName(e.target.value)} />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {WIZARD_TEMPLATES.map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    className={cn(
+                      'rounded-[10px] border p-4 text-left text-sm transition',
+                      templateId === tpl.id
+                        ? 'border-primary shadow-[0_0_0_2px_hsl(var(--accent))]'
+                        : 'border-border hover:border-primary/40',
+                    )}
+                    onClick={() => applyTemplate(tpl.id)}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold">{tpl.title}</span>
+                      {tpl.recommended && (
+                        <ToneBadge tone="emerald" className="px-1.5 py-0 text-[10px]">
+                          {t('wizard.recommended')}
+                        </ToneBadge>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {tpl.descKey ? t(tpl.descKey) : `${tpl.sourceTypes.join(' / ')} → ${tpl.sinkTypes.join(' / ')}`}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Source */}
+            <div id="wizard-section-source" className={cn(step === 'source' && 'ring-1 ring-primary/20 rounded-lg')}>
+              <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSource')}</h3>
+              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.sourceHint')}</p>
+              <div className="mb-3 grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Source</label>
+                  <select
+                    data-testid="wizard-source-type"
+                    className={wizardSelectClass}
+                    value={sourceType}
+                    onChange={(e) => {
+                      setSourceType(e.target.value);
+                      setSourceConnection('');
+                      setSourceContext(null);
+                      setSourceConfigText(prettyJSON(seedSourceConfig(e.target.value)));
+                    }}
+                  >
+                    {template.sourceTypes.map((tp) => (
+                      <option key={tp} value={tp}>{tp}</option>
+                    ))}
+                  </select>
+                  <select
+                    data-testid="wizard-source-connection"
+                    className={cn(wizardSelectClass, 'mt-2 text-sm')}
+                    value={sourceConnection}
+                    onFocus={() => refreshConnections()}
+                    onChange={(e) => selectSourceConnection(e.target.value)}
+                  >
+                    <option value="">Inline source config</option>
+                    {sourceConnections.map((conn) => (
+                      <option key={conn.name} value={conn.name}>
+                        {conn.name} · {conn.type} · {conn.last_status || 'untested'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {renderSchemaSummary(
+                  `Descriptor schema: ${sourceType}`,
+                  sourceFields,
+                  sourceMaturity,
+                  sourceCapabilities,
+                  sourceMissing,
+                )}
+              </div>
+              {renderConnectionContext('Source', sourceContext)}
+              <div className="mt-3">
+                {renderConfigEditor(
+                  'Source config',
+                  sourceFields,
+                  sourceConfig,
+                  sourceConfigText,
+                  setSourceConfigText,
+                  sourceJsonOpen,
+                  setSourceJsonOpen,
+                  'wizard-source-config-form',
+                )}
+              </div>
+            </div>
+
+            {/* Sink */}
+            <div id="wizard-section-sink" className={cn(step === 'sink' && 'ring-1 ring-primary/20 rounded-lg')}>
+              <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSink')}</h3>
+              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.sinkHint')}</p>
+              <div className="mb-3 grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Sink</label>
+                  <select
+                    data-testid="wizard-sink-type"
+                    className={wizardSelectClass}
+                    value={sinkType}
+                    onChange={(e) => {
+                      setSinkType(e.target.value);
+                      setSinkConnection('');
+                      setSinkContext(null);
+                      setSinkConfigText(prettyJSON(seedSinkConfig(e.target.value)));
+                    }}
+                  >
+                    {template.sinkTypes.map((tp) => (
+                      <option key={tp} value={tp}>{tp}</option>
+                    ))}
+                  </select>
+                  <select
+                    data-testid="wizard-sink-connection"
+                    className={cn(wizardSelectClass, 'mt-2 text-sm')}
+                    value={sinkConnection}
+                    onFocus={() => refreshConnections()}
+                    onChange={(e) => selectSinkConnection(e.target.value)}
+                  >
+                    <option value="">Inline sink config</option>
+                    {sinkConnections.map((conn) => (
+                      <option key={conn.name} value={conn.name}>
+                        {conn.name} · {conn.type} · {conn.last_status || 'untested'}
+                      </option>
+                    ))}
+                  </select>
+                  {typeof window !== 'undefined' &&
+                    (window.location.search.includes('e2e=') ||
+                      window.localStorage.getItem('etl_e2e') === '1') && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {template.sinkTypes.includes('maxcompute') && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="text-[11px]"
+                            onClick={() => {
+                              setSinkType('maxcompute');
+                              setSinkConnection('');
+                              setSinkContext(null);
+                              setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute')));
+                              setResult(null);
+                            }}
+                          >
+                            Failure demo
+                          </Button>
+                        )}
+                        {template.sinkTypes.includes('file_sink') && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="text-[11px]"
+                            onClick={() => {
+                              setSinkType('file_sink');
+                              setSinkConnection('');
+                              setSinkContext(null);
+                              setSinkConfigText(prettyJSON(seedSinkConfig('file_sink')));
+                              setResult(null);
+                            }}
+                          >
+                            Repair to file_sink
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                </div>
+                {renderSchemaSummary(
+                  `Descriptor schema: ${sinkType}`,
+                  sinkFields,
+                  sinkMaturity,
+                  sinkCapabilities,
+                  sinkMissing,
+                )}
+              </div>
+              {(template.tableMapping || tableMappingOpen) && (
+                <div className="mb-3 rounded-lg border border-primary/20 bg-accent/40 p-3" data-testid="wizard-table-mapping">
+                  <div className="mb-2 flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold">{t('wizard.tableMapping')}</div>
+                      <div className="text-[11px] text-muted-foreground">{t('wizard.tableMappingHint')}</div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-[11px]"
+                      onClick={() => setTableMappingOpen(!tableMappingOpen)}
+                    >
+                      {tableMappingOpen ? '−' : '+'}
+                    </Button>
+                  </div>
+                  {tableMappingOpen ? (
+                    <Textarea
+                      data-testid="wizard-table-mapping-json"
+                      className="min-h-20 w-full font-mono text-xs"
+                      value={tableMappingText}
+                      onChange={(e) => setTableMappingText(e.target.value)}
+                      placeholder={'{\\n  "template": "ods_{source_table}"\\n}'}
+                    />
+                  ) : (
+                    <pre className="overflow-auto rounded bg-card/70 p-2 text-xs text-muted-foreground">
+                      {tableMappingText || '—'}
+                    </pre>
+                  )}
+                </div>
+              )}
+              {renderConnectionContext('Sink', sinkContext)}
+              <div className="mt-3">
+                {renderConfigEditor(
+                  'Sink config',
+                  sinkFields,
+                  sinkConfig,
+                  sinkConfigText,
+                  setSinkConfigText,
+                  sinkJsonOpen,
+                  setSinkJsonOpen,
+                  'wizard-sink-config-form',
+                )}
+              </div>
+            </div>
+
+            {/* Transform */}
+            <div id="wizard-section-transform" className={cn(step === 'transform' && 'ring-1 ring-primary/20 rounded-lg')}>
+              <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepTransform')}</h3>
+              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.transformHint')}</p>
               <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="block text-xs font-medium text-slate-500">Transform chain</label>
-                <Button data-testid="wizard-add-transform" variant="secondary" size="sm" className="text-[11px]" onClick={addTransform}>Add transform</Button>
+                <label className="block text-xs font-medium text-muted-foreground">Transform chain</label>
+                <Button
+                  data-testid="wizard-add-transform"
+                  variant="secondary"
+                  size="sm"
+                  className="text-[11px]"
+                  onClick={addTransform}
+                >
+                  Add transform
+                </Button>
               </div>
               <div className="mb-3 rounded-lg border border-border bg-card p-3" data-testid="wizard-transform-config-form">
                 {transformConfigs.length ? (
@@ -877,33 +1182,109 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
                     {transformConfigs.map((item, index) => {
                       const fields = (schema?.data?.transforms?.[item.type] || []) as PluginSchemaField[];
                       return (
-                        <div key={`${item.type}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-3" data-testid={`wizard-transform-stage-${index}`}>
+                        <div
+                          key={`${item.type}-${index}`}
+                          className="rounded border border-border bg-muted/40 p-3"
+                          data-testid={`wizard-transform-stage-${index}`}
+                        >
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <div className="flex min-w-0 flex-1 items-center gap-2">
-                              <span className="shrink-0 text-xs font-semibold text-slate-600">{index + 1}.</span>
-                              <select data-testid={`wizard-transform-type-${index}`} className={cn(wizardSelectClass, "h-8 min-w-0 flex-1 text-xs")} value={item.type} onChange={(e) => updateTransformType(index, e.target.value)}>
-                                {transformTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+                              <span className="shrink-0 text-xs font-semibold text-muted-foreground">
+                                {index + 1}.
+                              </span>
+                              <select
+                                data-testid={`wizard-transform-type-${index}`}
+                                className={cn(wizardSelectClass, 'h-8 min-w-0 flex-1 text-xs')}
+                                value={item.type}
+                                onChange={(e) => updateTransformType(index, e.target.value)}
+                              >
+                                {transformTypes.map((type) => (
+                                  <option key={type} value={type}>{type}</option>
+                                ))}
                               </select>
-                              <ToneBadge tone="slate" className="text-[10px]">{metadata.transforms?.[item.type]?.maturity || 'unknown'}</ToneBadge>
+                              <ToneBadge tone="slate" className="text-[10px]">
+                                {metadata.transforms?.[item.type]?.maturity || 'unknown'}
+                              </ToneBadge>
                             </div>
                             <div className="flex shrink-0 gap-1">
-                              <Button data-testid={`wizard-transform-move-up-${index}`} variant="ghost" size="sm" className="px-2" onClick={() => moveTransform(index, -1)} disabled={index === 0} title="Move up">↑</Button>
-                              <Button data-testid={`wizard-transform-move-down-${index}`} variant="ghost" size="sm" className="px-2" onClick={() => moveTransform(index, 1)} disabled={index === transformConfigs.length - 1} title="Move down">↓</Button>
-                              <Button data-testid={`wizard-transform-dry-run-${index}`} variant="secondary" size="sm" className="px-2" onClick={() => dryRunThroughStage(index)} disabled={busy === `stage-${index}`} title="Dry-run through this stage">▶</Button>
-                              <Button data-testid={`wizard-transform-remove-${index}`} variant="destructive" size="sm" className="px-2" onClick={() => removeTransform(index)} title="Remove">×</Button>
+                              <Button
+                                data-testid={`wizard-transform-move-up-${index}`}
+                                variant="ghost"
+                                size="sm"
+                                className="px-2"
+                                onClick={() => moveTransform(index, -1)}
+                                disabled={index === 0}
+                                title="Move up"
+                                aria-label="Move up"
+                              >
+                                ↑
+                              </Button>
+                              <Button
+                                data-testid={`wizard-transform-move-down-${index}`}
+                                variant="ghost"
+                                size="sm"
+                                className="px-2"
+                                onClick={() => moveTransform(index, 1)}
+                                disabled={index === transformConfigs.length - 1}
+                                title="Move down"
+                                aria-label="Move down"
+                              >
+                                ↓
+                              </Button>
+                              <Button
+                                data-testid={`wizard-transform-dry-run-${index}`}
+                                variant="secondary"
+                                size="sm"
+                                className="px-2"
+                                onClick={() => dryRunThroughStage(index)}
+                                disabled={busy === `stage-${index}`}
+                                title="Dry-run through this stage"
+                                aria-label="Dry-run stage"
+                              >
+                                <PlayIcon />
+                              </Button>
+                              <Button
+                                data-testid={`wizard-transform-remove-${index}`}
+                                variant="destructive"
+                                size="sm"
+                                className="px-2"
+                                onClick={() => removeTransform(index)}
+                                title="Remove"
+                                aria-label="Remove"
+                              >
+                                ×
+                              </Button>
                             </div>
                           </div>
-                          <ConfigForm fields={fields} config={item.config || {}} onChange={(next) => updateTransformConfig(index, next)} t={t} emptyText="No config fields for this transform." />
+                          <ConfigForm
+                            fields={fields}
+                            config={item.config || {}}
+                            onChange={(next) => updateTransformConfig(index, next)}
+                            t={t}
+                            emptyText="No config fields for this transform."
+                          />
                           {stageDryRunResult?.index === index && stageDryRunResult.result !== undefined && (
-                            <div data-testid={`wizard-transform-stage-result-${index}`} className="mt-2 rounded border border-emerald-100 bg-white p-2">
-                              <div className="mb-1 text-[11px] font-semibold text-emerald-700">Stage {index + 1} output</div>
-                              <pre className="max-h-36 overflow-auto text-xs text-slate-700">{prettyJSON(stageDryRunResult.result)}</pre>
+                            <div
+                              data-testid={`wizard-transform-stage-result-${index}`}
+                              className="mt-2 rounded border border-emerald-100 bg-card p-2"
+                            >
+                              <div className="mb-1 text-[11px] font-semibold text-emerald-700">
+                                Stage {index + 1} output
+                              </div>
+                              <pre className="max-h-36 overflow-auto text-xs">
+                                {prettyJSON(stageDryRunResult.result)}
+                              </pre>
                             </div>
                           )}
                           {stageDryRunResult?.index === index && stageDryRunResult.error && (
-                            <div data-testid={`wizard-transform-stage-error-${index}`} className="mt-2 rounded border border-rose-100 bg-white p-2 text-xs text-rose-700">
+                            <div
+                              data-testid={`wizard-transform-stage-error-${index}`}
+                              className="mt-2 rounded border border-rose-100 bg-card p-2 text-xs text-rose-700"
+                            >
                               <div className="mb-1 font-semibold">Stage {index + 1} failed</div>
-                              <pre className="max-h-36 overflow-auto whitespace-pre-wrap">{stageDryRunResult.error}</pre>
+                              <pre className="max-h-36 overflow-auto whitespace-pre-wrap">
+                                {stageDryRunResult.error}
+                              </pre>
                             </div>
                           )}
                         </div>
@@ -912,102 +1293,345 @@ export function FirstTaskWizard({ t, plugins, schema, onClose, onCreated }: { t:
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <div className="text-xs text-slate-400">No valid transforms in the chain.</div>
-                    <Button data-testid="wizard-add-transform-empty" variant="secondary" size="sm" onClick={addTransform}>Add transform</Button>
+                    <div className="text-xs text-muted-foreground">No valid transforms in the chain.</div>
+                    <Button
+                      data-testid="wizard-add-transform-empty"
+                      variant="secondary"
+                      size="sm"
+                      onClick={addTransform}
+                    >
+                      Add transform
+                    </Button>
                   </div>
                 )}
               </div>
-              <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => setTransformJsonOpen(!transformJsonOpen)}>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="text-[11px]"
+                onClick={() => setTransformJsonOpen(!transformJsonOpen)}
+              >
                 {transformJsonOpen ? 'Hide chain JSON' : 'Advanced chain JSON'}
               </Button>
               {transformJsonOpen && (
-                <Textarea data-testid="wizard-transform-json" className="mt-2 min-h-32 w-full font-mono text-xs" value={transformsText} onChange={(e) => setTransformsText(e.target.value)} />
+                <Textarea
+                  data-testid="wizard-transform-json"
+                  className="mt-2 min-h-32 w-full font-mono text-xs"
+                  value={transformsText}
+                  onChange={(e) => setTransformsText(e.target.value)}
+                />
+              )}
+              <div className="mt-4">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <label className="block text-xs font-medium text-muted-foreground">Sample record</label>
+                  <a className="text-xs text-primary hover:underline" href="/api/v2/docs" target="_blank" rel="noreferrer">
+                    API docs
+                  </a>
+                </div>
+                <Textarea
+                  className="min-h-32 font-mono text-xs"
+                  value={sampleText}
+                  onChange={(e) => setSampleText(e.target.value)}
+                />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  data-testid="wizard-dry-run"
+                  variant="secondary"
+                  disabled={busy === 'dry-run'}
+                  onClick={dryRun}
+                >
+                  Transform dry-run
+                </Button>
+              </div>
+              {dryRunResult !== null && (
+                <div className="mt-3 rounded-lg border border-primary/20 bg-accent/40 p-3">
+                  <div className="mb-2 text-xs font-semibold text-primary">Dry-run output</div>
+                  <pre className="max-h-56 overflow-auto text-xs">{prettyJSON(dryRunResult)}</pre>
+                </div>
               )}
             </div>
-            <div>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="block text-xs font-medium text-slate-500">Sample record</label>
-                <a className="text-xs text-indigo-600 hover:underline" href="/api/v2/docs" target="_blank" rel="noreferrer">API docs</a>
+
+            {/* Safety */}
+            <div id="wizard-section-safety" className={cn(step === 'safety' && 'ring-1 ring-primary/20 rounded-lg')}>
+              <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSafety')}</h3>
+              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.safetyHint')}</p>
+              <div className="rounded-lg border border-border bg-card p-3" data-testid="wizard-runtime-safety">
+                <div className="mb-3 text-xs font-semibold">Runtime safety</div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="block text-xs text-muted-foreground">
+                    <span className="mb-1 block font-medium">Batch size</span>
+                    <Input
+                      data-testid="wizard-batch-size"
+                      type="number"
+                      min={1}
+                      value={batchSize}
+                      onChange={(e) => setBatchSize(positiveIntValue(e.target.value, batchSize))}
+                    />
+                  </label>
+                  <label className="block text-xs text-muted-foreground">
+                    <span className="mb-1 block font-medium">Checkpoint sec</span>
+                    <Input
+                      data-testid="wizard-checkpoint-sec"
+                      type="number"
+                      min={1}
+                      value={checkpointIntervalSec}
+                      onChange={(e) =>
+                        setCheckpointIntervalSec(positiveIntValue(e.target.value, checkpointIntervalSec))
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-xs font-medium">
+                    <input
+                      data-testid="wizard-dlq-enabled"
+                      type="checkbox"
+                      checked={dlqEnabled}
+                      onChange={(e) => setDlqEnabled(e.target.checked)}
+                    />
+                    DLQ enabled
+                  </label>
+                </div>
               </div>
-              <Textarea className="min-h-32 font-mono text-xs" value={sampleText} onChange={(e) => setSampleText(e.target.value)} />
-            </div>
-          </div>
-          <div>
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <label className="block text-xs font-medium text-slate-500">Generated YAML</label>
-              <Button variant="secondary" size="sm" onClick={syncFromYaml}>Sync YAML to form</Button>
-            </div>
-            <Textarea data-testid="wizard-yaml" className="min-h-56 w-full font-mono text-xs" value={yamlText} onChange={(e) => setYamlText(e.target.value)} />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button data-testid="wizard-dry-run" variant="secondary" disabled={busy === 'dry-run'} onClick={dryRun}>Transform dry-run</Button>
-            <Button data-testid="wizard-validate" variant="secondary" disabled={busy === 'validate'} onClick={() => validate().catch(() => {})}>Validate + preflight</Button>
-            <Button data-testid="wizard-create-start" disabled={busy === 'create'} onClick={createAndStart}>Create and start</Button>
-          </div>
-          {error && <ErrorBox message={error} />}
-          {dryRunResult !== null && (
-            <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3">
-              <div className="mb-2 text-xs font-semibold text-cyan-700">Dry-run output</div>
-              <pre className="max-h-56 overflow-auto text-xs text-cyan-950">{prettyJSON(dryRunResult)}</pre>
-            </div>
-          )}
-          {result && (
-            <div data-testid="wizard-preflight-result" className={`rounded-lg border p-3 ${result.valid === false ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
-              <div className="mb-2 text-sm font-semibold">{result.valid === false ? 'Preflight failed' : 'Preflight passed'} · {result.preflight?.summary || 'validation complete'}</div>
-              {(result.warnings || result.errors || []).map((msg, i) => <div key={i} className="text-xs text-slate-700">{msg}</div>)}
-              {(result.preflight?.recommendations || []).map((rec, i) => (
-                <div key={`recommendation-${rec.path}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="font-semibold">{rec.safety || 'review'} · {rec.path}</div>
-                      <div>{rec.reason}</div>
-                      <div className="mt-1 font-mono text-slate-500">{prettyJSON(rec.value)}</div>
-                    </div>
-                    <Button variant="secondary" size="sm" className="shrink-0 text-[11px]" onClick={() => applyPreflightRecommendation(rec)}>Apply</Button>
+              <div className="mt-4">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <label className="block text-xs font-medium text-muted-foreground">Generated YAML</label>
+                  <Button variant="secondary" size="sm" onClick={syncFromYaml}>
+                    Sync YAML to form
+                  </Button>
+                </div>
+                <Textarea
+                  data-testid="wizard-yaml"
+                  className="min-h-56 w-full font-mono text-xs"
+                  value={yamlText}
+                  onChange={(e) => setYamlText(e.target.value)}
+                />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  data-testid="wizard-validate"
+                  variant="secondary"
+                  disabled={busy === 'validate'}
+                  onClick={() => validate().catch(() => {})}
+                >
+                  Validate + preflight
+                </Button>
+              </div>
+              {error && <div className="mt-3"><ErrorBox message={error} /></div>}
+              {result && (
+                <div
+                  data-testid="wizard-preflight-result"
+                  className={cn(
+                    'mt-3 rounded-lg border p-3',
+                    result.valid === false
+                      ? 'border-rose-200 bg-rose-50 dark:border-rose-900 dark:bg-rose-950/30'
+                      : 'border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30',
+                  )}
+                >
+                  <div className="mb-2 text-sm font-semibold">
+                    {result.valid === false ? 'Preflight failed' : 'Preflight passed'} ·{' '}
+                    {result.preflight?.summary || 'validation complete'}
                   </div>
-                </div>
-              ))}
-              {(result.preflight?.issues || []).map((issue, i) => (
-                <div key={`issue-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="font-semibold">{issue.level} · {issue.check}</div>
-                  <div>{issue.message}</div>
-                  {issue.remediation && <div className="mt-1 text-slate-500">Fix: {issue.remediation}</div>}
-                </div>
-              ))}
-              {(result.preflight?.field_issues || []).map((issue, i) => (
-                <div key={`field-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="font-semibold">{issue.field} · {issue.check}</div>
-                  <div>{issue.message}</div>
-                  {issue.remediation && <div className="mt-1 text-slate-500">Fix: {issue.remediation}</div>}
-                </div>
-              ))}
-              {(result.preflight?.guidance || []).map((item, i) => (
-                <div key={`guidance-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="font-semibold">{item.level} · {item.category} · {item.code}</div>
-                  <div>{item.message}</div>
-                  {item.action && <div className="mt-1 text-slate-500">Action: {item.action}</div>}
-                </div>
-              ))}
-              {(result.preflight?.readiness || []).map((connector, i) => (
-                <div key={`readiness-${connector.kind}-${connector.type}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2 text-xs">
-                  <div className="font-semibold">{connector.kind} · {connector.type} · {connector.maturity} · {connector.status}</div>
-                  {connector.summary && <div>{connector.summary}</div>}
-                  {(connector.gates || []).filter((gate) => gate.status === 'missing' || gate.status === 'partial').slice(0, 3).map((gate) => (
-                    <div key={gate.code} className="mt-1 text-slate-600">
-                      {gate.status} · {gate.label}{gate.remediation ? ` · ${gate.remediation}` : ''}
+                  {(result.warnings || result.errors || []).map((msg, i) => (
+                    <div key={i} className="text-xs">{msg}</div>
+                  ))}
+                  {(result.preflight?.recommendations || []).map((rec, i) => (
+                    <div
+                      key={`recommendation-${rec.path}-${i}`}
+                      className="mt-2 rounded border border-border bg-card/70 p-2 text-xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="font-semibold">
+                            {rec.safety || 'review'} · {rec.path}
+                          </div>
+                          <div>{rec.reason}</div>
+                          <div className="mt-1 font-mono text-muted-foreground">{prettyJSON(rec.value)}</div>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="shrink-0 text-[11px]"
+                          onClick={() => applyPreflightRecommendation(rec)}
+                        >
+                          Apply
+                        </Button>
+                      </div>
                     </div>
                   ))}
+                  {(result.preflight?.issues || []).map((issue, i) => (
+                    <div key={`issue-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
+                      <div className="font-semibold">
+                        {issue.level} · {issue.check}
+                      </div>
+                      <div>{issue.message}</div>
+                      {issue.remediation && (
+                        <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>
+                      )}
+                    </div>
+                  ))}
+                  {(result.preflight?.field_issues || []).map((issue, i) => (
+                    <div key={`field-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
+                      <div className="font-semibold">
+                        {issue.field} · {issue.check}
+                      </div>
+                      <div>{issue.message}</div>
+                      {issue.remediation && (
+                        <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>
+                      )}
+                    </div>
+                  ))}
+                  {(result.preflight?.guidance || []).map((item, i) => (
+                    <div key={`guidance-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
+                      <div className="font-semibold">
+                        {item.level} · {item.category} · {item.code}
+                      </div>
+                      <div>{item.message}</div>
+                      {item.action && (
+                        <div className="mt-1 text-muted-foreground">Action: {item.action}</div>
+                      )}
+                    </div>
+                  ))}
+                  {(result.preflight?.readiness || []).map((connector, i) => (
+                    <div
+                      key={`readiness-${connector.kind}-${connector.type}-${i}`}
+                      className="mt-2 rounded border border-border bg-card/70 p-2 text-xs"
+                    >
+                      <div className="font-semibold">
+                        {connector.kind} · {connector.type} · {connector.maturity} · {connector.status}
+                      </div>
+                      {connector.summary && <div>{connector.summary}</div>}
+                      {(connector.gates || [])
+                        .filter((gate) => gate.status === 'missing' || gate.status === 'partial')
+                        .slice(0, 3)
+                        .map((gate) => (
+                          <div key={gate.code} className="mt-1 text-muted-foreground">
+                            {gate.status} · {gate.label}
+                            {gate.remediation ? ` · ${gate.remediation}` : ''}
+                          </div>
+                        ))}
+                    </div>
+                  ))}
+                  {result.preflight?.ddl_preview?.statements?.length ? (
+                    <pre className="mt-2 max-h-40 overflow-auto rounded bg-card/80 p-2 text-xs">
+                      {result.preflight.ddl_preview.statements.join('\\n')}
+                    </pre>
+                  ) : null}
                 </div>
-              ))}
-              {result.preflight?.ddl_preview?.statements?.length ? (
-                <pre className="mt-2 max-h-40 overflow-auto rounded bg-white/80 p-2 text-xs">{result.preflight.ddl_preview.statements.join('\n')}</pre>
-              ) : null}
+              )}
             </div>
-          )}
+
+            {/* Confirm */}
+            <div id="wizard-section-confirm" className={cn(step === 'confirm' && 'ring-1 ring-primary/20 rounded-lg')}>
+              <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepConfirm')}</h3>
+              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.confirmHint')}</p>
+              <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">Name</span>
+                  <span className="font-semibold">{name}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">Path</span>
+                  <span className="text-right font-mono text-xs">{summaryPath}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">Batch / checkpoint / DLQ</span>
+                  <span className="tabular">
+                    {batchSize} / {checkpointIntervalSec}s / {dlqEnabled ? 'on' : 'off'}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">Template</span>
+                  <span>{template.id}</span>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  data-testid="wizard-create-start"
+                  disabled={busy === 'create'}
+                  onClick={createAndStart}
+                >
+                  Create and start
+                </Button>
+                <Button
+                  variant="outline"
+                  size="default"
+                  data-testid="wizard-open-dag"
+                  onClick={() => {
+                    saveDraftAndExit();
+                    onOpenDesigner?.(name.trim() || 'draft');
+                    navigate({ page: 'designer', editTarget: name.trim() || undefined });
+                  }}
+                >
+                  <GitBranch className="h-4 w-4" /> {t('wizard.openAdvancedDag')}
+                </Button>
+              </div>
+              {error && <div className="mt-3"><ErrorBox message={error} /></div>}
+            </div>
+
+            {/* Step nav footer */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
+              <Button variant="ghost" size="sm" onClick={goBack} disabled={stepIndex === 0}>
+                <ArrowLeft className="h-4 w-4" /> {t('wizard.prev')}
+              </Button>
+              {step !== 'confirm' ? (
+                <Button size="sm" onClick={goNext} data-testid="wizard-next">
+                  {t('wizard.next')} <ArrowRight className="h-4 w-4" />
+                </Button>
+              ) : (
+                <span className="text-xs text-muted-foreground">{t('wizard.readyHint')}</span>
+              )}
+            </div>
+          </div>
+
+          {/* Right summary */}
+          <aside className="hidden border-l border-border bg-muted/30 p-5 xl:block" data-testid="wizard-summary">
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {t('wizard.summary')}
+            </h3>
+            <div className="space-y-3 text-sm">
+              <div>
+                <div className="text-[11px] text-muted-foreground">Name</div>
+                <div className="font-semibold">{name || '—'}</div>
+              </div>
+              <div>
+                <div className="text-[11px] text-muted-foreground">Source</div>
+                <div className="rounded-md bg-card px-2 py-1.5 text-xs">
+                  {sourceType}
+                  {sourceConnection ? ` · ${sourceConnection}` : ''}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] text-muted-foreground">Transform</div>
+                <div className="rounded-md bg-card px-2 py-1.5 text-xs">
+                  {transformConfigs.map((x) => x.type).join(' → ') || '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] text-muted-foreground">Sink</div>
+                <div className="rounded-md bg-card px-2 py-1.5 text-xs">
+                  {sinkType}
+                  {sinkConnection ? ` · ${sinkConnection}` : ''}
+                </div>
+              </div>
+              <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+                batch {batchSize} · cp {checkpointIntervalSec}s · DLQ {dlqEnabled ? 'on' : 'off'}
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">{t('wizard.summaryFoot')}</p>
+            </div>
+          </aside>
         </div>
       </div>
-    </Modal>
+    </div>
   );
 }
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden>
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
 
 // ════════════════════════════════════════════════

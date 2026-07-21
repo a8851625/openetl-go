@@ -215,8 +215,22 @@ export function deriveIssues(
     }
   }
 
+  // Fixed order: failed → degraded → DLQ → lag/checkpoint → connection/worker
+  const kindRank = (issue: DerivedIssue): number => {
+    if (issue.health === 'failed' || issue.id.endsWith(':failed')) return 0;
+    if (issue.id.endsWith(':dlq') || issue.action === 'dlq') return 2;
+    if (issue.id.endsWith(':lag') || issue.id.endsWith(':cp')) return 3;
+    if (issue.action === 'connections') return 4;
+    if (issue.health === 'degraded') return 1;
+    return 5;
+  };
   const rank: Record<IssueSeverity, number> = { blocking: 0, warning: 1, info: 2 };
-  return issues.sort((a, b) => rank[a.severity] - rank[b.severity] || a.pipelineName.localeCompare(b.pipelineName));
+  return issues.sort(
+    (a, b) =>
+      kindRank(a) - kindRank(b) ||
+      rank[a.severity] - rank[b.severity] ||
+      a.pipelineName.localeCompare(b.pipelineName),
+  );
 }
 
 export function formatLag(ms: number): string {

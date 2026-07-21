@@ -30,9 +30,9 @@ import type {
 import { DashboardPage } from '@/pages/DashboardPage';
 import { PipelinesPage } from '@/pages/pipelines/PipelinesPage';
 import { PipelineDetailPage } from '@/pages/pipelines/PipelineDetailPage';
+import { FirstTaskWizard } from '@/pages/pipelines/first-task-wizard';
 import { IssuesPage } from '@/pages/IssuesPage';
 import { DLQPage } from '@/pages/DLQPage';
-import { PluginsPage } from '@/pages/PluginsPage';
 import { AuditPage } from '@/pages/AuditPage';
 import { SettingsModal } from '@/pages/SettingsPage';
 import { ConnectorsPage } from '@/pages/ConnectorsPage';
@@ -188,7 +188,9 @@ function App() {
     }
     setSelectedPipeline(key);
     const safeTab = (
-      ['overview', 'runs', 'issues', 'checkpoints', 'spec'].includes(tab) ? tab : 'overview'
+      ['overview', 'runs', 'issues', 'checkpoints', 'logs', 'topology', 'spec'].includes(tab)
+        ? tab
+        : 'overview'
     ) as DetailTab;
     navigate({ page: 'pipeline-detail', id: key, tab: safeTab });
   }, []);
@@ -229,6 +231,7 @@ function App() {
         labelKey: 'nav.groupResources',
         items: [
           { id: 'connections', key: 'nav.connections', dataNav: 'connections' },
+          // Built-in matrix merged into connector catalog (single capability surface).
           { id: 'connectors', key: 'nav.connectors', dataNav: 'connectors' },
         ],
       },
@@ -237,7 +240,12 @@ function App() {
         labelKey: 'nav.groupSystem',
         items: [
           { id: 'audit', key: 'nav.audit', dataNav: 'audit' },
-          { id: 'schedules', key: 'nav.schedules', dataNav: 'schedules' },
+          // Schedule *editing* lives on pipeline detail dialog; this page is fleet overview.
+          {
+            id: 'schedules',
+            key: 'nav.schedules',
+            dataNav: 'schedules',
+          },
           {
             id: 'workers',
             key: 'nav.workers',
@@ -245,7 +253,13 @@ function App() {
             // Prefer progressive disclosure: hide when clearly standalone (0–1 workers)
             hidden: !distributedHint,
           },
-          { id: 'plugins', key: 'nav.plugins', dataNav: 'plugins' },
+        ],
+      },
+      {
+        id: 'extensions',
+        labelKey: 'nav.groupExtensions',
+        items: [
+          // WASM / custom only — built-in matrix is under Connector catalog.
           { id: 'myPlugins', key: 'nav.myPlugins', dataNav: 'myPlugins' },
         ],
       },
@@ -313,7 +327,7 @@ function App() {
           />
         )}
 
-        {(route.page === 'pipelines' || route.page === 'pipeline-new') && (
+        {route.page === 'pipelines' && (
           <PipelinesPage
             t={t}
             lang={lang}
@@ -322,9 +336,8 @@ function App() {
             selected={selected}
             selectedMetric={selectedMetric}
             onSelect={setSelectedPipeline}
-            onOpenDetail={(key) => openPipelineDetail(key, 'overview')}
+            onOpenDetail={(key, tab) => openPipelineDetail(key, tab || 'overview')}
             onOpenWizard={openWizard}
-            forceWizard={route.page === 'pipeline-new'}
             onAction={runAction}
             checkpoints={checkpoints}
             onResetCheckpoint={(ref: string, label?: string) =>
@@ -339,15 +352,29 @@ function App() {
             onShowToast={toast}
             plugins={plugins}
             pluginSchema={pluginSchema}
-            onWizardClose={() => {
-              if (route.page === 'pipeline-new') navigate({ page: 'pipelines' });
+          />
+        )}
+
+        {route.page === 'pipeline-new' && (
+          <FirstTaskWizard
+            t={t}
+            plugins={plugins}
+            schema={pluginSchema}
+            initialStep={route.step}
+            onClose={() => navigate({ page: 'pipelines' })}
+            onCreated={(name) => {
+              toast('success', `Pipeline created: ${name}`);
+              setRefreshKey((n) => n + 1);
+              openPipelineDetail(name, 'overview');
             }}
+            onOpenDesigner={editPipeline}
           />
         )}
 
         {route.page === 'pipeline-detail' && (
           <PipelineDetailPage
             t={t}
+            lang={lang}
             pipeline={
               pipelinesList.find((p) => pipelineKey(p) === route.id || p.name === route.id) ||
               selected
@@ -372,9 +399,8 @@ function App() {
                 }),
               )
             }
-            onEdit={editPipeline}
-            onOpenDLQ={openDLQ}
             onOpenDesigner={editPipeline}
+            onOpenDLQ={openDLQ}
           />
         )}
 
@@ -414,7 +440,16 @@ function App() {
             onAction={runAction}
           />
         )}
-        {route.page === 'plugins' && <PluginsPage t={t} lang={lang} plugins={plugins} />}
+        {/* Built-in matrix merged into Connector catalog; keep route for deep links / e2e. */}
+        {route.page === 'plugins' && (
+          <ConnectorsPage
+            t={t}
+            lang={lang}
+            plugins={plugins}
+            schema={pluginSchema}
+            initialView="matrix"
+          />
+        )}
         {route.page === 'myPlugins' && <MyPluginsPage t={t} lang={lang} />}
         {route.page === 'workers' && <WorkersPage t={t} lang={lang} />}
         {route.page === 'schedules' && (

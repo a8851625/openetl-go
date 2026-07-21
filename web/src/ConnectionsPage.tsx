@@ -91,6 +91,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonError, setJsonError] = useState('');
   const [openOnTest, setOpenOnTest] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const refresh = () => {
     setLoading(true);
@@ -196,6 +197,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
         method: 'POST',
         body: JSON.stringify({ name, kind, type, config: parsed }),
       });
+      setDrawerOpen(false);
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -236,6 +238,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     setType(conn.type);
     setName(conn.name);
     applyConfig(conn.config || {});
+    setDrawerOpen(true);
   };
 
   const healthTone = (status?: string): 'emerald' | 'rose' | 'slate' => {
@@ -246,45 +249,38 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardContent className="p-5">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {t('conn.saved')}
-            </span>
-            <div className="mt-2 text-3xl font-bold text-indigo-600 dark:text-indigo-400">
-              {connections.length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-5">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {t('conn.healthy')}
-            </span>
-            <div className="mt-2 text-3xl font-bold text-emerald-600 dark:text-emerald-400">
-              {connections.filter((c) => c.last_status === 'ok').length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-5">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {t('conn.descriptors')}
-            </span>
-            <div className="mt-2 text-3xl font-bold text-blue-600 dark:text-blue-400">
-              {descriptors.length}
-            </div>
-          </CardContent>
-        </Card>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="text-xs font-bold uppercase tracking-[0.08em] text-primary">Resources</div>
+          <h2 className="mt-1 text-2xl font-semibold tracking-tight">{t('nav.connections')}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {connections.length} instances · {connections.filter((c) => c.last_status === 'ok').length} healthy
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            onClick={() => {
+              setDrawerOpen(true);
+              setName('');
+              applyConfig(nextConfigFor(kind, type));
+            }}
+            data-testid="connection-new"
+          >
+            {t('conn.new')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => { window.location.hash = '#/connectors'; }}>
+            {t('nav.connectors')}
+          </Button>
+        </div>
       </div>
 
       {error && <ErrorBox message={error} />}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm">{t('conn.catalog')}</CardTitle>
+            <CardTitle className="text-sm">{t('nav.connections')}</CardTitle>
             <div className="flex items-center gap-3">
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <input
@@ -324,7 +320,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                     <TableRow key={conn.name}>
                       <TableCell className="font-medium">{conn.name}</TableCell>
                       <TableCell>
-                        <ToneBadge tone="blue">{conn.kind}</ToneBadge>
+                        <ToneBadge tone="slate">{conn.kind}</ToneBadge>
                       </TableCell>
                       <TableCell>{conn.type}</TableCell>
                       <TableCell>
@@ -370,9 +366,11 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-3">
+        {drawerOpen && (
+        <Card data-testid="connection-editor-drawer">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-sm">{t('conn.new')}</CardTitle>
+            <Button variant="ghost" size="sm" onClick={() => setDrawerOpen(false)}>{t('common.cancel')}</Button>
           </CardHeader>
           <CardContent className="space-y-4">
             <label className="block">
@@ -524,6 +522,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
             </Button>
           </CardContent>
         </Card>
+        )}
       </div>
     </div>
   );

@@ -77,7 +77,7 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
       label: t('worker.registered'),
       value: workers.length,
       sub: `${onlineCount} ${t('worker.online')}`,
-      color: 'text-indigo-600 dark:text-indigo-400',
+      color: 'text-primary dark:text-indigo-400',
     },
     {
       label: t('worker.totalSlots'),

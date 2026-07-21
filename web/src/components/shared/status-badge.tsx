@@ -79,7 +79,8 @@ export function ToneBadge({
     | 'violet'
     | 'cyan'
     | 'indigo'
-    | 'purple';
+    | 'purple'
+    | 'primary';
 }) {
   const tones: Record<string, string> = {
     emerald: 'border-transparent bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300',
@@ -88,9 +89,10 @@ export function ToneBadge({
     rose: 'border-transparent bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300',
     slate: 'border-transparent bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
     violet: 'border-transparent bg-violet-50 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300',
-    cyan: 'border-transparent bg-cyan-50 text-cyan-700 dark:bg-cyan-950/50 dark:text-cyan-300',
-    indigo: 'border-transparent bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300',
-    purple: 'border-transparent bg-purple-50 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300',
+    cyan: 'border-transparent bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300',
+    indigo: 'border-transparent bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary',
+    purple: 'border-transparent bg-muted text-muted-foreground',
+    primary: 'border-transparent bg-primary/10 text-primary',
   };
   return (
     <Badge variant="outline" className={cn(tones[tone], className)} {...props}>

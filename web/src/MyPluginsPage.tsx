@@ -450,8 +450,8 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
 
   // ── Render ──
 
-  const kindTone = (kind: string): 'cyan' | 'emerald' | 'violet' =>
-    kind === 'source' ? 'cyan' : kind === 'sink' ? 'emerald' : 'violet';
+  const kindTone = (kind: string): 'emerald' | 'emerald' | 'violet' =>
+    kind === 'source' ? 'emerald' : kind === 'sink' ? 'emerald' : 'violet';
 
   return (
     <div className="space-y-6">
@@ -703,7 +703,7 @@ export const transform = plugin;`}</pre>
                     />
                   </div>
                   <Button className="w-full" size="sm" onClick={handleDebug} disabled={debugRunning || !editorName.trim()}>
-                    {debugRunning ? '...' : '▶ ' + t('myplugin.runDebug')}
+                    {debugRunning ? '...' : '' + t('myplugin.runDebug')}
                   </Button>
                   <div>
                     <Label className="mb-1.5 text-xs text-muted-foreground">{t('myplugin.debugOutput')}</Label>

@@ -18,8 +18,8 @@ type Props = {
   plugins: ApiState<PluginResponse>;
 };
 
-const kindTone: Record<string, 'cyan' | 'emerald' | 'violet'> = {
-  source: 'cyan',
+const kindTone: Record<string, 'emerald' | 'slate' | 'violet'> = {
+  source: 'emerald',
   sink: 'emerald',
   transform: 'violet',
 };

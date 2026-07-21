@@ -334,7 +334,7 @@ function ScheduleForm({
         </div>
       )}
       {schedule.type === 'streaming' && (
-        <div className="rounded-lg bg-cyan-50 px-3 py-2 text-xs text-cyan-700">
+        <div className="rounded-lg bg-accent px-3 py-2 text-xs text-primary">
           {t('sched.streaming')} — {t('dag.streamingDesc')}
         </div>
       )}
@@ -913,7 +913,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3 shadow-sm">
         <div className="flex items-center gap-2">
           <input className={cn(fieldClass, "w-48")} value={pipelineName} onChange={(e) => setPipelineName(e.target.value)} placeholder={t('design.name')} />
-          {editTarget && <ToneBadge tone="amber" className="text-xs">✏️ {t('dag.editing').replace('{name}', editTarget)}</ToneBadge>}
+          {editTarget && <ToneBadge tone="amber" className="text-xs">{t('dag.editing').replace('{name}', editTarget)}</ToneBadge>}
         </div>
         <div className="h-5 w-px bg-border" />
         {/* Node palette — icon-only compact */}
@@ -937,16 +937,16 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
             );
           }))}
         </div>
-        <Button variant="destructive" size="sm" className="px-2" onClick={deleteSelected} disabled={!selectedNodeId} title={t('dag.deleteNode')}>🗑</Button>
+        {selectedNodeId ? <Button variant="destructive" size="sm" className="px-2" onClick={deleteSelected} title={t('dag.deleteNode')} aria-label={t('dag.deleteNode')}>Delete</Button> : null}
         {/* Drawer tabs */}
         <div className="flex items-center gap-0.5">
-          <Button size="sm" className="px-2" variant={drawerTab === 'schedule' ? 'default' : 'secondary'} onClick={() => toggleDrawer('schedule')} title={t('dag.toolbarSchedule')}>📅 <span className="hidden sm:inline">{t('dag.toolbarSchedule')}</span></Button>
-          <Button size="sm" className="px-2" variant={drawerTab === 'hooks' ? 'default' : 'secondary'} onClick={() => toggleDrawer('hooks')} title={t('dag.toolbarHooks')}>🪝 <span className="hidden sm:inline">{t('dag.toolbarHooks')}</span></Button>
-          <Button size="sm" className="px-2" variant={drawerTab === 'advanced' ? 'default' : 'secondary'} onClick={() => toggleDrawer('advanced')} title={t('dag.toolbarAdvanced')}>⚙️ <span className="hidden sm:inline">{t('dag.toolbarAdvanced')}</span></Button>
-          <Button size="sm" className="px-2" variant={drawerTab === 'ai' ? 'default' : 'secondary'} onClick={() => toggleDrawer('ai')} title={t('dag.toolbarAI')}>🤖 <span className="hidden sm:inline">{t('dag.toolbarAI')}</span></Button>
-          <Button variant="secondary" size="sm" className="px-2" onClick={() => { exportYaml(); setDrawerTab('yaml'); }} title={t('dag.exportYaml')}>📄 <span className="hidden sm:inline">{t('dag.toolbarYaml')}</span></Button>
-          <Button variant="secondary" size="sm" className="px-2" onClick={() => validateCurrentSpec().catch(() => {})} title={t('dag.toolbarValidate')} data-testid="dag-validate-preflight">✓ <span className="hidden sm:inline">{t('dag.toolbarValidate')}</span></Button>
-          <Button variant="secondary" size="sm" className="px-2" onClick={testNodeConnection} title={t('dag.toolbarTest')} disabled={!selectedNode}>🔌 <span className="hidden sm:inline">{t('dag.toolbarTest')}</span></Button>
+          <Button size="sm" className="px-2" variant={drawerTab === 'schedule' ? 'default' : 'secondary'} onClick={() => toggleDrawer('schedule')} title={t('dag.toolbarSchedule')}><span className="hidden sm:inline">{t('dag.toolbarSchedule')}</span></Button>
+          <Button size="sm" className="px-2" variant={drawerTab === 'hooks' ? 'default' : 'secondary'} onClick={() => toggleDrawer('hooks')} title={t('dag.toolbarHooks')}><span className="hidden sm:inline">{t('dag.toolbarHooks')}</span></Button>
+          <Button size="sm" className="px-2" variant={drawerTab === 'advanced' ? 'default' : 'secondary'} onClick={() => toggleDrawer('advanced')} title={t('dag.toolbarAdvanced')}><span className="hidden sm:inline">{t('dag.toolbarAdvanced')}</span></Button>
+          <Button size="sm" className="px-2" variant={drawerTab === 'ai' ? 'default' : 'secondary'} onClick={() => toggleDrawer('ai')} title={t('dag.toolbarAI')}><span className="hidden sm:inline">{t('dag.toolbarAI')}</span></Button>
+          <Button variant="secondary" size="sm" className="px-2" onClick={() => { exportYaml(); setDrawerTab('yaml'); }} title={t('dag.exportYaml')}><span className="hidden sm:inline">{t('dag.toolbarYaml')}</span></Button>
+          <Button variant="secondary" size="sm" className="px-2" onClick={() => validateCurrentSpec().catch(() => {})} title={t('dag.toolbarValidate')} data-testid="dag-validate-preflight"><span className="hidden sm:inline">{t('dag.toolbarValidate')}</span></Button>
+          <Button variant="secondary" size="sm" className="px-2" onClick={testNodeConnection} title={t('dag.toolbarTest')} disabled={!selectedNode}><span className="hidden sm:inline">{t('dag.toolbarTest')}</span></Button>
         </div>
         {testResult && (
           <span className={`text-xs ${testResult.startsWith('✅') ? 'text-emerald-600' : testResult.startsWith('⏳') ? 'text-amber-600' : 'text-rose-600'}`}>{testResult}</span>
@@ -954,11 +954,11 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         <div className="ml-auto flex gap-2">
           {editTarget ? (
             <>
-              <Button size="sm" onClick={validateAndCreate}>✏️ {t('dag.updatePipeline')}</Button>
-              <Button size="sm" className="border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300" onClick={resetCheckpointAndUpdate}>↻ {t('dag.updateResetCheckpoint')}</Button>
+              <Button size="sm" onClick={validateAndCreate}>{t('dag.updatePipeline')}</Button>
+              <Button size="sm" className="border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300" onClick={resetCheckpointAndUpdate}>{t('dag.updateResetCheckpoint')}</Button>
             </>
           ) : (
-            <Button size="sm" onClick={validateAndCreate}>✓ {t('dag.createPipeline')}</Button>
+            <Button size="sm" onClick={validateAndCreate}>{t('dag.createPipeline')}</Button>
           )}
         </div>
       </div>
@@ -1044,7 +1044,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
             <div className="absolute right-3 top-3 z-20 max-h-[calc(100%-24px)] w-72 overflow-y-auto rounded-xl border border-border bg-card shadow-lg">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <div className="flex items-center gap-2">
-                  <ToneBadge tone={selKind === 'source' ? 'cyan' : selKind === 'sink' ? 'emerald' : 'violet'}>{selKind}</ToneBadge>
+                  <ToneBadge tone={selKind === 'source' ? 'emerald' : selKind === 'sink' ? 'emerald' : 'slate'}>{selKind}</ToneBadge>
                   <span className="text-sm font-semibold text-foreground/80">{selectedNode.id}</span>
                 </div>
                 <button className="text-xs text-muted-foreground hover:text-muted-foreground" onClick={() => setShowNodeProps(false)}>✕</button>
@@ -1069,17 +1069,17 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                     <div className="mb-1 flex items-center justify-between">
                       <label className="block text-xs font-medium text-muted-foreground">{t('conn.useSaved')}</label>
                       {selectedNode.data.connection && (
-                        <button className="text-xs font-medium text-indigo-600 hover:text-indigo-700" onClick={() => updateNodeConnection('')}>
+                        <button className="text-xs font-medium text-primary hover:text-primary/80" onClick={() => updateNodeConnection('')}>
                           {t('conn.useInline')}
                         </button>
                       )}
                     </div>
                     {selectedConnection ? (
-                      <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-2.5">
+                      <div className="rounded-lg border border-primary/20 bg-accent p-2.5">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-indigo-800">{selectedConnection.name}</div>
-                            <div className="text-xs text-indigo-600">{selectedConnection.kind} / {selectedConnection.type}</div>
+                            <div className="truncate text-sm font-semibold text-primary">{selectedConnection.name}</div>
+                            <div className="text-xs text-primary">{selectedConnection.kind} / {selectedConnection.type}</div>
                           </div>
                           <ToneBadge tone={selectedConnection.last_status === 'ok' ? 'emerald' : selectedConnection.last_status === 'error' ? 'rose' : 'slate'}>
                             {selectedConnection.last_status || 'unknown'}
@@ -1088,7 +1088,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                         {selectedConnection.last_error && <div className="mt-1 text-xs text-rose-600">{selectedConnection.last_error}</div>}
                       </div>
                     ) : (
-                      <button className="w-full rounded-lg border border-dashed border-border bg-white px-3 py-2 text-left text-sm text-muted-foreground hover:border-indigo-300 hover:bg-indigo-50/40" onClick={() => updateNodeConnection('')}>
+                      <button className="w-full rounded-lg border border-dashed border-border bg-white px-3 py-2 text-left text-sm text-muted-foreground hover:border-primary/40 hover:bg-accent/40" onClick={() => updateNodeConnection('')}>
                         {t('conn.inlineConfig')}
                       </button>
                     )}
@@ -1097,12 +1097,12 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                         {matchingConnections.slice(0, 8).map((conn) => (
                           <button
                             key={conn.name}
-                            className={`w-full rounded-lg border px-2.5 py-2 text-left transition ${conn.name === selectedNode.data.connection ? 'border-indigo-400 bg-indigo-50' : conn.type === selPlugin ? 'border-border bg-white hover:border-indigo-300' : 'border-border bg-muted/40 hover:border-border'}`}
+                            className={`w-full rounded-lg border px-2.5 py-2 text-left transition ${conn.name === selectedNode.data.connection ? 'border-primary bg-accent' : conn.type === selPlugin ? 'border-border bg-white hover:border-primary/40' : 'border-border bg-muted/40 hover:border-border'}`}
                             onClick={() => updateNodeConnection(conn.name)}
                           >
                             <div className="flex items-center justify-between gap-2">
                               <span className="truncate text-xs font-semibold text-foreground/80">{conn.name}</span>
-                              <ToneBadge tone={conn.type === selPlugin ? 'indigo' : 'slate'}>{conn.type}</ToneBadge>
+                              <ToneBadge tone={conn.type === selPlugin ? 'emerald' : 'slate'}>{conn.type}</ToneBadge>
                             </div>
                           </button>
                         ))}
@@ -1111,7 +1111,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                       <div className="mt-2 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t('conn.noMatchingSaved')}</div>
                     )}
                     {selectedConnectionContext && (
-                      <div className={`mt-2 rounded-lg border p-2.5 text-xs ${selectedConnectionContext.introspection?.ok === false ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-cyan-200 bg-cyan-50 text-muted-foreground'}`} data-testid="dag-connection-context">
+                      <div className={`mt-2 rounded-lg border p-2.5 text-xs ${selectedConnectionContext.introspection?.ok === false ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-primary/20 bg-accent text-muted-foreground'}`} data-testid="dag-connection-context">
                         <div className="mb-1 flex items-center justify-between">
                           <span className="font-semibold">Context</span>
                           <ToneBadge tone={selectedConnectionContext.introspection?.ok === false ? 'rose' : 'blue'}>{selectedConnectionContext.introspection?.status || 'ready'}</ToneBadge>
@@ -1122,13 +1122,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                             {selectedConnectionContext.recommendations.slice(0, 3).map((rec) => {
                               const canApply = Boolean(configPathForConnectionRecommendation(rec));
                               return (
-                                <span key={rec.field} className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-white/80 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                <span key={rec.field} className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground">
                                   <span>{rec.field}: {String(rec.value || 'review')}</span>
                                   {canApply && (
                                     <button
                                       type="button"
                                       data-testid="connection-recommendation-apply"
-                                      className="font-semibold text-indigo-600 hover:text-indigo-800"
+                                      className="font-semibold text-primary hover:text-primary"
                                       onClick={() => applyConnectionRecommendation(rec)}
                                     >
                                       Apply
@@ -1186,11 +1186,11 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
           <div className="w-80 flex-shrink-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
             <div className="flex items-center justify-between border-b border-border px-4 py-2">
               <h3 className="text-sm font-semibold">
-                {drawerTab === 'schedule' && `📅 ${t('nav.schedules')}`}
-                {drawerTab === 'hooks' && `🪝 ${t('drawer.hooks')}`}
-                {drawerTab === 'advanced' && `⚙️ ${t('drawer.advanced')}`}
-                {drawerTab === 'ai' && `🤖 ${t('drawer.ai')}`}
-                {drawerTab === 'yaml' && `📄 ${t('design.yamlSpec')}`}
+                {drawerTab === 'schedule' && `${t('nav.schedules')}`}
+                {drawerTab === 'hooks' && `${t('drawer.hooks')}`}
+                {drawerTab === 'advanced' && `${t('drawer.advanced')}`}
+                {drawerTab === 'ai' && `${t('drawer.ai')}`}
+                {drawerTab === 'yaml' && `${t('design.yamlSpec')}`}
               </h3>
               <button className="text-xs text-muted-foreground hover:text-muted-foreground" onClick={() => setDrawerTab(null)}>✕</button>
             </div>
@@ -1216,14 +1216,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                       const h = hooks[hk.key];
                       const enabled = h?.enabled ?? false;
                       return (
-                        <div key={hk.key} className={`rounded-lg border p-2.5 ${enabled ? 'border-indigo-200 bg-indigo-50/30' : 'border-border'}`}>
+                        <div key={hk.key} className={`rounded-lg border p-2.5 ${enabled ? 'border-primary/20 bg-accent/30' : 'border-border'}`}>
                           <div className="flex items-center justify-between">
                             <div className="flex-1 min-w-0">
                               <span className="text-xs font-semibold">{hk.label}</span>
                               <span className="ml-1.5 text-[10px] text-muted-foreground">{hk.desc}</span>
                             </div>
                             <label className="flex cursor-pointer items-center gap-1 text-[10px]">
-                              <input type="checkbox" checked={enabled} onChange={(e) => updateHook(hk.key, { enabled: e.target.checked })} className="h-3 w-3 rounded border-border text-indigo-600" />
+                              <input type="checkbox" checked={enabled} onChange={(e) => updateHook(hk.key, { enabled: e.target.checked })} className="h-3 w-3 rounded border-border text-primary" />
                               {enabled ? t('ui.on') : t('ui.off')}
                             </label>
                           </div>
@@ -1341,7 +1341,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                   <hr className="border-border" />
                   {/* Tags & Worker Selector */}
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-muted-foreground">🏷 Tags</label>
+                    <label className="mb-1 block text-xs font-medium text-muted-foreground">Tags</label>
                     <input className={fieldClass} value={tags} onChange={(e) => setTags(e.target.value)} placeholder="production, critical" />
                   </div>
                   <div>
@@ -1365,9 +1365,9 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                     {aiLoading ? '⏳ ' + t('dag.generating') : '✨ ' + t('dag.generatePipeline')}
                   </Button>
                   {aiResult && (
-                    <div className="space-y-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs" data-testid="dag-ai-review">
+                    <div className="space-y-2 rounded-lg border border-primary/20 bg-accent p-3 text-xs" data-testid="dag-ai-review">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-indigo-900">AI draft review</span>
+                        <span className="font-semibold text-primary">AI draft review</span>
                         <ToneBadge tone={aiResult.validation?.valid === false ? 'rose' : 'blue'}>
                           {aiResult.validation?.valid === false ? 'needs fixes' : 'validated'}
                         </ToneBadge>

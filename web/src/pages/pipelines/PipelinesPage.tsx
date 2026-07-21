@@ -8,14 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
-import { Progress, MiniStat } from '@/components/shared/progress';
-import {
-  StatusBadge,
-  StatusDot,
-  ToneBadge,
-  statusLabel,
-} from '@/components/shared/status-badge';
+import { EmptyState } from '@/components/shared/empty-state';
 import { PipelineHealthBadge, HealthDot } from '@/components/shared/pipeline-health-badge';
 import { PipelinePath } from '@/components/shared/pipeline-path';
 import { confirmAction } from '@/components/shared/confirm-dialog';
@@ -26,8 +19,7 @@ import {
   pipelineKey,
   pipelineRef,
 } from '@/lib/api';
-import { ratio, fmtTime } from '@/lib/format';
-import { LiveUptimeInline, PipelineRowMeta } from '@/lib/uptime';
+import { PipelineRowMeta } from '@/lib/uptime';
 import {
   deriveModeLabel,
   derivePipelineHealth,
@@ -42,21 +34,25 @@ import type {
   TFunc,
 } from '@/lib/types';
 import type { ToastFn } from '@/lib/toast';
-import { MoreHorizontal } from 'lucide-react';
 import {
-  PipelineDAGModal,
+  CheckSquare,
+  LayoutList,
+  MoreHorizontal,
+  Play,
+  Search,
+  Square,
+  SquareStack,
+} from 'lucide-react';
+import {
   PipelineLogModal,
   PipelineVersionsModal,
   SpecImportModal,
 } from './pipeline-modals';
-import { FirstTaskWizard } from './first-task-wizard';
-import { ShardsInline } from './shards-inline';
 
 function PipelineActionMenu({
   t,
   onLogs,
-  onDAG,
-  onEdit,
+  onViewTopology,
   onDelete,
   onExport,
   onStart,
@@ -65,21 +61,20 @@ function PipelineActionMenu({
 }: {
   t: TFunc;
   onLogs: () => void;
-  onDAG: () => void;
-  onEdit: () => void;
+  onViewTopology: () => void;
   onDelete: () => void;
   onExport: () => void;
   onStart: () => void;
   onStop: () => void;
   status: string;
 }) {
+  // List menu: ops + read-only topology. Designer is only from detail Topology/Spec.
   const items = [
     status !== 'running'
       ? { label: t('pipe.start'), onClick: onStart }
       : { label: t('pipe.stop'), onClick: onStop },
     { label: t('action.logs'), onClick: onLogs },
-    { label: t('action.dagAndLogs'), onClick: onDAG },
-    { label: t('action.edit'), onClick: onEdit },
+    { label: t('pipe.viewTopology'), onClick: onViewTopology },
     { label: t('action.exportYaml'), onClick: onExport },
     { label: t('action.delete'), onClick: onDelete, danger: true },
   ];
@@ -113,13 +108,13 @@ const PipelineRow = React.memo(
     m,
     compact,
     selected,
+    checked,
     t,
     onSelect,
+    onToggleCheck,
     onOpenDetail,
     onAction,
     onShowLogs,
-    onShowDAG,
-    onEdit,
     onExport,
     onDelete,
   }: {
@@ -127,13 +122,13 @@ const PipelineRow = React.memo(
     m?: MetricsPipeline;
     compact: boolean;
     selected: boolean;
+    checked: boolean;
     t: TFunc;
     onSelect: (n: string) => void;
-    onOpenDetail?: (n: string) => void;
+    onToggleCheck: (n: string) => void;
+    onOpenDetail?: (n: string, tab?: string) => void;
     onAction: (msg: string, fn: () => Promise<any>) => void;
     onShowLogs: () => void;
-    onShowDAG: () => void;
-    onEdit: () => void;
     onExport: () => void;
     onDelete: () => void;
   }) {
@@ -145,7 +140,11 @@ const PipelineRow = React.memo(
         : t('pipe.openDetail');
     return (
       <div
-        className={cn('pipeline-row', compact && 'py-2', selected && 'selected')}
+        className={cn(
+          'pipeline-row grid grid-cols-1 items-center gap-3 md:grid-cols-[auto_minmax(160px,.9fr)_minmax(200px,1.4fr)_100px_110px_minmax(9.5rem,auto)]',
+          compact && 'py-2',
+          selected && 'selected',
+        )}
         onClick={() => onSelect(pipelineKey(p))}
         role="button"
         tabIndex={0}
@@ -160,26 +159,43 @@ const PipelineRow = React.memo(
           onOpenDetail?.(pipelineKey(p));
         }}
       >
-        <HealthDot health={health} />
-        <div className="min-w-0 flex-1 space-y-1">
+        <div
+          className="flex items-center gap-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-input"
+            checked={checked}
+            aria-label={`Select ${p.name}`}
+            onChange={() => onToggleCheck(pipelineKey(p))}
+          />
+          <HealthDot health={health} />
+        </div>
+        <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold">{p.name}</span>
+            <span className="truncate text-sm font-semibold">{p.name}</span>
             <PipelineHealthBadge health={health} t={t} />
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {deriveModeLabel(p, m)}
-            </span>
             {p.parallelism && p.parallelism > 1 && (
-              <ToneBadge tone="purple" className="px-1 text-[10px]">
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                 ×{p.parallelism}
-              </ToneBadge>
+              </span>
             )}
             {!compact &&
               (p.tags || []).map((tag) => (
-                <ToneBadge key={tag} tone="slate" className="px-1 text-[10px]">
+                <span
+                  key={tag}
+                  className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                >
                   {tag}
-                </ToneBadge>
+                </span>
               ))}
           </div>
+          {compact && m && m.cdc_lag_ms > 0 && (
+            <span className="text-[10px] text-amber-600">lag {formatLag(m.cdc_lag_ms)}</span>
+          )}
+        </div>
+        <div className="min-w-0">
           {!compact && <PipelinePath pipeline={p} />}
           {!compact && (
             <PipelineRowMeta
@@ -190,11 +206,13 @@ const PipelineRow = React.memo(
               cdcLagMs={m?.cdc_lag_ms}
             />
           )}
-          {compact && m && m.cdc_lag_ms > 0 && (
-            <span className="ml-1 text-[10px] text-amber-600">lag {formatLag(m.cdc_lag_ms)}</span>
-          )}
         </div>
-        <div className="hidden min-w-[88px] flex-col items-end sm:flex">
+        <div className="hidden sm:block">
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {deriveModeLabel(p, m)}
+          </span>
+        </div>
+        <div className="hidden min-w-[88px] flex-col items-start sm:flex">
           {p.stats.records_dlq > 0 ? (
             <>
               <span className="tabular text-xs font-semibold text-rose-600">
@@ -223,7 +241,10 @@ const PipelineRow = React.memo(
             </>
           )}
         </div>
-        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="flex items-center justify-end gap-1 justify-self-end md:min-w-[9.5rem]"
+          onClick={(e) => e.stopPropagation()}
+        >
           <Button
             size="sm"
             variant={health === 'failed' || health === 'degraded' ? 'default' : 'secondary'}
@@ -248,8 +269,10 @@ const PipelineRow = React.memo(
               )
             }
             onLogs={onShowLogs}
-            onDAG={onShowDAG}
-            onEdit={onEdit}
+            onViewTopology={() => {
+              onSelect(pipelineKey(p));
+              onOpenDetail?.(pipelineKey(p), 'topology');
+            }}
             onDelete={onDelete}
             onExport={onExport}
           />
@@ -266,9 +289,11 @@ const PipelineRow = React.memo(
       p1.status !== p2.status ||
       p1.stats.records_written !== p2.stats.records_written ||
       p1.stats.records_failed !== p2.stats.records_failed ||
+      p1.stats.records_dlq !== p2.stats.records_dlq ||
       p1.stats.started_at !== p2.stats.started_at ||
       p1.parallelism !== p2.parallelism ||
       prev.selected !== next.selected ||
+      prev.checked !== next.checked ||
       prev.compact !== next.compact ||
       prev.t !== next.t
     ) {
@@ -286,6 +311,39 @@ const PipelineRow = React.memo(
   },
 );
 
+function readListFilters() {
+  const raw = (window.location.hash || '').split('?')[1] || '';
+  const qs = new URLSearchParams(raw);
+  return {
+    search: qs.get('q') || '',
+    status: qs.get('status') || '',
+    mode: qs.get('mode') || '',
+    tag: qs.get('tag') || '',
+    sort: qs.get('sort') || 'name',
+  };
+}
+
+function writeListFilters(next: {
+  search: string;
+  status: string;
+  mode: string;
+  tag: string;
+  sort: string;
+}) {
+  const base = (window.location.hash || '#/pipelines').split('?')[0] || '#/pipelines';
+  const qs = new URLSearchParams();
+  if (next.search) qs.set('q', next.search);
+  if (next.status) qs.set('status', next.status);
+  if (next.mode) qs.set('mode', next.mode);
+  if (next.tag) qs.set('tag', next.tag);
+  if (next.sort && next.sort !== 'name') qs.set('sort', next.sort);
+  const q = qs.toString();
+  const hash = q ? `${base}?${q}` : base;
+  if (window.location.hash !== hash) {
+    window.history.replaceState(null, '', hash);
+  }
+}
+
 type Props = {
   t: TFunc;
   lang?: string;
@@ -294,17 +352,17 @@ type Props = {
   selected?: Pipeline;
   selectedMetric?: MetricsPipeline;
   onSelect: (n: string) => void;
-  onOpenDetail?: (key: string) => void;
+  onOpenDetail?: (key: string, tab?: string) => void;
   onOpenWizard?: () => void;
   onAction: (label: string, fn: () => Promise<unknown>) => void;
   checkpoints: ApiState<{ checkpoints: Checkpoint[] }>;
   onResetCheckpoint: (ref: string, label?: string) => void;
-  onEdit: (ref: string) => void;
+  /** @deprecated Topology edit is only from detail Topology tab → designer. Kept optional for call-site compat. */
+  onEdit?: (ref: string) => void;
   refreshKey: number;
   onShowToast?: ToastFn;
   plugins: ApiState<any>;
   pluginSchema: ApiState<any>;
-  /** When true, open wizard from external route (#/pipelines/new) */
   forceWizard?: boolean;
   onWizardClose?: () => void;
 };
@@ -314,34 +372,34 @@ export function PipelinesPage({
   pipelines,
   metrics,
   selected,
-  selectedMetric,
   onSelect,
   onOpenDetail,
   onOpenWizard,
   onAction,
-  checkpoints,
-  onResetCheckpoint,
-  onEdit,
-  refreshKey,
   onShowToast,
-  plugins,
-  pluginSchema,
-  forceWizard = false,
-  onWizardClose,
 }: Props) {
+  const initial = readListFilters();
+  // Modal logs kept as fallback when detail route is unavailable.
   const [showLogs, setShowLogs] = useState(false);
-  const [showDAG, setShowDAG] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [showWizard, setShowWizard] = useState(forceWizard);
+  const [tagFilter, setTagFilter] = useState(initial.tag);
+  const [search, setSearch] = useState(initial.search);
+  const [statusFilter, setStatusFilter] = useState(initial.status);
+  const [modeFilter, setModeFilter] = useState(initial.mode);
+  const [sortKey, setSortKey] = useState(initial.sort);
+  const [compact, setCompact] = useState(false);
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    if (forceWizard) setShowWizard(true);
-  }, [forceWizard]);
-  const [tagFilter, setTagFilter] = useState('');
-  const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState('name');
-  const [compact, setCompact] = useState(false);
+    writeListFilters({
+      search,
+      status: statusFilter,
+      mode: modeFilter,
+      tag: tagFilter,
+      sort: sortKey,
+    });
+  }, [search, statusFilter, modeFilter, tagFilter, sortKey]);
 
   const allTags = useMemo(() => {
     const s = new Set<string>();
@@ -355,6 +413,23 @@ export function PipelinesPage({
     if (search) {
       const q = search.toLowerCase();
       list = list.filter((p) => p.name.toLowerCase().includes(q));
+    }
+    if (statusFilter) {
+      list = list.filter((p) => {
+        const m = (metrics.data?.pipelines || []).find(
+          (x) => (x.id && x.id === p.id) || x.name === p.name,
+        );
+        const h = derivePipelineHealth(p, m);
+        return h === statusFilter || p.status === statusFilter;
+      });
+    }
+    if (modeFilter) {
+      list = list.filter((p) => {
+        const m = (metrics.data?.pipelines || []).find(
+          (x) => (x.id && x.id === p.id) || x.name === p.name,
+        );
+        return deriveModeLabel(p, m).toLowerCase() === modeFilter.toLowerCase();
+      });
     }
     list = [...list].sort((a, b) => {
       const mA = (metrics.data?.pipelines || []).find(
@@ -379,11 +454,10 @@ export function PipelinesPage({
       }
     });
     return list;
-  }, [pipelines.data, tagFilter, search, sortKey, metrics.data]);
+  }, [pipelines.data, tagFilter, search, statusFilter, modeFilter, sortKey, metrics.data]);
 
   useEffect(() => {
     setShowLogs(false);
-    setShowDAG(false);
     setShowVersions(false);
   }, [selected?.id, selected?.name]);
 
@@ -414,8 +488,10 @@ export function PipelinesPage({
     }
   };
 
-  const batchAction = (action: 'start' | 'stop', filter: (p: Pipeline) => boolean) => {
-    const targets = filteredPipelines.filter(filter);
+  const selectedKeys = Object.keys(checked).filter((k) => checked[k]);
+  const selectedPipes = filteredPipelines.filter((p) => selectedKeys.includes(pipelineKey(p)));
+
+  const batchAction = (action: 'start' | 'stop', targets: Pipeline[]) => {
     if (!targets.length) return;
     onShowToast?.(
       'info',
@@ -432,6 +508,25 @@ export function PipelinesPage({
   const runningCount = filteredPipelines.filter((p) => p.status === 'running').length;
   const stoppedCount = filteredPipelines.filter((p) => p.status !== 'running').length;
 
+  const healthOptions: { value: string; label: string }[] = [
+    { value: '', label: t('pipe.allStatuses') },
+    { value: 'healthy', label: t('health.healthy') },
+    { value: 'degraded', label: t('health.degraded') },
+    { value: 'failed', label: t('health.failed') },
+    { value: 'running', label: t('pipe.running') },
+    { value: 'stopped', label: t('pipe.stopped') },
+    { value: 'scheduled', label: t('health.scheduled') },
+  ];
+
+  const modeOptions = [
+    { value: '', label: t('pipe.allModes') },
+    { value: 'CDC', label: 'CDC' },
+    { value: 'batch', label: 'batch' },
+    { value: 'streaming', label: 'streaming' },
+    { value: 'DAG', label: 'DAG' },
+    { value: 'scheduled', label: 'scheduled' },
+  ];
+
   return (
     <>
       {showLogs && selected?.name && (
@@ -440,14 +535,6 @@ export function PipelinesPage({
           name={selected.name}
           refId={pipelineRef(selected)}
           onClose={() => setShowLogs(false)}
-        />
-      )}
-      {showDAG && selected?.name && (
-        <PipelineDAGModal
-          t={t}
-          name={selected.name}
-          refId={pipelineRef(selected)}
-          onClose={() => setShowDAG(false)}
         />
       )}
       {showVersions && selected?.name && (
@@ -468,66 +555,65 @@ export function PipelinesPage({
           }
         />
       )}
-      {showWizard && (
-        <FirstTaskWizard
-          t={t}
-          plugins={plugins}
-          schema={pluginSchema}
-          onClose={() => {
-            setShowWizard(false);
-            onWizardClose?.();
-          }}
-          onCreated={(name) => {
-            onShowToast?.('success', `Pipeline created: ${name}`);
-            setShowWizard(false);
-            onWizardClose?.();
-          }}
-        />
-      )}
 
       {loading && !pipelines.data && (
-        <div className="grid gap-6 xl:grid-cols-[1fr_400px]">
-          <Card>
-            <CardContent className="space-y-3 p-6">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="h-14 animate-pulse rounded-lg bg-muted" />
-              ))}
-            </CardContent>
-          </Card>
-          <div className="space-y-6">
-            <Card>
-              <CardContent className="p-6">
-                <div className="h-48 animate-pulse rounded-lg bg-muted" />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-6">
-                <div className="h-32 animate-pulse rounded-lg bg-muted" />
-              </CardContent>
-            </Card>
-          </div>
-        </div>
+        <Card>
+          <CardContent className="space-y-3 p-6">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="h-14 animate-pulse rounded-lg bg-muted" />
+            ))}
+          </CardContent>
+        </Card>
       )}
 
       {!loading && (
-        <div className="grid gap-6 xl:grid-cols-[1fr_400px]">
+        <div className="space-y-4" data-testid="pipelines-list-fullwidth">
           <Card className="overflow-auto">
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
               <CardTitle className="text-sm">{t('pipe.allPipelines')}</CardTitle>
               <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  className="h-8 w-36 text-xs"
-                  placeholder={'🔍 ' + t('pipe.search')}
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    className="h-8 w-40 pl-7 text-xs"
+                    placeholder={t('pipe.search')}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    aria-label={t('pipe.search')}
+                  />
+                </div>
+                <select
+                  className="h-8 w-32 rounded-md border border-input bg-background px-2 text-xs"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label={t('pipe.filterStatus')}
+                >
+                  {healthOptions.map((o) => (
+                    <option key={o.value || 'all'} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="h-8 w-28 rounded-md border border-input bg-background px-2 text-xs"
+                  value={modeFilter}
+                  onChange={(e) => setModeFilter(e.target.value)}
+                  aria-label={t('pipe.filterMode')}
+                >
+                  {modeOptions.map((o) => (
+                    <option key={o.value || 'all-modes'} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
                 {allTags.length > 0 && (
                   <select
                     className="h-8 w-32 rounded-md border border-input bg-background px-2 text-xs"
                     value={tagFilter}
                     onChange={(e) => setTagFilter(e.target.value)}
+                    aria-label={t('pipe.allTags')}
                   >
-                    <option value="">🏷 {t('pipe.allTags')}</option>
+                    <option value="">{t('pipe.allTags')}</option>
                     {allTags.map((tag) => (
                       <option key={tag} value={tag}>
                         {tag}
@@ -539,12 +625,13 @@ export function PipelinesPage({
                   className="h-8 w-28 rounded-md border border-input bg-background px-2 text-xs"
                   value={sortKey}
                   onChange={(e) => setSortKey(e.target.value)}
+                  aria-label={t('pipe.sortName')}
                 >
-                  <option value="name">{'↕ ' + t('pipe.sortName')}</option>
-                  <option value="status">{'↕ ' + t('pipe.sortStatus')}</option>
-                  <option value="written">{'↕ ' + t('pipe.sortWritten')}</option>
-                  <option value="latency">{'↕ ' + t('pipe.sortLatency')}</option>
-                  <option value="uptime">{'↕ ' + t('pipe.sortUptime')}</option>
+                  <option value="name">{t('pipe.sortName')}</option>
+                  <option value="status">{t('pipe.sortStatus')}</option>
+                  <option value="written">{t('pipe.sortWritten')}</option>
+                  <option value="latency">{t('pipe.sortLatency')}</option>
+                  <option value="uptime">{t('pipe.sortUptime')}</option>
                 </select>
                 <Button
                   variant="ghost"
@@ -552,16 +639,14 @@ export function PipelinesPage({
                   className={cn('text-xs', compact && 'text-primary')}
                   onClick={() => setCompact(!compact)}
                   title={t(compact ? 'pipe.expandedMode' : 'pipe.compactMode')}
+                  aria-label={t(compact ? 'pipe.expandedMode' : 'pipe.compactMode')}
                 >
-                  {compact ? '⛶' : '⊞'}
+                  {compact ? <LayoutList className="h-4 w-4" /> : <SquareStack className="h-4 w-4" />}
                 </Button>
                 <Button
                   data-testid="open-first-task-wizard"
                   size="sm"
-                  onClick={() => {
-                    if (onOpenWizard) onOpenWizard();
-                    else setShowWizard(true);
-                  }}
+                  onClick={() => onOpenWizard?.()}
                 >
                   {t('pipe.createWizard')}
                 </Button>
@@ -571,62 +656,129 @@ export function PipelinesPage({
               </div>
             </CardHeader>
 
-            <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2">
-              <span className="text-xs text-muted-foreground">
-                {filteredPipelines.length} {t('pipe.pipelines')}
-              </span>
-              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
-                {runningCount} {t('pipe.running')}
-              </span>
-              {stoppedCount > 0 && (
-                <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                  {stoppedCount} {t('pipe.stopped')}
+            {selectedPipes.length > 0 ? (
+              <div
+                className="flex flex-wrap items-center gap-2 border-b border-border bg-primary/5 px-4 py-2"
+                data-testid="pipelines-selection-toolbar"
+              >
+                <CheckSquare className="h-4 w-4 text-primary" />
+                <span className="text-xs font-semibold">
+                  {t('pipe.selectedCount').replace('{n}', String(selectedPipes.length))}
                 </span>
-              )}
-              <div className="flex-1" />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-xs"
-                onClick={() => batchAction('start', (p) => p.status !== 'running')}
-              >
-                ▶ {t('pipe.startAll')}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-xs"
-                onClick={() => batchAction('stop', (p) => p.status === 'running')}
-              >
-                ⏹ {t('pipe.stopAll')}
-              </Button>
-            </div>
+                <span className="text-xs text-muted-foreground">
+                  {t('pipe.selectedImpact')
+                    .replace('{running}', String(selectedPipes.filter((p) => p.status === 'running').length))
+                    .replace('{stopped}', String(selectedPipes.filter((p) => p.status !== 'running').length))}
+                </span>
+                <div className="flex-1" />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() =>
+                    batchAction(
+                      'start',
+                      selectedPipes.filter((p) => p.status !== 'running'),
+                    )
+                  }
+                >
+                  <Play className="h-3.5 w-3.5" /> {t('pipe.start')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() =>
+                    batchAction(
+                      'stop',
+                      selectedPipes.filter((p) => p.status === 'running'),
+                    )
+                  }
+                >
+                  <Square className="h-3.5 w-3.5" /> {t('pipe.stop')}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => setChecked({})}
+                >
+                  {t('pipe.clearSelection')}
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-4 py-2">
+                <span className="text-xs text-muted-foreground">
+                  {filteredPipelines.length} {t('pipe.pipelines')}
+                </span>
+                <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+                  {runningCount} {t('pipe.running')}
+                </span>
+                {stoppedCount > 0 && (
+                  <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    {stoppedCount} {t('pipe.stopped')}
+                  </span>
+                )}
+                <div className="flex-1" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() =>
+                    batchAction(
+                      'start',
+                      filteredPipelines.filter((p) => p.status !== 'running'),
+                    )
+                  }
+                >
+                  <Play className="h-3.5 w-3.5" /> {t('pipe.startAll')}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() =>
+                    batchAction(
+                      'stop',
+                      filteredPipelines.filter((p) => p.status === 'running'),
+                    )
+                  }
+                >
+                  <Square className="h-3.5 w-3.5" /> {t('pipe.stopAll')}
+                </Button>
+              </div>
+            )}
 
             <CardContent className="space-y-1.5 pt-4">
               {filteredPipelines.map((p) => {
                 const m = (metrics.data?.pipelines || []).find(
                   (x) => (x.id && x.id === p.id) || x.name === p.name,
                 );
+                const key = pipelineKey(p);
                 return (
                   <PipelineRow
-                    key={pipelineKey(p)}
+                    key={key}
                     p={p}
                     m={m}
                     compact={compact}
-                    selected={pipelineKey(selected) === pipelineKey(p)}
+                    selected={pipelineKey(selected) === key}
+                    checked={Boolean(checked[key])}
                     t={t}
                     onSelect={onSelect}
+                    onToggleCheck={(k) =>
+                      setChecked((prev) => ({ ...prev, [k]: !prev[k] }))
+                    }
                     onOpenDetail={onOpenDetail}
                     onAction={onAction}
                     onShowLogs={() => {
-                      onSelect(pipelineKey(p));
-                      setShowLogs(true);
+                      onSelect(key);
+                      // Prefer full-page detail Logs tab (aligned shell); modal is fallback.
+                      if (onOpenDetail) {
+                        onOpenDetail(key, 'logs');
+                      } else {
+                        setShowLogs(true);
+                      }
                     }}
-                    onShowDAG={() => {
-                      onSelect(pipelineKey(p));
-                      setShowDAG(true);
-                    }}
-                    onEdit={() => onEdit(pipelineKey(p))}
                     onExport={() => handleExport(p)}
                     onDelete={() => handleDelete(p)}
                   />
@@ -637,20 +789,21 @@ export function PipelinesPage({
                   text={
                     search
                       ? `No pipelines matching "${search}"`
-                      : tagFilter
-                        ? `No pipelines with tag "${tagFilter}"`
+                      : tagFilter || statusFilter || modeFilter
+                        ? t('pipe.emptyFiltered')
                         : t('pipe.emptyTitle')
                   }
-                  hint={search || tagFilter ? '' : t('pipe.emptyHint')}
+                  hint={
+                    search || tagFilter || statusFilter || modeFilter
+                      ? t('pipe.emptyFilteredHint')
+                      : t('pipe.emptyHint')
+                  }
                 >
-                  {!search && !tagFilter && (
+                  {!search && !tagFilter && !statusFilter && !modeFilter && (
                     <Button
                       data-testid="empty-open-wizard"
                       size="sm"
-                      onClick={() => {
-                        if (onOpenWizard) onOpenWizard();
-                        else setShowWizard(true);
-                      }}
+                      onClick={() => onOpenWizard?.()}
                     >
                       {t('pipe.createWizard')}
                     </Button>
@@ -659,189 +812,6 @@ export function PipelinesPage({
               )}
             </CardContent>
           </Card>
-
-          <div className="space-y-6">
-            <Card>
-              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
-                <CardTitle className="text-sm">
-                  {t('pipe.details')} {selected?.name ? `· ${selected.name}` : ''}
-                </CardTitle>
-                <div className="flex flex-wrap gap-1.5">
-                  {selected?.name && onOpenDetail && (
-                    <Button
-                      size="sm"
-                      onClick={() => onOpenDetail(pipelineKey(selected))}
-                    >
-                      {t('pipe.openDetail')}
-                    </Button>
-                  )}
-                  {selected?.name && (
-                    <Button variant="secondary" size="sm" onClick={() => setShowDAG(true)}>
-                      {t('pipe.dagBtn')}
-                    </Button>
-                  )}
-                  {selected?.name && (
-                    <Button variant="secondary" size="sm" onClick={() => setShowVersions(true)}>
-                      {t('pipe.versions')}
-                    </Button>
-                  )}
-                  {selected?.name && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onEdit(pipelineKey(selected))}
-                    >
-                      {t('pipe.advancedDag')}
-                    </Button>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
-                {selectedMetric ? (
-                  <div className="space-y-4">
-                    {selected && (
-                      <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 p-3">
-                        <StatusDot status={selected.status} />
-                        <div>
-                          <div className="text-sm font-semibold">
-                            {statusLabel(t, selected.status)}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {t('pipe.uptimeLabel')}{' '}
-                            <LiveUptimeInline
-                              startedAt={selected.stats.started_at}
-                              fallback={selected.stats.uptime || t('common.na')}
-                            />
-                          </div>
-                        </div>
-                        <div className="flex-1" />
-                        <div className="text-right text-xs text-muted-foreground">
-                          <div>
-                            {t('pipe.readLabel')} {selected.stats.records_read || 0}
-                          </div>
-                          <div>
-                            {t('pipe.writtenLabel')} {selected.stats.records_written || 0}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    <Progress
-                      label={t('metric.writeSuccessRate')}
-                      value={ratio(
-                        selectedMetric.records_written,
-                        selectedMetric.records_written + selectedMetric.records_failed,
-                      )}
-                    />
-                    <Progress
-                      label={t('metric.dlqPressure')}
-                      value={ratio(
-                        selectedMetric.records_dlq,
-                        Math.max(1, selectedMetric.records_read),
-                      )}
-                      danger
-                    />
-                    <div className="grid grid-cols-2 gap-3 border-t border-border pt-4">
-                      <MiniStat
-                        label={t('metric.readLatency')}
-                        value={`${selectedMetric.source_read_latency_ms.toFixed(1)}ms`}
-                      />
-                      <MiniStat
-                        label={t('metric.writeLatency')}
-                        value={`${selectedMetric.sink_write_latency_ms.toFixed(1)}ms`}
-                      />
-                      <MiniStat
-                        label={t('metric.lastBatch')}
-                        value={String(selectedMetric.last_batch_size)}
-                      />
-                      <MiniStat
-                        label={t('metric.avgBatch')}
-                        value={String(selectedMetric.avg_batch_size)}
-                      />
-                      <MiniStat
-                        label={t('metric.batchCount')}
-                        value={String(selectedMetric.batch_count)}
-                      />
-                      <MiniStat
-                        label={t('metric.cpAge')}
-                        value={`${selectedMetric.checkpoint_age_seconds}s`}
-                      />
-                      {selectedMetric.cdc_lag_ms > 0 && (
-                        <MiniStat
-                          label={t('metric.cdcLag')}
-                          value={`${selectedMetric.cdc_lag_ms}ms`}
-                        />
-                      )}
-                      <MiniStat
-                        label={t('metric.dlqFiles')}
-                        value={String(selectedMetric.dlq_file_count)}
-                      />
-                    </div>
-                    {selected?.stats?.last_error && (
-                      <ErrorBox message={selected.stats.last_error} />
-                    )}
-                    {selected?.shard_count && selected.shard_count > 1 && (
-                      <>
-                        <h3 className="border-t border-border pt-2 text-sm font-semibold">
-                          {t('pipe.shardsLabel')} ({selected.shard_count})
-                        </h3>
-                        <ShardsInline
-                          t={t}
-                          name={pipelineRef(selected)}
-                          refreshKey={refreshKey}
-                        />
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <EmptyState text={t('dash.selectPipeline')} />
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">
-                  {t('pipe.checkpoints')} {selected?.name ? `· ${selected.name}` : ''}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {selected?.name ? (
-                  (() => {
-                    const selectedJob = pipelineKey(selected);
-                    const selCps = (checkpoints.data?.checkpoints || []).filter(
-                      (cp) => cp.job_name === selectedJob,
-                    );
-                    return selCps.length > 0 ? (
-                      selCps.map((cp) => (
-                        <div
-                          key={cp.job_name}
-                          className="flex items-center justify-between rounded-lg border border-border bg-muted/40 px-3 py-2.5"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium">{cp.job_name}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {cp.source} · {fmtTime(cp.timestamp)}
-                            </div>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => onResetCheckpoint(cp.job_name, selected.name)}
-                          >
-                            {t('pipe.reset')}
-                          </Button>
-                        </div>
-                      ))
-                    ) : (
-                      <EmptyState text={t('pipe.noCheckpoints')} />
-                    );
-                  })()
-                ) : (
-                  <EmptyState text={t('dash.selectPipeline')} />
-                )}
-              </CardContent>
-            </Card>
-          </div>
         </div>
       )}
     </>

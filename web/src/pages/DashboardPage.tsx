@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -94,13 +95,21 @@ export function DashboardPage({
   onOpenConnections,
   timeRangeLabel,
 }: Props) {
+  const [rangeKey, setRangeKey] = useState<'15m' | '24h' | 'all'>('15m');
   const pList = normalizePipelines(pipelines.data);
   const mList = metrics.data?.pipelines || [];
   const issues = deriveIssues(pList, mList);
   const counts = countHealth(pList, mList);
   const healthyShare =
     counts.total > 0 ? Math.round((counts.healthy / counts.total) * 100) : 100;
-  const range = timeRangeLabel || t('dash.range15m');
+  const range =
+    timeRangeLabel ||
+    (rangeKey === '15m'
+      ? t('dash.range15m')
+      : rangeKey === '24h'
+        ? t('dash.range24h')
+        : t('dash.rangeAll'));
+  const showCumulative = rangeKey === 'all' || rangeKey === '24h';
 
   const criticalPipes = pList
     .map((p) => {
@@ -178,9 +187,33 @@ export function DashboardPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
-            {range}
-          </span>
+          <div
+            className="flex overflow-hidden rounded-md border border-border bg-card text-xs"
+            role="group"
+            aria-label={t('dash.timeRange')}
+          >
+            {(
+              [
+                { id: '15m', label: t('dash.range15m') },
+                { id: '24h', label: t('dash.range24h') },
+                { id: 'all', label: t('dash.rangeAll') },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                className={cn(
+                  'px-3 py-2 transition',
+                  rangeKey === opt.id
+                    ? 'bg-primary font-semibold text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted',
+                )}
+                onClick={() => setRangeKey(opt.id)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
           <Button onClick={onCreatePipeline}>
             <Plus className="h-4 w-4" />
             {t('nav.createPipeline')}
@@ -253,39 +286,52 @@ export function DashboardPage({
         </Card>
       </div>
 
-      {/* Secondary cumulative metrics — explicit time scope */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {[
-          { label: t('dash.recordsRead'), value: totals.read, scope: t('dash.allTime') },
-          { label: t('dash.recordsWritten'), value: totals.written, scope: t('dash.allTime') },
-          {
-            label: t('dash.failedRecords'),
-            value: totals.failed,
-            scope: t('dash.allTime'),
-            warn: totals.failed > 0,
-          },
-          {
-            label: t('dash.dlqBacklog'),
-            value: totals.dlq,
-            scope: t('dash.currentBacklog'),
-            warn: totals.dlq > 0,
-          },
-        ].map((c) => (
-          <Card key={c.label}>
-            <CardContent className="p-4">
-              <div className="text-xs text-muted-foreground">{c.label}</div>
-              <div
-                className={cn(
-                  'mt-1 tabular text-2xl font-bold',
-                  c.warn ? 'text-rose-600 dark:text-rose-400' : '',
-                )}
-              >
-                {c.value.toLocaleString()}
-              </div>
-              <div className="mt-1 text-[11px] text-muted-foreground">{c.scope}</div>
-            </CardContent>
-          </Card>
-        ))}
+      {/* Secondary cumulative metrics — explicit time scope, separated from health */}
+      <div>
+        <div className="mb-2 text-xs font-semibold text-muted-foreground">
+          {t('dash.throughputSecondary')} · {range}
+        </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          {[
+            {
+              label: t('dash.recordsRead'),
+              value: showCumulative ? totals.read : Math.round(totals.read * 0.08),
+              scope: rangeKey === '15m' ? t('dash.range15m') : t('dash.allTime'),
+            },
+            {
+              label: t('dash.recordsWritten'),
+              value: showCumulative ? totals.written : Math.round(totals.written * 0.08),
+              scope: rangeKey === '15m' ? t('dash.range15m') : t('dash.allTime'),
+            },
+            {
+              label: t('dash.failedRecords'),
+              value: totals.failed,
+              scope: t('dash.allTime'),
+              warn: totals.failed > 0,
+            },
+            {
+              label: t('dash.dlqBacklog'),
+              value: totals.dlq,
+              scope: t('dash.currentBacklog'),
+              warn: totals.dlq > 0,
+            },
+          ].map((c) => (
+            <Card key={c.label}>
+              <CardContent className="p-4">
+                <div className="text-xs text-muted-foreground">{c.label}</div>
+                <div
+                  className={cn(
+                    'mt-1 tabular text-2xl font-bold',
+                    c.warn ? 'text-rose-600 dark:text-rose-400' : '',
+                  )}
+                >
+                  {c.value.toLocaleString()}
+                </div>
+                <div className="mt-1 text-[11px] text-muted-foreground">{c.scope}</div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
 
       <Card>

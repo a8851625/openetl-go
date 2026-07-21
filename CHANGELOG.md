@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [v0.2.11-beta.2] — 2026-07-22 — UI prototype alignment and IA cleanup
+
+### Highlights
+
+- **Pipeline list**: full-width (no master-detail right pane); hash query filters (search/status/mode/tag/sort); selection toolbar for bulk start/stop; Start/Stop in row overflow; list actions right-aligned.
+- **Create wizard**: full-page `#/pipelines/new` with 6-step rail, live summary, `?step=` + localStorage draft (skipped under e2e), confirm path to advanced designer.
+- **DLQ closed loop**: three-column layout; pipeline picker with filter/backlog-only/sort; Replay confirm panel (target count, filter, sink idempotency, dry-run); Lucide actions + aria-labels.
+- **Pipeline detail**: write-semantics + lifecycle cards; **Logs** tab (card surface, not terminal chrome); **Topology** read-only DAG (nodes/edges/config); schedule edit dialog from lifecycle; sole write path for topology is designer.
+- **IA cleanup**: list no longer exposes composite DAG+Logs modal; connector catalog merges built-in matrix (cards/matrix toggle); schedule fleet page uses shared dialog; fewer duplicate “edit pipeline” entries.
+- **AppShell**: topbar search, auto-refresh label, language toggle, reload-specs anchors for e2e; plugins under Extensions (myPlugins only for WASM).
+
+### Validation
+
+- `npm --prefix web run build`
+- `./hack/e2e-ui.sh` → **108 passed, 0 failed** (prototype alignment)
+
+### Residual
+
+- DAG empty-canvas template strip, mobile table→info-row polish, refreshed light/dark screenshots, multi-run history depth when API allows. See `docs/UI-REDESIGN-TODO.zh.md`.
+
 ## [v0.2.11-beta.1] — 2026-07-21 — Task-oriented Web UI redesign (P4 landing)
 
 ### Highlights
@@ -21,7 +41,7 @@
 
 - `npm --prefix web run typecheck`
 - `npm --prefix web run build`
-- `./hack/e2e-ui.sh` → **107 passed, 0 failed**
+- `./hack/e2e-ui.sh` → **108 passed, 0 failed**（2026-07-21 原型对齐后）
 
 ### Boundary
 

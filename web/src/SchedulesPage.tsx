@@ -15,6 +15,7 @@ import {
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { StatusDot, ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
+import { ScheduleEditorDialog } from '@/components/schedule-editor-dialog';
 
 type Pipeline = { id?: string; name: string; status: string; stats?: Record<string, number> };
 type Schedule = { type: string; cron?: string; interval_sec?: number; depends_on?: string[] };
@@ -86,12 +87,12 @@ function describeSchedule(t: TFunc, lang: Lang, schedule?: Schedule) {
   return t(`sched.${schedule.type}`);
 }
 
-const typeTone: Record<string, 'cyan' | 'emerald' | 'blue' | 'indigo' | 'purple' | 'slate'> = {
-  streaming: 'cyan',
+const typeTone: Record<string, 'emerald' | 'emerald' | 'blue' | 'emerald' | 'slate' | 'slate'> = {
+  streaming: 'emerald',
   once: 'emerald',
   periodic: 'blue',
-  cron: 'indigo',
-  dependency: 'purple',
+  cron: 'emerald',
+  dependency: 'slate',
   manual: 'slate',
 };
 
@@ -99,10 +100,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
   const [filter, setFilter] = useState('all');
   const [rows, setRows] = useState<ScheduleRow[]>([]);
   const [selected, setSelected] = useState('');
-  const [type, setType] = useState('cron');
-  const [cron, setCron] = useState('*/5 * * * *');
-  const [intervalSec, setIntervalSec] = useState(300);
-  const [dependsOn, setDependsOn] = useState('');
+  const [editorOpen, setEditorOpen] = useState(false);
   const [cronInput, setCronInput] = useState('');
   const [cronDesc, setCronDesc] = useState('');
   const [history, setHistory] = useState<RunHistory[]>([]);
@@ -140,23 +138,6 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
   }, [allPipelines, refreshKey, selected]);
 
   const selectedRow = rows.find((r) => pipelineKey(r) === selected || r.name === selected);
-
-  useEffect(() => {
-    if (!selectedRow) return;
-    const sched = selectedRow.schedule;
-    if (sched) {
-      setType(sched.type || 'cron');
-      setCron(sched.cron || '*/5 * * * *');
-      setIntervalSec(sched.interval_sec || 300);
-      setDependsOn(Array.isArray(sched.depends_on) ? sched.depends_on.join(', ') : '');
-    }
-  }, [
-    selectedRow?.name,
-    selectedRow?.schedule?.type,
-    selectedRow?.schedule?.cron,
-    selectedRow?.schedule?.interval_sec,
-    selectedRow?.schedule?.depends_on,
-  ]);
 
   useEffect(() => {
     if (!selected) {
@@ -201,50 +182,6 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
     }
   };
 
-  const saveSchedule = async () => {
-    if (!selected) return;
-    setBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      const body: Schedule = { type };
-      if (type === 'cron') body.cron = cron;
-      if (type === 'periodic') body.interval_sec = Number(intervalSec) || 60;
-      if (type === 'dependency') {
-        body.depends_on = dependsOn
-          .split(',')
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0);
-      }
-      await api(`/api/v2/pipelines/${encodeURIComponent(selected)}/schedule`, {
-        method: 'PUT',
-        body: JSON.stringify(body),
-      });
-      setMessage(t('sched.saved'));
-      setRefreshKey((n) => n + 1);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const disableSchedule = async () => {
-    if (!selected) return;
-    setBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      await api(`/api/v2/pipelines/${encodeURIComponent(selected)}/schedule`, { method: 'DELETE' });
-      setMessage(t('sched.disabled'));
-      setRefreshKey((n) => n + 1);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const runNow = async () => {
     if (!selected) return;
     setBusy(true);
@@ -261,11 +198,16 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
     }
   };
 
+  const selectedName = selectedRow?.name || selected;
+
   return (
     <div className="space-y-6">
+      <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground" data-testid="sched-overview-hint">
+        {t('sched.overviewHint')}
+      </div>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Summary label={t('sched.streaming')} value={counts.streaming} tone="text-cyan-600 dark:text-cyan-400" />
-        <Summary label={t('sched.cron')} value={counts.cron} tone="text-indigo-600 dark:text-indigo-400" />
+        <Summary label={t('sched.streaming')} value={counts.streaming} tone="text-primary" />
+        <Summary label={t('sched.cron')} value={counts.cron} tone="text-primary" />
         <Summary label={t('sched.periodic')} value={counts.periodic} tone="text-blue-600 dark:text-blue-400" />
         <Summary label={t('sched.manual')} value={counts.manual} tone="text-slate-600 dark:text-slate-300" />
       </div>
@@ -284,6 +226,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
               <CardTitle className="text-sm">{t('sched.editor')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              <p className="text-xs text-muted-foreground">{t('sched.dialogHint')}</p>
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   {t('sched.pipeline')}
@@ -300,81 +243,29 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
                   ))}
                 </select>
               </label>
-              <div className="grid grid-cols-3 gap-2">
-                {['cron', 'periodic', 'streaming', 'once', 'dependency'].map((tp) => (
-                  <Button
-                    key={tp}
-                    size="sm"
-                    variant={type === tp ? 'default' : 'secondary'}
-                    onClick={() => setType(tp)}
-                  >
-                    {t(`sched.${tp}`)}
-                  </Button>
-                ))}
-              </div>
-              {type === 'cron' && (
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {t('common.cron')}
-                  </span>
-                  <Input
-                    className="font-mono"
-                    value={cron}
-                    onChange={(e) => setCron(e.target.value)}
-                    placeholder="*/5 * * * *"
-                  />
-                </label>
-              )}
-              {type === 'periodic' && (
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {t('common.interval')}
-                  </span>
-                  <Input
-                    type="number"
-                    min={1}
-                    value={intervalSec}
-                    onChange={(e) => setIntervalSec(Number(e.target.value))}
-                  />
-                </label>
-              )}
-              {type === 'dependency' && (
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {t('sched.dependsOn')}
-                  </span>
-                  <Input
-                    className="font-mono"
-                    value={dependsOn}
-                    onChange={(e) => setDependsOn(e.target.value)}
-                    placeholder="upstream-a, upstream-b"
-                  />
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {t('sched.dependsOnHint')}
-                  </span>
-                </label>
-              )}
-              <div className="grid grid-cols-3 gap-2">
-                <Button size="sm" disabled={busy || !selected} onClick={saveSchedule}>
-                  {t('sched.save')}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  disabled={!selected}
+                  onClick={() => setEditorOpen(true)}
+                  data-testid="sched-open-editor"
+                >
+                  {t('sched.editInDialog')}
                 </Button>
                 <Button
-                  variant="secondary"
                   size="sm"
+                  variant="secondary"
                   disabled={busy || !selected}
                   onClick={runNow}
                 >
                   {t('sched.runNow')}
                 </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  disabled={busy || !selected || !selectedRow?.enabled}
-                  onClick={disableSchedule}
-                >
-                  {t('sched.disable')}
-                </Button>
               </div>
+              {selectedRow && (
+                <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                  {describeSchedule(t, lang, selectedRow.enabled ? selectedRow.schedule : undefined)}
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -444,6 +335,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
                       <TableHead>{t('sched.expression')}</TableHead>
                       <TableHead>{t('common.status')}</TableHead>
                       <TableHead>{t('sched.nextRun')}</TableHead>
+                      <TableHead className="w-[100px]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -454,6 +346,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
                         <TableRow
                           key={key}
                           className={cn('cursor-pointer', selected === key && 'bg-muted/50')}
+                          onDoubleClick={() => { setSelected(key); setEditorOpen(true); }}
                           onClick={() => setSelected(key)}
                         >
                           <TableCell className="font-medium">{p.name}</TableCell>
@@ -470,6 +363,19 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {describeSchedule(t, lang, p.enabled ? p.schedule : undefined)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelected(key);
+                                setEditorOpen(true);
+                              }}
+                            >
+                              {t('sched.edit')}
+                            </Button>
                           </TableCell>
                         </TableRow>
                       );
@@ -523,6 +429,16 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
           </Card>
         </div>
       </div>
+
+      <ScheduleEditorDialog
+        t={t}
+        lang={lang}
+        open={editorOpen && !!selected}
+        pipelineRef={encodeURIComponent(selected)}
+        pipelineName={selectedName}
+        onClose={() => setEditorOpen(false)}
+        onSaved={() => setRefreshKey((n) => n + 1)}
+      />
     </div>
   );
 }

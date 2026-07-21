@@ -33,8 +33,8 @@ export function PipelineLogModal({
 }) {
   return (
     <Modal title={`${t('pipe.logs')} · ${name}`} onClose={onClose} className="sm:max-w-4xl">
-      <div style={{ height: '60vh' }}>
-        <PipelineLogDrawer t={t} name={refId} />
+      <div className="-mx-1">
+        <PipelineLogDrawer t={t} name={refId} heightClass="h-[min(60vh,520px)] min-h-[280px]" />
       </div>
     </Modal>
   );
@@ -145,7 +145,7 @@ export function PipelineDAGModal({
   const [selectedNode, setSelectedNode] = useState<DAGNode | null>(null);
 
   const kindColor: Record<string, string> = {
-    source: 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800',
+    source: 'bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800',
     transform:
       'bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-950/40 dark:text-violet-300 dark:border-violet-800',
     sink: 'bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800',
@@ -153,13 +153,13 @@ export function PipelineDAGModal({
       'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800',
     router:
       'bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800',
-    tap: 'bg-cyan-100 text-cyan-700 border-cyan-300 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-800',
+    tap: 'bg-cyan-100 text-primary border-cyan-300 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-800',
     rate_limiter:
       'bg-lime-100 text-lime-700 border-lime-300 dark:bg-lime-950/40 dark:text-lime-300 dark:border-lime-800',
     enricher:
       'bg-pink-100 text-pink-700 border-pink-300 dark:bg-pink-950/40 dark:text-pink-300 dark:border-pink-800',
     lookup:
-      'bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800',
+      'bg-muted text-muted-foreground border-border',
   };
 
   return (

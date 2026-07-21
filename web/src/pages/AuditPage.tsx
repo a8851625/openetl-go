@@ -41,7 +41,7 @@ export function AuditPage({ t, audit }: Props) {
             {events.map((e, i) => (
               <TableRow key={i}>
                 <TableCell>
-                  <ToneBadge tone="indigo">{e.action || 'event'}</ToneBadge>
+                  <ToneBadge tone="emerald">{e.action || 'event'}</ToneBadge>
                 </TableCell>
                 <TableCell>
                   <ToneBadge tone="slate">{e.method || t('common.na')}</ToneBadge>

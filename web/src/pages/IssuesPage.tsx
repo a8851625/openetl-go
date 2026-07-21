@@ -35,8 +35,14 @@ export function IssuesPage({
 
   const act = (issue: DerivedIssue) => {
     onSelect(issue.pipelineKey);
-    if (issue.action === 'dlq') onOpenDLQ(issue.pipelineKey);
-    else if (issue.action === 'connections') onOpenConnections();
+    const issueQ = `?issue=${encodeURIComponent(issue.id)}`;
+    if (issue.action === 'dlq') {
+      onOpenDLQ(issue.pipelineKey);
+      // keep issue param discoverable for deep links
+      if (!window.location.hash.includes('issue=')) {
+        window.history.replaceState(null, '', `${window.location.hash.split('?')[0]}${issueQ}`);
+      }
+    } else if (issue.action === 'connections') onOpenConnections();
     else onOpenPipeline(issue.pipelineKey, 'issues');
   };
 
@@ -95,13 +101,26 @@ export function IssuesPage({
               <div className="min-w-0">
                 <div className="text-sm font-semibold">{issue.title}</div>
                 <div className="mt-0.5 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground/80">{issue.pipelineName}</span>
+                  {' · '}
                   {issue.summary}
-                  {issue.node ? ` · ${issue.node}` : ''}
+                  {issue.node ? ` · node ${issue.node}` : ''}
                   {issue.field ? `.${issue.field}` : ''}
+                </div>
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  {issue.metricLabel ? `${issue.metricLabel}: ${issue.metricValue ?? '—'}` : ''}
+                  {issue.severity === 'blocking' ? ' · blocking' : ' · warning'}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={() => onOpenPipeline(issue.pipelineKey, 'overview')}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    onSelect(issue.pipelineKey);
+                    onOpenPipeline(issue.pipelineKey, issue.node || issue.field ? 'issues' : 'overview');
+                  }}
+                >
                   {t('issues.locate')}
                 </Button>
                 <Button size="sm" onClick={() => act(issue)}>

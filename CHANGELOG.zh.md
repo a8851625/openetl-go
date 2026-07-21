@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [v0.2.11-beta.2] — 2026-07-22 — UI 原型对齐与信息架构收口
+
+### 亮点
+
+- **管道列表**：全宽列表（去掉 master-detail 右栏）；hash 筛选；批量选择工具条；行操作右对齐；Start/Stop 在更多菜单。
+- **新建向导**：`#/pipelines/new` 全页 6 步 + 摘要 + 草稿；e2e 跳过草稿恢复。
+- **DLQ 闭环**：三栏布局；左侧管道筛选/仅积压/排序；右侧 Replay 确认面板（目标数/幂等/dry-run）；Lucide + aria-label。
+- **管道详情**：写入语义/生命周期卡；**Logs** 页签（卡片式日志，非终端风格）；**Topology** 只读 DAG；调度在详情弹窗编辑；拓扑写入口只保留设计器。
+- **IA 收口**：去掉列表「DAG+日志」复合弹窗；连接器目录合并内置矩阵；调度总览共用弹窗；减少重复编辑入口。
+- **AppShell**：顶栏搜索/自动刷新/语言切换/重载锚点；扩展区仅 WASM 我的插件。
+
+### 验证
+
+- `npm --prefix web run build`
+- `./hack/e2e-ui.sh` → **108 passed, 0 failed**
+
+### Residual
+
+- DAG 空画布模板、小屏表格信息行、截图刷新、多 run 历史深度。详见 `docs/UI-REDESIGN-TODO.zh.md`。
+
 ## [v0.2.11-beta.1] — 2026-07-21 — 任务型 Web UI 重构（P4 落地）
 
 ### 亮点

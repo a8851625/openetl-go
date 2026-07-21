@@ -17,7 +17,14 @@ export type AppRoute =
   | { page: 'audit' }
   | { page: 'settings' };
 
-export type DetailTab = 'overview' | 'runs' | 'issues' | 'checkpoints' | 'spec';
+export type DetailTab =
+  | 'overview'
+  | 'runs'
+  | 'issues'
+  | 'checkpoints'
+  | 'logs'
+  | 'topology'
+  | 'spec';
 
 export type NavPage =
   | 'dashboard'
@@ -34,7 +41,15 @@ export type NavPage =
   | 'audit'
   | 'settings';
 
-const DETAIL_TABS: DetailTab[] = ['overview', 'runs', 'issues', 'checkpoints', 'spec'];
+const DETAIL_TABS: DetailTab[] = [
+  'overview',
+  'runs',
+  'issues',
+  'checkpoints',
+  'logs',
+  'topology',
+  'spec',
+];
 
 export function parseHash(hash = window.location.hash): AppRoute {
   const raw = (hash || '').replace(/^#\/?/, '').trim();
