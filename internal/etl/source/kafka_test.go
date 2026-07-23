@@ -271,3 +271,160 @@ func TestKafkaConfigParsing(t *testing.T) {
 		t.Errorf("initialOffset = %q, want oldest", s.initialOffset)
 	}
 }
+
+// TestKafkaFetchConfigDefaults verifies omitted fetch knobs keep Sarama-compatible
+// defaults so existing pipelines are unchanged.
+func TestKafkaFetchConfigDefaults(t *testing.T) {
+	s, err := NewKafkaSource(map[string]any{
+		"brokers": []any{"localhost:9092"},
+		"topic":   "events",
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaSource: %v", err)
+	}
+	if s.fetchMinBytes != 1 {
+		t.Errorf("fetchMinBytes = %d, want 1", s.fetchMinBytes)
+	}
+	if s.fetchMaxBytes != 1024*1024 {
+		t.Errorf("fetchMaxBytes = %d, want 1048576", s.fetchMaxBytes)
+	}
+	if s.fetchMaxWaitMs != 500 {
+		t.Errorf("fetchMaxWaitMs = %d, want 500", s.fetchMaxWaitMs)
+	}
+	if s.channelBufferSize != 256 {
+		t.Errorf("channelBufferSize = %d, want 256", s.channelBufferSize)
+	}
+	if s.maxProcessingTimeMs != 100 {
+		t.Errorf("maxProcessingTimeMs = %d, want 100", s.maxProcessingTimeMs)
+	}
+	if s.maxOpenRequests != 5 {
+		t.Errorf("maxOpenRequests = %d, want 5", s.maxOpenRequests)
+	}
+
+	cfg, err := s.buildSaramaConfig()
+	if err != nil {
+		t.Fatalf("buildSaramaConfig: %v", err)
+	}
+	if cfg.Consumer.Fetch.Min != 1 {
+		t.Errorf("Fetch.Min = %d, want 1", cfg.Consumer.Fetch.Min)
+	}
+	if cfg.Consumer.Fetch.Default != 1024*1024 {
+		t.Errorf("Fetch.Default = %d, want 1048576", cfg.Consumer.Fetch.Default)
+	}
+	if cfg.Consumer.MaxWaitTime != 500*time.Millisecond {
+		t.Errorf("MaxWaitTime = %v, want 500ms", cfg.Consumer.MaxWaitTime)
+	}
+	if cfg.ChannelBufferSize != 256 {
+		t.Errorf("ChannelBufferSize = %d, want 256", cfg.ChannelBufferSize)
+	}
+	if cfg.Consumer.MaxProcessingTime != 100*time.Millisecond {
+		t.Errorf("MaxProcessingTime = %v, want 100ms", cfg.Consumer.MaxProcessingTime)
+	}
+	if cfg.Net.MaxOpenRequests != 5 {
+		t.Errorf("MaxOpenRequests = %d, want 5", cfg.Net.MaxOpenRequests)
+	}
+}
+
+// TestKafkaFetchConfigAppliedToSarama verifies YAML/config knobs are parsed and
+// applied to the underlying sarama.Config before Validate().
+func TestKafkaFetchConfigAppliedToSarama(t *testing.T) {
+	s, err := NewKafkaSource(map[string]any{
+		"brokers":                 []any{"b1:9092"},
+		"topic":                   "cdc-events",
+		"fetch_min_bytes":         2048,
+		"fetch_max_bytes":         4 * 1024 * 1024,
+		"fetch_max_wait_ms":        250,
+		"channel_buffer_size":     512,
+		"max_processing_time_ms":  1000,
+		"max_open_requests":       3,
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaSource: %v", err)
+	}
+	if s.fetchMinBytes != 2048 || s.fetchMaxBytes != 4*1024*1024 {
+		t.Fatalf("parsed fetch bytes = %d/%d", s.fetchMinBytes, s.fetchMaxBytes)
+	}
+	if s.fetchMaxWaitMs != 250 || s.channelBufferSize != 512 {
+		t.Fatalf("parsed wait/buffer = %d/%d", s.fetchMaxWaitMs, s.channelBufferSize)
+	}
+	if s.maxProcessingTimeMs != 1000 || s.maxOpenRequests != 3 {
+		t.Fatalf("parsed processing/open = %d/%d", s.maxProcessingTimeMs, s.maxOpenRequests)
+	}
+
+	cfg, err := s.buildSaramaConfig()
+	if err != nil {
+		t.Fatalf("buildSaramaConfig: %v", err)
+	}
+	if cfg.Consumer.Fetch.Min != 2048 {
+		t.Errorf("Fetch.Min = %d, want 2048", cfg.Consumer.Fetch.Min)
+	}
+	if cfg.Consumer.Fetch.Default != 4*1024*1024 {
+		t.Errorf("Fetch.Default = %d, want 4194304", cfg.Consumer.Fetch.Default)
+	}
+	if cfg.Consumer.MaxWaitTime != 250*time.Millisecond {
+		t.Errorf("MaxWaitTime = %v, want 250ms", cfg.Consumer.MaxWaitTime)
+	}
+	if cfg.ChannelBufferSize != 512 {
+		t.Errorf("ChannelBufferSize = %d, want 512", cfg.ChannelBufferSize)
+	}
+	if cfg.Consumer.MaxProcessingTime != 1000*time.Millisecond {
+		t.Errorf("MaxProcessingTime = %v, want 1000ms", cfg.Consumer.MaxProcessingTime)
+	}
+	if cfg.Net.MaxOpenRequests != 3 {
+		t.Errorf("MaxOpenRequests = %d, want 3", cfg.Net.MaxOpenRequests)
+	}
+}
+
+// TestKafkaFetchConfigYAMLParsing verifies YAML-decoded numeric types (float64)
+// are accepted for the fetch knobs, matching real pipeline spec loading.
+func TestKafkaFetchConfigYAMLParsing(t *testing.T) {
+	// YAML unmarshals integers into map[string]any as float64.
+	s, err := NewKafkaSource(map[string]any{
+		"brokers":                []any{"b1:9092"},
+		"topic":                  "events",
+		"fetch_min_bytes":        float64(4096),
+		"fetch_max_bytes":        float64(2 * 1024 * 1024),
+		"fetch_max_wait_ms":       float64(100),
+		"channel_buffer_size":    float64(128),
+		"max_processing_time_ms": float64(200),
+		"max_open_requests":      float64(10),
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaSource: %v", err)
+	}
+	if s.fetchMinBytes != 4096 {
+		t.Errorf("fetchMinBytes = %d, want 4096", s.fetchMinBytes)
+	}
+	if s.fetchMaxBytes != 2*1024*1024 {
+		t.Errorf("fetchMaxBytes = %d, want 2097152", s.fetchMaxBytes)
+	}
+	if s.fetchMaxWaitMs != 100 {
+		t.Errorf("fetchMaxWaitMs = %d, want 100", s.fetchMaxWaitMs)
+	}
+	if s.channelBufferSize != 128 {
+		t.Errorf("channelBufferSize = %d, want 128", s.channelBufferSize)
+	}
+	if s.maxProcessingTimeMs != 200 {
+		t.Errorf("maxProcessingTimeMs = %d, want 200", s.maxProcessingTimeMs)
+	}
+	if s.maxOpenRequests != 10 {
+		t.Errorf("maxOpenRequests = %d, want 10", s.maxOpenRequests)
+	}
+
+	cfg, err := s.buildSaramaConfig()
+	if err != nil {
+		t.Fatalf("buildSaramaConfig: %v", err)
+	}
+	if cfg.Consumer.Fetch.Min != 4096 || cfg.Consumer.Fetch.Default != 2*1024*1024 {
+		t.Fatalf("sarama fetch = %d/%d", cfg.Consumer.Fetch.Min, cfg.Consumer.Fetch.Default)
+	}
+	if cfg.Consumer.MaxWaitTime != 100*time.Millisecond {
+		t.Fatalf("MaxWaitTime = %v", cfg.Consumer.MaxWaitTime)
+	}
+	if cfg.ChannelBufferSize != 128 || cfg.Net.MaxOpenRequests != 10 {
+		t.Fatalf("buffer/open = %d/%d", cfg.ChannelBufferSize, cfg.Net.MaxOpenRequests)
+	}
+	if cfg.Consumer.MaxProcessingTime != 200*time.Millisecond {
+		t.Fatalf("MaxProcessingTime = %v", cfg.Consumer.MaxProcessingTime)
+	}
+}

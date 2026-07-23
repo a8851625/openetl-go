@@ -319,6 +319,13 @@ source:
     format: json
     key_column: key
     value_column: payload
+    # 可选 consumer fetch 调优（下列为 Sarama 默认值）：
+    # fetch_min_bytes: 1
+    # fetch_max_bytes: 1048576
+    # fetch_max_wait_ms: 500
+    # channel_buffer_size: 256
+    # max_processing_time_ms: 100
+    # max_open_requests: 5
 ```
 
 | 字段 | 必填 | 默认值 | 说明 |
@@ -329,6 +336,18 @@ source:
 | `format` | 否 | `json` | 消息格式：`json` 或 `text`。 |
 | `key_column` | 否 | | 消息 key 的列名。 |
 | `value_column` | 否 | | 原始消息 value 的列名。 |
+| `initial_offset` | 否 | `newest` | 无已提交 offset 时的初始消费位置：`oldest` 或 `newest`。 |
+| `sasl_user` | 否 | | SASL 用户名。 |
+| `sasl_password` | 否 | | SASL 密码（**密钥**）。 |
+| `sasl_mechanism` | 否 | `PLAIN` | SASL 机制：`PLAIN`、`SCRAM-SHA-256` 或 `SCRAM-SHA-512`。 |
+| `tls` | 否 | `false` | 启用 Kafka TLS 连接。 |
+| `tls_skip_verify` | 否 | `false` | 跳过 TLS 证书校验。 |
+| `fetch_min_bytes` | 否 | `1` | 每次 fetch 请求最小返回字节数（`Consumer.Fetch.Min`）。高吞吐场景可调高；低延迟场景保持较小值。 |
+| `fetch_max_bytes` | 否 | `1048576` | 每次 fetch 请求默认最大返回字节数（`Consumer.Fetch.Default`，1MB）。高吞吐 CDC 可调高。 |
+| `fetch_max_wait_ms` | 否 | `500` | broker 等待凑齐 `fetch_min_bytes` 的最大时间（`Consumer.MaxWaitTime`，毫秒）。 |
+| `channel_buffer_size` | 否 | `256` | consumer 内部 channel 缓冲大小（`ChannelBufferSize`）。突发流量下增大可提升吞吐。 |
+| `max_processing_time_ms` | 否 | `100` | 单条消息处理超时时间（`Consumer.MaxProcessingTime`，毫秒）。sink 写入较慢时应调高。 |
+| `max_open_requests` | 否 | `5` | 每个 broker 连接最大未完成请求数（`Net.MaxOpenRequests`）。 |
 | `schema` | 否 | | 仅用于 preflight 的 schema hint，格式为 `[{name,data_type,nullable}]` 或 `{field: type}`。 |
 | `sample` | 否 | | 仅用于 preflight 的样例消息；不消费 Kafka 时用于推断 schema。 |
 
