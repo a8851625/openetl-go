@@ -66,6 +66,7 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, transforms, "join", "on_miss", "state_backend", "state_ttl_seconds")
 	assertFields(t, transforms, "javascript", "script", "code", "timeout_ms")
 	assertFields(t, transforms, "js", "script", "code", "timeout_ms")
+	assertFields(t, transforms, "dbt", "project_dir", "model_name", "source_table", "adapter", "dsn", "path", "exec_timeout_sec", "write_mode", "threads", "target")
 }
 
 func TestWindowSchemaOnlyExposesImplementedWindowTypes(t *testing.T) {

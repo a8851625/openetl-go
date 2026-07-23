@@ -1091,6 +1091,56 @@ restart can still contribute to the final aggregate. This is a recovery aid for
 at-least-once pipelines; it does not make window emission transactional with
 Kafka offsets or downstream sink commits.
 
+### `dbt`
+
+Optional bridge that stages a batch into a source table, runs a dbt model, and
+reads the model output as records. Phase 1 supports `postgres` and `duckdb`
+adapters only. dbt is **not** a core dependency — the host must provide a
+working `dbt` CLI plus adapter (`dbt-postgres` / `dbt-duckdb`).
+
+```yaml
+transforms:
+  - type: dbt
+    config:
+      project_dir: /etc/etl/dbt/my_project
+      model_name: transformed_orders
+      source_schema: etl_staging
+      source_table: orders_raw
+      target_schema: etl_output
+      target_table: transformed_orders
+      adapter: postgres
+      dsn: postgres://user:pass@localhost:5432/etl?sslmode=disable
+      threads: 4
+      target: dev
+      exec_timeout_sec: 600
+      write_mode: replace
+```
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `project_dir` | yes | | Path to the dbt project (must contain `dbt_project.yml`). |
+| `model_name` | yes | | Model passed to `dbt run --select`. |
+| `source_table` | yes | | Staging table for upstream records. |
+| `source_schema` | no | | Staging schema. |
+| `target_schema` | no | `source_schema` | Schema of the dbt output table. |
+| `target_table` | no | `model_name` | dbt output table name. |
+| `adapter` | no | `postgres` | `postgres` or `duckdb` (phase 1). |
+| `dsn` | for postgres | | Connection used to stage rows and read output. |
+| `path` | for duckdb | | DuckDB database file path. |
+| `threads` | no | `4` | dbt `--threads`. |
+| `target` | no | `dev` | dbt target name. |
+| `dbt_binary` | no | `dbt` | Path to the dbt executable. |
+| `profiles_dir` | no | temp dir | Existing profiles dir; otherwise OpenETL-Go generates one. |
+| `exec_timeout_sec` | no | `600` | Subprocess timeout. |
+| `write_mode` | no | `replace` | `replace` truncates the staging table per batch; `insert` appends. |
+| `full_refresh` | no | `false` | Pass `--full-refresh`. |
+| `vars` | no | | Optional dbt `--vars` map. |
+
+Prerequisite: install `dbt-core` and the matching adapter on the runtime host.
+Non-zero dbt exit codes and timeouts surface as transform errors so the pipeline
+retry/DLQ path can handle the batch. Checkpoint advances only after a successful
+batch write downstream (same as other batch transforms).
+
 ### `deduplicate`
 
 Drops repeated records by a composite key. By default it keeps the recent key

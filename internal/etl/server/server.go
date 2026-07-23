@@ -3727,6 +3727,7 @@ func pluginMetadata() map[string]any {
 			"deduplicate":        pluginInfo([]string{"keys"}, []string{"dedup", "lru"}, "beta"),
 			"validate":           pluginInfo([]string{"rules"}, []string{"data_quality", "schema_validation"}, "beta"),
 			"join":               pluginInfo([]string{"join_key", "join_fields"}, []string{"stream_join", "interval_join"}, "beta"),
+			"dbt":                pluginInfo([]string{"project_dir", "model_name", "source_table"}, []string{"dbt_bridge", "batch_transform", "external_process"}, "experimental"),
 		},
 	}
 }
