@@ -3677,6 +3677,12 @@ func pluginMetadata() map[string]any {
 			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot", "checkpoint"}, "beta"),
 			"redis":              pluginInfo([]string{"host", "port"}, []string{"stream", "checkpoint"}, "experimental"),
 			"feishu_sheet":       pluginInfo([]string{"app_id", "app_secret", "spreadsheet_token"}, []string{"batch", "oauth2_client_credentials", "scheduled_pull"}, "beta"),
+			"rest_source":        pluginInfo([]string{"url"}, []string{"batch", "pagination", "auth_headers", "checkpoint", "oauth2_client_credentials"}, "beta"),
+			"salesforce":         pluginInfo([]string{"client_id", "client_secret"}, []string{"batch", "pagination", "oauth2_client_credentials", "template"}, "beta"),
+			"github":             pluginInfo([]string{"repo", "token"}, []string{"batch", "pagination", "auth_headers", "template"}, "beta"),
+			"hubspot":            pluginInfo([]string{}, []string{"batch", "pagination", "auth_headers", "template"}, "beta"),
+			"stripe":             pluginInfo([]string{"token"}, []string{"batch", "pagination", "auth_headers", "template"}, "beta"),
+			"notion":             pluginInfo([]string{"database_id", "token"}, []string{"batch", "pagination", "auth_headers", "template"}, "beta"),
 		},
 		"sinks": map[string]any{
 			"file_sink":     pluginInfo([]string{"output_dir", "format"}, []string{"batch", "local_file"}, "production"),

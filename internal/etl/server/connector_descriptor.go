@@ -198,7 +198,7 @@ func sourceSchemaGate(typ string, capSet map[string]bool) ConnectorReadinessGate
 	switch typ {
 	case "mysql_batch", "mysql_cdc", "mysql_snapshot_cdc":
 		return passGate("schema_introspection", "Schema introspection", "source implements SchemaDescriptor for table/query metadata")
-	case "file", "http", "kafka":
+	case "file", "http", "kafka", "rest_source", "salesforce", "github", "hubspot", "stripe", "notion":
 		return ConnectorReadinessGate{
 			Code:        "schema_introspection",
 			Label:       "Schema introspection",
@@ -233,6 +233,8 @@ func sourceRemotePreflightGate(typ string, capSet map[string]bool) ConnectorRead
 		return ConnectorReadinessGate{Code: "remote_preflight", Label: "Remote preflight", Status: "partial", Evidence: "preflight checks local file readability and parses a sample", Remediation: "run preflight in the same container/host path layout used for deployment"}
 	case "http":
 		return ConnectorReadinessGate{Code: "remote_preflight", Label: "Remote preflight", Status: "partial", Evidence: "preflight sends a short sample request and validates response JSON/result_key shape", Remediation: "verify production auth headers, rate limits, pagination, and retry policy against the real API"}
+	case "rest_source", "salesforce", "github", "hubspot", "stripe", "notion":
+		return ConnectorReadinessGate{Code: "remote_preflight", Label: "Remote preflight", Status: "partial", Evidence: "preflight builds the connector and probes the base URL with configured auth", Remediation: "verify production auth, rate limits, pagination, and retry policy against the real API"}
 	case "kafka":
 		return ConnectorReadinessGate{Code: "remote_preflight", Label: "Remote preflight", Status: "partial", Evidence: "preflight reads broker topic metadata and blocks missing or empty topics when metadata is reachable", Remediation: "verify broker ACLs, consumer group policy, and topic retention in the target environment"}
 	default:

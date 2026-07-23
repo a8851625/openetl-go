@@ -29,6 +29,12 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, sources, "mysql_cdc", "server_id_base", "shard_index", "shard_total", "start_from")
 	assertFields(t, sources, "mysql_snapshot_cdc", "tables", "consistent_snapshot_lock", "server_id_base")
 	assertFields(t, sources, "http", "body", "auth_type", "auth_user", "auth_pass", "max_retries", "retry_base_ms")
+	assertFields(t, sources, "rest_source", "url", "auth", "pagination", "api_key_header", "cursor_field", "token_param", "variables", "max_retries", "retry_base_ms")
+	assertFields(t, sources, "salesforce", "object", "api_version", "instance_url", "client_id", "client_secret")
+	assertFields(t, sources, "github", "repo", "resource", "base_url", "token")
+	assertFields(t, sources, "hubspot", "object", "api_key", "base_url")
+	assertFields(t, sources, "stripe", "resource", "secret_key", "base_url")
+	assertFields(t, sources, "notion", "database_id", "api_version", "integration_token")
 	assertFields(t, sources, "kafka", "initial_offset", "sasl_user", "sasl_password", "tls",
 		"fetch_min_bytes", "fetch_max_bytes", "fetch_max_wait_ms", "channel_buffer_size", "max_processing_time_ms", "max_open_requests")
 	assertFields(t, sources, "redis", "pattern", "count")
@@ -144,6 +150,12 @@ func TestPluginMetadataUsesEvidenceDrivenMaturity(t *testing.T) {
 	}{
 		{"sources", "file", "production"},
 		{"sources", "http", "production"},
+		{"sources", "rest_source", "beta"},
+		{"sources", "salesforce", "beta"},
+		{"sources", "github", "beta"},
+		{"sources", "hubspot", "beta"},
+		{"sources", "stripe", "beta"},
+		{"sources", "notion", "beta"},
 		{"sources", "mysql_batch", "production"},
 		{"sources", "mysql_cdc", "production"},
 		{"sources", "mysql_snapshot_cdc", "production"},

@@ -229,7 +229,7 @@ func recommendationsForConnection(kind, typ string, cfg map[string]any) []connec
 			if str(cfg, "query") != "" {
 				add("cursor_column", str(cfg, "cursor_column"), "Custom queries need a stable cursor or explicit pk_column for replay-safe pagination.")
 			}
-		case "file", "http":
+		case "file", "http", "rest_source", "salesforce", "github", "hubspot", "stripe", "notion":
 			add("schedule.type", "once", "File and HTTP reads are usually bounded extraction jobs.")
 			add("batch_size", 1000, "Use a bounded batch to keep generated files and DLQ replay manageable.")
 			add("checkpoint_interval_sec", 30, "Bounded reads do not need sub-second checkpointing.")

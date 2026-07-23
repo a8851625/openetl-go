@@ -123,6 +123,7 @@ func (s *Server) RunPreflight(ctx context.Context, spec *pipeline.Spec) *Preflig
 		s.checkPostgresCDCSource(ctx, spec, result)
 		s.checkFileSource(ctx, spec, result)
 		s.checkHTTPSource(ctx, spec, result)
+		s.checkRestSource(ctx, spec, result)
 		s.checkKafkaSource(ctx, spec, result)
 	}
 
@@ -1983,6 +1984,67 @@ func (s *Server) checkHTTPSource(ctx context.Context, spec *pipeline.Spec, resul
 	}
 }
 
+// restSourcePreflighter 是 rest_source / SaaS 模板连接器的可选探测接口。
+type restSourcePreflighter interface {
+	PreflightProbe(ctx context.Context) error
+}
+
+// ── Source: rest_source + SaaS template checks ────────────────────────
+
+func (s *Server) checkRestSource(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
+	if spec == nil {
+		return
+	}
+	switch strings.ToLower(spec.Source.Type) {
+	case "rest_source", "salesforce", "github", "hubspot", "stripe", "notion":
+	default:
+		return
+	}
+	srcType := strings.ToLower(spec.Source.Type)
+	cfg := spec.Source.Config
+	built, err := registry.BuildSource(spec.Source.Type, cfg)
+	if err != nil {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "rest-source-config",
+			Message:     fmt.Sprintf("%s source configuration error: %v", srcType, err),
+			Remediation: "fix source.config url/auth/pagination/template fields before starting",
+		})
+		result.Passed = false
+		return
+	}
+
+	// 模板连接器可能尚未展开 url（例如仅校验配置错误）；尝试连接验证
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if probe, ok := built.(restSourcePreflighter); ok {
+		if err := probe.PreflightProbe(probeCtx); err != nil {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "error",
+				Check:       "rest-source-probe",
+				Message:     fmt.Sprintf("%s source connection probe failed: %v", srcType, err),
+				Remediation: "verify URL, auth credentials, network reachability, and that the endpoint returns HTTP 2xx",
+			})
+			result.Passed = false
+		}
+		return
+	}
+
+	// 回退：至少校验 url 形态（若配置中有）
+	rawURL := strings.TrimSpace(stringField(cfg, "url", ""))
+	if rawURL != "" {
+		if parsedURL, err := url.Parse(rawURL); err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "error",
+				Check:       "rest-source-url",
+				Message:     fmt.Sprintf("%s source url %q is invalid", srcType, rawURL),
+				Remediation: "use an absolute http:// or https:// URL reachable from the ETL process",
+			})
+			result.Passed = false
+		}
+	}
+}
+
 func applyHTTPPreflightPageParams(rawURL string, cfg map[string]any) string {
 	pageParam := strings.TrimSpace(stringField(cfg, "page_param", ""))
 	sizeParam := strings.TrimSpace(stringField(cfg, "size_param", ""))
@@ -2576,7 +2638,7 @@ func isStructuredSchemaHint(raw any) bool {
 
 func sourceFieldsAreSchemaHints(sourceType string) bool {
 	switch strings.ToLower(sourceType) {
-	case "demo", "file", "http", "kafka":
+	case "demo", "file", "http", "kafka", "rest_source", "salesforce", "github", "hubspot", "stripe", "notion":
 		return true
 	default:
 		return false
