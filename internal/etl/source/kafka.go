@@ -33,6 +33,14 @@ type KafkaSource struct {
 	valueColumn   string
 	initialOffset string
 
+	// Consumer fetch / throughput knobs (mapped to sarama.Config).
+	fetchMinBytes       int // Consumer.Fetch.Min
+	fetchMaxBytes       int // Consumer.Fetch.Default
+	fetchMaxWaitMs      int // Consumer.MaxWaitTime
+	channelBufferSize   int // ChannelBufferSize
+	maxProcessingTimeMs int // Consumer.MaxProcessingTime
+	maxOpenRequests     int // Net.MaxOpenRequests
+
 	// Security
 	saslUser      string
 	saslPassword  string
@@ -43,10 +51,16 @@ type KafkaSource struct {
 
 func NewKafkaSource(config map[string]any) (*KafkaSource, error) {
 	s := &KafkaSource{
-		name:          "kafka",
-		format:        "json",
-		groupID:       "etl-consumer",
-		initialOffset: "newest",
+		name:                "kafka",
+		format:              "json",
+		groupID:             "etl-consumer",
+		initialOffset:       "newest",
+		fetchMinBytes:       1,          // sarama default
+		fetchMaxBytes:       1024 * 1024, // 1MB, sarama default
+		fetchMaxWaitMs:      500,        // sarama default (ms)
+		channelBufferSize:   256,        // sarama default
+		maxProcessingTimeMs: 100,        // sarama default (ms)
+		maxOpenRequests:     5,          // sarama default
 	}
 	if v, ok := config["name"].(string); ok {
 		s.name = v
@@ -85,6 +99,27 @@ func NewKafkaSource(config map[string]any) (*KafkaSource, error) {
 	if v, ok := config["tls_skip_verify"].(bool); ok {
 		s.tlsSkipVerify = v
 	}
+	// Consumer fetch / throughput knobs. Zero or negative values keep the
+	// struct defaults (matching sarama.NewConfig) so existing pipelines stay
+	// unchanged when the fields are omitted from YAML.
+	if v := readInt(config, "fetch_min_bytes", 0); v > 0 {
+		s.fetchMinBytes = v
+	}
+	if v := readInt(config, "fetch_max_bytes", 0); v > 0 {
+		s.fetchMaxBytes = v
+	}
+	if v := readInt(config, "fetch_max_wait_ms", 0); v > 0 {
+		s.fetchMaxWaitMs = v
+	}
+	if v := readInt(config, "channel_buffer_size", 0); v > 0 {
+		s.channelBufferSize = v
+	}
+	if v := readInt(config, "max_processing_time_ms", 0); v > 0 {
+		s.maxProcessingTimeMs = v
+	}
+	if v := readInt(config, "max_open_requests", 0); v > 0 {
+		s.maxOpenRequests = v
+	}
 	if len(s.brokers) == 0 {
 		s.brokers = []string{"localhost:9092"}
 	}
@@ -102,6 +137,26 @@ func (s *KafkaSource) buildSaramaConfig() (*sarama.Config, error) {
 		config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	} else {
 		config.Consumer.Offsets.Initial = sarama.OffsetNewest
+	}
+
+	// Apply consumer fetch / throughput knobs before Validate().
+	if s.fetchMinBytes > 0 {
+		config.Consumer.Fetch.Min = int32(s.fetchMinBytes)
+	}
+	if s.fetchMaxBytes > 0 {
+		config.Consumer.Fetch.Default = int32(s.fetchMaxBytes)
+	}
+	if s.fetchMaxWaitMs > 0 {
+		config.Consumer.MaxWaitTime = time.Duration(s.fetchMaxWaitMs) * time.Millisecond
+	}
+	if s.channelBufferSize > 0 {
+		config.ChannelBufferSize = s.channelBufferSize
+	}
+	if s.maxProcessingTimeMs > 0 {
+		config.Consumer.MaxProcessingTime = time.Duration(s.maxProcessingTimeMs) * time.Millisecond
+	}
+	if s.maxOpenRequests > 0 {
+		config.Net.MaxOpenRequests = s.maxOpenRequests
 	}
 
 	if s.saslUser != "" {

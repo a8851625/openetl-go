@@ -382,6 +382,13 @@ source:
     format: json
     key_column: key
     value_column: payload
+    # Optional consumer fetch tuning (Sarama defaults shown):
+    # fetch_min_bytes: 1
+    # fetch_max_bytes: 1048576
+    # fetch_max_wait_ms: 500
+    # channel_buffer_size: 256
+    # max_processing_time_ms: 100
+    # max_open_requests: 5
 ```
 
 | Field | Required | Default | Description |
@@ -392,6 +399,18 @@ source:
 | `format` | no | `json` | Message format: `json` or `text`. |
 | `key_column` | no | | Column name for message key. |
 | `value_column` | no | | Column name for raw message value. |
+| `initial_offset` | no | `newest` | Initial consumer offset when no committed offset exists: `oldest` or `newest`. |
+| `sasl_user` | no | | SASL username. |
+| `sasl_password` | no | | SASL password (**secret**). |
+| `sasl_mechanism` | no | `PLAIN` | SASL mechanism: `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`. |
+| `tls` | no | `false` | Enable TLS for the Kafka connection. |
+| `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
+| `fetch_min_bytes` | no | `1` | Minimum bytes returned by each Kafka fetch request (`Consumer.Fetch.Min`). Raise for higher throughput on busy topics; keep low for lower latency. |
+| `fetch_max_bytes` | no | `1048576` | Default maximum bytes returned by each Kafka fetch request (`Consumer.Fetch.Default`, 1MB). Raise for high-throughput CDC. |
+| `fetch_max_wait_ms` | no | `500` | Maximum time the broker waits for `fetch_min_bytes` before returning (`Consumer.MaxWaitTime`, milliseconds). |
+| `channel_buffer_size` | no | `256` | Internal consumer channel buffer size (`ChannelBufferSize`). Larger values improve throughput under bursty load. |
+| `max_processing_time_ms` | no | `100` | Maximum time to process a single message before the consumer session is considered stuck (`Consumer.MaxProcessingTime`, milliseconds). Raise when sink writes are slow. |
+| `max_open_requests` | no | `5` | Maximum outstanding requests per broker connection (`Net.MaxOpenRequests`). |
 | `schema` | no | | Optional preflight-only schema hint, as `[{name,data_type,nullable}]` or `{field: type}`. |
 | `sample` | no | | Optional preflight-only sample message used to infer schema without consuming Kafka. |
 

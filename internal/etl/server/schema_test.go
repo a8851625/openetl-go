@@ -29,7 +29,8 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, sources, "mysql_cdc", "server_id_base", "shard_index", "shard_total", "start_from")
 	assertFields(t, sources, "mysql_snapshot_cdc", "tables", "consistent_snapshot_lock", "server_id_base")
 	assertFields(t, sources, "http", "body", "auth_type", "auth_user", "auth_pass", "max_retries", "retry_base_ms")
-	assertFields(t, sources, "kafka", "initial_offset", "sasl_user", "sasl_password", "tls")
+	assertFields(t, sources, "kafka", "initial_offset", "sasl_user", "sasl_password", "tls",
+		"fetch_min_bytes", "fetch_max_bytes", "fetch_max_wait_ms", "channel_buffer_size", "max_processing_time_ms", "max_open_requests")
 	assertFields(t, sources, "redis", "pattern", "count")
 	assertFields(t, sources, "demo", "interval_ms", "count", "fields")
 
