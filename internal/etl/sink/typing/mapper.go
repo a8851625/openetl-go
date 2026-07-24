@@ -20,8 +20,13 @@ const (
 )
 
 // InferFromValue returns the DDL type string for a value with the given column name.
-// Value type takes priority for unambiguous Go types ([]byte, time.Time, bool).
-// Column name hints are used for string/numeric values (e.g. "amount" → DECIMAL, "email" → VARCHAR).
+// Value type takes priority for unambiguous Go types ([]byte, time.Time, bool,
+// and all numeric kinds). Column name hints are used for string/unknown values
+// (e.g. "amount" → DECIMAL, "email" → VARCHAR).
+//
+// Important: column names like "deleted" are ambiguous (soft-delete flag vs
+// deletion timestamp). Numeric values must NOT be forced into DATETIME by the
+// temporal name hint — that produces MySQL Error 1292 when writing 0/1 flags.
 func InferFromValue(dialect Dialect, columnName string, value any) string {
 	// Unambiguous Go types take priority over name hints.
 	switch value.(type) {
@@ -31,8 +36,19 @@ func InferFromValue(dialect Dialect, columnName string, value any) string {
 		return inferFromGoType(dialect, value)
 	case bool:
 		return inferFromGoType(dialect, value)
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		// Numeric values always win over temporal/boolean name hints so that
+		// soft-delete flags (deleted=0/1) become INT/TINYINT, not DATETIME.
+		// Name hints that only refine numerics (id → BIGINT, amount → DECIMAL)
+		// are still applied below when the value is non-numeric or nil.
+		if hint := nameHint(dialect, columnName); isNumericDDL(hint) {
+			return hint
+		}
+		return inferFromGoType(dialect, value)
 	}
-	// Column name hints for string and numeric values.
+	// Column name hints for string and unknown values.
 	if hint := nameHint(dialect, columnName); hint != "" {
 		return hint
 	}
@@ -41,12 +57,9 @@ func InferFromValue(dialect Dialect, columnName string, value any) string {
 
 // InferFromValues examines multiple values for a column and returns the most
 // appropriate type. If all values are nil, returns the default string type.
+// Numeric sample values take priority over temporal name hints (same rule as
+// InferFromValue) so auto_create does not build DATETIME for soft-delete flags.
 func InferFromValues(dialect Dialect, columnName string, values []any) string {
-	// Try name hint first.
-	if hint := nameHint(dialect, columnName); hint != "" {
-		return hint
-	}
-	// Collect all non-nil values and infer from the most specific type.
 	var nonNil []any
 	for _, v := range values {
 		if v != nil {
@@ -54,10 +67,20 @@ func InferFromValues(dialect Dialect, columnName string, values []any) string {
 		}
 	}
 	if len(nonNil) == 0 {
+		if hint := nameHint(dialect, columnName); hint != "" {
+			return hint
+		}
 		return defaultStringType(dialect)
 	}
-	// Use the first non-nil value.
-	return inferFromGoType(dialect, nonNil[0])
+	// Prefer the concrete sample over name-only guessing when available.
+	return InferFromValue(dialect, columnName, nonNil[0])
+}
+
+func isNumericDDL(ddl string) bool {
+	u := strings.ToUpper(ddl)
+	return strings.Contains(u, "INT") || strings.Contains(u, "DECIMAL") ||
+		strings.Contains(u, "NUMERIC") || strings.Contains(u, "DOUBLE") ||
+		strings.Contains(u, "FLOAT") || strings.Contains(u, "BOOL")
 }
 
 // nameHint returns a DDL type based on column naming conventions, or empty
@@ -79,24 +102,11 @@ func nameHint(dialect Dialect, name string) string {
 		}
 	}
 
-	// Temporal columns → datetime types
-	if strings.HasSuffix(lower, "_at") || strings.HasSuffix(lower, "_time") ||
-		lower == "created" || lower == "updated" || lower == "deleted" ||
-		strings.HasPrefix(lower, "time") || lower == "date" || lower == "timestamp" ||
-		strings.HasSuffix(lower, "_date") || strings.HasSuffix(lower, "_ts") {
-		switch dialect {
-		case DialectMySQL:
-			return "DATETIME(3)"
-		case DialectPostgreSQL:
-			return "TIMESTAMP(3)"
-		case DialectClickHouse:
-			return "DateTime64(3)"
-		case DialectDoris:
-			return "DATETIME"
-		}
-	}
-
-	// Boolean columns
+	// Soft-delete / boolean flags. "deleted" is intentionally NOT treated as a
+	// temporal name: Debezium CDC commonly carries deleted=0/1 as an int flag,
+	// and forcing DATETIME here caused MySQL Error 1292 (zero-date) on upsert.
+	// Prefer flag types; callers with a real deletion timestamp should use
+	// deleted_at / deleted_time naming (covered by the temporal suffix rules).
 	if strings.HasPrefix(lower, "is_") || strings.HasPrefix(lower, "has_") ||
 		lower == "active" || lower == "enabled" || lower == "deleted" ||
 		strings.HasSuffix(lower, "_flag") {
@@ -109,6 +119,23 @@ func nameHint(dialect Dialect, name string) string {
 			return "UInt8"
 		case DialectDoris:
 			return "BOOLEAN"
+		}
+	}
+
+	// Temporal columns → datetime types (deleted_at / deleted_time via suffixes).
+	if strings.HasSuffix(lower, "_at") || strings.HasSuffix(lower, "_time") ||
+		lower == "created" || lower == "updated" ||
+		strings.HasPrefix(lower, "time") || lower == "date" || lower == "timestamp" ||
+		strings.HasSuffix(lower, "_date") || strings.HasSuffix(lower, "_ts") {
+		switch dialect {
+		case DialectMySQL:
+			return "DATETIME(3)"
+		case DialectPostgreSQL:
+			return "TIMESTAMP(3)"
+		case DialectClickHouse:
+			return "DateTime64(3)"
+		case DialectDoris:
+			return "DATETIME"
 		}
 	}
 

@@ -50,6 +50,13 @@ func TestInferFromValue(t *testing.T) {
 
 		// Timestamp string
 		{"ts_str_mysql", DialectMySQL, "event_time", "2024-01-15T10:30:00Z", "DATETIME(3)"},
+
+		// Soft-delete flag must not become DATETIME (CDC deleted=0/1).
+		{"deleted_flag_int_mysql", DialectMySQL, "deleted", 0, "TINYINT(1)"},
+		{"deleted_flag_int64_mysql", DialectMySQL, "deleted", int64(0), "TINYINT(1)"},
+		{"deleted_flag_float_json_mysql", DialectMySQL, "deleted", float64(0), "TINYINT(1)"},
+		{"deleted_at_still_temporal", DialectMySQL, "deleted_at", "2024-01-15 10:30:00", "DATETIME(3)"},
+		{"deleted_time_still_temporal", DialectMySQL, "deleted_time", now, "DATETIME(3)"},
 	}
 
 	for _, tt := range tests {
