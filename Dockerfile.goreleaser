@@ -8,10 +8,10 @@ RUN apk add --no-cache ca-certificates tzdata wget \
 
 COPY openetl-go ./openetl-go
 COPY manifest ./manifest
-COPY pipes ./pipes
 
+# Create empty pipes/ and data dirs; pipeline specs are mounted by the operator.
 RUN chmod +x ./openetl-go \
-    && mkdir -p data/checkpoint data/dlq data/output \
+    && mkdir -p pipes data/checkpoint data/dlq data/output \
     && chown -R etl:etl /app
 
 USER etl

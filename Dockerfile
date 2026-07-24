@@ -32,10 +32,9 @@ RUN addgroup -g 1001 etl && adduser -D -u 1001 -G etl etl
 COPY --from=builder /app/main .
 COPY --from=builder /app/resource ./resource
 COPY --from=builder /app/manifest ./manifest
-COPY --from=builder /app/pipes ./pipes
 
-# Create data directories with correct permissions
-RUN mkdir -p data/checkpoint data/dlq data/output && chown -R etl:etl /app
+# Create empty pipes/ and data dirs; pipeline specs are mounted by the operator.
+RUN mkdir -p pipes data/checkpoint data/dlq data/output && chown -R etl:etl /app
 
 USER etl
 

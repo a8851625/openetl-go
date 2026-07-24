@@ -21,7 +21,7 @@ GoReleaser is configured by [`.goreleaser.yml`](../.goreleaser.yml).
 | --- | --- | --- |
 | `openetl-go_<version>_<os>_<arch>` | Default pure-Go binary, `manifest/`, `README.md`, `LICENSE` | Linux, macOS, Windows for amd64/arm64, excluding Windows arm64. |
 | `openetl-go-extism_<version>_<os>_<arch>` | WASM-enabled binary plus the same release files | Built with `-tags=extism`. |
-| `ghcr.io/a8851625/openetl-go:<version>` | Runtime Docker image | Contains binary, `manifest/`, `resource/`, and `pipes/`. Test fixtures are not shipped. |
+| `ghcr.io/a8851625/openetl-go:<version>` | Runtime Docker image | Contains binary, `manifest/`, and `resource/`. Pipeline specs are not baked in — mount them to `/app/pipes`. Test fixtures are not shipped. |
 | `ghcr.io/a8851625/openetl-go:latest` | Latest release image | Updated by tagged releases. |
 
 Release images do **not** include `testdata/`. Test fixtures remain in the repository for automated e2e scripts, but production containers should receive input files, pipeline specs, and writable state through explicit mounts.

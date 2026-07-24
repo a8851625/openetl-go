@@ -21,7 +21,7 @@ GoReleaser 配置位于 [`.goreleaser.yml`](../.goreleaser.yml)。
 | --- | --- | --- |
 | `openetl-go_<version>_<os>_<arch>` | 默认纯 Go 二进制、`manifest/`、`README.md`、`LICENSE` | 支持 Linux、macOS、Windows 的 amd64/arm64，不包含 Windows arm64。 |
 | `openetl-go-extism_<version>_<os>_<arch>` | 启用 WASM 的二进制及相同发布文件 | 使用 `-tags=extism` 构建。 |
-| `ghcr.io/a8851625/openetl-go:<version>` | 运行时 Docker 镜像 | 包含二进制、`manifest/`、`resource/` 和 `pipes/`。不携带测试夹具。 |
+| `ghcr.io/a8851625/openetl-go:<version>` | 运行时 Docker 镜像 | 包含二进制、`manifest/` 和 `resource/`。不内置 pipeline spec，需挂载到 `/app/pipes`。不携带测试夹具。 |
 | `ghcr.io/a8851625/openetl-go:latest` | 最新发布镜像 | 由 tag 发布流程更新。 |
 
 发布镜像不包含 `testdata/`。测试夹具保留在仓库中供自动化 e2e 脚本使用；生产容器应通过显式挂载传入输入文件、pipeline spec 和可写状态目录。

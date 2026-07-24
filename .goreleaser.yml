@@ -114,7 +114,6 @@ dockers:
       - --platform=linux/amd64
     extra_files:
       - manifest
-      - pipes
     skip_push: auto
 
 release:
