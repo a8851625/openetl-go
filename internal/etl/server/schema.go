@@ -543,6 +543,32 @@ func transformConfigSchemas() map[string][]ConfigField {
 			{Name: "state_node", Type: FieldString, Required: false, Default: "transform node id", Description: "Node namespace for persisted join buffers; runtime injects the transform node id when omitted"},
 			{Name: "state_ttl_seconds", Type: FieldInt, Required: false, Default: 0, Description: "TTL for persisted join buffers in seconds (0 = join window)"},
 		},
+		// ── Row-level utility transforms ──
+		"distinct": {
+			{Name: "fields", Type: FieldStringArray, Required: false, Description: "Fields used as the distinct key; empty = full-record distinct", Example: []string{"id", "event_type"}},
+		},
+		"sort": {
+			{Name: "fields", Type: FieldMap, Required: true, Description: "Sort keys as [{name, order}]; order is asc or desc", Example: []any{map[string]any{"name": "created_at", "order": "desc"}, map[string]any{"name": "id", "order": "asc"}}},
+			{Name: "max_buffer", Type: FieldInt, Required: false, Default: 100000, Description: "Maximum records buffered for one sort batch"},
+		},
+		"cast": {
+			{Name: "casts", Type: FieldMap, Required: true, Description: "Map of field → target type (to_string, to_int, to_float, to_bool, to_timestamp, to_date, to_json, to_array)", Example: map[string]string{"price": "to_float", "active": "to_bool"}},
+			{Name: "on_error", Type: FieldString, Required: false, Default: "null", Description: "Action when a cast fails", Enum: []string{"null", "skip", "fail"}},
+		},
+		"coalesce": {
+			{Name: "fields", Type: FieldStringArray, Required: true, Description: "Candidate fields, first non-empty wins", Example: []string{"nickname", "username", "email"}},
+			{Name: "target_field", Type: FieldString, Required: true, Description: "Field to write the coalesced value into", Example: "display_name"},
+		},
+		"limit": {
+			{Name: "count", Type: FieldInt, Required: true, Description: "Maximum number of records to pass through", Example: 1000},
+		},
+		"skip": {
+			{Name: "count", Type: FieldInt, Required: true, Description: "Number of leading records to discard", Example: 10},
+		},
+		"sample": {
+			{Name: "rate", Type: FieldFloat, Required: true, Description: "Keep probability in [0.0, 1.0]", Example: 0.1},
+			{Name: "seed", Type: FieldInt, Required: false, Description: "Optional RNG seed for deterministic sampling", Example: 42},
+		},
 	}
 	schemas["javascript"] = schemas["ts"]
 	schemas["js"] = schemas["ts"]

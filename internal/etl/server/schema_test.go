@@ -66,6 +66,13 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, transforms, "join", "on_miss", "state_backend", "state_ttl_seconds")
 	assertFields(t, transforms, "javascript", "script", "code", "timeout_ms")
 	assertFields(t, transforms, "js", "script", "code", "timeout_ms")
+	assertFields(t, transforms, "distinct", "fields")
+	assertFields(t, transforms, "sort", "fields", "max_buffer")
+	assertFields(t, transforms, "cast", "casts", "on_error")
+	assertFields(t, transforms, "coalesce", "fields", "target_field")
+	assertFields(t, transforms, "limit", "count")
+	assertFields(t, transforms, "skip", "count")
+	assertFields(t, transforms, "sample", "rate", "seed")
 }
 
 func TestWindowSchemaOnlyExposesImplementedWindowTypes(t *testing.T) {
