@@ -131,9 +131,18 @@ export function PipelineDetailPage({
   const health = derivePipelineHealth(pipeline, metric);
   const ref = pipelineRef(pipeline);
   const key = pipelineKey(pipeline);
-  const cps = checkpoints.filter(
-    (c) => c.job_name === pipeline.name || c.id.includes(pipeline.name),
-  );
+  // Runtime checkpoints are keyed by pipeline instance id (runtimeSpec rewrites
+  // spec.Name to the id). DAG multi-source keys are "{id}-{sourceNodeID}".
+  // Matching only display name hides all modern API-created pipelines.
+  const cps = checkpoints.filter((c) => {
+    const job = String(c.job_name || c.id || '').trim();
+    if (!job) return false;
+    const id = String(pipeline.id || '').trim();
+    const name = String(pipeline.name || '').trim();
+    if (id && (job === id || job.startsWith(`${id}-`))) return true;
+    if (name && (job === name || job.startsWith(`${name}-`))) return true;
+    return false;
+  });
 
   return (
     <div className="space-y-4">
