@@ -38,6 +38,13 @@ var sourceScheduleCapabilities = map[string]SourceScheduleCapability{
 	"demo":  {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic}, DefaultSchedule: ScheduleOnce},
 	// feishu_sheet is a batch pull source; use periodic for refresh.
 	"feishu_sheet": {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic, ScheduleDependency}, DefaultSchedule: ScheduleOnce},
+	// rest_source and SaaS templates are bounded HTTP pulls.
+	"rest_source": {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic, ScheduleDependency}, DefaultSchedule: ScheduleOnce},
+	"salesforce":  {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic, ScheduleDependency}, DefaultSchedule: ScheduleOnce},
+	"github":      {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic, ScheduleDependency}, DefaultSchedule: ScheduleOnce},
+	"hubspot":     {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic, ScheduleDependency}, DefaultSchedule: ScheduleOnce},
+	"stripe":      {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic, ScheduleDependency}, DefaultSchedule: ScheduleOnce},
+	"notion":      {SupportedSchedules: []string{ScheduleOnce, ScheduleCron, SchedulePeriodic, ScheduleDependency}, DefaultSchedule: ScheduleOnce},
 }
 
 // SourceScheduleCapabilityFor returns the schedule capability for a source.
