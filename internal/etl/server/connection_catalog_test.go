@@ -737,3 +737,150 @@ func saveTestConnection(t *testing.T, baseURL string, body map[string]any) {
 		t.Fatalf("save connection status = %d, body=%#v", resp.StatusCode, got)
 	}
 }
+
+// TestConnectionSavePreservesMaskedSecrets ensures updating a connection with
+// GET-masked secret placeholders does not overwrite the stored password.
+func TestConnectionSavePreservesMaskedSecrets(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	saveTestConnection(t, ts.URL, map[string]any{
+		"name": "mysql-src",
+		"kind": "source",
+		"type": "mysql_batch",
+		"config": map[string]any{
+			"host":     "db.example",
+			"user":     "sync",
+			"password": "real-password-xyz",
+			"database": "app",
+		},
+	})
+
+	// Resubmit with the catalog mask sentinel and a non-secret field change.
+	saveTestConnection(t, ts.URL, map[string]any{
+		"name": "mysql-src",
+		"kind": "source",
+		"type": "mysql_batch",
+		"config": map[string]any{
+			"host":     "db.example",
+			"user":     "sync2",
+			"password": "******",
+			"database": "app",
+		},
+	})
+
+	got, err := s.store.GetConnection(t.Context(), "mysql-src")
+	if err != nil {
+		t.Fatalf("GetConnection: %v", err)
+	}
+	if got == nil {
+		t.Fatal("connection missing")
+	}
+	if got.Config["password"] != "real-password-xyz" {
+		t.Fatalf("password overwritten: %#v", got.Config["password"])
+	}
+	if got.Config["user"] != "sync2" {
+		t.Fatalf("user not updated: %#v", got.Config["user"])
+	}
+}
+
+// TestPipelineUpdatePreservesMaskedSecrets ensures PUT /pipelines keeps real
+// secrets when the editor resubmits a GET /spec payload with masked passwords.
+func TestPipelineUpdatePreservesMaskedSecrets(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	outDir := t.TempDir()
+	spec := pipeline.Spec{
+		Name: "secret-pipe",
+		Source: pipeline.SourceSpec{
+			Type: "file",
+			Config: map[string]any{
+				"path":     filepath.Join(outDir, "in.jsonl"),
+				"format":   "json",
+				"password": "source-secret-value",
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "file_sink",
+			Config: map[string]any{
+				"output_dir": outDir,
+				"format":     "json",
+				"password":   "sink-secret-value",
+			},
+		},
+	}
+	// Seed an input file so file source open/preflight is happier if exercised.
+	if err := os.WriteFile(filepath.Join(outDir, "in.jsonl"), []byte(`{"id":1}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	createResp, err := http.Post(ts.URL+"/api/v2/pipelines", "application/json", bytes.NewReader(mustPipelineJSON(t, spec)))
+	if err != nil {
+		t.Fatalf("POST pipeline: %v", err)
+	}
+	defer createResp.Body.Close()
+	if createResp.StatusCode != http.StatusOK {
+		var got map[string]any
+		_ = json.NewDecoder(createResp.Body).Decode(&got)
+		t.Fatalf("create status=%d body=%#v", createResp.StatusCode, got)
+	}
+	var created map[string]any
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("missing id: %#v", created)
+	}
+
+	// GET /spec returns masked secrets.
+	getResp, err := http.Get(ts.URL + "/api/v2/pipelines/" + id + "/spec")
+	if err != nil {
+		t.Fatalf("GET spec: %v", err)
+	}
+	defer getResp.Body.Close()
+	var getBody struct {
+		Spec pipeline.Spec `json:"spec"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&getBody); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if getBody.Spec.Source.Config["password"] == "source-secret-value" {
+		t.Fatalf("GET /spec did not mask source password: %#v", getBody.Spec.Source.Config["password"])
+	}
+
+	// Change a non-secret field and PUT the masked payload back.
+	getBody.Spec.Sink.Config["format"] = "jsonl"
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v2/pipelines", bytes.NewReader(mustPipelineUpdateJSONWithID(t, id, getBody.Spec)))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT pipeline: %v", err)
+	}
+	defer putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		var got map[string]any
+		_ = json.NewDecoder(putResp.Body).Decode(&got)
+		t.Fatalf("update status=%d body=%#v", putResp.StatusCode, got)
+	}
+
+	s.mu.RLock()
+	updated := s.specs[id]
+	s.mu.RUnlock()
+	if updated == nil {
+		t.Fatal("pipeline missing after update")
+	}
+	if updated.Source.Config["password"] != "source-secret-value" {
+		t.Fatalf("source password overwritten: %#v", updated.Source.Config["password"])
+	}
+	if updated.Sink.Config["password"] != "sink-secret-value" {
+		t.Fatalf("sink password overwritten: %#v", updated.Sink.Config["password"])
+	}
+	if updated.Sink.Config["format"] != "jsonl" {
+		t.Fatalf("non-secret field not updated: %#v", updated.Sink.Config["format"])
+	}
+}

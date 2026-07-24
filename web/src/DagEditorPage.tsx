@@ -457,16 +457,20 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setSinkConcurrency(Math.max(0, Number(executionSpec.sink_concurrency) || 0));
     setShardStrategy(shardingSpec.strategy || parallelismSpec.shard_strategy || 'round_robin');
     setShardKey(shardingSpec.key || parallelismSpec.shard_key || '');
+    // Use fixed defaults as fallback — do NOT close over current editor state.
+    // Otherwise loadSpecIntoCanvas's identity changes when the user edits
+    // batch_size / flush / checkpoint / buffer, re-triggering the editTarget
+    // load effect and overwriting the in-progress edits with the saved spec.
     if (spec.execution) {
-      setBatchSize(Number(spec.execution.batch_size) || batchSize);
-      setFlushIntervalMs(Number(spec.execution.flush_interval_ms) || flushIntervalMs);
-      setCheckpointIntervalSec(Number(spec.execution.checkpoint_interval_sec) || checkpointIntervalSec);
-      setBackpressureBuffer(Number(spec.execution.backpressure_buffer) || backpressureBuffer);
+      setBatchSize(Number(spec.execution.batch_size) || 1000);
+      setFlushIntervalMs(Number(spec.execution.flush_interval_ms) || 1000);
+      setCheckpointIntervalSec(Number(spec.execution.checkpoint_interval_sec) || 30);
+      setBackpressureBuffer(Number(spec.execution.backpressure_buffer) || 100);
     } else {
-      setBatchSize(Number(spec.batch_size) || batchSize);
-      setFlushIntervalMs(Number(spec.flush_interval_ms) || flushIntervalMs);
-      setCheckpointIntervalSec(Number(spec.checkpoint_interval_sec) || checkpointIntervalSec);
-      setBackpressureBuffer(Number(spec.backpressure_buffer) || backpressureBuffer);
+      setBatchSize(Number(spec.batch_size) || 1000);
+      setFlushIntervalMs(Number(spec.flush_interval_ms) || 1000);
+      setCheckpointIntervalSec(Number(spec.checkpoint_interval_sec) || 30);
+      setBackpressureBuffer(Number(spec.backpressure_buffer) || 100);
     }
 
     if (spec.dag?.nodes) {
@@ -518,14 +522,17 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setSelectedNodeId(nextNodes[0]?.id || null);
     setValidateResult(null);
     setValidateError('');
-  }, [backpressureBuffer, batchSize, checkpointIntervalSec, flushIntervalMs, setEdges, setNodes]);
+  }, [setEdges, setNodes]);
 
-  // Load pipeline when editTarget changes
+  // Load pipeline only when the target pipeline changes — not when local
+  // execution fields (batch_size etc.) are being edited.
   useEffect(() => {
     if (!editTarget) return;
+    let cancelled = false;
     apiGet<{ spec: any }>(`/api/v2/pipelines/${encodeURIComponent(editTarget)}/spec`).then((res) => {
-      if (res.spec) loadSpecIntoCanvas(res.spec);
+      if (!cancelled && res.spec) loadSpecIntoCanvas(res.spec);
     }).catch(() => {});
+    return () => { cancelled = true; };
   }, [editTarget, loadSpecIntoCanvas]);
 
   const onConnect = useCallback((params: Connection) => {
@@ -981,7 +988,21 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
 
       {(validateResult || validateError) && (
         <div data-testid="dag-validate-result" className={`rounded-lg border px-3 py-2 text-xs ${validateError || validateResult?.valid === false ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
-          <div className="font-semibold">{validateError || validateResult?.valid === false ? 'Validation failed' : 'Validation passed'} · {validateResult?.preflight?.summary || 'spec checked'}</div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="font-semibold">{validateError || validateResult?.valid === false ? 'Validation failed' : 'Validation passed'} · {validateResult?.preflight?.summary || 'spec checked'}</div>
+            <button
+              type="button"
+              className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium opacity-70 hover:bg-black/5 hover:opacity-100"
+              data-testid="dag-validate-dismiss"
+              aria-label="Dismiss validation result"
+              onClick={() => {
+                setValidateResult(null);
+                setValidateError('');
+              }}
+            >
+              ✕
+            </button>
+          </div>
           {validateError && <div className="mt-1 whitespace-pre-wrap">{validateError}</div>}
           {(validateResult?.warnings || validateResult?.errors || []).map((msg, i) => <div key={i} className="mt-1">{msg}</div>)}
           {(validateResult?.preflight?.issues || []).map((issue, i) => (
@@ -1367,19 +1388,79 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                   <div className="space-y-2.5">
                     <div>
                       <label className="mb-1 block text-xs font-medium text-muted-foreground">📦 Batch Size</label>
-                      <input type="number" className={fieldClass} min={1} max={100000} value={batchSize} onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1000))} />
+                      <input
+                        type="number"
+                        className={fieldClass}
+                        min={1}
+                        max={100000}
+                        value={batchSize}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            setBatchSize(1);
+                            return;
+                          }
+                          const n = parseInt(raw, 10);
+                          if (!Number.isNaN(n)) setBatchSize(Math.min(100000, Math.max(1, n)));
+                        }}
+                      />
                     </div>
                     <div>
                       <label className="mb-1 block text-xs font-medium text-muted-foreground">⏱ Flush Interval (ms)</label>
-                      <input type="number" className={fieldClass} min={100} max={60000} value={flushIntervalMs} onChange={(e) => setFlushIntervalMs(Math.max(100, parseInt(e.target.value) || 1000))} />
+                      <input
+                        type="number"
+                        className={fieldClass}
+                        min={100}
+                        max={60000}
+                        value={flushIntervalMs}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            setFlushIntervalMs(100);
+                            return;
+                          }
+                          const n = parseInt(raw, 10);
+                          if (!Number.isNaN(n)) setFlushIntervalMs(Math.min(60000, Math.max(100, n)));
+                        }}
+                      />
                     </div>
                     <div>
                       <label className="mb-1 block text-xs font-medium text-muted-foreground">💾 Checkpoint Interval (s)</label>
-                      <input type="number" className={fieldClass} min={1} max={3600} value={checkpointIntervalSec} onChange={(e) => setCheckpointIntervalSec(Math.max(1, parseInt(e.target.value) || 30))} />
+                      <input
+                        type="number"
+                        className={fieldClass}
+                        min={1}
+                        max={3600}
+                        value={checkpointIntervalSec}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            setCheckpointIntervalSec(1);
+                            return;
+                          }
+                          const n = parseInt(raw, 10);
+                          if (!Number.isNaN(n)) setCheckpointIntervalSec(Math.min(3600, Math.max(1, n)));
+                        }}
+                      />
                     </div>
                     <div>
                       <label className="mb-1 block text-xs font-medium text-muted-foreground">🔄 Backpressure Buffer</label>
-                      <input type="number" className={fieldClass} min={1} max={10000} value={backpressureBuffer} onChange={(e) => setBackpressureBuffer(Math.max(1, parseInt(e.target.value) || 100))} />
+                      <input
+                        type="number"
+                        className={fieldClass}
+                        min={1}
+                        max={10000}
+                        value={backpressureBuffer}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            setBackpressureBuffer(1);
+                            return;
+                          }
+                          const n = parseInt(raw, 10);
+                          if (!Number.isNaN(n)) setBackpressureBuffer(Math.min(10000, Math.max(1, n)));
+                        }}
+                      />
                     </div>
                   </div>
                   <hr className="border-border" />

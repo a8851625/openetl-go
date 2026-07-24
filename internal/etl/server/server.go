@@ -1749,7 +1749,8 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			s.mu.RUnlock()
 			if dagSpecExists {
 				specChanged = true
-				_ = oldDagSpec // could compare fields if needed
+				// Keep real secrets when the UI resubmits masked values from GET /spec.
+				preserveDAGSpecSecrets(&dagSpec, oldDagSpec)
 			}
 
 			if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
@@ -1834,6 +1835,16 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				id = resolved
 			}
 		}
+
+		// Restore previously stored secrets before connection merge/preflight when
+		// the client resubmitted GET-masked placeholders (e.g. password="p****d").
+		s.mu.RLock()
+		oldSpec, specExists := s.specs[id]
+		s.mu.RUnlock()
+		if specExists {
+			preserveLinearSpecSecrets(&spec, oldSpec)
+		}
+
 		if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -1846,11 +1857,7 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Detect spec changes and checkpoint compatibility
-		s.mu.RLock()
-		oldSpec, specExists := s.specs[id]
-		s.mu.RUnlock()
-
+		// Detect spec changes and checkpoint compatibility.
 		specChanged := false
 		checkpointWarning := ""
 		if specExists {
@@ -2120,70 +2127,6 @@ func (s *Server) persistPipelineSchedule(ctx context.Context, name, status strin
 	return fmt.Errorf("pipeline %s not found", name)
 }
 
-// secretKeyPatterns are config key substrings that indicate a secret field.
-var secretKeyPatterns = []string{"password", "passwd", "secret", "token", "api_key", "apikey", "credential", "private_key"}
-
-// maskConfigSecrets recursively masks secret values in a config map.
-func maskConfigSecrets(cfg map[string]any) map[string]any {
-	if cfg == nil {
-		return nil
-	}
-	out := make(map[string]any, len(cfg))
-	for k, v := range cfg {
-		if isSecretKey(k) {
-			if s, ok := v.(string); ok && s != "" {
-				out[k] = maskString(s)
-			} else {
-				out[k] = "****"
-			}
-		} else {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-func isSecretKey(key string) bool {
-	lk := strings.ToLower(key)
-	for _, pat := range secretKeyPatterns {
-		if strings.Contains(lk, pat) {
-			return true
-		}
-	}
-	return false
-}
-
-func maskString(s string) string {
-	if len(s) <= 2 {
-		return "****"
-	}
-	return s[:1] + "****" + s[len(s)-1:]
-}
-
-func maskSpecSecrets(spec *pipeline.Spec) *pipeline.Spec {
-	if spec == nil {
-		return nil
-	}
-	cp := *spec
-	cp.Source.Config = maskConfigSecrets(cp.Source.Config)
-	cp.Sink.Config = maskConfigSecrets(cp.Sink.Config)
-	for i := range cp.Transforms {
-		cp.Transforms[i].Config = maskConfigSecrets(cp.Transforms[i].Config)
-	}
-	return &cp
-}
-
-func maskDAGSpecSecrets(spec *orchestrator.PipelineSpec) *orchestrator.PipelineSpec {
-	if spec == nil {
-		return nil
-	}
-	cp := *spec
-	for i := range cp.DAG.Nodes {
-		cp.DAG.Nodes[i].Config = maskConfigSecrets(cp.DAG.Nodes[i].Config)
-	}
-	return &cp
-}
-
 // handlePipelineExport returns the pipeline spec as downloadable YAML.
 func (s *Server) handlePipelineExport(w http.ResponseWriter, r *http.Request, name string) {
 	s.mu.RLock()
@@ -2431,10 +2374,15 @@ func (s *Server) handlePipelineVersionDiff(w http.ResponseWriter, r *http.Reques
 
 	s.mu.RLock()
 	currentSpec := s.specs[name]
+	currentDAG := s.dagSpecs[name]
 	s.mu.RUnlock()
 
 	currentYAML := ""
-	if currentSpec != nil {
+	if currentDAG != nil {
+		if yb, me := yaml.Marshal(currentDAG); me == nil {
+			currentYAML = string(yb)
+		}
+	} else if currentSpec != nil {
 		if yb, me := pipeline.MarshalSpecYAML(currentSpec); me == nil {
 			currentYAML = string(yb)
 		}
@@ -2674,6 +2622,12 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 
 // handlePipelinesPut is a helper to update an existing pipeline (used by spec import).
 func (s *Server) handlePipelinesPut(ctx context.Context, id string, spec *pipeline.Spec) error {
+	s.mu.RLock()
+	oldSpec := s.specs[id]
+	s.mu.RUnlock()
+	if oldSpec != nil {
+		preserveLinearSpecSecrets(spec, oldSpec)
+	}
 	if err := s.resolvePipelineConnections(ctx, spec); err != nil {
 		return err
 	}

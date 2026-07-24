@@ -9,6 +9,7 @@ import { ErrorBox } from '@/components/shared/empty-state';
 import {
   ConfigForm,
   buildDefaultConfig,
+  essentialFields,
   filterFieldsByScope,
   missingRequiredFields,
   type PluginSchemaField,
@@ -236,6 +237,10 @@ export function FirstTaskWizard({
   const [sourceJsonOpen, setSourceJsonOpen] = useState(false);
   const [sinkJsonOpen, setSinkJsonOpen] = useState(false);
   const [transformJsonOpen, setTransformJsonOpen] = useState(false);
+  const [sourceMoreOpen, setSourceMoreOpen] = useState(false);
+  const [sinkMoreOpen, setSinkMoreOpen] = useState(false);
+  const [transformMoreOpen, setTransformMoreOpen] = useState(false);
+  const [safetyMoreOpen, setSafetyMoreOpen] = useState(false);
   const [tableMappingOpen, setTableMappingOpen] = useState(false);
   const [tableMappingText, setTableMappingText] = useState(
     restored?.tableMappingText ||
@@ -269,18 +274,18 @@ export function FirstTaskWizard({
   const sourceConfig = parseJSONObject(sourceConfigText);
   const sinkConfig = parseJSONObject(sinkConfigText);
   const transformConfigs = parseTransformList(transformsText);
+  // Compact form: only essentials up front; full schema stays under "More options".
+  const sourceEssentialFields = essentialFields(sourceFields, sourceConfig);
+  const sinkEssentialFields = essentialFields(sinkFields, sinkConfig);
+  const sourceHiddenCount = Math.max(0, sourceFields.length - sourceEssentialFields.length);
+  const sinkHiddenCount = Math.max(0, sinkFields.length - sinkEssentialFields.length);
   const sourceMissing = sourceConnection
     ? missingRequiredFields(sourceFields, sourceConfig)
     : missingRequiredFields(allSourceFields, sourceConfig);
   const sinkMissing = sinkConnection
     ? missingRequiredFields(sinkFields, sinkConfig)
     : missingRequiredFields(allSinkFields, sinkConfig);
-  const metadata = plugins?.data?.metadata || {};
   const transformTypes = Object.keys(schema?.data?.transforms || {}).sort();
-  const sourceMaturity = metadata.sources?.[sourceType]?.maturity || 'unknown';
-  const sinkMaturity = metadata.sinks?.[sinkType]?.maturity || 'unknown';
-  const sourceCapabilities = metadata.sources?.[sourceType]?.capabilities || [];
-  const sinkCapabilities = metadata.sinks?.[sinkType]?.capabilities || [];
   const sourceConnections = connections.filter((conn) => conn.kind === 'source');
   const sinkConnections = connections.filter((conn) => conn.kind === 'sink');
   const recommendationValue = (field: string, fallback: number) => {
@@ -433,6 +438,10 @@ export function FirstTaskWizard({
     setSourceJsonOpen(false);
     setSinkJsonOpen(false);
     setTransformJsonOpen(false);
+    setSourceMoreOpen(false);
+    setSinkMoreOpen(false);
+    setTransformMoreOpen(false);
+    setSafetyMoreOpen(false);
     setResult(null);
     setDryRunResult(null);
     setStageDryRunResult(null);
@@ -692,30 +701,6 @@ export function FirstTaskWizard({
     setError('');
   };
 
-  const renderSchemaSummary = (title: string, fields: PluginSchemaField[], maturity: string, capabilities: string[], missing: string[]) => (
-    <div className="rounded-lg border border-border bg-muted/40 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold text-slate-600">{title}</div>
-        <ToneBadge tone="slate">{maturity}</ToneBadge>
-      </div>
-      <div className="mb-2 flex flex-wrap gap-1">
-        {capabilities.slice(0, 5).map((cap: string) => <ToneBadge key={cap} tone="blue" className="text-[10px]">{cap}</ToneBadge>)}
-        {missing.map((field) => <ToneBadge key={field} tone="rose" className="text-[10px]">missing {field}</ToneBadge>)}
-      </div>
-      <div className="grid gap-1">
-        {fields.slice(0, 8).map((field) => (
-          <div key={field.name} className="flex items-center gap-2 text-xs text-slate-500">
-            <span className="font-mono text-slate-700">{field.name}</span>
-            <span>{field.type}</span>
-            {field.required && <span className="text-rose-500">required</span>}
-            {field.secret && <span className="text-amber-600">secret</span>}
-          </div>
-        ))}
-        {!fields.length && <div className="text-xs text-slate-400">No schema fields returned.</div>}
-      </div>
-    </div>
-  );
-
   const renderConfigEditor = (
     title: string,
     fields: PluginSchemaField[],
@@ -725,49 +710,84 @@ export function FirstTaskWizard({
     jsonOpen: boolean,
     setJsonOpen: (open: boolean) => void,
     testId: string,
-  ) => (
-    <div className="rounded-lg border border-border bg-card p-3" data-testid={testId}>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold text-slate-600">{title}</div>
-        <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => setJsonOpen(!jsonOpen)}>{jsonOpen ? 'Hide JSON' : 'Advanced JSON'}</Button>
-      </div>
-      {title.toLowerCase().includes('source') || title.toLowerCase().includes('sink') ? (
-        <div className="mb-2 text-[11px] text-slate-400" data-testid={`${testId}-scope-hint`}>
-          {fields.every((f) => f.scope === 'behavior')
-            ? t('field.behaviorOnlyHint')
-            : t('field.fullConfigHint')}
-        </div>
-      ) : null}
-      <ConfigForm fields={fields} config={config} onChange={(next) => setConfigText(prettyJSON(next))} t={t} />
-      {jsonOpen && (
-        <Textarea className="mt-3 min-h-36 font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
-      )}
-    </div>
-  );
-
-  const renderConnectionContext = (title: string, ctx: ConnectionContext | null) => {
-    if (!ctx) {
-      return <div className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-slate-400">{title}: select a saved connection to load health, schema, sample, and recommendations.</div>;
-    }
-    const intro = ctx.introspection;
-    const schemaRows = intro?.schema || intro?.tables?.find((table) => table.columns?.length)?.columns || [];
+    opts?: {
+      moreOpen?: boolean;
+      setMoreOpen?: (open: boolean) => void;
+      hiddenCount?: number;
+      essential?: PluginSchemaField[];
+      connectionSelected?: boolean;
+    },
+  ) => {
+    const showAll = !!opts?.moreOpen || !opts?.essential;
+    const visibleFields = showAll ? fields : (opts?.essential || fields);
+    const hidden = opts?.hiddenCount || 0;
     return (
-      <div className={`rounded-lg border p-3 ${intro?.ok === false ? 'border-rose-200 bg-rose-50' : 'border-primary/20 bg-accent'}`} data-testid={`${title.toLowerCase().replace(/\s+/g, '-')}-context`}>
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="text-xs font-semibold text-slate-700">{title} context</div>
-          <ToneBadge tone={intro?.ok === false ? 'rose' : 'blue'}>{intro?.status || 'ready'}</ToneBadge>
+      <div className="rounded-lg border border-border bg-card p-3" data-testid={testId}>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs font-semibold text-slate-600">{title}</div>
+          <div className="flex flex-wrap gap-1">
+            {opts?.setMoreOpen && hidden > 0 && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="text-[11px]"
+                data-testid={`${testId}-more`}
+                onClick={() => opts.setMoreOpen?.(!opts.moreOpen)}
+              >
+                {opts.moreOpen ? t('wizard.hideOptions') : `${t('wizard.moreOptions')} (${hidden})`}
+              </Button>
+            )}
+            <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => setJsonOpen(!jsonOpen)}>
+              {jsonOpen ? 'Hide JSON' : 'JSON'}
+            </Button>
+          </div>
         </div>
-        {ctx.connection && (
-          <div className="mb-2 text-xs text-slate-600">
-            {ctx.connection.name} · {ctx.connection.type}
-            {ctx.connection.last_status ? ` · last ${ctx.connection.last_status}` : ''}
-            {ctx.connection.last_error ? ` · ${ctx.connection.last_error}` : ''}
+        {opts?.connectionSelected ? (
+          <div className="mb-2 text-[11px] text-emerald-700" data-testid={`${testId}-scope-hint`}>
+            {t('wizard.connectionFirst')}
+          </div>
+        ) : (
+          <div className="mb-2 text-[11px] text-muted-foreground" data-testid={`${testId}-scope-hint`}>
+            {t('wizard.inlineFallback')}
           </div>
         )}
-        {intro?.error && <div className="mb-2 text-xs text-rose-700">{intro.error}</div>}
-        {ctx.recommendations?.length ? (
-          <div className="mb-2 flex flex-wrap gap-1">
-            {ctx.recommendations.map((rec) => {
+        <ConfigForm
+          fields={visibleFields}
+          config={config}
+          onChange={(next) => setConfigText(prettyJSON(next))}
+          t={t}
+          emptyText={opts?.connectionSelected ? t('wizard.connectionFirst') : undefined}
+        />
+        {jsonOpen && (
+          <Textarea className="mt-3 min-h-28 font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
+        )}
+      </div>
+    );
+  };
+
+  const renderConnectionContext = (title: string, ctx: ConnectionContext | null) => {
+    if (!ctx) return null;
+    const intro = ctx.introspection;
+    const ok = intro?.ok !== false;
+    const name = ctx.connection?.name || 'connection';
+    const status = intro?.status || ctx.connection?.last_status || 'ready';
+    const recCount = ctx.recommendations?.length || 0;
+    return (
+      <div
+        className={`mb-2 rounded-lg border px-3 py-2 text-xs ${ok ? 'border-primary/20 bg-accent/50' : 'border-rose-200 bg-rose-50'}`}
+        data-testid={`${title.toLowerCase().replace(/\s+/g, '-')}-context`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="font-medium text-slate-700">
+            {title}: {name}
+            {ctx.connection?.type ? ` · ${ctx.connection.type}` : ''}
+          </div>
+          <ToneBadge tone={ok ? 'blue' : 'rose'}>{status}</ToneBadge>
+        </div>
+        {intro?.error && <div className="mt-1 text-rose-700">{intro.error}</div>}
+        {recCount > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {ctx.recommendations!.slice(0, 4).map((rec) => {
               const canApply = canApplyConnectionRecommendation(title, rec);
               return (
                 <span key={rec.field} className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-white/80 px-2 py-0.5 text-[10px] text-slate-600">
@@ -785,35 +805,9 @@ export function FirstTaskWizard({
                 </span>
               );
             })}
+            {recCount > 4 && <span className="text-[10px] text-muted-foreground">+{recCount - 4}</span>}
           </div>
-        ) : null}
-        {intro?.tables?.length ? (
-          <div className="mb-2 text-xs text-slate-600">
-            Tables: {intro.tables.slice(0, 6).map((table) => table.schema ? `${table.schema}.${table.name}` : table.name).join(', ')}
-            {intro.tables.length > 6 ? ` +${intro.tables.length - 6}` : ''}
-          </div>
-        ) : null}
-        {intro?.topics?.length ? (
-          <div className="mb-2 text-xs text-slate-600">
-            Topics: {intro.topics.slice(0, 6).map((topic) => `${topic.name}${topic.partitions?.length ? `(${topic.partitions.length})` : ''}`).join(', ')}
-            {intro.topics.length > 6 ? ` +${intro.topics.length - 6}` : ''}
-          </div>
-        ) : null}
-        {intro?.targets?.length ? (
-          <div className="mb-2 text-xs text-slate-600">
-            Targets: {intro.targets.slice(0, 4).map((target) => `${target.kind}:${target.location}${target.prefix ? `/${target.prefix}` : ''}${target.writable === false ? ' (not writable)' : ''}`).join(', ')}
-            {intro.targets.length > 4 ? ` +${intro.targets.length - 4}` : ''}
-          </div>
-        ) : null}
-        {schemaRows.length ? (
-          <div className="mb-2 grid grid-cols-2 gap-1 text-xs sm:grid-cols-3">
-            {schemaRows.slice(0, 9).map((col) => <div key={col.name} className="truncate rounded bg-white/80 px-2 py-1 font-mono text-slate-600">{col.name}<span className="ml-1 text-slate-400">{col.data_type}</span></div>)}
-          </div>
-        ) : null}
-        {intro?.sample?.length ? (
-          <pre className="max-h-32 overflow-auto rounded bg-white/80 p-2 text-xs">{prettyJSON(intro.sample[0])}</pre>
-        ) : null}
-        {intro?.warnings?.map((warning, i) => <div key={i} className="mt-1 text-xs text-amber-700">{warning}</div>)}
+        )}
       </div>
     );
   };
@@ -899,7 +893,7 @@ export function FirstTaskWizard({
       </div>
 
       <div className="overflow-hidden rounded-[14px] border border-border bg-card">
-        <div className="grid min-h-[620px] gap-0 xl:grid-cols-[210px_minmax(0,1fr)_270px]">
+        <div className="grid min-h-[520px] gap-0 xl:grid-cols-[200px_minmax(0,1fr)_250px]">
           {/* Left steps */}
           <aside className="border-b border-border p-4 xl:border-b-0 xl:border-r" data-testid="wizard-steps">
             <div className="mb-3 text-xs font-semibold text-muted-foreground">{t('wizard.progress')}</div>
@@ -918,10 +912,7 @@ export function FirstTaskWizard({
                       done && !active && 'text-foreground',
                       !active && !done && 'text-muted-foreground',
                     )}
-                    onClick={() => {
-                      setStep(s.id);
-                      document.getElementById(`wizard-section-${s.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    }}
+                    onClick={() => setStep(s.id)}
                   >
                     <span className="mr-2 tabular text-xs opacity-70">{i + 1}</span>
                     {t(s.labelKey)}
@@ -932,10 +923,11 @@ export function FirstTaskWizard({
             </div>
           </aside>
 
-          {/* Center form */}
+          {/* Center form: only the active step is rendered to reduce visual clutter. */}
           <div className="space-y-4 p-5 md:p-6" data-testid="wizard-step-body">
             {/* Scenario */}
-            <div id="wizard-section-scenario" className={cn(step === 'scenario' && 'ring-1 ring-primary/20 rounded-lg')}>
+            {step === 'scenario' && (
+            <div id="wizard-section-scenario" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepScenario')}</h3>
               <p className="mb-4 text-sm text-muted-foreground">{t('wizard.emptyStart')}</p>
               <div className="mb-4">
@@ -970,14 +962,16 @@ export function FirstTaskWizard({
                 ))}
               </div>
             </div>
+            )}
 
             {/* Source */}
-            <div id="wizard-section-source" className={cn(step === 'source' && 'ring-1 ring-primary/20 rounded-lg')}>
+            {step === 'source' && (
+            <div id="wizard-section-source" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSource')}</h3>
-              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.sourceHint')}</p>
-              <div className="mb-3 grid gap-3 md:grid-cols-2">
+              <p className="mb-3 text-sm text-muted-foreground">{t('wizard.sourceHint')}</p>
+              <div className="mb-3 grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Source</label>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
                   <select
                     data-testid="wizard-source-type"
                     className={wizardSelectClass}
@@ -986,6 +980,7 @@ export function FirstTaskWizard({
                       setSourceType(e.target.value);
                       setSourceConnection('');
                       setSourceContext(null);
+                      setSourceMoreOpen(false);
                       setSourceConfigText(prettyJSON(seedSourceConfig(e.target.value)));
                     }}
                   >
@@ -993,14 +988,20 @@ export function FirstTaskWizard({
                       <option key={tp} value={tp}>{tp}</option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Connection</label>
                   <select
                     data-testid="wizard-source-connection"
-                    className={cn(wizardSelectClass, 'mt-2 text-sm')}
+                    className={cn(wizardSelectClass, 'text-sm')}
                     value={sourceConnection}
                     onFocus={() => refreshConnections()}
-                    onChange={(e) => selectSourceConnection(e.target.value)}
+                    onChange={(e) => {
+                      setSourceMoreOpen(false);
+                      selectSourceConnection(e.target.value);
+                    }}
                   >
-                    <option value="">Inline source config</option>
+                    <option value="">{sourceConnections.length ? '— select saved connection —' : 'No saved connection (inline)'}</option>
                     {sourceConnections.map((conn) => (
                       <option key={conn.name} value={conn.name}>
                         {conn.name} · {conn.type} · {conn.last_status || 'untested'}
@@ -1008,18 +1009,14 @@ export function FirstTaskWizard({
                     ))}
                   </select>
                 </div>
-                {renderSchemaSummary(
-                  `Descriptor schema: ${sourceType}`,
-                  sourceFields,
-                  sourceMaturity,
-                  sourceCapabilities,
-                  sourceMissing,
-                )}
               </div>
+              {sourceMissing.length > 0 && (
+                <div className="mb-2 text-xs text-rose-600">Missing: {sourceMissing.join(', ')}</div>
+              )}
               {renderConnectionContext('Source', sourceContext)}
               <div className="mt-3">
                 {renderConfigEditor(
-                  'Source config',
+                  'Source essentials',
                   sourceFields,
                   sourceConfig,
                   sourceConfigText,
@@ -1027,17 +1024,26 @@ export function FirstTaskWizard({
                   sourceJsonOpen,
                   setSourceJsonOpen,
                   'wizard-source-config-form',
+                  {
+                    moreOpen: sourceMoreOpen,
+                    setMoreOpen: setSourceMoreOpen,
+                    hiddenCount: sourceHiddenCount,
+                    essential: sourceEssentialFields,
+                    connectionSelected: Boolean(sourceConnection),
+                  },
                 )}
               </div>
             </div>
+            )}
 
             {/* Sink */}
-            <div id="wizard-section-sink" className={cn(step === 'sink' && 'ring-1 ring-primary/20 rounded-lg')}>
+            {step === 'sink' && (
+            <div id="wizard-section-sink" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSink')}</h3>
-              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.sinkHint')}</p>
-              <div className="mb-3 grid gap-3 md:grid-cols-2">
+              <p className="mb-3 text-sm text-muted-foreground">{t('wizard.sinkHint')}</p>
+              <div className="mb-3 grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Sink</label>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
                   <select
                     data-testid="wizard-sink-type"
                     className={wizardSelectClass}
@@ -1046,6 +1052,7 @@ export function FirstTaskWizard({
                       setSinkType(e.target.value);
                       setSinkConnection('');
                       setSinkContext(null);
+                      setSinkMoreOpen(false);
                       setSinkConfigText(prettyJSON(seedSinkConfig(e.target.value)));
                     }}
                   >
@@ -1053,67 +1060,31 @@ export function FirstTaskWizard({
                       <option key={tp} value={tp}>{tp}</option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Connection</label>
                   <select
                     data-testid="wizard-sink-connection"
-                    className={cn(wizardSelectClass, 'mt-2 text-sm')}
+                    className={cn(wizardSelectClass, 'text-sm')}
                     value={sinkConnection}
                     onFocus={() => refreshConnections()}
-                    onChange={(e) => selectSinkConnection(e.target.value)}
+                    onChange={(e) => {
+                      setSinkMoreOpen(false);
+                      selectSinkConnection(e.target.value);
+                    }}
                   >
-                    <option value="">Inline sink config</option>
+                    <option value="">{sinkConnections.length ? '— select saved connection —' : 'No saved connection (inline)'}</option>
                     {sinkConnections.map((conn) => (
                       <option key={conn.name} value={conn.name}>
                         {conn.name} · {conn.type} · {conn.last_status || 'untested'}
                       </option>
                     ))}
                   </select>
-                  {typeof window !== 'undefined' &&
-                    (window.location.search.includes('e2e=') ||
-                      window.localStorage.getItem('etl_e2e') === '1') && (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {template.sinkTypes.includes('maxcompute') && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="text-[11px]"
-                            onClick={() => {
-                              setSinkType('maxcompute');
-                              setSinkConnection('');
-                              setSinkContext(null);
-                              setSinkConfigText(prettyJSON(seedSinkConfig('maxcompute')));
-                              setResult(null);
-                            }}
-                          >
-                            Failure demo
-                          </Button>
-                        )}
-                        {template.sinkTypes.includes('file_sink') && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="text-[11px]"
-                            onClick={() => {
-                              setSinkType('file_sink');
-                              setSinkConnection('');
-                              setSinkContext(null);
-                              setSinkConfigText(prettyJSON(seedSinkConfig('file_sink')));
-                              setResult(null);
-                            }}
-                          >
-                            Repair to file_sink
-                          </Button>
-                        )}
-                      </div>
-                    )}
                 </div>
-                {renderSchemaSummary(
-                  `Descriptor schema: ${sinkType}`,
-                  sinkFields,
-                  sinkMaturity,
-                  sinkCapabilities,
-                  sinkMissing,
-                )}
               </div>
+              {sinkMissing.length > 0 && (
+                <div className="mb-2 text-xs text-rose-600">Missing: {sinkMissing.join(', ')}</div>
+              )}
               {(template.tableMapping || tableMappingOpen) && (
                 <div className="mb-3 rounded-lg border border-primary/20 bg-accent/40 p-3" data-testid="wizard-table-mapping">
                   <div className="mb-2 flex items-center justify-between">
@@ -1136,7 +1107,7 @@ export function FirstTaskWizard({
                       className="min-h-20 w-full font-mono text-xs"
                       value={tableMappingText}
                       onChange={(e) => setTableMappingText(e.target.value)}
-                      placeholder={'{\\n  "template": "ods_{source_table}"\\n}'}
+                      placeholder={'{\n  "template": "ods_{source_table}"\n}'}
                     />
                   ) : (
                     <pre className="overflow-auto rounded bg-card/70 p-2 text-xs text-muted-foreground">
@@ -1148,7 +1119,7 @@ export function FirstTaskWizard({
               {renderConnectionContext('Sink', sinkContext)}
               <div className="mt-3">
                 {renderConfigEditor(
-                  'Sink config',
+                  'Sink essentials',
                   sinkFields,
                   sinkConfig,
                   sinkConfigText,
@@ -1156,16 +1127,35 @@ export function FirstTaskWizard({
                   sinkJsonOpen,
                   setSinkJsonOpen,
                   'wizard-sink-config-form',
+                  {
+                    moreOpen: sinkMoreOpen,
+                    setMoreOpen: setSinkMoreOpen,
+                    hiddenCount: sinkHiddenCount,
+                    essential: sinkEssentialFields,
+                    connectionSelected: Boolean(sinkConnection),
+                  },
                 )}
               </div>
             </div>
+            )}
 
             {/* Transform */}
-            <div id="wizard-section-transform" className={cn(step === 'transform' && 'ring-1 ring-primary/20 rounded-lg')}>
+            {step === 'transform' && (
+            <div id="wizard-section-transform" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepTransform')}</h3>
-              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.transformHint')}</p>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="block text-xs font-medium text-muted-foreground">Transform chain</label>
+              <p className="mb-3 text-sm text-muted-foreground">{t('wizard.transformHint')}</p>
+              <div className="mb-3 flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  data-testid="wizard-skip-transform"
+                  onClick={() => {
+                    setTransformsText('[]');
+                    setTransformMoreOpen(false);
+                  }}
+                >
+                  {t('wizard.skipTransform')}
+                </Button>
                 <Button
                   data-testid="wizard-add-transform"
                   variant="secondary"
@@ -1178,9 +1168,11 @@ export function FirstTaskWizard({
               </div>
               <div className="mb-3 rounded-lg border border-border bg-card p-3" data-testid="wizard-transform-config-form">
                 {transformConfigs.length ? (
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     {transformConfigs.map((item, index) => {
                       const fields = (schema?.data?.transforms?.[item.type] || []) as PluginSchemaField[];
+                      const compactFields = essentialFields(fields, item.config || {}, { maxOptionalEmpty: 2 });
+                      const showAll = transformMoreOpen || compactFields.length >= fields.length;
                       return (
                         <div
                           key={`${item.type}-${index}`}
@@ -1202,47 +1194,8 @@ export function FirstTaskWizard({
                                   <option key={type} value={type}>{type}</option>
                                 ))}
                               </select>
-                              <ToneBadge tone="slate" className="text-[10px]">
-                                {metadata.transforms?.[item.type]?.maturity || 'unknown'}
-                              </ToneBadge>
                             </div>
                             <div className="flex shrink-0 gap-1">
-                              <Button
-                                data-testid={`wizard-transform-move-up-${index}`}
-                                variant="ghost"
-                                size="sm"
-                                className="px-2"
-                                onClick={() => moveTransform(index, -1)}
-                                disabled={index === 0}
-                                title="Move up"
-                                aria-label="Move up"
-                              >
-                                ↑
-                              </Button>
-                              <Button
-                                data-testid={`wizard-transform-move-down-${index}`}
-                                variant="ghost"
-                                size="sm"
-                                className="px-2"
-                                onClick={() => moveTransform(index, 1)}
-                                disabled={index === transformConfigs.length - 1}
-                                title="Move down"
-                                aria-label="Move down"
-                              >
-                                ↓
-                              </Button>
-                              <Button
-                                data-testid={`wizard-transform-dry-run-${index}`}
-                                variant="secondary"
-                                size="sm"
-                                className="px-2"
-                                onClick={() => dryRunThroughStage(index)}
-                                disabled={busy === `stage-${index}`}
-                                title="Dry-run through this stage"
-                                aria-label="Dry-run stage"
-                              >
-                                <PlayIcon />
-                              </Button>
                               <Button
                                 data-testid={`wizard-transform-remove-${index}`}
                                 variant="destructive"
@@ -1257,107 +1210,92 @@ export function FirstTaskWizard({
                             </div>
                           </div>
                           <ConfigForm
-                            fields={fields}
+                            fields={showAll ? fields : compactFields}
                             config={item.config || {}}
                             onChange={(next) => updateTransformConfig(index, next)}
                             t={t}
                             emptyText="No config fields for this transform."
                           />
-                          {stageDryRunResult?.index === index && stageDryRunResult.result !== undefined && (
-                            <div
-                              data-testid={`wizard-transform-stage-result-${index}`}
-                              className="mt-2 rounded border border-emerald-100 bg-card p-2"
-                            >
-                              <div className="mb-1 text-[11px] font-semibold text-emerald-700">
-                                Stage {index + 1} output
-                              </div>
-                              <pre className="max-h-36 overflow-auto text-xs">
-                                {prettyJSON(stageDryRunResult.result)}
-                              </pre>
-                            </div>
-                          )}
-                          {stageDryRunResult?.index === index && stageDryRunResult.error && (
-                            <div
-                              data-testid={`wizard-transform-stage-error-${index}`}
-                              className="mt-2 rounded border border-rose-100 bg-card p-2 text-xs text-rose-700"
-                            >
-                              <div className="mb-1 font-semibold">Stage {index + 1} failed</div>
-                              <pre className="max-h-36 overflow-auto whitespace-pre-wrap">
-                                {stageDryRunResult.error}
-                              </pre>
-                            </div>
-                          )}
                         </div>
                       );
                     })}
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    <div className="text-xs text-muted-foreground">No valid transforms in the chain.</div>
-                    <Button
-                      data-testid="wizard-add-transform-empty"
-                      variant="secondary"
-                      size="sm"
-                      onClick={addTransform}
-                    >
-                      Add transform
-                    </Button>
-                  </div>
+                  <div className="text-xs text-muted-foreground">No transforms — source writes straight to sink.</div>
                 )}
               </div>
               <Button
                 variant="secondary"
                 size="sm"
                 className="text-[11px]"
-                onClick={() => setTransformJsonOpen(!transformJsonOpen)}
+                data-testid="wizard-transform-more"
+                onClick={() => setTransformMoreOpen(!transformMoreOpen)}
               >
-                {transformJsonOpen ? 'Hide chain JSON' : 'Advanced chain JSON'}
+                {transformMoreOpen ? t('wizard.hideOptions') : t('wizard.moreOptions')}
               </Button>
-              {transformJsonOpen && (
-                <Textarea
-                  data-testid="wizard-transform-json"
-                  className="mt-2 min-h-32 w-full font-mono text-xs"
-                  value={transformsText}
-                  onChange={(e) => setTransformsText(e.target.value)}
-                />
-              )}
-              <div className="mt-4">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <label className="block text-xs font-medium text-muted-foreground">Sample record</label>
-                  <a className="text-xs text-primary hover:underline" href="/api/v2/docs" target="_blank" rel="noreferrer">
-                    API docs
-                  </a>
-                </div>
-                <Textarea
-                  className="min-h-32 font-mono text-xs"
-                  value={sampleText}
-                  onChange={(e) => setSampleText(e.target.value)}
-                />
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  data-testid="wizard-dry-run"
-                  variant="secondary"
-                  disabled={busy === 'dry-run'}
-                  onClick={dryRun}
-                >
-                  Transform dry-run
-                </Button>
-              </div>
-              {dryRunResult !== null && (
-                <div className="mt-3 rounded-lg border border-primary/20 bg-accent/40 p-3">
-                  <div className="mb-2 text-xs font-semibold text-primary">Dry-run output</div>
-                  <pre className="max-h-56 overflow-auto text-xs">{prettyJSON(dryRunResult)}</pre>
+              {transformMoreOpen && (
+                <div className="mt-3 space-y-3 rounded-lg border border-dashed border-border p-3">
+                  <div className="flex flex-wrap gap-2">
+                    {transformConfigs.map((_, index) => (
+                      <div key={index} className="flex gap-1">
+                        <Button size="sm" variant="ghost" className="px-2" onClick={() => moveTransform(index, -1)} disabled={index === 0}>↑</Button>
+                        <Button size="sm" variant="ghost" className="px-2" onClick={() => moveTransform(index, 1)} disabled={index === transformConfigs.length - 1}>↓</Button>
+                        <Button size="sm" variant="secondary" className="px-2" onClick={() => dryRunThroughStage(index)} disabled={busy === `stage-${index}`}>
+                          <PlayIcon /> stage {index + 1}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-muted-foreground">Sample record</label>
+                    <Textarea className="min-h-24 font-mono text-xs" value={sampleText} onChange={(e) => setSampleText(e.target.value)} />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button data-testid="wizard-dry-run" variant="secondary" disabled={busy === 'dry-run'} onClick={dryRun}>
+                      Transform dry-run
+                    </Button>
+                    <Button variant="secondary" size="sm" className="text-[11px]" onClick={() => setTransformJsonOpen(!transformJsonOpen)}>
+                      {transformJsonOpen ? 'Hide chain JSON' : 'Chain JSON'}
+                    </Button>
+                  </div>
+                  {transformJsonOpen && (
+                    <Textarea
+                      data-testid="wizard-transform-json"
+                      className="min-h-28 w-full font-mono text-xs"
+                      value={transformsText}
+                      onChange={(e) => setTransformsText(e.target.value)}
+                    />
+                  )}
+                  {dryRunResult !== null && (
+                    <div className="rounded-lg border border-primary/20 bg-accent/40 p-3">
+                      <div className="mb-2 text-xs font-semibold text-primary">Dry-run output</div>
+                      <pre className="max-h-56 overflow-auto text-xs">{prettyJSON(dryRunResult)}</pre>
+                    </div>
+                  )}
+                  {stageDryRunResult?.result !== undefined && (
+                    <div data-testid={`wizard-transform-stage-result-${stageDryRunResult.index}`} className="rounded border border-emerald-100 bg-card p-2">
+                      <div className="mb-1 text-[11px] font-semibold text-emerald-700">Stage {stageDryRunResult.index + 1} output</div>
+                      <pre className="max-h-36 overflow-auto text-xs">{prettyJSON(stageDryRunResult.result)}</pre>
+                    </div>
+                  )}
+                  {stageDryRunResult?.error && (
+                    <div data-testid={`wizard-transform-stage-error-${stageDryRunResult.index}`} className="rounded border border-rose-100 bg-card p-2 text-xs text-rose-700">
+                      <div className="mb-1 font-semibold">Stage {(stageDryRunResult.index ?? 0) + 1} failed</div>
+                      <pre className="max-h-36 overflow-auto whitespace-pre-wrap">{stageDryRunResult.error}</pre>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
+            )}
 
             {/* Safety */}
-            <div id="wizard-section-safety" className={cn(step === 'safety' && 'ring-1 ring-primary/20 rounded-lg')}>
+            {step === 'safety' && (
+            <div id="wizard-section-safety" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSafety')}</h3>
-              <p className="mb-4 text-sm text-muted-foreground">{t('wizard.safetyHint')}</p>
+              <p className="mb-3 text-sm text-muted-foreground">{t('wizard.safetyHint')}</p>
               <div className="rounded-lg border border-border bg-card p-3" data-testid="wizard-runtime-safety">
-                <div className="mb-3 text-xs font-semibold">Runtime safety</div>
+                <div className="mb-3 text-xs font-semibold">Runtime defaults</div>
                 <div className="grid gap-3 sm:grid-cols-3">
                   <label className="block text-xs text-muted-foreground">
                     <span className="mb-1 block font-medium">Batch size</span>
@@ -1392,20 +1330,6 @@ export function FirstTaskWizard({
                   </label>
                 </div>
               </div>
-              <div className="mt-4">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <label className="block text-xs font-medium text-muted-foreground">Generated YAML</label>
-                  <Button variant="secondary" size="sm" onClick={syncFromYaml}>
-                    Sync YAML to form
-                  </Button>
-                </div>
-                <Textarea
-                  data-testid="wizard-yaml"
-                  className="min-h-56 w-full font-mono text-xs"
-                  value={yamlText}
-                  onChange={(e) => setYamlText(e.target.value)}
-                />
-              </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button
                   data-testid="wizard-validate"
@@ -1414,6 +1338,15 @@ export function FirstTaskWizard({
                   onClick={() => validate().catch(() => {})}
                 >
                   Validate + preflight
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="text-[11px]"
+                  data-testid="wizard-advanced-checks"
+                  onClick={() => setSafetyMoreOpen(!safetyMoreOpen)}
+                >
+                  {safetyMoreOpen ? t('wizard.hideOptions') : t('wizard.advancedChecks')}
                 </Button>
               </div>
               {error && <div className="mt-3"><ErrorBox message={error} /></div>}
@@ -1427,101 +1360,78 @@ export function FirstTaskWizard({
                       : 'border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30',
                   )}
                 >
-                  <div className="mb-2 text-sm font-semibold">
-                    {result.valid === false ? 'Preflight failed' : 'Preflight passed'} ·{' '}
-                    {result.preflight?.summary || 'validation complete'}
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <div className="text-sm font-semibold">
+                      {result.valid === false ? 'Preflight failed' : 'Preflight passed'} ·{' '}
+                      {result.preflight?.summary || 'validation complete'}
+                    </div>
+                    <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => setResult(null)}>✕</Button>
                   </div>
-                  {(result.warnings || result.errors || []).map((msg, i) => (
+                  {(result.warnings || result.errors || []).slice(0, 5).map((msg, i) => (
                     <div key={i} className="text-xs">{msg}</div>
                   ))}
-                  {(result.preflight?.recommendations || []).map((rec, i) => (
-                    <div
-                      key={`recommendation-${rec.path}-${i}`}
-                      className="mt-2 rounded border border-border bg-card/70 p-2 text-xs"
-                    >
+                  {(result.preflight?.issues || []).slice(0, 5).map((issue, i) => (
+                    <div key={`issue-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
+                      <div className="font-semibold">{issue.level} · {issue.check}</div>
+                      <div>{issue.message}</div>
+                      {issue.remediation && <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>}
+                    </div>
+                  ))}
+                  {(result.preflight?.recommendations || []).slice(0, 5).map((rec, i) => (
+                    <div key={`recommendation-${rec.path}-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="font-semibold">
-                            {rec.safety || 'review'} · {rec.path}
-                          </div>
+                          <div className="font-semibold">{rec.safety || 'review'} · {rec.path}</div>
                           <div>{rec.reason}</div>
-                          <div className="mt-1 font-mono text-muted-foreground">{prettyJSON(rec.value)}</div>
                         </div>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          className="shrink-0 text-[11px]"
-                          onClick={() => applyPreflightRecommendation(rec)}
-                        >
+                        <Button variant="secondary" size="sm" className="shrink-0 text-[11px]" onClick={() => applyPreflightRecommendation(rec)}>
                           Apply
                         </Button>
                       </div>
                     </div>
                   ))}
-                  {(result.preflight?.issues || []).map((issue, i) => (
-                    <div key={`issue-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
-                      <div className="font-semibold">
-                        {issue.level} · {issue.check}
-                      </div>
+                </div>
+              )}
+              {safetyMoreOpen && (
+                <div className="mt-3 space-y-3 rounded-lg border border-dashed border-border p-3">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <label className="block text-xs font-medium text-muted-foreground">Generated YAML</label>
+                    <Button variant="secondary" size="sm" onClick={syncFromYaml}>
+                      Sync YAML to form
+                    </Button>
+                  </div>
+                  <Textarea
+                    data-testid="wizard-yaml"
+                    className="min-h-40 w-full font-mono text-xs"
+                    value={yamlText}
+                    onChange={(e) => setYamlText(e.target.value)}
+                  />
+                  {(result?.preflight?.field_issues || []).map((issue, i) => (
+                    <div key={`field-${i}`} className="rounded border border-border bg-card/70 p-2 text-xs">
+                      <div className="font-semibold">{issue.field} · {issue.check}</div>
                       <div>{issue.message}</div>
-                      {issue.remediation && (
-                        <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>
-                      )}
                     </div>
                   ))}
-                  {(result.preflight?.field_issues || []).map((issue, i) => (
-                    <div key={`field-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
-                      <div className="font-semibold">
-                        {issue.field} · {issue.check}
-                      </div>
-                      <div>{issue.message}</div>
-                      {issue.remediation && (
-                        <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>
-                      )}
-                    </div>
-                  ))}
-                  {(result.preflight?.guidance || []).map((item, i) => (
-                    <div key={`guidance-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
-                      <div className="font-semibold">
-                        {item.level} · {item.category} · {item.code}
-                      </div>
+                  {(result?.preflight?.guidance || []).map((item, i) => (
+                    <div key={`guidance-${i}`} className="rounded border border-border bg-card/70 p-2 text-xs">
+                      <div className="font-semibold">{item.level} · {item.category} · {item.code}</div>
                       <div>{item.message}</div>
-                      {item.action && (
-                        <div className="mt-1 text-muted-foreground">Action: {item.action}</div>
-                      )}
                     </div>
                   ))}
-                  {(result.preflight?.readiness || []).map((connector, i) => (
-                    <div
-                      key={`readiness-${connector.kind}-${connector.type}-${i}`}
-                      className="mt-2 rounded border border-border bg-card/70 p-2 text-xs"
-                    >
-                      <div className="font-semibold">
-                        {connector.kind} · {connector.type} · {connector.maturity} · {connector.status}
-                      </div>
+                  {(result?.preflight?.readiness || []).map((connector, i) => (
+                    <div key={`readiness-${connector.kind}-${connector.type}-${i}`} className="rounded border border-border bg-card/70 p-2 text-xs">
+                      <div className="font-semibold">{connector.kind} · {connector.type} · {connector.maturity} · {connector.status}</div>
                       {connector.summary && <div>{connector.summary}</div>}
-                      {(connector.gates || [])
-                        .filter((gate) => gate.status === 'missing' || gate.status === 'partial')
-                        .slice(0, 3)
-                        .map((gate) => (
-                          <div key={gate.code} className="mt-1 text-muted-foreground">
-                            {gate.status} · {gate.label}
-                            {gate.remediation ? ` · ${gate.remediation}` : ''}
-                          </div>
-                        ))}
                     </div>
                   ))}
-                  {result.preflight?.ddl_preview?.statements?.length ? (
-                    <pre className="mt-2 max-h-40 overflow-auto rounded bg-card/80 p-2 text-xs">
-                      {result.preflight.ddl_preview.statements.join('\\n')}
-                    </pre>
-                  ) : null}
                 </div>
               )}
             </div>
+            )}
 
             {/* Confirm */}
-            <div id="wizard-section-confirm" className={cn(step === 'confirm' && 'ring-1 ring-primary/20 rounded-lg')}>
+            {step === 'confirm' && (
+            <div id="wizard-section-confirm" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepConfirm')}</h3>
               <p className="mb-4 text-sm text-muted-foreground">{t('wizard.confirmHint')}</p>
               <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
@@ -1567,6 +1477,7 @@ export function FirstTaskWizard({
               </div>
               {error && <div className="mt-3"><ErrorBox message={error} /></div>}
             </div>
+            )}
 
             {/* Step nav footer */}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">

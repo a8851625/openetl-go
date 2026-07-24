@@ -53,6 +53,49 @@ export function missingRequiredFields(fields: PluginSchemaField[] = [], config: 
     .map((field) => field.name);
 }
 
+/**
+ * Prefer a short form for first-run UIs: required fields, or fields whose value is still empty.
+ * Optional filled fields stay hidden until the caller expands "more options".
+ */
+export function essentialFields(
+  fields: PluginSchemaField[] = [],
+  config: Record<string, unknown> = {},
+  opts?: { maxOptionalEmpty?: number },
+) {
+  const maxOptionalEmpty = opts?.maxOptionalEmpty ?? 3;
+  const required = fields.filter((f) => f.required);
+  const optionalEmpty = fields.filter((f) => {
+    if (f.required) return false;
+    const value = config[f.name];
+    if (value === undefined || value === null) return true;
+    if (typeof value === 'string') return value.trim() === '';
+    if (Array.isArray(value)) return value.length === 0;
+    return false;
+  });
+  // Keep form short: required + a few empty optional knobs (table/topic/etc.).
+  const picked = [...required];
+  for (const f of optionalEmpty) {
+    if (picked.length >= required.length + maxOptionalEmpty) break;
+    // Prefer common "which object" fields over long-tail options.
+    if (
+      /^(table|tables|topic|topics|database|db|bucket|path|prefix|query|object|index)$/i.test(f.name) ||
+      f.name.endsWith('_table') ||
+      f.name.endsWith('_topic')
+    ) {
+      picked.push(f);
+    }
+  }
+  // If still short, add remaining empty optionals until cap.
+  for (const f of optionalEmpty) {
+    if (picked.some((p) => p.name === f.name)) continue;
+    if (picked.length >= required.length + maxOptionalEmpty) break;
+    picked.push(f);
+  }
+  // Preserve original schema order.
+  const order = new Map(fields.map((f, i) => [f.name, i]));
+  return picked.sort((a, b) => (order.get(a.name) ?? 0) - (order.get(b.name) ?? 0));
+}
+
 export function exampleText(value: unknown) {
   if (value === undefined || value === null) return '';
   if (typeof value === 'string') return value;

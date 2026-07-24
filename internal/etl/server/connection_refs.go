@@ -163,6 +163,17 @@ func normalizedConnectionRef(connection, connectionRef string) string {
 func mergeConnectionConfig(conn *storage.ConnectionEntry, overrides map[string]any) map[string]any {
 	merged := cloneConfigMap(conn.Config)
 	for k, v := range overrides {
+		// Do not let UI-masked/empty secrets overwrite real connection secrets.
+		if isSecretKey(k) && (isSecretPlaceholder(v) || looksLikeMaskedSecret(v, merged[k])) {
+			continue
+		}
+		if nested, ok := v.(map[string]any); ok {
+			if base, ok := merged[k].(map[string]any); ok {
+				// Recurse so nested secret placeholders also preserve connection values.
+				merged[k] = preserveSecretConfig(nested, base)
+				continue
+			}
+		}
 		merged[k] = v
 	}
 	return merged

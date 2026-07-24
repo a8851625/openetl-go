@@ -132,6 +132,13 @@ func (s *Server) saveConnection(w http.ResponseWriter, r *http.Request, pathName
 		return
 	}
 
+	// Preserve previously stored secrets when the UI resubmits GET-masked values.
+	if existing, err := s.store.GetConnection(r.Context(), req.Name); err == nil && existing != nil {
+		req.Config = preserveSecretConfig(req.Config, existing.Config)
+	} else {
+		req.Config = scrubSecretPlaceholders(req.Config)
+	}
+
 	conn := &storage.ConnectionEntry{
 		Name:   req.Name,
 		Kind:   req.Kind,
@@ -300,35 +307,4 @@ func maskConnection(c *storage.ConnectionEntry) *storage.ConnectionEntry {
 	out := *c
 	out.Config = maskSecretMap(c.Config)
 	return &out
-}
-
-func maskSecretMap(in map[string]any) map[string]any {
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		if isSecretKey(k) {
-			if s, ok := v.(string); ok && s != "" {
-				out[k] = "******"
-			} else {
-				out[k] = v
-			}
-			continue
-		}
-		switch vv := v.(type) {
-		case map[string]any:
-			out[k] = maskSecretMap(vv)
-		case []any:
-			items := make([]any, len(vv))
-			for i, item := range vv {
-				if m, ok := item.(map[string]any); ok {
-					items[i] = maskSecretMap(m)
-				} else {
-					items[i] = item
-				}
-			}
-			out[k] = items
-		default:
-			out[k] = v
-		}
-	}
-	return out
 }

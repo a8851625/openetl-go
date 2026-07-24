@@ -303,14 +303,15 @@ export function PipelineVersionsModal({
   const doDiff = async (version: number) => {
     try {
       const d = await api<{
-        version: { version: number; spec_yaml: string };
-        current: string;
-        historical: string;
+        version?: { version?: number; spec_yaml?: string };
+        current?: string;
+        historical?: string;
       }>(`/api/v2/pipelines/${refId}/versions/${version}/diff`);
       setDiffData({
-        version: d.version.version,
-        current: d.current,
-        historical: d.version.spec_yaml,
+        version: d.version?.version ?? version,
+        current: d.current || '',
+        // Prefer top-level historical; fall back to nested version YAML.
+        historical: d.historical || d.version?.spec_yaml || '',
       });
     } catch {
       /* ignore */
