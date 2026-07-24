@@ -7,6 +7,14 @@ import (
 	"sync"
 )
 
+// SourceSchemaConsumer is an optional interface for sinks that can use a
+// source-described schema (information_schema / SchemaDescriptor) when
+// auto-creating or adding columns. The pipeline runner calls SetSourceSchema
+// after a successful source Describe when both sides implement their interfaces.
+type SourceSchemaConsumer interface {
+	SetSourceSchema(schema SchemaInfo)
+}
+
 // ── Schema Management Abstraction ────────────────────────────────────
 
 // SchemaManager handles auto-creation and schema-drift detection for sinks.

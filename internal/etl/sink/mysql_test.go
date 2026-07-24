@@ -202,3 +202,38 @@ func getenvOr(key, def string) string {
 	}
 	return def
 }
+
+func TestMySQLSinkResolveColumnDDLPriority(t *testing.T) {
+	s, err := NewMySQLSink(map[string]any{
+		"host":     "localhost",
+		"user":     "u",
+		"database": "db",
+		"column_types": map[string]any{
+			"deleted": "TINYINT(1)",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// override
+	if got := s.resolveColumnDDL("deleted", "2020-01-01", map[string]string{"deleted": "datetime"}); got != "TINYINT(1)" {
+		t.Fatalf("override: got %q", got)
+	}
+	// source schema
+	s.columnTypes = nil
+	s.SetSourceSchema(core.SchemaInfo{Columns: []core.ColumnInfo{
+		{Name: "deleted", DataType: "tinyint(1)"},
+		{Name: "phone", DataType: "varchar(20)"},
+	}})
+	if got := s.resolveColumnDDL("deleted", 0, nil); got != "TINYINT(1)" {
+		t.Fatalf("source schema deleted: got %q", got)
+	}
+	if got := s.resolveColumnDDL("phone", "x", nil); got != "varchar(20)" {
+		t.Fatalf("source schema phone: got %q", got)
+	}
+	// record-level Debezium types
+	s.sourceSchemaColumns = nil
+	if got := s.resolveColumnDDL("deleted", 0, map[string]string{"deleted": "int16"}); got != "SMALLINT" {
+		t.Fatalf("debezium int16: got %q", got)
+	}
+}

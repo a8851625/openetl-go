@@ -6,7 +6,9 @@ Write records into MySQL with insert or upsert batch modes.
 ## Config Fields
 - `host`, `user`, `database`, `table`: required target fields.
 - `port`, `password`, `tls`: connection fields.
-- `batch_mode`, `pk_columns`, `pk_columns_from_metadata`, `auto_create`, `schema_drift`, `ddl_policy`: idempotency and schema controls.
+- `batch_mode`, `pk_columns`, `pk_columns_from_metadata`, `auto_create`, `column_types`, `schema_drift`, `ddl_policy`: idempotency and schema controls.
+- `column_types`: optional map of column → target DDL for `auto_create` / `add_columns` (e.g. `{deleted: "TINYINT(1)"}`). Highest priority over source schema and sample inference.
+- Auto-create type resolution order: **column_types override → source SchemaDescriptor / Debezium field schema → sample+name inference**.
 - `pre_write`: optional pre-write action block `{action, condition, params}`. Runs inside the batch transaction before inserts. `action`: `delete` (requires `condition`), `truncate`, or `truncate_partition` (requires `condition`). Idempotent for batch (delete-then-rewrite on checkpoint reset), dangerous for CDC/streaming — preflight flags truncate/truncate_partition on CDC sources as error-level.
 
 ## Record Shape

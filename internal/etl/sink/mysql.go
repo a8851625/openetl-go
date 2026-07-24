@@ -55,6 +55,12 @@ type MySQLSink struct {
 	ddLPolicy     DDLPolicy
 	tlsEnabled    bool
 	tlsSkipVerify bool
+	// columnTypes: sink.config.column_types overrides for auto_create DDL
+	// (column name → target DDL, e.g. {"deleted": "TINYINT(1)"}).
+	columnTypes map[string]string
+	// sourceSchemaColumns: optional types from SchemaDescriptor (information_schema).
+	// Keyed by lower-case column name. Prefered over sample inference, below overrides.
+	sourceSchemaColumns map[string]string
 	// schemaCache avoids repeated information_schema queries.
 	schemaCache  *core.SchemaCache
 	preWrite     *PreWriteConfig
@@ -126,6 +132,7 @@ func NewMySQLSink(config map[string]any) (*MySQLSink, error) {
 			s.autoCreate = b
 		}
 	}
+	s.columnTypes = stringMapConfig(config, "column_types")
 	if v, ok := config["schema_drift"]; ok {
 		if vs, ok := v.(string); ok {
 			s.schemaDrift = vs
@@ -162,6 +169,45 @@ func NewMySQLSink(config map[string]any) (*MySQLSink, error) {
 }
 
 func (s *MySQLSink) Name() string { return s.name }
+
+// SetSourceSchema implements core.SourceSchemaConsumer. Types from the source
+// SchemaDescriptor (e.g. MySQL information_schema) are used when auto-creating
+// or adding columns, above sample inference and below column_types overrides.
+func (s *MySQLSink) SetSourceSchema(schema core.SchemaInfo) {
+	if len(schema.Columns) == 0 {
+		return
+	}
+	m := make(map[string]string, len(schema.Columns))
+	for _, c := range schema.Columns {
+		name := strings.TrimSpace(c.Name)
+		if name == "" || strings.TrimSpace(c.DataType) == "" {
+			continue
+		}
+		m[strings.ToLower(name)] = c.DataType
+	}
+	s.sourceSchemaColumns = m
+}
+
+func (s *MySQLSink) resolveColumnDDL(column string, sample any, recordDeclared map[string]string) string {
+	override := ""
+	if s.columnTypes != nil {
+		override = s.columnTypes[column]
+		if override == "" {
+			override = s.columnTypes[strings.ToLower(column)]
+		}
+	}
+	declared := ""
+	if recordDeclared != nil {
+		declared = recordDeclared[column]
+		if declared == "" {
+			declared = recordDeclared[strings.ToLower(column)]
+		}
+	}
+	if declared == "" && s.sourceSchemaColumns != nil {
+		declared = s.sourceSchemaColumns[strings.ToLower(column)]
+	}
+	return typing.ResolveColumnDDL(typing.DialectMySQL, column, sample, declared, override)
+}
 
 // quotedFQTN returns the fully-qualified, quoted table name for pre_write
 // statements. When the table carries a schema/db prefix it is split and each
@@ -622,10 +668,11 @@ func (s *MySQLSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 		return nil
 	}
 
-	// Collect unique tables and their columns + sample values from the batch.
+	// Collect unique tables and their columns + sample values + declared types.
 	type colInfo struct {
-		cols    []string
-		samples map[string]any // column name → first non-nil value seen
+		cols     []string
+		samples  map[string]any    // column name → first non-nil value seen
+		declared map[string]string // from Metadata.ColumnTypes (Debezium etc.)
 	}
 	tableMeta := make(map[string]*colInfo)
 	for _, rec := range records {
@@ -638,7 +685,7 @@ func (s *MySQLSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 		}
 		ti, ok := tableMeta[tableName]
 		if !ok {
-			ti = &colInfo{samples: make(map[string]any)}
+			ti = &colInfo{samples: make(map[string]any), declared: make(map[string]string)}
 			tableMeta[tableName] = ti
 		}
 		for k, v := range rec.Data {
@@ -660,10 +707,28 @@ func (s *MySQLSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 				}
 			}
 		}
+		for col, typ := range rec.Metadata.ColumnTypes {
+			if col == "" || typ == "" {
+				continue
+			}
+			if _, has := ti.declared[col]; !has {
+				ti.declared[col] = typ
+			}
+		}
 	}
 
 	for tableName, ti := range tableMeta {
-		if err := s.EnsureSchema(ctx, tableName, ti.cols, ti.samples); err != nil {
+		samples := ti.samples
+		if len(ti.declared) > 0 {
+			// Pass declared types to createTable/addColumn without polluting
+			// the real column set (reserved key, not a table column).
+			samples = make(map[string]any, len(ti.samples)+1)
+			for k, v := range ti.samples {
+				samples[k] = v
+			}
+			samples["__column_types__"] = ti.declared
+		}
+		if err := s.EnsureSchema(ctx, tableName, ti.cols, samples); err != nil {
 			return err
 		}
 	}
@@ -798,8 +863,8 @@ func (s *MySQLSink) derivePKFromMetadata(table string, records []core.Record) []
 	return nil
 }
 
-// createTableFromFields creates a target table with columns inferred from
-// field names and sample values using the unified type mapper.
+// createTableFromFields creates a target table with columns resolved via
+// column_types override → source/Debezium declared types → sample inference.
 func (s *MySQLSink) createTableFromFields(ctx context.Context, table string, columns []string, fieldValues map[string]any) error {
 	if len(columns) == 0 {
 		return nil
@@ -821,6 +886,14 @@ func (s *MySQLSink) createTableFromFields(ctx context.Context, table string, col
 		}
 	}
 
+	// Optional per-batch declared types attached under reserved key.
+	var recordDeclared map[string]string
+	if fieldValues != nil {
+		if m, ok := fieldValues["__column_types__"].(map[string]string); ok {
+			recordDeclared = m
+		}
+	}
+
 	for i, c := range columns {
 		if i > 0 {
 			b.WriteString(", ")
@@ -831,8 +904,7 @@ func (s *MySQLSink) createTableFromFields(ctx context.Context, table string, col
 		if c == pkCol {
 			b.WriteString("BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY")
 		} else {
-			// Use the typing package to infer the column type from the sample value.
-			colType := typing.InferFromValue(typing.DialectMySQL, c, fieldValues[c])
+			colType := s.resolveColumnDDL(c, fieldValues[c], recordDeclared)
 			b.WriteString(colType)
 		}
 	}
@@ -842,10 +914,16 @@ func (s *MySQLSink) createTableFromFields(ctx context.Context, table string, col
 	return err
 }
 
-// addColumn adds a single column to an existing table, inferring its type
-// from the sample value.
+// addColumn adds a single column to an existing table using the same type
+// resolution priority as createTableFromFields.
 func (s *MySQLSink) addColumn(ctx context.Context, table, column string, fieldValues map[string]any) error {
-	colType := typing.InferFromValue(typing.DialectMySQL, column, fieldValues[column])
+	var recordDeclared map[string]string
+	if fieldValues != nil {
+		if m, ok := fieldValues["__column_types__"].(map[string]string); ok {
+			recordDeclared = m
+		}
+	}
+	colType := s.resolveColumnDDL(column, fieldValues[column], recordDeclared)
 	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", quoteIdentMySQL(table), quoteIdentMySQL(column), colType)
 	_, err := s.db.ExecContext(ctx, ddl)
 	return err

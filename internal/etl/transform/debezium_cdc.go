@@ -69,6 +69,7 @@ func (t *DebeziumCDCTransform) Apply(ctx context.Context, rec core.Record) (core
 		return rec, nil
 	}
 
+	root := rec.Data
 	payload := rec.Data
 	if rawPayload, ok := rec.Data["payload"]; ok {
 		if rawPayload == nil {
@@ -82,6 +83,9 @@ func (t *DebeziumCDCTransform) Apply(ctx context.Context, rec core.Record) (core
 			payload = m
 		}
 	}
+	// Capture Connect/Debezium field schema from the envelope root before we
+	// replace rec.Data with the row image (after/before).
+	columnTypes := extractDebeziumColumnTypes(root, payload)
 
 	source, _ := asStringAnyMap(payload["source"])
 	sourceDB := firstString(source["db"], source["database"], payload["databaseName"])
@@ -145,6 +149,12 @@ func (t *DebeziumCDCTransform) Apply(ctx context.Context, rec core.Record) (core
 		return rec, fmt.Errorf("debezium_cdc: Debezium payload has op=%q but no row image", op)
 	}
 
+	// Prefer Debezium/Kafka Connect field schema when present so sink
+	// auto_create uses declared types (e.g. deleted int16) instead of name hints.
+	if len(columnTypes) > 0 {
+		rec.Metadata.ColumnTypes = columnTypes
+	}
+
 	rec.Metadata.Table = t.mapTable(rec.Metadata.Database, rec.Metadata.Table, rec.Metadata.Timestamp)
 	if t.keepMetadata {
 		t.annotate(rec.Data, op, sourceDB, sourceTable, rec.Metadata.Timestamp)
@@ -155,6 +165,113 @@ func (t *DebeziumCDCTransform) Apply(ctx context.Context, rec core.Record) (core
 		}
 	}
 	return rec, nil
+}
+
+// extractDebeziumColumnTypes reads Kafka Connect / Debezium envelope field
+// schemas for the row image (after, else before). Supports:
+//   - Envelope: { schema: { fields: [ {field:"after", fields:[...]} ] }, payload: {...} }
+//   - Inline schema on the record root (same shape as envelope schema)
+//   - Flattened after/before schema objects with .fields
+func extractDebeziumColumnTypes(root, payload map[string]any) map[string]string {
+	// 1) Envelope schema.fields → field named after/before
+	if schema, ok := asStringAnyMap(root["schema"]); ok {
+		if types := columnTypesFromConnectSchema(schema, "after"); len(types) > 0 {
+			return types
+		}
+		if types := columnTypesFromConnectSchema(schema, "before"); len(types) > 0 {
+			return types
+		}
+		// Some connectors put the row schema directly under schema.fields
+		if types := fieldsToColumnTypes(schema["fields"]); len(types) > 0 {
+			// Filter out envelope bookkeeping fields when present.
+			delete(types, "before")
+			delete(types, "after")
+			delete(types, "source")
+			delete(types, "op")
+			delete(types, "ts_ms")
+			delete(types, "transaction")
+			if len(types) > 0 {
+				return types
+			}
+		}
+	}
+	// 2) payload nested schema (rare)
+	if schema, ok := asStringAnyMap(payload["schema"]); ok {
+		if types := columnTypesFromConnectSchema(schema, "after"); len(types) > 0 {
+			return types
+		}
+	}
+	return nil
+}
+
+func columnTypesFromConnectSchema(schema map[string]any, rowField string) map[string]string {
+	fields, ok := schema["fields"]
+	if !ok {
+		return nil
+	}
+	list, ok := fields.([]any)
+	if !ok {
+		return nil
+	}
+	for _, item := range list {
+		fm, ok := asStringAnyMap(item)
+		if !ok {
+			continue
+		}
+		name := firstString(fm["field"], fm["name"])
+		if name != rowField {
+			continue
+		}
+		// Nested struct schema for the row image.
+		if nested := fieldsToColumnTypes(fm["fields"]); len(nested) > 0 {
+			return nested
+		}
+		if nestedSchema, ok := asStringAnyMap(fm); ok {
+			if nested := fieldsToColumnTypes(nestedSchema["fields"]); len(nested) > 0 {
+				return nested
+			}
+		}
+	}
+	return nil
+}
+
+func fieldsToColumnTypes(raw any) map[string]string {
+	list, ok := raw.([]any)
+	if !ok || len(list) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(list))
+	for _, item := range list {
+		fm, ok := asStringAnyMap(item)
+		if !ok {
+			continue
+		}
+		fieldName := firstString(fm["field"])
+		if fieldName == "" {
+			// Some schemas only set name as the column name.
+			fieldName = firstString(fm["name"])
+		}
+		if fieldName == "" {
+			continue
+		}
+		// Kafka Connect field: type=primitive|struct, optional name=logical type
+		// (e.g. io.debezium.time.Timestamp). Prefer logical when present and not
+		// equal to the field name itself.
+		primitive := firstString(fm["type"])
+		logical := firstString(fm["name"])
+		typ := primitive
+		if logical != "" && logical != fieldName {
+			typ = logical
+		}
+		if typ == "" {
+			continue
+		}
+		out[fieldName] = typ
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (t *DebeziumCDCTransform) annotate(data map[string]any, op, sourceDB, sourceTable string, ts time.Time) {

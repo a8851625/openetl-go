@@ -203,3 +203,58 @@ func TestDebeziumCDCTombstoneIsFilteredByDefault(t *testing.T) {
 		t.Fatalf("Apply error = %v, want ErrRecordFiltered", err)
 	}
 }
+
+func TestDebeziumCDCExtractsColumnTypesFromEnvelopeSchema(t *testing.T) {
+	tr, err := NewDebeziumCDCTransform(map[string]any{"keep_metadata": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := core.Record{
+		Data: map[string]any{
+			"schema": map[string]any{
+				"type": "struct",
+				"fields": []any{
+					map[string]any{
+						"field": "after",
+						"type":  "struct",
+						"fields": []any{
+							map[string]any{"field": "id", "type": "int64"},
+							map[string]any{"field": "deleted", "type": "int16"},
+							map[string]any{"field": "created_at", "type": "int64", "name": "io.debezium.time.Timestamp"},
+						},
+					},
+					map[string]any{"field": "op", "type": "string"},
+				},
+			},
+			"payload": map[string]any{
+				"op": "c",
+				"source": map[string]any{
+					"db":    "dl_vo",
+					"table": "user_personal_info",
+				},
+				"after": map[string]any{
+					"id":         float64(1),
+					"deleted":    float64(0),
+					"created_at": float64(1710000000000),
+				},
+			},
+		},
+	}
+	out, err := tr.Apply(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if out.Metadata.ColumnTypes["deleted"] != "int16" {
+		t.Fatalf("ColumnTypes.deleted = %q, want int16; full=%v", out.Metadata.ColumnTypes["deleted"], out.Metadata.ColumnTypes)
+	}
+	if out.Metadata.ColumnTypes["id"] != "int64" {
+		t.Fatalf("ColumnTypes.id = %q", out.Metadata.ColumnTypes["id"])
+	}
+	if out.Metadata.ColumnTypes["created_at"] != "io.debezium.time.Timestamp" {
+		t.Fatalf("ColumnTypes.created_at = %q, want logical timestamp", out.Metadata.ColumnTypes["created_at"])
+	}
+	// Soft-delete flag value still present as data
+	if out.Data["deleted"] != float64(0) {
+		t.Fatalf("data.deleted = %#v", out.Data["deleted"])
+	}
+}

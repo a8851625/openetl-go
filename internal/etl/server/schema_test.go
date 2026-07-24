@@ -40,9 +40,9 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, sources, "redis", "pattern", "count")
 	assertFields(t, sources, "demo", "interval_ms", "count", "fields")
 
-	assertFields(t, sinks, "mysql", "auto_create", "schema_drift", "insert_chunk_size", "ddl_policy")
-	assertFields(t, sinks, "postgres", "sslmode", "auto_create", "schema_drift", "insert_chunk_size", "ddl_policy")
-	assertFields(t, sinks, "postgresql", "sslmode", "auto_create", "schema_drift", "insert_chunk_size", "ddl_policy")
+	assertFields(t, sinks, "mysql", "auto_create", "column_types", "schema_drift", "insert_chunk_size", "ddl_policy")
+	assertFields(t, sinks, "postgres", "sslmode", "auto_create", "column_types", "schema_drift", "insert_chunk_size", "ddl_policy")
+	assertFields(t, sinks, "postgresql", "sslmode", "auto_create", "column_types", "schema_drift", "insert_chunk_size", "ddl_policy")
 	assertFields(t, sinks, "clickhouse", "source_dialect", "ddl_policy", "async_insert", "ttl")
 	assertFields(t, sinks, "kafka", "auto_create_topic", "retry_backoff_ms")
 	assertFields(t, sinks, "elasticsearch", "host", "chunk_size", "retry_base_ms")

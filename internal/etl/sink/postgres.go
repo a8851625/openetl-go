@@ -39,12 +39,14 @@ type PostgresSink struct {
 	incrementColumns map[string]string
 	pool             *pgxpool.Pool
 	insertChunkSize  int
-	autoCreate       bool
-	schemaDrift      string
-	ddLPolicy        DDLPolicy
-	schemaCache      *core.SchemaCache
-	preWrite         *PreWriteConfig
-	sinkCounters     // P4-20: per-sink write metrics (SK-4)
+	autoCreate          bool
+	schemaDrift         string
+	ddLPolicy           DDLPolicy
+	columnTypes         map[string]string
+	sourceSchemaColumns map[string]string
+	schemaCache         *core.SchemaCache
+	preWrite            *PreWriteConfig
+	sinkCounters        // P4-20: per-sink write metrics (SK-4)
 }
 
 func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
@@ -117,6 +119,7 @@ func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
 			s.autoCreate = b
 		}
 	}
+	s.columnTypes = stringMapConfig(config, "column_types")
 	if v, ok := config["schema_drift"]; ok {
 		if vs, ok := v.(string); ok {
 			s.schemaDrift = vs
@@ -143,6 +146,43 @@ func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
 }
 
 func (s *PostgresSink) Name() string { return s.name }
+
+// SetSourceSchema implements core.SourceSchemaConsumer.
+func (s *PostgresSink) SetSourceSchema(schema core.SchemaInfo) {
+	if len(schema.Columns) == 0 {
+		return
+	}
+	m := make(map[string]string, len(schema.Columns))
+	for _, c := range schema.Columns {
+		name := strings.TrimSpace(c.Name)
+		if name == "" || strings.TrimSpace(c.DataType) == "" {
+			continue
+		}
+		m[strings.ToLower(name)] = c.DataType
+	}
+	s.sourceSchemaColumns = m
+}
+
+func (s *PostgresSink) resolveColumnDDL(column string, sample any, recordDeclared map[string]string) string {
+	override := ""
+	if s.columnTypes != nil {
+		override = s.columnTypes[column]
+		if override == "" {
+			override = s.columnTypes[strings.ToLower(column)]
+		}
+	}
+	declared := ""
+	if recordDeclared != nil {
+		declared = recordDeclared[column]
+		if declared == "" {
+			declared = recordDeclared[strings.ToLower(column)]
+		}
+	}
+	if declared == "" && s.sourceSchemaColumns != nil {
+		declared = s.sourceSchemaColumns[strings.ToLower(column)]
+	}
+	return typing.ResolveColumnDDL(typing.DialectPostgreSQL, column, sample, declared, override)
+}
 
 // quotedFQTNPg returns the fully-qualified, PostgreSQL-quoted table name for
 // pre_write statements.
@@ -595,8 +635,9 @@ func (s *PostgresSink) ensureSchemaForBatch(ctx context.Context, records []core.
 		return nil
 	}
 	type colInfo struct {
-		cols    []string
-		samples map[string]any
+		cols     []string
+		samples  map[string]any
+		declared map[string]string
 	}
 	tableMeta := make(map[string]*colInfo)
 	for _, rec := range records {
@@ -609,7 +650,7 @@ func (s *PostgresSink) ensureSchemaForBatch(ctx context.Context, records []core.
 		}
 		ti, ok := tableMeta[tableName]
 		if !ok {
-			ti = &colInfo{samples: make(map[string]any)}
+			ti = &colInfo{samples: make(map[string]any), declared: make(map[string]string)}
 			tableMeta[tableName] = ti
 		}
 		for k, v := range rec.Data {
@@ -629,9 +670,25 @@ func (s *PostgresSink) ensureSchemaForBatch(ctx context.Context, records []core.
 				}
 			}
 		}
+		for col, typ := range rec.Metadata.ColumnTypes {
+			if col == "" || typ == "" {
+				continue
+			}
+			if _, has := ti.declared[col]; !has {
+				ti.declared[col] = typ
+			}
+		}
 	}
 	for tableName, ti := range tableMeta {
-		if err := s.EnsureSchema(ctx, tableName, ti.cols, ti.samples); err != nil {
+		samples := ti.samples
+		if len(ti.declared) > 0 {
+			samples = make(map[string]any, len(ti.samples)+1)
+			for k, v := range ti.samples {
+				samples[k] = v
+			}
+			samples["__column_types__"] = ti.declared
+		}
+		if err := s.EnsureSchema(ctx, tableName, ti.cols, samples); err != nil {
 			return err
 		}
 	}
@@ -762,7 +819,13 @@ func (s *PostgresSink) pgCreateTable(ctx context.Context, table string, columns 
 		if c == pkCol {
 			b.WriteString(" BIGSERIAL PRIMARY KEY")
 		} else {
-			colType := typing.InferFromValue(typing.DialectPostgreSQL, c, fieldValues[c])
+			var recordDeclared map[string]string
+			if fieldValues != nil {
+				if m, ok := fieldValues["__column_types__"].(map[string]string); ok {
+					recordDeclared = m
+				}
+			}
+			colType := s.resolveColumnDDL(c, fieldValues[c], recordDeclared)
 			b.WriteString(" ")
 			b.WriteString(colType)
 		}
@@ -774,7 +837,13 @@ func (s *PostgresSink) pgCreateTable(ctx context.Context, table string, columns 
 }
 
 func (s *PostgresSink) pgAddColumn(ctx context.Context, table, column string, fieldValues map[string]any) error {
-	colType := typing.InferFromValue(typing.DialectPostgreSQL, column, fieldValues[column])
+	var recordDeclared map[string]string
+	if fieldValues != nil {
+		if m, ok := fieldValues["__column_types__"].(map[string]string); ok {
+			recordDeclared = m
+		}
+	}
+	colType := s.resolveColumnDDL(column, fieldValues[column], recordDeclared)
 	ddl := fmt.Sprintf(`ALTER TABLE %s.%s ADD COLUMN %s %s`, pgQuote(s.schema), pgQuote(table), pgQuote(column), colType)
 	_, err := s.pool.Exec(ctx, ddl)
 	return err

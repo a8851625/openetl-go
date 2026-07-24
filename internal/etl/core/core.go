@@ -36,6 +36,11 @@ type Metadata struct {
 	// record, used by DLQ entries + metrics) is preserved while edges have a
 	// dedicated field to match on.
 	Route string `json:"route,omitempty"`
+	// ColumnTypes maps field name → declared source type (MySQL COLUMN_TYPE,
+	// Debezium/Kafka Connect field type name, etc.). Sinks with auto_create
+	// prefer these over sample-value inference when building target DDL.
+	// Not serialized into DLQ payloads by default (omitempty keeps size down).
+	ColumnTypes map[string]string `json:"column_types,omitempty"`
 }
 
 type Record struct {

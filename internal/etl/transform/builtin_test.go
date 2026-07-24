@@ -91,7 +91,7 @@ func TestProjectTransformProjectsAliasesConstantsAndTimeFormats(t *testing.T) {
 			t.Fatalf("project retained %q in %#v", field, projected.Data)
 		}
 	}
-	if projected.Operation != rec.Operation || projected.Metadata != rec.Metadata || projected.Before["name"] != "old" {
+	if projected.Operation != rec.Operation || projected.Metadata.Source != rec.Metadata.Source || projected.Metadata.Table != rec.Metadata.Table || projected.Before["name"] != "old" {
 		t.Fatalf("project did not preserve record envelope: %#v", projected)
 	}
 }

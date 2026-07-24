@@ -526,12 +526,13 @@ sink:
 | `pk_columns_from_metadata` | no | `false` | Derive per-table primary key columns from `record.metadata.key` for Debezium multi-table CDC. |
 | `increment_columns` | no | | Target column -> source field map for additive `batch_mode: increment`. |
 | `pre_write` | no | | Pre-write action block: `delete`, `truncate`, or `truncate_partition` with optional `params`. |
-| `auto_create` | no | `false` | Auto-create table if missing. |
+| `auto_create` | no | `false` | Auto-create table if missing. Type resolution: `column_types` → source/Debezium declared types → sample inference. |
+| `column_types` | no | | Map of column → target DDL for auto_create/add_columns (e.g. `{deleted: "TINYINT(1)"}`). Highest priority. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
 | `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. |
 | `insert_chunk_size` | no | `500` | Rows per INSERT statement. |
 
-Use `batch_mode: upsert` for CDC/snapshot+CDC idempotency.
+Use `batch_mode: upsert` for CDC/snapshot+CDC idempotency. For Kafka Debezium → MySQL with `auto_create`, prefer schema-inclusive JSON or set `column_types` for ambiguous columns such as soft-delete flags.
 
 ### `clickhouse`
 
@@ -696,7 +697,8 @@ sink:
 | `pk_columns` | no | `["id"]` | Primary key columns for upsert mode. |
 | `increment_columns` | no | | Target column -> source field map for additive `batch_mode: increment`. |
 | `pre_write` | no | | Pre-write action block: `delete`, `truncate`, or `truncate_partition` with optional `params`. |
-| `auto_create` | no | `false` | Auto-create table if missing. |
+| `auto_create` | no | `false` | Auto-create table if missing. Type resolution: `column_types` → source/Debezium declared types → sample inference. |
+| `column_types` | no | | Map of column → target DDL for auto_create/add_columns. Highest priority. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
 | `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. |
 | `sslmode` | no | `prefer` | PostgreSQL SSL mode: `disable`, `allow`, `prefer`, `require`, `verify-ca`, or `verify-full`. |

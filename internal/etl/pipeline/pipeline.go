@@ -533,18 +533,24 @@ func (r *Runner) Start(ctx context.Context) error {
 		return fmt.Errorf("open sink: %w", err)
 	}
 
-	// Optional schema validation: if source describes its schema and sink
-	// accepts schema validation, check compatibility before reading.
+	// Optional schema validation + typed auto_create: if source describes its
+	// schema, feed it to sinks that implement SourceSchemaConsumer (so
+	// information_schema types drive target DDL) and to SchemaValidators.
 	if descriptor, ok := r.source.(core.SchemaDescriptor); ok {
-		if validator, ok := schemaValidatorForSink(r.sink); ok {
-			schema, err := descriptor.Describe(ctx)
-			if err != nil {
-				r.setStatus(StatusFailed)
-				r.logError(fmt.Sprintf("Source schema description failed: %v", err))
-				_ = r.sink.Close()
-				markStartFailed()
-				return fmt.Errorf("describe source schema: %w", err)
-			} else if len(schema.Columns) > 0 {
+		schema, err := descriptor.Describe(ctx)
+		if err != nil {
+			r.setStatus(StatusFailed)
+			r.logError(fmt.Sprintf("Source schema description failed: %v", err))
+			_ = r.sink.Close()
+			markStartFailed()
+			return fmt.Errorf("describe source schema: %w", err)
+		}
+		if len(schema.Columns) > 0 {
+			if consumer, ok := r.sink.(core.SourceSchemaConsumer); ok {
+				consumer.SetSourceSchema(schema)
+				r.logInfo(fmt.Sprintf("Source schema applied to sink for typed auto_create: %d columns", len(schema.Columns)))
+			}
+			if validator, ok := schemaValidatorForSink(r.sink); ok {
 				if err := validator.ValidateSchema(ctx, schema); err != nil {
 					r.setStatus(StatusFailed)
 					r.logError(fmt.Sprintf("Schema validation failed: %v", err))
