@@ -134,7 +134,8 @@ func sourceConfigSchemas() map[string][]ConfigField {
 		"kafka": {
 			{Name: "brokers", Type: FieldStringArray, Required: true, Description: "Kafka broker addresses", Example: []string{"localhost:9092"}},
 			{Name: "topic", Type: FieldString, Required: true, Description: "Kafka topic to consume"},
-			{Name: "group_id", Type: FieldString, Required: false, Default: "etl-consumer", Description: "Consumer group ID. All parallelism shards share this group ID; Kafka's consumer-group protocol assigns topic partitions to shards, so set parallelism.count ≤ topic partition count."},
+			{Name: "group_id", Type: FieldString, Required: false, Default: "etl-consumer", Description: "Consumer group ID. All parallelism shards share this group ID; Kafka's consumer-group protocol assigns topic partitions to shards, so set parallelism.sharding.logical_shards ≤ topic partition count."},
+			{Name: "topic_partitions", Type: FieldInt, Required: false, Description: "Optional static partition-count hint for validate when broker metadata is unavailable. When logical_shards > topic_partitions, validate warns that excess shards idle. Prefer preflight (live metadata) in production; recommended logical_shards = topic partition count."},
 			{Name: "format", Type: FieldString, Required: false, Default: "json", Description: "Message format", Enum: []string{"json", "text"}},
 			{Name: "key_column", Type: FieldString, Required: false, Description: "Column name for message key"},
 			{Name: "value_column", Type: FieldString, Required: false, Description: "Column name for raw message value"},

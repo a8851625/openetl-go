@@ -208,16 +208,41 @@ func NewPipeline(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *a
 
 // NewDistributedPipeline creates a ParallelRunner that delegates shard execution
 // to worker processes via the dispatcher instead of running shards inline
-// (A11-redo). Used by the master role; standalone/master-without-workers keep
-// using NewPipeline. For single-shard specs (Parallelism.Count <= 1) it falls
-// back to an inline Runner — distributed dispatch only applies to parallel
-// pipelines.
+// (A11-redo). Used by the master role; standalone keeps using NewPipeline.
+//
+// Placement rules:
+//   - logical_shards > 1: one continuous/batch task per shard (existing path).
+//   - logical_shards <= 1: still dispatch ONE continuous shard task so the
+//     pipeline is placed on a worker rather than the master control plane.
+//     This is pipeline-level placement for single-shard streaming CDC, not
+//     multi-active HA (still one replica; worker loss reassigns the task).
+//
+// Checkpoint keys for the single-shard path keep the plain pipeline name
+// (same as standalone NewRunner) so promoting an unsharded CDC pipeline to
+// master-worker does not orphan existing checkpoints. Multi-shard paths still
+// use "{name}.shard-{idx}".
 func NewDistributedPipeline(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *alert.Manager, dispatcher ShardDispatcher) (RunnerInterface, error) {
-	if spec.Parallelism == nil || spec.Parallelism.LogicalShardCount() <= 1 {
-		// No sharding to distribute — run inline.
-		return NewRunner(spec, cpStore, dlqW, am)
+	// Work on a shallow copy so we never mutate the caller's stored Spec
+	// (e.g. Server.specs map entries returned by the API).
+	runSpec := *spec
+	if runSpec.Parallelism != nil {
+		pc := *runSpec.Parallelism
+		runSpec.Parallelism = &pc
+	} else {
+		runSpec.Parallelism = &ParallelismConfig{Count: 1}
 	}
-	pr, err := NewParallelRunner(spec, cpStore, dlqW, am)
+	runSpec.Parallelism.ApplyDefaults()
+	if runSpec.Parallelism.LogicalShardCount() < 1 {
+		runSpec.Parallelism.Count = 1
+		if runSpec.Parallelism.Sharding == nil {
+			runSpec.Parallelism.Sharding = &ShardingConfig{LogicalShards: 1}
+		} else {
+			sh := *runSpec.Parallelism.Sharding
+			sh.LogicalShards = 1
+			runSpec.Parallelism.Sharding = &sh
+		}
+	}
+	pr, err := NewParallelRunner(&runSpec, cpStore, dlqW, am)
 	if err != nil {
 		return nil, err
 	}

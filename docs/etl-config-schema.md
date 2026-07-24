@@ -395,7 +395,8 @@ source:
 | --- | --- | --- | --- |
 | `brokers` | yes | `["localhost:9092"]` | Kafka broker addresses. |
 | `topic` | yes | | Kafka topic to consume. |
-| `group_id` | no | `etl-consumer` | Consumer group ID. |
+| `group_id` | no | `etl-consumer` | Consumer group ID. All logical shards of a pipeline share this group so Kafka assigns partitions across shards. |
+| `topic_partitions` | no | | Optional static partition-count hint for offline validate when brokers are unreachable. When `logical_shards > topic_partitions`, validate warns excess shards will idle. Prefer preflight live metadata in production; recommended `logical_shards` equals topic partition count. |
 | `format` | no | `json` | Message format: `json` or `text`. |
 | `key_column` | no | | Column name for message key. |
 | `value_column` | no | | Column name for raw message value. |

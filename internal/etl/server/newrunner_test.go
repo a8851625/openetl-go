@@ -59,6 +59,42 @@ func TestNewRunnerNotRecursive(t *testing.T) {
 	}
 }
 
+// TestNewRunnerDistributedPlacesSingleShard proves master-role placement:
+// unsharded linear pipelines use NewDistributedPipeline (one continuous shard)
+// instead of an inline Runner on the control plane.
+func TestNewRunnerDistributedPlacesSingleShard(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "in.jsonl")
+	if err := os.WriteFile(srcPath, []byte(`{"id":1}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	spec := &pipeline.Spec{
+		Name:   "single-shard-stream",
+		Source: pipeline.SourceSpec{Type: "file", Config: map[string]any{"path": srcPath, "format": "json"}},
+		Sink:   pipeline.SinkSpec{Type: "file_sink", Config: map[string]any{"output_dir": filepath.Join(dir, "out")}},
+	}
+	store, err := factory.NewStore(context.Background(), "sqlite", filepath.Join(dir, "cp"), filepath.Join(dir, "dlq"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	s, err := NewServer(store, dir)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	s.SetDistributed(true)
+	runner, err := s.newRunner(spec)
+	if err != nil {
+		t.Fatalf("newRunner: %v", err)
+	}
+	pr, ok := runner.(*pipeline.ParallelRunner)
+	if !ok {
+		t.Fatalf("runner type = %T, want *pipeline.ParallelRunner for distributed single-shard placement", runner)
+	}
+	if got := pr.InstanceCount(); got != 1 {
+		t.Fatalf("InstanceCount = %d, want 1", got)
+	}
+}
+
 func TestDispatchIfParallelSkipsDistributedRunnerStartPath(t *testing.T) {
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "in.jsonl")

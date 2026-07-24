@@ -2376,8 +2376,42 @@ func (s *Server) checkKafkaSource(ctx context.Context, spec *pipeline.Spec, resu
 			Remediation: "create at least one partition for the source topic before starting the pipeline",
 		})
 		result.Passed = false
+		return
 	}
-	g.Log().Debugf(ctx, "Kafka source preflight passed: brokers=%v topic=%s partitions=%d", brokers, topic, detail.NumPartitions)
+
+	// Productize Kafka shard vs partition guidance: excess shards stay idle.
+	logicalShards := 1
+	if spec.Parallelism != nil {
+		spec.Parallelism.ApplyDefaults()
+		logicalShards = spec.Parallelism.LogicalShardCount()
+	}
+	partitionCount := int(detail.NumPartitions)
+	if logicalShards > partitionCount {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level: "warning",
+			Check: "kafka-source-shard-partitions",
+			Message: fmt.Sprintf(
+				"logical_shards=%d exceeds topic %q partition count %d; %d shard(s) will stay idle",
+				logicalShards, topic, partitionCount, logicalShards-partitionCount),
+			Remediation: fmt.Sprintf(
+				"set parallelism.sharding.logical_shards <= %d (recommended default = partition count) "+
+					"or increase the topic partition count; Kafka assigns at most one partition per consumer in a group",
+				partitionCount),
+		})
+	} else if logicalShards == 1 && partitionCount > 1 {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level: "warning",
+			Check: "kafka-source-shard-recommendation",
+			Message: fmt.Sprintf(
+				"topic %q has %d partitions but logical_shards=1; only one consumer will process all partitions in this pipeline",
+				topic, partitionCount),
+			Remediation: fmt.Sprintf(
+				"for safe Kafka scale-out set parallelism.sharding.logical_shards to %d (or <= partition count) "+
+					"and run under master-worker or multi-instance standalone; unsharded streaming stays a single placement",
+				partitionCount),
+		})
+	}
+	g.Log().Debugf(ctx, "Kafka source preflight passed: brokers=%v topic=%s partitions=%d logical_shards=%d", brokers, topic, partitionCount, logicalShards)
 }
 
 func kafkaPreflightAdminConfig(cfg map[string]any) (*sarama.Config, error) {

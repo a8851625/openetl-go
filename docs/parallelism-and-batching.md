@@ -23,7 +23,14 @@ Pipeline spec (logical_shards=4)
 └── Shard 3: Source(shard_index=3) → Transforms → Sink  [checkpoint: name.shard-3]
 ```
 
-`parallelism.sharding.logical_shards` is stable data ownership and should not be changed just to tune throughput. `parallelism.execution.max_active_shards` controls how many logical shards may run at once in a standalone process. In master/worker mode, all logical shards are dispatched as tasks and effective concurrency is bounded by worker slots.
+`parallelism.sharding.logical_shards` is stable data ownership and should not be changed just to tune throughput. `parallelism.execution.max_active_shards` controls how many logical shards may run at once in a standalone process. In master/worker mode, **all** linear pipelines are dispatched as shard tasks (including `logical_shards=1` as a single continuous placement task) and effective concurrency is bounded by worker slots.
+
+### Streaming placement vs multi-shard scale-out
+
+- **Unsharded streaming** (`logical_shards=1`, default for kafka/cdc): one placement. Standalone runs it locally; master dispatches one continuous worker task. Validate warns that this is not multi-active HA.
+- **Multi-shard streaming** (Kafka consumer-group shards, multi-table `mysql_cdc`, etc.): N tasks / N runners. Safe Kafka default is `logical_shards = topic partition count`.
+- **Ops split without code**: multiple standalone instances, each owning a subset of pipeline specs, shared MySQL metadata.
+- Checkpoint keys: multi-shard uses `{name}.shard-{N}`; single-shard placement keeps the plain `{name}` key so promoting standalone CDC to master-worker does not orphan checkpoints.
 
 ### Per-Source Sharding Strategies
 
@@ -115,7 +122,26 @@ count**:
 
 - If logical shards ≤ topic partitions: all shards receive data.
 - If logical shards > topic partitions: the extra shards stay idle (no data, no
-  error).
+  error). Spec validate warns when `source.config.topic_partitions` is set and
+  lower than `logical_shards`; preflight warns using **live** broker metadata
+  and recommends `logical_shards = NumPartitions` when currently unsharded.
+- Optional `source.config.topic_partitions` is a static validate-only hint when
+  brokers are unreachable; production should rely on preflight metadata.
+
+Recommended safe multi-shard Kafka CDC:
+
+```yaml
+source:
+  type: kafka
+  config:
+    brokers: ["kafka:9092"]
+    topic: dbserver.inventory.orders
+    group_id: openetl-orders-cdc
+    # topic_partitions: 4   # optional offline validate hint
+parallelism:
+  sharding:
+    logical_shards: 4   # ≤ PartitionCount; prefer equal to partitions
+```
 
 Check the topic's partition count before raising `parallelism.sharding.logical_shards`:
 

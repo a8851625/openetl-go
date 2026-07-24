@@ -220,11 +220,12 @@ func pathPart(raw string) string {
 // etl.role=master. Only meaningful with MySQL/PG shared storage.
 func (s *Server) SetDistributed(b bool) { s.distributed = b }
 
-// newRunner builds a runner for a spec. In distributed (master) mode, parallel
-// pipelines use NewDistributedPipeline so shards execute on workers; everything
-// else (single-shard specs, standalone role) uses inline NewPipeline unchanged.
+// newRunner builds a runner for a spec. In distributed (master) mode every
+// linear pipeline uses NewDistributedPipeline so shard tasks (including a
+// single continuous shard for unsharded streaming CDC) execute on workers.
+// Standalone keeps NewPipeline (inline single or parallel runners).
 func (s *Server) newRunner(spec *pipeline.Spec) (pipeline.RunnerInterface, error) {
-	if s.distributed && spec.Parallelism != nil && spec.Parallelism.LogicalShardCount() > 1 && s.masterNode != nil {
+	if s.distributed && s.masterNode != nil {
 		return pipeline.NewDistributedPipeline(spec, s.cpAdapter, s.dlqWriter, s.alertManager, s.masterNode.Dispatcher())
 	}
 	// Non-distributed path: single-shard specs run inline via NewRunner; multi-shard
@@ -4441,7 +4442,9 @@ func (s *Server) Storage() storage.Storage {
 }
 
 // dispatchIfParallel notifies the master dispatcher about shards when a
-// ParallelRunner is created, so workers can claim shard tasks via poll.
+// ParallelRunner is created in standalone mode (cosmetic task rows). In
+// distributed mode ParallelRunner.Start owns dispatch for both multi-shard
+// and single-shard (pipeline placement) pipelines.
 func (s *Server) dispatchIfParallel(ctx context.Context, runner pipeline.RunnerInterface, spec *pipeline.Spec) {
 	if s.distributed {
 		// Distributed ParallelRunner.Start dispatches shard tasks and then waits

@@ -23,7 +23,14 @@ Pipeline spec（logical_shards=4）
 └── Shard 3：Source(shard_index=3) → Transforms → Sink  [checkpoint：name.shard-3]
 ```
 
-`parallelism.sharding.logical_shards` 表示稳定的数据归属，不应该只为了调吞吐而随意修改。`parallelism.execution.max_active_shards` 表示 standalone 进程内最多同时运行多少个 logical shard。master/worker 模式会把所有 logical shard 派发为任务，实际并发由 worker slots 限制。
+`parallelism.sharding.logical_shards` 表示稳定的数据归属，不应该只为了调吞吐而随意修改。`parallelism.execution.max_active_shards` 表示 standalone 进程内最多同时运行多少个 logical shard。master/worker 模式下，**所有** linear pipeline 都会派发为 shard 任务（含 `logical_shards=1` 的单分片持续任务，即 pipeline 级放置），实际并发由 worker slots 限制。
+
+### Streaming 放置 vs 多分片扩展
+
+- **未分片 streaming**（默认 `logical_shards=1`，kafka/cdc）：单一放置。standalone 在本进程跑；master 派 1 个 continuous worker 任务。Validate 会提示这不是多副本 HA。
+- **多分片 streaming**（Kafka consumer group 分片、多表 `mysql_cdc` 等）：N 个任务/Runner。Kafka 安全默认是 `logical_shards = topic 分区数`。
+- **运维层拆分（无代码）**：多个 standalone 实例各自挂载部分 pipeline YAML，共享 MySQL 元数据。
+- Checkpoint：多分片用 `{name}.shard-{N}`；单分片放置保持普通 `{name}`，standalone CDC 升到 master-worker 不会丢掉旧 checkpoint。
 
 ### 每种 Source 的分片策略
 
@@ -95,7 +102,22 @@ Worker 结果会按 source 重新排序后再进入 sink 批次聚合。Sink 写
 Kafka source 会忽略 `shard_strategy`，所有 logical shard 加入同一个 consumer group，由 Kafka 分配 topic partition。有效并行度受 topic partition 数限制：
 
 - logical shards ≤ topic partitions：所有 shard 都能收到数据。
-- logical shards > topic partitions：多余 shard 空闲，不报错。
+- logical shards > topic partitions：多余 shard 空闲，不报错。配置了 `source.config.topic_partitions` 时 validate 会警告；preflight 用**实时** broker 元数据警告，并在未分片时建议 `logical_shards = NumPartitions`。
+- `source.config.topic_partitions` 仅作 broker 不可达时的静态校验提示；生产以 preflight 为准。
+
+安全的 Kafka CDC 多分片示例：
+
+```yaml
+source:
+  type: kafka
+  config:
+    brokers: ["kafka:9092"]
+    topic: dbserver.inventory.orders
+    group_id: openetl-orders-cdc
+parallelism:
+  sharding:
+    logical_shards: 4   # ≤ PartitionCount；建议等于分区数
+```
 
 提高 `parallelism.sharding.logical_shards` 前先确认 partition 数：
 

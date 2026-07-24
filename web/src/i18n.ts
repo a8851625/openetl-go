@@ -717,7 +717,15 @@ const dict: Dict = {
   'dag.testConnection': { en: 'Test connection', zh: '测试连接' },
   'dag.testing': { en: 'Testing...', zh: '测试中...' },
   'dag.testSelectNode': { en: 'Select a node first', zh: '请先选中一个节点' },
-  'dag.parallelInstances': { en: 'Parallel instances', zh: '并行实例数' },
+  'dag.parallelInstances': { en: 'Parallel instances: {n}', zh: '并行实例数：{n}' },
+  'dag.kafkaShardHint': {
+    en: 'Kafka: set logical shards ≤ topic partitions (recommended = partition count). Excess shards stay idle. Unsharded streaming is a single placement (standalone local / master one worker task).',
+    zh: 'Kafka：logical shards 应 ≤ topic 分区数（建议等于分区数）。多余 shard 会空转。未分片 streaming 是单一放置（standalone 本机 / master 派一个 worker 任务）。',
+  },
+  'dag.kafkaSuggestShards': {
+    en: 'Suggest shards from topic partitions ({n})',
+    zh: '按 topic 分区数建议 shards（{n}）',
+  },
   'dag.streamingDesc': { en: 'Streaming mode runs continuously', zh: '流式模式会持续运行' },
   'dag.onceDesc': { en: 'Run once and exit', zh: '运行一次后退出' },
   'dag.hooksDesc': { en: 'Lifecycle hooks (Lua/JS)', zh: '生命周期钩子（Lua/JS）' },

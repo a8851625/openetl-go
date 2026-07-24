@@ -332,7 +332,8 @@ source:
 | --- | --- | --- | --- |
 | `brokers` | 是 | `["localhost:9092"]` | Kafka broker 地址。 |
 | `topic` | 是 | | 要消费的 Kafka topic。 |
-| `group_id` | 否 | `etl-consumer` | 消费者组 ID。 |
+| `group_id` | 否 | `etl-consumer` | 消费者组 ID。同一 pipeline 的所有 logical shard 共享该 group，以便 Kafka 在 shard 间分配分区。 |
+| `topic_partitions` | 否 | | 可选的静态分区数提示，用于 broker 不可达时的离线 validate。当 `logical_shards > topic_partitions` 时会警告多余 shard 空转。生产优先用 preflight 实时元数据；推荐 `logical_shards` 等于 topic 分区数。 |
 | `format` | 否 | `json` | 消息格式：`json` 或 `text`。 |
 | `key_column` | 否 | | 消息 key 的列名。 |
 | `value_column` | 否 | | 原始消息 value 的列名。 |

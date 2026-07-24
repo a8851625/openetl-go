@@ -13,6 +13,27 @@ Lightweight self-hosted deployment modes for OpenETL-Go.
 
 Priority: **CLI flags > environment variables > config.yaml > built-in defaults**.
 
+## Streaming / CDC scale-out (placement semantics)
+
+Distributed dispatch is **linear-spec only** (DAG executors always run in the process that loads them). Placement rules:
+
+| Spec shape | Standalone | Master + workers |
+| --- | --- | --- |
+| Streaming/CDC, `logical_shards=1` (default) | Runs **in this process** | Dispatched as **one continuous shard task** to a worker (pipeline-level placement). Still **one replica** — not multi-active HA. |
+| Linear, `logical_shards > 1` | Inline `ParallelRunner` (bounded by `max_active_shards`) | One task per shard; workers claim continuous/batch shards |
+| DAG | Local `DAGExecutor` | Local on master (not shard-distributed) |
+
+### Decision tree for pure Kafka CDC (e.g. many independent topics)
+
+1. **Default / small fleet**: `standalone` with all pipelines in one process. Validate warns that unsharded streaming is a single placement.
+2. **CPU or blast-radius split (ops-only)**: multiple standalone pods, each mounting a **subset** of pipeline YAMLs, sharing MySQL metadata. No code change required.
+3. **Kafka throughput scale-out**: set `parallelism.sharding.logical_shards` to **≤ topic partition count** (preflight recommends partition count). Shards share one `group_id`; excess shards idle. Under master-worker those shards are long-running worker tasks.
+4. **Keep control plane light**: `role=master` places even single-shard streaming on workers so the API/UI host does not own every CDC consumer.
+
+Not multi-active HA: losing the process (or the single worker holding the continuous task) stops that pipeline until restart/reassign + checkpoint resume. Absorb replay with upsert/PK sinks (see [etl-idempotency.md](./etl-idempotency.md)).
+
+`POST /api/v2/specs/validate` surfaces placement warnings; Kafka preflight compares `logical_shards` to live topic partition metadata.
+
 ```sh
 # Help is the executable manual
 ./openetl-go --help

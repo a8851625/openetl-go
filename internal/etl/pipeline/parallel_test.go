@@ -266,3 +266,122 @@ func (s *sinkConcurrencyProbe) Write(ctx context.Context, records []core.Record)
 	}
 }
 func (s *sinkConcurrencyProbe) Close() error { return nil }
+
+// TestNewDistributedPipelineDispatchesSingleShardPlacement proves master-role
+// pipeline-level placement: unsharded (logical_shards=1) streaming specs still
+// become a distributed ParallelRunner with one continuous shard task, instead
+// of falling back to an inline Runner on the master process.
+func TestNewDistributedPipelineDispatchesSingleShardPlacement(t *testing.T) {
+	tmpDir := t.TempDir()
+	spec := &Spec{
+		Name:   "single-shard-place",
+		Source: SourceSpec{Type: "demo", Config: map[string]any{"interval_ms": 50}},
+		Sink:   SinkSpec{Type: "file_sink", Config: map[string]any{"path": tmpDir + "/out.jsonl", "format": "json"}},
+		// No Parallelism — defaults to logical_shards=1.
+	}
+	disp := &recordingDispatcher{}
+	runner, err := NewDistributedPipeline(spec, newMemoryCPStore(), noopDLQ{}, alert.NewManager(), disp)
+	if err != nil {
+		t.Fatalf("NewDistributedPipeline: %v", err)
+	}
+	pr, ok := runner.(*ParallelRunner)
+	if !ok {
+		t.Fatalf("runner type = %T, want *ParallelRunner for single-shard placement", runner)
+	}
+	if !pr.distributed || pr.dispatcher == nil {
+		t.Fatalf("expected distributed ParallelRunner with dispatcher, distributed=%v dispatcher=%v", pr.distributed, pr.dispatcher != nil)
+	}
+	if got := pr.InstanceCount(); got != 1 {
+		t.Fatalf("InstanceCount = %d, want 1", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := pr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Give startDistributed a moment to call DispatchShards.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && disp.count() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("DispatchShards count arg = %d, want 1 continuous shard task", got)
+	}
+	_ = pr.Stop()
+}
+
+// TestBuildShardRunnerSingleShardKeepsPlainCheckpointKey ensures promoting an
+// unsharded pipeline to master-worker does not rename the checkpoint namespace.
+func TestBuildShardRunnerSingleShardKeepsPlainCheckpointKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := newMemoryCPStore()
+	// Seed a standalone-style checkpoint under the plain pipeline name.
+	marker := []byte(`{"v":42}`)
+	if err := store.Save(context.Background(), core.Checkpoint{JobName: "cdc-job", Position: marker}); err != nil {
+		t.Fatal(err)
+	}
+	spec := &Spec{
+		Name:   "cdc-job",
+		Source: SourceSpec{Type: "demo", Config: map[string]any{}},
+		Sink:   SinkSpec{Type: "file_sink", Config: map[string]any{"path": tmpDir + "/out.jsonl", "format": "json"}},
+	}
+	runner, err := BuildShardRunner(spec, store, noopDLQ{}, alert.NewManager(), 0, 1)
+	if err != nil {
+		t.Fatalf("BuildShardRunner: %v", err)
+	}
+	// The runner's store should load the plain-name checkpoint, not cdc-job.shard-0.
+	cp, err := runner.checkpointStore.Load(context.Background(), "cdc-job")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cp == nil || string(cp.Position) != string(marker) {
+		t.Fatalf("checkpoint = %#v, want plain-name Position=%s", cp, marker)
+	}
+}
+
+// TestBuildShardRunnerMultiShardUsesScopedCheckpointKey keeps multi-shard
+// isolation for ParallelRunner / worker reassignment.
+func TestBuildShardRunnerMultiShardUsesScopedCheckpointKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := newMemoryCPStore()
+	marker := []byte(`{"v":7}`)
+	if err := store.Save(context.Background(), core.Checkpoint{JobName: "batch-job.shard-1", Position: marker}); err != nil {
+		t.Fatal(err)
+	}
+	spec := &Spec{
+		Name:        "batch-job",
+		Source:      SourceSpec{Type: "demo", Config: map[string]any{}},
+		Sink:        SinkSpec{Type: "file_sink", Config: map[string]any{"path": tmpDir + "/out.jsonl", "format": "json"}},
+		Parallelism: &ParallelismConfig{Count: 3},
+	}
+	runner, err := BuildShardRunner(spec, store, noopDLQ{}, alert.NewManager(), 1, 3)
+	if err != nil {
+		t.Fatalf("BuildShardRunner: %v", err)
+	}
+	cp, err := runner.checkpointStore.Load(context.Background(), "ignored")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cp == nil || string(cp.Position) != string(marker) {
+		t.Fatalf("checkpoint = %#v, want shard-1 Position=%s", cp, marker)
+	}
+}
+
+type recordingDispatcher struct {
+	n int32
+}
+
+func (d *recordingDispatcher) DispatchShards(_ context.Context, _ string, count int, _ map[string]string) error {
+	atomic.StoreInt32(&d.n, int32(count))
+	return nil
+}
+
+func (d *recordingDispatcher) WaitShard(ctx context.Context, _ string, _ int) (Status, error) {
+	<-ctx.Done()
+	return StatusStopped, ctx.Err()
+}
+
+func (d *recordingDispatcher) count() int {
+	return int(atomic.LoadInt32(&d.n))
+}

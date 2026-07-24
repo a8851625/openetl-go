@@ -35,7 +35,7 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, sources, "hubspot", "object", "api_key", "base_url")
 	assertFields(t, sources, "stripe", "resource", "secret_key", "base_url")
 	assertFields(t, sources, "notion", "database_id", "api_version", "integration_token")
-	assertFields(t, sources, "kafka", "initial_offset", "sasl_user", "sasl_password", "tls",
+	assertFields(t, sources, "kafka", "initial_offset", "sasl_user", "sasl_password", "tls", "topic_partitions",
 		"fetch_min_bytes", "fetch_max_bytes", "fetch_max_wait_ms", "channel_buffer_size", "max_processing_time_ms", "max_open_requests")
 	assertFields(t, sources, "redis", "pattern", "count")
 	assertFields(t, sources, "demo", "interval_ms", "count", "fields")

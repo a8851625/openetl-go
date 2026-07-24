@@ -20,9 +20,14 @@ import (
 //     `total` so the framework-level NewShardedReader decorator applies for
 //     non-native sources (file/redis/...) in pipeline.go. Nilling Parallelism
 //     would make every worker read the FULL stream.
-//   - The checkpoint store is the shard-scoped "{spec.Name}.shard-{idx}"
-//     namespace (NewShardCheckpointStore), matching ParallelRunner's inline
-//     instances exactly.
+//   - When total > 1, the checkpoint store is the shard-scoped
+//     "{spec.Name}.shard-{idx}" namespace (NewShardCheckpointStore), matching
+//     ParallelRunner's inline multi-shard instances.
+//   - When total == 1 (pipeline-level placement of an unsharded streaming
+//     pipeline onto a worker), the checkpoint store keeps the plain
+//     spec.Name key used by NewRunner / standalone. That preserves checkpoint
+//     continuity when promoting a single-shard CDC pipeline from standalone
+//     to master-worker without a forced reset.
 func BuildShardRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *alert.Manager, idx, total int) (*Runner, error) {
 	if total < 1 {
 		total = 1
@@ -52,6 +57,8 @@ func BuildShardRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, 
 	shardSpec.Parallelism.Count = total
 
 	// Deep-copy all config maps to prevent cross-shard / cross-worker mutation.
+	// For total==1, still inject shard_index/shard_total for source adapters
+	// that read them, but keep checkpoint key unscoped (see below).
 	shardSpec.Source.Config = InjectShardConfig(spec.Source.Config, idx, total, strategy, shardKey)
 	shardSpec.Sink.Config = cloneConfig(spec.Sink.Config)
 	shardSpec.Transforms = make([]TransformSpec, len(spec.Transforms))
@@ -62,8 +69,11 @@ func BuildShardRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, 
 		}
 	}
 
-	shardCPStore := NewShardCheckpointStore(cpStore, spec.Name, idx)
-	runner, err := NewRunner(&shardSpec, shardCPStore, dlqW, am)
+	runCPStore := cpStore
+	if total > 1 {
+		runCPStore = NewShardCheckpointStore(cpStore, spec.Name, idx)
+	}
+	runner, err := NewRunner(&shardSpec, runCPStore, dlqW, am)
 	if err != nil {
 		return nil, fmt.Errorf("shard-%d/%d: %w", idx, total, err)
 	}

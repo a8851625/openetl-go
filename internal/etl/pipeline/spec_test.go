@@ -368,15 +368,54 @@ func TestValidateParallelismKafkaWarning(t *testing.T) {
 	}
 }
 
-func TestValidateParallelismNoWarningForSingleShard(t *testing.T) {
-	// count == 1 (or nil Parallelism) must not emit the kafka warning.
+func TestValidateParallelismNoKafkaMultiShardWarningForSingleShard(t *testing.T) {
+	// count == 1 (or nil Parallelism) must not emit the multi-shard kafka warning,
+	// but MUST emit the unsharded streaming placement warning.
 	cases := []*Spec{
 		{Name: "a", Source: SourceSpec{Type: "kafka"}, Sink: SinkSpec{Type: "file_sink"}, Parallelism: nil},
 		{Name: "b", Source: SourceSpec{Type: "kafka"}, Sink: SinkSpec{Type: "file_sink"}, Parallelism: &ParallelismConfig{Count: 1}},
 	}
 	for _, spec := range cases {
-		if got := ValidateParallelism(spec); len(got) != 0 {
-			t.Errorf("spec %s: expected no warnings, got %v", spec.Name, got)
+		got := ValidateParallelism(spec)
+		joined := strings.Join(got, "; ")
+		if strings.Contains(joined, "shard_strategy is ignored") {
+			t.Errorf("spec %s: unexpected multi-shard kafka warning: %v", spec.Name, got)
+		}
+		if !strings.Contains(joined, "logical_shards=1") || !strings.Contains(joined, "single placement") {
+			t.Errorf("spec %s: expected unsharded streaming placement warning, got %v", spec.Name, got)
+		}
+	}
+}
+
+func TestValidateParallelismUnshardedStreamingPlacement(t *testing.T) {
+	spec := &Spec{
+		Name:   "cdc-local",
+		Source: SourceSpec{Type: "mysql_cdc"},
+		Sink:   SinkSpec{Type: "mysql"},
+	}
+	got := strings.Join(ValidateParallelism(spec), "; ")
+	for _, want := range []string{"streaming source", "mysql_cdc", "logical_shards=1", "single placement", "master-worker"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ValidateParallelism() = %q, want substring %q", got, want)
+		}
+	}
+}
+
+func TestValidateParallelismKafkaTopicPartitionsHint(t *testing.T) {
+	spec := &Spec{
+		Name: "kafka-overshard",
+		Source: SourceSpec{Type: "kafka", Config: map[string]any{
+			"topic_partitions": 2,
+		}},
+		Sink: SinkSpec{Type: "file_sink"},
+		Parallelism: &ParallelismConfig{
+			Sharding: &ShardingConfig{LogicalShards: 4},
+		},
+	}
+	got := strings.Join(ValidateParallelism(spec), "; ")
+	for _, want := range []string{"logical_shards=4", "topic_partitions=2", "stay idle"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ValidateParallelism() = %q, want substring %q", got, want)
 		}
 	}
 }

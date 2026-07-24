@@ -909,29 +909,54 @@ func preWriteWarnings(spec *Spec) []string {
 }
 
 // ValidateParallelism returns warnings about parallelism / shard_strategy
-// misconfigurations. These do not block pipeline creation but surface common
-// pitfalls before runtime.
+// misconfigurations and streaming placement semantics. These do not block
+// pipeline creation but surface common pitfalls before runtime.
 //
 // Known footguns covered:
-//   - kafka source with logical_shards > 1: Kafka shards share one
-//     group_id and rely on the consumer-group protocol to distribute topic
-//     partitions. If the topic has fewer partitions than logical_shards, the extra
-//     shard instances stay idle. shard_strategy is ignored for kafka.
+//   - unsharded streaming sources (kafka/cdc/...): run only in the local
+//     process on standalone, or as a single dispatched shard on master when
+//     distributed placement is enabled. They do not multi-active replicate.
+//   - kafka source with logical_shards > 1: Kafka shards share one group_id
+//     and rely on the consumer-group protocol to distribute topic partitions.
+//     If the topic has fewer partitions than logical_shards, the extra shard
+//     instances stay idle. shard_strategy is ignored for kafka.
+//   - optional source.config.topic_partitions (static hint): when set and
+//     logical_shards > topic_partitions, warn that excess shards will idle.
 func ValidateParallelism(spec *Spec) []string {
-	if spec == nil || spec.Parallelism == nil {
+	if spec == nil {
 		return nil
 	}
-	spec.Parallelism.ApplyDefaults()
-	logicalShards := spec.Parallelism.LogicalShardCount()
-	maxActive := spec.Parallelism.MaxActiveShardCount()
-	strategy := spec.Parallelism.Strategy()
 	var warnings []string
-	if spec.Parallelism.Execution != nil {
-		if spec.Parallelism.Execution.SourceConcurrency > 1 {
+	logicalShards := 1
+	maxActive := 1
+	strategy := ""
+	if spec.Parallelism != nil {
+		spec.Parallelism.ApplyDefaults()
+		logicalShards = spec.Parallelism.LogicalShardCount()
+		maxActive = spec.Parallelism.MaxActiveShardCount()
+		strategy = spec.Parallelism.Strategy()
+		if spec.Parallelism.Execution != nil && spec.Parallelism.Execution.SourceConcurrency > 1 {
 			warnings = append(warnings,
 				"parallelism.execution.source_concurrency is reserved for the staged execution engine and is not active yet; current source concurrency is driven by logical_shards and max_active_shards.")
 		}
 	}
+
+	// Placement: unsharded streaming pipelines do not multi-active scale.
+	// On standalone they always run in-process; on master they are dispatched
+	// as a single continuous shard (pipeline-level placement) when distributed
+	// mode is enabled — still one replica, not multi-active HA.
+	if logicalShards <= 1 && isStreamingSource(spec.Source.Type) {
+		warnings = append(warnings, fmt.Sprintf(
+			"streaming source %q with logical_shards=1 runs as a single placement "+
+				"(standalone: local process; master: one continuous worker shard). "+
+				"It is not multi-active: process loss stops this pipeline until restart/reassign. "+
+				"Scale-out options: (1) raise parallelism.sharding.logical_shards for Kafka "+
+				"(<= topic partitions) or multi-table mysql_cdc, (2) split pipelines across "+
+				"multiple standalone instances sharing metadata, (3) use master-worker so "+
+				"single-shard streaming is placed on a worker instead of the control plane.",
+			spec.Source.Type))
+	}
+
 	if logicalShards <= 1 {
 		return warnings
 	}
@@ -941,8 +966,15 @@ func ValidateParallelism(spec *Spec) []string {
 			"source type %q with logical_shards=%d: shards share the same group_id and Kafka's "+
 				"consumer-group protocol assigns topic partitions to them. Ensure the Kafka topic has at "+
 				"least %d partitions, otherwise the extra shards will stay idle. shard_strategy is ignored "+
-				"for kafka sources.",
+				"for kafka sources. On master-worker, these shards are continuous tasks claimed by workers.",
 			spec.Source.Type, logicalShards, logicalShards))
+		if parts := topicPartitionsHint(spec.Source.Config); parts > 0 && logicalShards > parts {
+			warnings = append(warnings, fmt.Sprintf(
+				"logical_shards=%d exceeds source.config.topic_partitions=%d; Kafka assigns at most one "+
+					"partition per consumer in the group, so %d shard(s) will stay idle with no data. "+
+					"Set logical_shards <= %d or increase the topic partition count.",
+				logicalShards, parts, logicalShards-parts, parts))
+		}
 	case "postgres_cdc":
 		warnings = append(warnings,
 			"source type \"postgres_cdc\" does not implement sharding; parallel logical shards may duplicate the same replication stream. Keep logical_shards=1 until postgres_cdc exposes a partition-safe strategy.")
@@ -972,6 +1004,36 @@ func ValidateParallelism(spec *Spec) []string {
 			maxActive, logicalShards, spec.Source.Type))
 	}
 	return warnings
+}
+
+// topicPartitionsHint reads an optional static partition-count hint used by
+// validate when broker metadata is unavailable. Accepts int/float64/string.
+func topicPartitionsHint(config map[string]any) int {
+	if config == nil {
+		return 0
+	}
+	v, ok := config["topic_partitions"]
+	if !ok || v == nil {
+		return 0
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	case string:
+		var parsed int
+		if _, err := fmt.Sscanf(strings.TrimSpace(n), "%d", &parsed); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func stringSliceConfig(config map[string]any, key string) []string {

@@ -250,7 +250,8 @@ func (a *sApp) StartETLAsync(ctx context.Context) {
 // readRole resolves the process role: "standalone" (default), "master", or
 // "worker". ETL_ROLE env overrides etl.role config (matches the existing
 // ETL_* env convention). DAG pipelines do not shard-distribute regardless of
-// role — distributed dispatch is linear-spec only.
+// role — distributed dispatch is linear-spec only (including single-shard
+// streaming placement on master).
 func readRole(ctx context.Context) string {
 	role := os.Getenv("ETL_ROLE")
 	if role == "" {

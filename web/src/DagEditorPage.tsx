@@ -185,10 +185,16 @@ const NODE_PALETTE = (t: (key: string) => string): { category: string; catLabel:
   },
 ];
 
-let nodeCounter = 0;
-function nextNodeId(kind: string) {
-  nodeCounter++;
-  return `${kind}-${nodeCounter}`;
+// Allocate `${kind}-${n}` that does not collide with any node already on the
+// canvas. A module-level counter alone is wrong when editing an existing
+// pipeline: loadSpecIntoCanvas seeds transform-1..N, but the counter resets
+// on page load, so the next palette click reused transform-1 and React Flow
+// replaced the previous transform node instead of appending.
+function nextNodeId(kind: string, existingIds: Iterable<string>) {
+  const used = new Set(existingIds);
+  let n = 1;
+  while (used.has(`${kind}-${n}`)) n += 1;
+  return `${kind}-${n}`;
 }
 
 function schedulePolicyForSources(sourcePlugins: string[], descriptors: ConnectorDescriptor[]) {
@@ -532,23 +538,33 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   }, [setEdges]);
 
   const addNode = (kind: string, defaultPlugin: string) => {
-    const id = nextNodeId(kind);
-    const offset = nodes.length * 30;
-    // Lane Y positions by category for visual grouping
-    const laneY: Record<string, number> = {
-      source: 50, sink: 500,
-      transform: 200, fanout: 200, router: 200, tap: 200,
-      rate_limiter: 350, enricher: 350, lookup: 350,
-    };
-    const pos = { x: 200 + offset, y: laneY[kind] || 250 };
-    const newNode: Node<DAGNodeData> = {
-      id,
-      type: 'pipelineNode',
-      position: pos,
-      data: { kind, plugin: defaultPlugin, config: {}, label: id },
-    };
-    setNodes((nds) => [...nds, newNode]);
-    setSelectedNodeId(id);
+    // Compute id against the live node list so concurrent adds and loaded
+    // specs never reuse an existing transform/source/sink id.
+    setNodes((nds) => {
+      const id = nextNodeId(kind, nds.map((n) => n.id));
+      const offset = nds.length * 30;
+      // Lane Y positions by category for visual grouping
+      const laneY: Record<string, number> = {
+        source: 50, sink: 500,
+        transform: 200, fanout: 200, router: 200, tap: 200,
+        rate_limiter: 350, enricher: 350, lookup: 350,
+      };
+      // Stack multiple transforms vertically so they don't sit on top of each other.
+      const sameKindCount = nds.filter((n) => n.data.kind === kind).length;
+      const pos = {
+        x: 200 + offset,
+        y: (laneY[kind] || 250) + sameKindCount * 90,
+      };
+      const newNode: Node<DAGNodeData> = {
+        id,
+        type: 'pipelineNode',
+        position: pos,
+        data: { kind, plugin: defaultPlugin, config: {}, label: id },
+      };
+      // Defer selection so it observes the committed id from this updater.
+      queueMicrotask(() => setSelectedNodeId(id));
+      return [...nds, newNode];
+    });
   };
 
   const deleteSelected = useCallback(() => {
@@ -1317,6 +1333,34 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                       />
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">{t('dag.parallelInstances').replace('{n}', String(parallelism))}</p>
+                    {(() => {
+                      const kafkaSources = nodes.filter((n) => n.data.kind === 'source' && n.data.plugin === 'kafka');
+                      if (kafkaSources.length === 0) return null;
+                      const topicName = String(kafkaSources[0]?.data?.config?.topic || '').trim();
+                      const topics = selectedConnectionContext?.introspection?.topics || [];
+                      const match = topicName
+                        ? topics.find((tp) => tp.name === topicName)
+                        : topics[0];
+                      const partitionCount = match?.partitions?.length || 0;
+                      return (
+                        <div className="mt-2 space-y-1 rounded-md border border-border bg-muted/30 p-2">
+                          <p className="text-[11px] text-muted-foreground">{t('dag.kafkaShardHint')}</p>
+                          {partitionCount > 0 && (
+                            <button
+                              type="button"
+                              className="text-[11px] font-medium text-primary hover:underline"
+                              onClick={() => {
+                                setParallelism(partitionCount);
+                                setMaxActiveShards((cur) => Math.min(Math.max(1, cur), partitionCount));
+                                setShardStrategy('partition');
+                              }}
+                            >
+                              {t('dag.kafkaSuggestShards').replace('{n}', String(partitionCount))}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <hr className="border-border" />
                   {/* Batch & Flow Control */}
