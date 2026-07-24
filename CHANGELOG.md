@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **dbt transform (Phase 1)**: `type: dbt` stages a batch, runs `dbt run --select <model>`, and reads the model output. Adapters: `postgres` / `duckdb`. dbt remains an optional host dependency.
+- Schema/descriptor registration, `docs/components/transform-dbt.md`, and skippable `hack/e2e-dbt.sh`.
+
+### Validation
+
+- `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
+- `go test ./internal/etl/server/ -run 'PluginSchema'`
+
 ## [v0.2.11-beta.2] — 2026-07-22 — UI prototype alignment and IA cleanup
 
 ### Highlights

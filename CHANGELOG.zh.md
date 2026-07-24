@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **dbt transform（Phase 1）**：`type: dbt` 将 batch 写入 staging 表 → `dbt run --select <model>` → 读取输出表；支持 `postgres` / `duckdb` adapter。dbt 为可选能力，不引入核心依赖。
+- 配置 schema / connector descriptor 注册 `dbt`；组件文档 `docs/components/transform-dbt.md`；可跳过 E2E `hack/e2e-dbt.sh`。
+
+### 验证
+
+- `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
+- `go test ./internal/etl/server/ -run 'PluginSchema'`
+
 ## [v0.2.11-beta.2] — 2026-07-22 — UI 原型对齐与信息架构收口
 
 ### 亮点

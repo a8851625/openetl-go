@@ -1021,6 +1021,50 @@ transforms:
 
 启用 `state_backend` 后，`window` 会持久化 tumbling window 的聚合缓冲状态，并在启动时恢复；重启前已经累计但尚未输出的记录仍可参与最终聚合。这是 at-least-once pipeline 的恢复辅助能力，不等价于 Kafka offset、window 输出和下游 sink commit 之间的事务。
 
+### `dbt`
+
+可选的 dbt 桥接 transform：将 batch 写入源表 → 运行 dbt 模型 → 读取输出表作为下游记录。Phase 1 仅支持 `postgres` 与 `duckdb` adapter。dbt **不是**核心依赖，运行主机需自行安装 `dbt` CLI 及对应 adapter（`dbt-postgres` / `dbt-duckdb`）。
+
+```yaml
+transforms:
+  - type: dbt
+    config:
+      project_dir: /etc/etl/dbt/my_project
+      model_name: transformed_orders
+      source_schema: etl_staging
+      source_table: orders_raw
+      target_schema: etl_output
+      target_table: transformed_orders
+      adapter: postgres
+      dsn: postgres://user:pass@localhost:5432/etl?sslmode=disable
+      threads: 4
+      target: dev
+      exec_timeout_sec: 600
+      write_mode: replace
+```
+
+| 字段 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `project_dir` | 是 | | dbt 项目目录（需包含 `dbt_project.yml`）。 |
+| `model_name` | 是 | | 传给 `dbt run --select` 的模型名。 |
+| `source_table` | 是 | | 上游记录写入的 staging 表。 |
+| `source_schema` | 否 | | staging schema。 |
+| `target_schema` | 否 | `source_schema` | dbt 输出表 schema。 |
+| `target_table` | 否 | `model_name` | dbt 输出表名。 |
+| `adapter` | 否 | `postgres` | Phase 1 支持 `postgres` / `duckdb`。 |
+| `dsn` | postgres 必填 | | 用于写 staging / 读输出的连接串。 |
+| `path` | duckdb 必填 | | DuckDB 数据库文件路径。 |
+| `threads` | 否 | `4` | dbt `--threads`。 |
+| `target` | 否 | `dev` | dbt target 名。 |
+| `dbt_binary` | 否 | `dbt` | dbt 可执行文件路径。 |
+| `profiles_dir` | 否 | 临时目录 | 已有 profiles 目录；省略时自动生成。 |
+| `exec_timeout_sec` | 否 | `600` | 子进程超时秒数。 |
+| `write_mode` | 否 | `replace` | `replace` 每批清空 staging；`insert` 追加。 |
+| `full_refresh` | 否 | `false` | 是否传 `--full-refresh`。 |
+| `vars` | 否 | | 可选 dbt `--vars`。 |
+
+前置条件：运行时主机安装 `dbt-core` 与对应 adapter。dbt 非零退出码与超时会作为 transform 错误返回，由管道 retry/DLQ 处理。checkpoint 仅在下游成功写出后前进（与其他 batch transform 一致）。
+
 ### `deduplicate`
 
 按复合 key 过滤重复记录。默认只在进程内保存最近 key；如果需要 crash/restart 后仍能去重，可以启用 Redis `StateStore` 后端。
