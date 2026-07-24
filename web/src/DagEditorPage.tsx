@@ -457,21 +457,17 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setSinkConcurrency(Math.max(0, Number(executionSpec.sink_concurrency) || 0));
     setShardStrategy(shardingSpec.strategy || parallelismSpec.shard_strategy || 'round_robin');
     setShardKey(shardingSpec.key || parallelismSpec.shard_key || '');
-    // Use fixed defaults as fallback — do NOT close over current editor state.
-    // Otherwise loadSpecIntoCanvas's identity changes when the user edits
-    // batch_size / flush / checkpoint / buffer, re-triggering the editTarget
-    // load effect and overwriting the in-progress edits with the saved spec.
-    if (spec.execution) {
-      setBatchSize(Number(spec.execution.batch_size) || 1000);
-      setFlushIntervalMs(Number(spec.execution.flush_interval_ms) || 1000);
-      setCheckpointIntervalSec(Number(spec.execution.checkpoint_interval_sec) || 30);
-      setBackpressureBuffer(Number(spec.execution.backpressure_buffer) || 100);
-    } else {
-      setBatchSize(Number(spec.batch_size) || 1000);
-      setFlushIntervalMs(Number(spec.flush_interval_ms) || 1000);
-      setCheckpointIntervalSec(Number(spec.checkpoint_interval_sec) || 30);
-      setBackpressureBuffer(Number(spec.backpressure_buffer) || 100);
-    }
+    // Prefer execution.* (DAG) then top-level (linear). Fixed defaults only.
+    // Do NOT close over current editor state — that recreates this callback and
+    // re-triggers the editTarget load effect, snapping batch_size back.
+    const nextBatch = Number(spec.execution?.batch_size ?? spec.batch_size);
+    const nextFlush = Number(spec.execution?.flush_interval_ms ?? spec.flush_interval_ms);
+    const nextCheckpoint = Number(spec.execution?.checkpoint_interval_sec ?? spec.checkpoint_interval_sec);
+    const nextBuffer = Number(spec.execution?.backpressure_buffer ?? spec.backpressure_buffer);
+    setBatchSize(Number.isFinite(nextBatch) && nextBatch > 0 ? nextBatch : 1000);
+    setFlushIntervalMs(Number.isFinite(nextFlush) && nextFlush > 0 ? nextFlush : 1000);
+    setCheckpointIntervalSec(Number.isFinite(nextCheckpoint) && nextCheckpoint > 0 ? nextCheckpoint : 30);
+    setBackpressureBuffer(Number.isFinite(nextBuffer) && nextBuffer > 0 ? nextBuffer : 100);
 
     if (spec.dag?.nodes) {
       const nextNodes: Node<DAGNodeData>[] = (spec.dag.nodes || []).map((n: any, i: number) => ({
@@ -524,8 +520,9 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setValidateError('');
   }, [setEdges, setNodes]);
 
-  // Load pipeline only when the target pipeline changes — not when local
-  // execution fields (batch_size etc.) are being edited.
+  // Load pipeline only when the target pipeline id changes.
+  // Intentionally omit loadSpecIntoCanvas from deps so local batch_size edits
+  // never re-fetch and overwrite the form.
   useEffect(() => {
     if (!editTarget) return;
     let cancelled = false;
@@ -533,7 +530,8 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       if (!cancelled && res.spec) loadSpecIntoCanvas(res.spec);
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [editTarget, loadSpecIntoCanvas]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editTarget]);
 
   const onConnect = useCallback((params: Connection) => {
     setEdges((eds) => addEdge({
@@ -1394,12 +1392,10 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                         min={1}
                         max={100000}
                         value={batchSize}
+                        data-testid="dag-batch-size"
                         onChange={(e) => {
                           const raw = e.target.value;
-                          if (raw === '') {
-                            setBatchSize(1);
-                            return;
-                          }
+                          if (raw === '') return; // allow clearing while typing
                           const n = parseInt(raw, 10);
                           if (!Number.isNaN(n)) setBatchSize(Math.min(100000, Math.max(1, n)));
                         }}
