@@ -25,7 +25,7 @@
 | `PR-0` | `delivered` | 控制面持久化一致性、spec 加密恢复、production profile、TLS 和 scheduler compensation 已完成 |
 | `P0 MaxCompute` | `blocked_external` | 缺真实 endpoint/project/table/AccessKey 和受控失败注入环境；不能用本地 mock 代替认证 |
 | `PR-1` | `queued` | Secret envelope、migration、backup/restore、retention |
-| `PR-2` | `queued` | path contract、主链路故障认证、边界语义 |
+| `PR-2` | `delivered` | path contract、主链路故障认证、边界语义 |
 | `P3` | `queued` | maturity/readiness/certification 事实源 |
 | `P4` | `queued` | 首次任务向导、状态语义、deep link、故障自助；当前 UI e2e 为 91 passed/17 failed |
 | `P5` | `queued` | 业务健康、运维、CI、资源基线、发布门槛 |

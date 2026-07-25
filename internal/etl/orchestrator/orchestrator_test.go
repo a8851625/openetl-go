@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -182,6 +183,14 @@ func TestMultiSinkDAG(t *testing.T) {
 	}
 	if err := dag.Validate(); err != nil {
 		t.Fatalf("multi-sink dag invalid: %v", err)
+	}
+	// PR-2.3: multi-sink fanout is structurally valid but blocked for production
+	// unless allow_unsafe is set (non-atomic across sinks under at-least-once).
+	if err := dag.ValidateProduction(false); err == nil || !strings.Contains(err.Error(), "cross-sink fanout") {
+		t.Fatalf("ValidateProduction(false) error = %v, want cross-sink fanout rejection", err)
+	}
+	if err := dag.ValidateProduction(true); err != nil {
+		t.Fatalf("ValidateProduction(true) error = %v", err)
 	}
 	if len(dag.Sinks()) != 2 {
 		t.Errorf("sinks = %d, want 2", len(dag.Sinks()))

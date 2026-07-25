@@ -571,9 +571,33 @@ func ValidateSpec(spec *Spec) error {
 	if !spec.AllowUnsafe && cdcSources[spec.Source.Type] && nonIdempotentSinks[spec.Sink.Type] {
 		return fmt.Errorf(
 			"unsafe pipeline %q: CDC source %q with non-idempotent sink %q will silently duplicate data on crash recovery; "+
-				"use an idempotent sink (mysql/postgres/clickhouse/doris with upsert) or a batch source instead",
+				"use an idempotent sink (mysql/postgres/clickhouse/doris with upsert) or a batch source instead, or set allow_unsafe: true after accepting the documented duplicate boundary",
 			spec.Name, spec.Source.Type, spec.Sink.Type,
 		)
+	}
+
+	// PR-2.3: PostgreSQL CDC TRUNCATE is not mapped to target DELETE.
+	// Default on_truncate=error (fail closed). on_truncate=skip requires allow_unsafe.
+	if strings.EqualFold(spec.Source.Type, "postgres_cdc") {
+		onTruncate := "error"
+		if v, ok := spec.Source.Config["on_truncate"]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				onTruncate = strings.ToLower(strings.TrimSpace(s))
+			}
+		}
+		switch onTruncate {
+		case "error":
+		case "skip":
+			if !spec.AllowUnsafe {
+				return fmt.Errorf(
+					"unsafe pipeline %q: postgres_cdc on_truncate=skip leaves residual sink rows after source TRUNCATE; "+
+						"set allow_unsafe: true only after accepting that residual, or keep on_truncate=error (default)",
+					spec.Name,
+				)
+			}
+		default:
+			return fmt.Errorf("invalid pipeline %q: source.config.on_truncate must be error or skip, got %q", spec.Name, onTruncate)
+		}
 	}
 
 	return nil

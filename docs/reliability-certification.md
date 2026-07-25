@@ -2,6 +2,8 @@
 
 This matrix is the evidence source for OpenETL-Go production-candidate recovery boundaries. The default guarantee is at-least-once: a sink acknowledgement happens before the corresponding source checkpoint is persisted. A crash or checkpoint-store failure in between can replay records; it must not silently skip them.
 
+Path-level production contracts (source → transforms → sink write mode + business key + storage/runtime + RPO/RTO) live in [path-contract.md](./path-contract.md) and `GET /api/v2/paths/contracts`. Connector maturity alone does not certify a path.
+
 ## Checkpoint Boundary
 
 Successful stateful checkpoints use the v1 envelope:
@@ -33,17 +35,18 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 
 ## Production-Candidate Matrix
 
-| Path | Happy path | Replay absorption | Failure / DLQ | Restart / crash | Broker / rebalance | Residual boundary |
+| Path / `path_id` | Happy path | Replay absorption | Failure / DLQ | Restart / crash | Broker / rebalance | Residual boundary |
 | --- | --- | --- | --- | --- | --- | --- |
-| Kafka -> file | `hack/e2e-kafka.sh` (`allow_unsafe: true` is explicit in the fixture) | Content-addressed file key keeps object count stable after offset replay | Runner and file sink tests | Wait for source offset + sink commit, SIGKILL, produce while down, restart from checkpoint | Redpanda restart and same-group join/leave | Changed batch boundaries may produce different objects; production specs remain blocked by default without explicit opt-in |
+| **MySQL CDC -> MySQL upsert** `mysql_cdc__mysql_upsert` (PR-2 forced) | `hack/e2e-path-mysql-cdc-mysql.sh`, `hack/e2e-cdc-mysql.sh` | MySQL `batch_mode: upsert` + stable PK | Sink privilege/outage -> DLQ -> replay | SIGKILL + checkpoint resume (`hack/e2e-cdc-crash-recovery.sh`, path matrix) | Not applicable | Source binlog and sink are not a distributed transaction |
+| **MySQL snapshot+CDC -> ClickHouse** `mysql_snap_cdc__ch_rmt` (PR-2 forced) | `hack/e2e-snapshot-cdc-clickhouse.sh` | ReplacingMergeTree absorbs checkpoint reset replay | ClickHouse outage DLQ/replay | Snapshot and CDC crash recovery (`hack/e2e-snapshot-cdc-crash.sh`) | Not applicable | Source binlog and sink are not a distributed transaction; use `FINAL` for exact current state |
+| Kafka -> file `kafka__file_unsafe` | `hack/e2e-kafka.sh` (`allow_unsafe: true` is explicit in the fixture) | Content-addressed file key keeps object count stable after offset replay | Runner and file sink tests | Wait for source offset + sink commit, SIGKILL, produce while down, restart from checkpoint | Redpanda restart and same-group join/leave | Changed batch boundaries may produce different objects; production specs remain blocked by default without explicit opt-in |
 | Kafka raw -> lookup -> Kafka ODS | `hack/e2e-kafka-raw-ods.sh` | Kafka append duplicates are explicitly visible after offset replay | Parser and lookup miss DLQ | Source checkpoint restart coverage inherited from Kafka tests | Covered by ordinary Kafka and Debezium paths | Kafka transactions/exactly-once are not claimed |
-| Debezium Kafka -> MySQL | `hack/e2e-debezium-mysql.sh` | MySQL upsert and stable keys absorb replay | Data/schema DLQ and replay | App restart | Broker restart and consumer-group rebalance | Debezium connector lifecycle remains external |
+| Debezium Kafka -> MySQL `debezium_kafka__mysql` | `hack/e2e-debezium-mysql.sh` | MySQL upsert and stable keys absorb replay | Data/schema DLQ and replay | App restart | Broker restart and consumer-group rebalance | Debezium connector lifecycle remains external |
 | Kafka -> lookup/deduplicate/window -> ClickHouse | `hack/e2e-wide-table.sh` | ReplacingMergeTree/deduplicate absorb replay | Lookup miss and ClickHouse outage DLQ/replay | SIGKILL with Redis state restore | Kafka boundary certified by `hack/e2e-kafka.sh` | Offset/state/sink are bound by an envelope, not atomically committed |
 | Kafka -> lookup -> ClickHouse | `hack/e2e-lookup-state.sh` | ClickHouse business key/version strategy | Dimension query unavailable after restart uses Redis cache | App SIGKILL/restart | Kafka boundary certified separately | Cache TTL expiry follows configured miss/error policy |
-| MySQL snapshot+CDC -> ClickHouse | `hack/e2e-snapshot-cdc-clickhouse.sh`, `hack/e2e-snapshot-cdc-crash.sh` | ReplacingMergeTree absorbs checkpoint reset replay | ClickHouse outage DLQ/replay | Snapshot and CDC crash recovery | Not applicable | Source binlog and sink are not a distributed transaction |
-| MySQL CDC/snapshot+CDC -> Doris | `hack/e2e-doris.sh` | Unique Key/upsert with stable PK | BE outage -> DLQ -> recovery replay | App restart | Not applicable | Mixed write/delete batches remain constrained |
+| MySQL CDC/snapshot+CDC -> Doris `mysql_snap_cdc__doris_uk` | `hack/e2e-doris.sh` | Unique Key/upsert with stable PK | BE outage -> DLQ -> recovery replay | App restart | Not applicable | Mixed write/delete batches remain constrained |
 | MySQL batch -> Elasticsearch | `hack/e2e-elasticsearch.sh` | Stable document ID | Item-level mapping conflict DLQ/replay | Repeatable batch restart | Not applicable | Bulk request is only item-aware, not cross-item atomic |
-| File/batch -> S3 | `hack/e2e-s3-minio.sh` | Deterministic content-addressed object key | MinIO outage -> transient DLQ -> replay | Checkpoint reset | Not applicable | First-class manifests are not implemented |
+| File/batch -> S3 `file_batch__s3_content_key` | `hack/e2e-s3-minio.sh` | Deterministic content-addressed object key | MinIO outage -> transient DLQ -> replay | Checkpoint reset | Not applicable | First-class manifests are not implemented |
 
 ## Required Unit Gates
 
@@ -72,6 +75,20 @@ go test ./internal/etl/... -count=1
 E2E_SKIP_BUILD=1 ./hack/e2e-wide-table.sh
 E2E_SKIP_BUILD=1 ./hack/e2e-lookup-state.sh
 ```
+
+## RPO / RTO (release declaration)
+
+| Metric | Declaration |
+| --- | --- |
+| **RPO** | Last durable checkpoint. If sink ack succeeds but checkpoint persistence fails, the batch replays; it is never silently skipped. |
+| **RTO** | Process restart + source/sink reconnect + at most one `checkpoint_interval_sec` recovery window (standalone). |
+| **Duplicate upper bound** | Uncheckpointed last batches; absorbed by upsert / ReplacingMergeTree / content-addressed keys, or explicitly visible on append sinks. |
+
+## Boundary policies (PR-2.3)
+
+- PostgreSQL CDC `TRUNCATE`: default `on_truncate: error` fails closed; `skip` requires `allow_unsafe: true` and leaves residual sink rows.
+- CDC → file/S3 append: blocked unless `allow_unsafe: true`.
+- DAG multi-sink fanout: blocked unless `allow_unsafe: true` (non-atomic across sinks).
 
 ## Non-Claims
 

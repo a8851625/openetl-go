@@ -10,10 +10,11 @@ Read PostgreSQL logical replication changes through pgoutput for CDC pipelines.
 - `tables`: optional CDC table filter, and required when `enable_snapshot` is true.
 - `enable_snapshot`: run an initial snapshot before CDC.
 - `drop_slot_on_close`: drops the replication slot on close; keep false for restartable production pipelines.
+- `on_truncate`: `error` (default) fails closed when TRUNCATE is observed; `skip` only continues after explicit `allow_unsafe: true` and leaves residual sink rows (PR-2.3).
 - `password`: secret.
 
 ## Record Shape
-Emits insert/update/delete CDC records with PostgreSQL row fields in `data` and operation metadata. TRUNCATE is currently skipped with a warning rather than mapped to target deletes.
+Emits insert/update/delete CDC records with PostgreSQL row fields in `data` and operation metadata. TRUNCATE is **not** mapped to target deletes: default policy is `on_truncate: error` so production paths cannot silently keep stale sink rows.
 
 ## Checkpoint, DLQ, Idempotency
 Checkpoint stores the PostgreSQL LSN after sink commit. Downstream replay must be absorbed by upsert or versioned sinks. Keep `drop_slot_on_close: false` so a restart can resume from the same slot.

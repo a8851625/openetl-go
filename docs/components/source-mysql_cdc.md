@@ -34,4 +34,4 @@ source:
 ```
 
 ## Evidence
-Covered by `hack/e2e-cdc-mysql.sh`, `hack/e2e-cdc-postgres.sh`, `hack/e2e-clickhouse.sh`, and CDC crash recovery scripts.
+Covered by `hack/e2e-path-mysql-cdc-mysql.sh` (PR-2 path matrix: happy/crash/reset/outage/DLQ), `hack/e2e-cdc-mysql.sh`, `hack/e2e-cdc-postgres.sh`, `hack/e2e-clickhouse.sh`, and `hack/e2e-cdc-crash-recovery.sh`. Path contract: `mysql_cdc__mysql_upsert`.

@@ -2,6 +2,8 @@
 
 The runtime provides at-least-once delivery. A checkpoint is committed only after a batch is successfully written to the sink, so a crash can replay the last uncommitted records. Production pipelines must therefore choose a sink mode that can tolerate duplicates or replayed CDC events.
 
+Path-level write mode, business key, evidence scripts, and RPO/RTO declarations are catalogued in [path-contract.md](./path-contract.md) (`GET /api/v2/paths/contracts`).
+
 ## Common Rules
 
 - Every CDC/snapshot+CDC pipeline should preserve a stable primary key in `record.data`.

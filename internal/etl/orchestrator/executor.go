@@ -57,6 +57,7 @@ type ScheduleConfig struct {
 // PipelineSpec is the full DAG-based pipeline definition.
 type PipelineSpec struct {
 	Name           string                   `yaml:"name" json:"name"`
+	AllowUnsafe    bool                     `yaml:"allow_unsafe,omitempty" json:"allow_unsafe,omitempty"`
 	DAG            DAG                      `yaml:"dag" json:"dag"`
 	Schedule       *ScheduleConfig          `yaml:"schedule,omitempty" json:"schedule,omitempty"`
 	Execution      *ExecutionConfig         `yaml:"execution,omitempty" json:"execution,omitempty"`
@@ -111,7 +112,7 @@ type ExecutorStats struct {
 
 // NewDAGExecutor builds all plugins from the spec and returns an executor.
 func NewDAGExecutor(spec *PipelineSpec, cpStore *storage.CheckpointStoreAdapter, dlqW *storage.DLQCompatWriter, am *alert.Manager) (*DAGExecutor, error) {
-	if err := spec.DAG.Validate(); err != nil {
+	if err := spec.DAG.ValidateProduction(spec.AllowUnsafe); err != nil {
 		return nil, fmt.Errorf("validate dag: %w", err)
 	}
 

@@ -36,4 +36,4 @@ source:
 ```
 
 ## Evidence
-Covered by `hack/e2e-snapshot-cdc.sh`, `hack/e2e-snapshot-cdc-clickhouse.sh`, and snapshot+CDC crash tests.
+Covered by `hack/e2e-snapshot-cdc.sh`, `hack/e2e-snapshot-cdc-clickhouse.sh` (PR-2 path matrix: happy/crash/reset/outage/DLQ/schema drift), and `hack/e2e-snapshot-cdc-crash.sh`. Path contract: `mysql_snap_cdc__ch_rmt`.

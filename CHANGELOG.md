@@ -8,18 +8,30 @@
 
 - **dbt transform (Phase 1)**: `type: dbt` stages a batch, runs `dbt run --select <model>`, and reads the model output. Adapters: `postgres` / `duckdb`. dbt remains an optional host dependency.
 - Schema/descriptor registration, `docs/components/transform-dbt.md`, and skippable `hack/e2e-dbt.sh`.
+- **PR-2 path contract**: `docs/path-contract.md` + `GET /api/v2/paths/contracts` for write mode / business key / storage / RPO-RTO traceability.
 
 ### Reliability and security
 
 - Closed the PR-0 control-plane gate: encrypted spec restart/rollback, atomic current/version/checkpoint boundaries, scheduler prepare/commit compensation, production fail-closed profile, CORS/trusted-proxy/security headers, and the two-port TLS topology now have current-version evidence.
 - Kept the UI API token in page memory and added `hack/e2e-ui-token.sh` as a focused browser gate; `.dockerignore` now excludes local Go/race caches, build outputs, and screenshots from production image contexts.
+- **PR-2 main-path failure reconciliation**:
+  - Forced path `mysql_cdc__mysql_upsert` via `hack/e2e-path-mysql-cdc-mysql.sh` (happy / crash / checkpoint reset / sink outage+DLQ replay; silent_loss=0)
+  - Forced path `mysql_snap_cdc__ch_rmt` via `hack/e2e-snapshot-cdc-clickhouse.sh` + crash scripts
+  - Boundaries: PostgreSQL CDC `on_truncate` defaults to `error`; multi-sink fanout and CDC→file/S3 remain blocked unless `allow_unsafe`
+  - Release notes declare at-least-once duplicate bounds and RPO/RTO
 
 ### Validation
 
 - `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
 - `go test ./internal/etl/server/ -run 'PluginSchema'`
+- `go test ./internal/etl/server/ -run PathContract`
+- `go test ./internal/etl/pipeline/ -run 'Unsafe|OnTruncate'`
+- `go test ./internal/etl/orchestrator/ -run MultiSink`
 - `go test ./... -count=1`
 - `go test -race ./internal/etl/orchestrator ./internal/etl/server -count=1`
+- `./hack/e2e-path-contract-smoke.sh`
+- `./hack/e2e-path-mysql-cdc-mysql.sh`
+- `./hack/e2e-snapshot-cdc-clickhouse.sh`
 - `./hack/e2e-spec-encryption-recovery.sh`
 - `./hack/e2e-control-plane-persistence.sh`
 - `CONTAINER_CLI=podman ./hack/e2e-storage-mysql.sh`

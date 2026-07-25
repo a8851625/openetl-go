@@ -1153,6 +1153,7 @@ func (s *Server) RegisterHTTPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/plugins", s.handlePlugins)
 	mux.HandleFunc("/api/v2/plugins/schema", s.handlePluginSchema)
 	mux.HandleFunc("/api/v2/connectors/descriptors", s.handleConnectorDescriptors)
+	mux.HandleFunc("/api/v2/paths/contracts", s.handlePathContracts)
 	mux.HandleFunc("/api/v2/plugins/install", s.handlePluginInstall)
 	mux.HandleFunc("/api/v2/plugins/compile", s.handlePluginCompile)
 	mux.HandleFunc("/api/v2/plugins/dry-run", s.handlePluginDryRun)
@@ -1239,8 +1240,8 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
 			return
 		}
-		// Validate DAG nodes/edges
-		if err := dagSpec.DAG.Validate(); err != nil {
+		// Validate DAG nodes/edges + production multi-sink fanout gate (PR-2.3).
+		if err := dagSpec.DAG.ValidateProduction(dagSpec.AllowUnsafe); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
 			return

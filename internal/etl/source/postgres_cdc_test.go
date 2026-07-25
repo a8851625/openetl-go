@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -408,5 +409,86 @@ func TestPGPositionRoundtrip(t *testing.T) {
 	}
 	if decoded.LSN != "0/16B3748" {
 		t.Errorf("LSN = %q, want 0/16B3748", decoded.LSN)
+	}
+}
+
+func buildTruncateMsg(relIDs []uint32) []byte {
+	var buf []byte
+	buf = append(buf, 0) // flags
+	n := make([]byte, 4)
+	binary.BigEndian.PutUint32(n, uint32(len(relIDs)))
+	buf = append(buf, n...)
+	for _, id := range relIDs {
+		rid := make([]byte, 4)
+		binary.BigEndian.PutUint32(rid, id)
+		buf = append(buf, rid...)
+		buf = append(buf, 0) // option bits
+	}
+	return buf
+}
+
+func TestHandleTruncateMsgDefaultError(t *testing.T) {
+	src := &PostgresCDCSource{onTruncate: "error"}
+	r := &pgCDCReader{
+		source: src,
+		errors: make(chan error, 1),
+		done:   make(chan struct{}),
+		ctx:    context.Background(),
+	}
+	// closeDone uses doneOnce
+	rest := r.handleTruncateMsg(buildTruncateMsg([]uint32{1, 2}))
+	if len(rest) != 0 {
+		t.Fatalf("rest len = %d, want 0", len(rest))
+	}
+	select {
+	case err := <-r.errors:
+		if err == nil || !strings.Contains(err.Error(), "TRUNCATE") {
+			t.Fatalf("error = %v", err)
+		}
+	default:
+		t.Fatal("expected truncate error on channel")
+	}
+	select {
+	case <-r.done:
+	default:
+		t.Fatal("expected reader done closed on truncate error")
+	}
+}
+
+func TestHandleTruncateMsgSkip(t *testing.T) {
+	src := &PostgresCDCSource{onTruncate: "skip"}
+	r := &pgCDCReader{
+		source: src,
+		errors: make(chan error, 1),
+		done:   make(chan struct{}),
+		ctx:    context.Background(),
+	}
+	_ = r.handleTruncateMsg(buildTruncateMsg([]uint32{9}))
+	select {
+	case err := <-r.errors:
+		t.Fatalf("unexpected error: %v", err)
+	default:
+	}
+	select {
+	case <-r.done:
+		t.Fatal("done should not close on skip")
+	default:
+	}
+}
+
+func TestNewPostgresCDCOnTruncateDefault(t *testing.T) {
+	s, err := NewPostgresCDCSource(map[string]any{
+		"host": "localhost", "user": "u", "database": "db",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.onTruncate != "error" {
+		t.Fatalf("onTruncate = %q, want error", s.onTruncate)
+	}
+	if _, err := NewPostgresCDCSource(map[string]any{
+		"host": "localhost", "user": "u", "database": "db", "on_truncate": "drop",
+	}); err == nil {
+		t.Fatal("expected invalid on_truncate error")
 	}
 }

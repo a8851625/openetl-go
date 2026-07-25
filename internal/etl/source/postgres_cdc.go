@@ -39,6 +39,11 @@ type PostgresCDCSource struct {
 	sslmode         string
 	enableSnapshot  bool
 	dropSlotOnClose bool
+	// onTruncate controls TRUNCATE handling (PR-2.3):
+	//   "error" (default) — abort the stream so production paths cannot silently
+	//                       keep stale sink rows after a source TRUNCATE;
+	//   "skip"            — log and continue (requires pipeline allow_unsafe).
+	onTruncate string
 }
 
 func NewPostgresCDCSource(config map[string]any) (*PostgresCDCSource, error) {
@@ -99,6 +104,17 @@ func NewPostgresCDCSource(config map[string]any) (*PostgresCDCSource, error) {
 		if b, ok := v.(bool); ok {
 			s.dropSlotOnClose = b
 		}
+	}
+	s.onTruncate = "error"
+	if v, ok := config["on_truncate"]; ok {
+		if vs, ok := v.(string); ok && strings.TrimSpace(vs) != "" {
+			s.onTruncate = strings.ToLower(strings.TrimSpace(vs))
+		}
+	}
+	switch s.onTruncate {
+	case "error", "skip":
+	default:
+		return nil, fmt.Errorf("postgres_cdc on_truncate must be error or skip, got %q", s.onTruncate)
 	}
 	if s.host == "" || s.user == "" || s.database == "" {
 		return nil, fmt.Errorf("postgres_cdc requires host, user, database")
@@ -500,9 +516,9 @@ func (r *pgCDCReader) handleWALData(ctx context.Context, data []byte, frameLSNSt
 		case 'D':
 			data = r.parseDeleteMsg(data[1:], frameLSNStr)
 		case 'T':
-			// TRUNCATE — not yet mapped to an OpDelete batch. Log and skip
-			// so unrecognised messages don't halt the stream.
-			data = r.skipTruncateMsg(data[1:])
+			// TRUNCATE — not mapped to target DELETE. Default policy is error so
+			// production paths cannot keep stale sink rows without an operator choice.
+			data = r.handleTruncateMsg(data[1:])
 		default:
 			// Unknown pgoutput message type. pgoutput messages do not have a
 			// uniform message-level length prefix, so blindly skipping one byte
@@ -586,9 +602,12 @@ func (r *pgCDCReader) skipLogicalMessageMsg(data []byte) []byte {
 	return data[pos+contentLen:]
 }
 
-// skipTruncateMsg skips a TRUNCATE pgoutput message.
+// handleTruncateMsg processes a TRUNCATE pgoutput message.
 // Format: flags(1) + n_relations(4) + for each: relID(4) + option_bits(1).
-func (r *pgCDCReader) skipTruncateMsg(data []byte) []byte {
+//
+// Default on_truncate=error aborts the reader so operators must either implement
+// target truncate/delete or explicitly accept skip + allow_unsafe.
+func (r *pgCDCReader) handleTruncateMsg(data []byte) []byte {
 	if len(data) < 5 {
 		return data[:0]
 	}
@@ -597,7 +616,23 @@ func (r *pgCDCReader) skipTruncateMsg(data []byte) []byte {
 	if len(data) < skip {
 		return data[:0]
 	}
-	g.Log().Warningf(r.ctx, "postgres_cdc: TRUNCATE on %d table(s) — not yet mapped to target DELETE; rows still exist in sink", nRels)
+	policy := "error"
+	if r.source != nil && r.source.onTruncate != "" {
+		policy = r.source.onTruncate
+	}
+	switch policy {
+	case "skip":
+		g.Log().Warningf(r.ctx, "postgres_cdc: TRUNCATE on %d table(s) skipped (on_truncate=skip); sink rows are NOT deleted", nRels)
+	default:
+		err := fmt.Errorf("postgres_cdc: TRUNCATE on %d table(s) is not mapped to target DELETE; set source.config.on_truncate=skip and allow_unsafe: true only after accepting residual sink rows, or truncate/rebuild the sink table", nRels)
+		g.Log().Errorf(r.ctx, "%v", err)
+		select {
+		case r.errors <- err:
+		default:
+		}
+		// Fail closed: stop the stream loop so the pipeline cannot advance past TRUNCATE.
+		r.closeDone()
+	}
 	return data[skip:]
 }
 

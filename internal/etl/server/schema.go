@@ -165,6 +165,7 @@ func sourceConfigSchemas() map[string][]ConfigField {
 			{Name: "sslmode", Type: FieldString, Required: false, Default: "prefer", Description: "SSL mode (disable/prefer/require/verify-full)"},
 			{Name: "enable_snapshot", Type: FieldBool, Required: false, Default: false, Description: "Perform initial full-table snapshot before CDC"},
 			{Name: "drop_slot_on_close", Type: FieldBool, Required: false, Default: false, Description: "Drop the replication slot when the source closes"},
+			{Name: "on_truncate", Type: FieldString, Required: false, Default: "error", Enum: []string{"error", "skip"}, Description: "TRUNCATE policy: error (default, production-safe) aborts when TRUNCATE is observed; skip requires allow_unsafe and leaves sink rows intact"},
 		},
 		"redis": {
 			{Name: "host", Type: FieldString, Required: false, Default: "localhost", Description: "Redis host"},
