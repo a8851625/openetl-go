@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/a8851625/openetl-go/internal/etl/telemetry"
 )
 
 type Level string
@@ -91,6 +95,9 @@ type Manager struct {
 	// repeats within the suppression window (default 5 minutes).
 	dedup       map[string]time.Time
 	dedupWindow time.Duration
+
+	// dropped counts events discarded when the queue is full (P5 observability).
+	dropped atomic.Int64
 }
 
 func NewManager() *Manager {
@@ -164,8 +171,18 @@ func (m *Manager) Send(ctx context.Context, event Event) {
 	select {
 	case m.queue <- event:
 	default:
-		fmt.Printf("[ALERT] queue full, dropping event: %s\n", event.Title)
+		n := m.dropped.Add(1)
+		telemetry.DefaultRegistry.Counter("alert_dropped_total").Inc()
+		// Structured log context so operators can correlate drops without
+		// depending solely on Prometheus scrape timing.
+		log.Printf("[ALERT] queue full, dropping event title=%q job=%q level=%s dropped_total=%d",
+			event.Title, event.JobName, event.Level, n)
 	}
+}
+
+// Dropped returns how many alerts were discarded because the queue was full.
+func (m *Manager) Dropped() int64 {
+	return m.dropped.Load()
 }
 
 func (m *Manager) SendAll(ctx context.Context, events []Event) {

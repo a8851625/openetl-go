@@ -29,6 +29,15 @@ test-integration:
 .PHONY: test-all
 test-all: test test-integration
 
+# P5 production gate: release assets + profile smoke + health units + storage matrix.
+.PHONY: test-production-gate
+test-production-gate:
+	bash ./hack/e2e-production-gate.sh
+
+.PHONY: check-release-assets
+check-release-assets:
+	bash ./hack/check-release-assets.sh
+
 # Quick test — run unit tests without race detector (faster for dev loops).
 .PHONY: test-quick
 test-quick:

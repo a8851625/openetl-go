@@ -128,10 +128,13 @@ Kafka/MySQL CDC 事实流
 可以从 [Releases](../../releases) 下载压缩包，也可以直接运行容器镜像：
 
 ```bash
+# 生产与准生产请钉死版本 tag 或 digest，不要用 latest。
 docker run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
   -v "$PWD/pipes:/app/pipes" \
-  ghcr.io/a8851625/openetl-go:latest
+  -e ETL_API_TOKEN="$(openssl rand -hex 16)" \
+  ghcr.io/a8851625/openetl-go:v0.2.11-beta.3
 # podman 用户: 把 docker 换成 podman
+# 生产部署请用 docker-compose.yml（必填 secret + 固定 OPENETL_IMAGE）。
 ```
 
 源码构建：

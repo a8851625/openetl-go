@@ -142,7 +142,7 @@ Roadmap 状态只使用以下值：
 | `PR-2` | 数据一致性 | 主推荐链路通过 crash/reset/outage/DLQ replay 对账 | `PR-0`，并复用 `PR-1` storage gate | `delivered` |
 | P3 | 证据治理 | maturity 与当前版本实际认证证据一致 | `PR-2` 定义 path gate | `queued` |
 | P4 | 易上手 | 30 分钟首次任务与 10 分钟故障定位目标可验证 | `PR-0` 安全/profile 约定 | `queued` |
-| P5 | 易维护、可观测 | 业务健康、资源基线、CI 和 production runbook 成为发布门槛 | `PR-1`、`PR-2` | `queued` |
+| P5 | 易维护、可观测 | 业务健康、资源基线、CI 和 production runbook 成为发布门槛 | `PR-1`、`PR-2` | `delivered` |
 | `PR-D1` | distributed 可靠性 | worker 认证、fencing、重试和真实多进程恢复通过 | standalone 收口后，或显式提前 | `queued` |
 
 ### PR-0：控制面持久化一致性与安全默认值
@@ -629,9 +629,9 @@ PR-1.3 本轮证据（Round 3/5 · partial）：
 
 ### P5：轻量运行、可观测性与生产运维收口
 
-状态：`queued`
+状态：`delivered`（2026-07-25）
 
-现有运行模式文档和最小 runbook 已交付；剩余工作聚焦小团队可维护性、业务健康契约、自动化恢复和资源基线。PR-1 负责 storage/secret 的正确性，本项负责把这些能力变成可操作的发布与日常运维流程。
+现有运行模式文档和最小 runbook 已交付；本项把业务健康契约、CI 发布门槛、资源基线与可重复运维 runbook 收口为发布门禁。PR-1 负责 storage/secret 的正确性，本项负责把这些能力变成可操作的发布与日常运维流程。
 
 范围：
 
@@ -690,6 +690,7 @@ PR-1.3 本轮证据（Round 3/5 · partial）：
 | P2 真实 WASM 插件链路 | `hack/e2e-wasm-plugin.sh`、`hack/wasm-compiler.Dockerfile`、`web/plugin-sdk/examples/replay-matrix-transform/`、`TestWASMPluginCertificationFixture` |
 | Feishu source plugin 样板 | `web/plugin-sdk/examples/feishu-sheet-source/` |
 | 运行模式与生产 runbook | [runtime-modes.md](./runtime-modes.md)、`hack/e2e-runtime-smoke.sh` |
+| P5 业务健康 / CI / 发布门槛 | [release-checklist.md](./release-checklist.md)、[ops-runbook.md](./ops-runbook.md)、[resource-baseline.md](./resource-baseline.md)、`hack/e2e-production-gate.sh`、`hack/check-release-assets.sh`、`/api/v2/health` 扩展 |
 | UI 首次任务闭环与 AI context pack | `web/src/main.tsx`、`web/src/DagEditorPage.tsx`、`internal/etl/server/ai_context_test.go`、`hack/e2e-ui.sh` |
 
 ## 跟踪指标

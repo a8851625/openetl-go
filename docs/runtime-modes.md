@@ -233,7 +233,7 @@ Not multi-active HA: losing the process (or the single worker holding the contin
 Compose references:
 
 - `docker-compose.yml` — production standalone (app + MySQL + Redis)
-- `docker-compose.distributed.yml` — master + scalable workers
+- `docker-compose.distributed.yml` — master + scalable workers (**beta / PR-D1 residual**)
 - `docker-compose.quickstart.yml` — demo path
 - `docker-compose.dev.yml` — full local dependency harness
 
@@ -245,6 +245,10 @@ go test ./internal/cmd -count=1
 
 # Runtime smoke (help, invalid role, optional binary/container health)
 bash hack/e2e-runtime-smoke.sh
+
+# P5 production gate (profile + release assets + storage matrix)
+bash hack/e2e-production-gate.sh
+bash hack/check-release-assets.sh
 ```
 
 Acceptance for a release:
@@ -252,6 +256,12 @@ Acceptance for a release:
 1. `--help` exits 0 and documents priority + core flags.
 2. Invalid `--role` fails before server start.
 3. Standalone/master/worker compose examples start and pass health.
+4. Production assets pass `hack/check-release-assets.sh` (no empty token / `change-me` / floating `latest` defaults).
+5. Business health unit tests and `/api/v2/health` component checks are green.
+
+Full ops procedures (upgrade / backup / restore / incidents): [ops-runbook.md](./ops-runbook.md).
+Release sign-off: [release-checklist.md](./release-checklist.md).
+Resource baselines: [resource-baseline.md](./resource-baseline.md).
 
 ## Production runbook (minimum)
 
