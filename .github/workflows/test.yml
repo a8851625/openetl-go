@@ -29,6 +29,49 @@ jobs:
       - name: Run unit tests
         run: go test -race -count=1 ./internal/etl/... ./internal/logic/...
 
+  # P5: production checklist gate — release assets, profile smoke, health unit
+  # coverage, and storage matrix with explicit SKIP (never silent green).
+  production-gate:
+    name: Production Gate (P5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Business health + alert drop unit tests
+        run: go test -race -count=1 ./internal/etl/telemetry/... ./internal/etl/alert/...
+      - name: Release asset scan
+        run: bash ./hack/check-release-assets.sh
+      - name: Production profile smoke
+        run: bash ./hack/e2e-production-profile.sh
+      - name: Runtime smoke
+        run: bash ./hack/e2e-runtime-smoke.sh
+      - name: SQLite backup/retention smoke
+        run: bash ./hack/e2e-backup-restore-sqlite.sh
+
+  storage-mysql:
+    name: Storage MySQL (P5 matrix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: MySQL storage e2e (self-contained container)
+        run: bash ./hack/e2e-storage-mysql.sh
+
+  storage-postgres:
+    name: Storage Postgres (P5 matrix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Postgres storage e2e (self-contained container)
+        run: bash ./hack/e2e-storage-postgres.sh
+
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest

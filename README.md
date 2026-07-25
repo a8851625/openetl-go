@@ -166,10 +166,13 @@ Download a release archive from [Releases](../../releases), or run the container
 image:
 
 ```bash
+# Pin a release tag or digest for anything beyond local experimentation.
 docker run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
   -v "$PWD/pipes:/app/pipes" \
-  ghcr.io/a8851625/openetl-go:latest
+  -e ETL_API_TOKEN="$(openssl rand -hex 16)" \
+  ghcr.io/a8851625/openetl-go:v0.2.11-beta.3
 # podman users: replace `docker` with `podman`
+# Production: use docker-compose.yml with required secrets + pinned OPENETL_IMAGE.
 ```
 
 Build from source:

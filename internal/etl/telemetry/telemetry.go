@@ -83,6 +83,8 @@ type PipelineMetrics struct {
 	Uptime               string     `json:"uptime"`
 	// CircuitBreakerState: 0=closed, 1=open, 2=half_open
 	CircuitBreakerState int `json:"circuit_breaker_state"`
+	// Derived business health (healthy/degraded/failed/…); mirrors UI rules.
+	Health string `json:"health,omitempty"`
 	// Per-sink metrics: sink name → metrics snapshot
 	SinkMetrics []SinkMetric `json:"sink_metrics,omitempty"`
 	// Per-stateful-node metrics: node id → durable state size/freshness.
@@ -134,12 +136,14 @@ func HealthHandler(getStatus func() map[string]string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status := getStatus()
 		w.Header().Set("Content-Type", "application/json")
-		status["timestamp"] = time.Now().Format(time.RFC3339)
+		if status["timestamp"] == "" {
+			status["timestamp"] = time.Now().UTC().Format(time.RFC3339)
+		}
 
-		// If any component is unhealthy, return 503 so load balancers
-		// and kube probes can react appropriately.
+		// Load balancers / compose probes treat non-ok as 503. Degraded still
+		// means the process is up but business health is not fully green.
 		overall := status["status"]
-		if overall != "ok" && overall != "" {
+		if overall != HealthOK && overall != "" {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 		json.NewEncoder(w).Encode(status)
@@ -205,45 +209,74 @@ func PrometheusHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 # TYPE etl_state_updated_timestamp_seconds gauge
 # HELP etl_transform_metric_total Transform-specific counters by pipeline node.
 # TYPE etl_transform_metric_total counter
+# HELP etl_alert_dropped_total Alerts dropped because the internal queue was full.
+# TYPE etl_alert_dropped_total counter
+# HELP etl_pipeline_health Pipeline health (1=healthy, 0=not healthy display state).
+# TYPE etl_pipeline_health gauge
 `))
 		for _, m := range getMetrics() {
-			fmt.Fprintf(w, "etl_records_read_total{pipeline=\"%s\"} %d\n", m.Name, m.RecordsRead)
-			fmt.Fprintf(w, "etl_records_written_total{pipeline=\"%s\"} %d\n", m.Name, m.RecordsWritten)
-			fmt.Fprintf(w, "etl_records_failed_total{pipeline=\"%s\"} %d\n", m.Name, m.RecordsFailed)
-			fmt.Fprintf(w, "etl_records_dlq_total{pipeline=\"%s\"} %d\n", m.Name, m.RecordsDLQ)
-			fmt.Fprintf(w, "etl_dlq_file_count{pipeline=\"%s\"} %d\n", m.Name, m.DLQFileCount)
-			fmt.Fprintf(w, "etl_dlq_replay_total{pipeline=\"%s\"} %d\n", m.Name, m.DLQReplayCount)
-			fmt.Fprintf(w, "etl_dlq_delete_total{pipeline=\"%s\"} %d\n", m.Name, m.DLQDeleteCount)
-			fmt.Fprintf(w, "etl_checkpoint_age_seconds{pipeline=\"%s\"} %d\n", m.Name, m.CheckpointAgeSeconds)
-			fmt.Fprintf(w, "etl_source_read_latency_ms{pipeline=\"%s\"} %.2f\n", m.Name, m.SourceReadLatencyMs)
-			fmt.Fprintf(w, "etl_sink_write_latency_ms{pipeline=\"%s\"} %.2f\n", m.Name, m.SinkWriteLatencyMs)
-			fmt.Fprintf(w, "etl_last_batch_size{pipeline=\"%s\"} %d\n", m.Name, m.LastBatchSize)
-			fmt.Fprintf(w, "etl_avg_batch_size{pipeline=\"%s\"} %d\n", m.Name, m.AvgBatchSize)
-			fmt.Fprintf(w, "etl_batch_count_total{pipeline=\"%s\"} %d\n", m.Name, m.BatchCount)
+			p := EscapePrometheusLabel(m.Name)
+			fmt.Fprintf(w, "etl_records_read_total{pipeline=\"%s\"} %d\n", p, m.RecordsRead)
+			fmt.Fprintf(w, "etl_records_written_total{pipeline=\"%s\"} %d\n", p, m.RecordsWritten)
+			fmt.Fprintf(w, "etl_records_failed_total{pipeline=\"%s\"} %d\n", p, m.RecordsFailed)
+			fmt.Fprintf(w, "etl_records_dlq_total{pipeline=\"%s\"} %d\n", p, m.RecordsDLQ)
+			fmt.Fprintf(w, "etl_dlq_file_count{pipeline=\"%s\"} %d\n", p, m.DLQFileCount)
+			fmt.Fprintf(w, "etl_dlq_replay_total{pipeline=\"%s\"} %d\n", p, m.DLQReplayCount)
+			fmt.Fprintf(w, "etl_dlq_delete_total{pipeline=\"%s\"} %d\n", p, m.DLQDeleteCount)
+			fmt.Fprintf(w, "etl_checkpoint_age_seconds{pipeline=\"%s\"} %d\n", p, m.CheckpointAgeSeconds)
+			fmt.Fprintf(w, "etl_source_read_latency_ms{pipeline=\"%s\"} %.2f\n", p, m.SourceReadLatencyMs)
+			fmt.Fprintf(w, "etl_sink_write_latency_ms{pipeline=\"%s\"} %.2f\n", p, m.SinkWriteLatencyMs)
+			fmt.Fprintf(w, "etl_last_batch_size{pipeline=\"%s\"} %d\n", p, m.LastBatchSize)
+			fmt.Fprintf(w, "etl_avg_batch_size{pipeline=\"%s\"} %d\n", p, m.AvgBatchSize)
+			fmt.Fprintf(w, "etl_batch_count_total{pipeline=\"%s\"} %d\n", p, m.BatchCount)
 			if m.CDCLagMs > 0 {
-				fmt.Fprintf(w, "etl_cdc_lag_ms{pipeline=\"%s\"} %d\n", m.Name, m.CDCLagMs)
+				fmt.Fprintf(w, "etl_cdc_lag_ms{pipeline=\"%s\"} %d\n", p, m.CDCLagMs)
 			}
-			fmt.Fprintf(w, "etl_backpressure_depth{pipeline=\"%s\"} %d\n", m.Name, m.BackpressureDepth)
-			fmt.Fprintf(w, "etl_backpressure_capacity{pipeline=\"%s\"} %d\n", m.Name, m.BackpressureCapacity)
-			fmt.Fprintf(w, "etl_circuit_breaker_state{pipeline=\"%s\"} %d\n", m.Name, m.CircuitBreakerState)
+			fmt.Fprintf(w, "etl_backpressure_depth{pipeline=\"%s\"} %d\n", p, m.BackpressureDepth)
+			fmt.Fprintf(w, "etl_backpressure_capacity{pipeline=\"%s\"} %d\n", p, m.BackpressureCapacity)
+			fmt.Fprintf(w, "etl_circuit_breaker_state{pipeline=\"%s\"} %d\n", p, m.CircuitBreakerState)
+			health := DerivePipelineHealth(PipelineHealthInput{
+				Status:               m.Status,
+				RecordsFailed:        m.RecordsFailed,
+				RecordsDLQ:           m.RecordsDLQ,
+				DLQFileCount:         m.DLQFileCount,
+				LastError:            m.LastError,
+				CheckpointAgeSeconds: m.CheckpointAgeSeconds,
+				CDCLagMs:             m.CDCLagMs,
+				SourceReadLatencyMs:  m.SourceReadLatencyMs,
+				SinkWriteLatencyMs:   m.SinkWriteLatencyMs,
+				CircuitBreakerState:  m.CircuitBreakerState,
+			}, DefaultHealthThresholds())
+			healthyVal := 0
+			if health == PipelineHealthy {
+				healthyVal = 1
+			}
+			fmt.Fprintf(w, "etl_pipeline_health{pipeline=\"%s\",health=\"%s\"} %d\n", p, EscapePrometheusLabel(string(health)), healthyVal)
 			// Per-sink metrics
 			for _, sm := range m.SinkMetrics {
-				fmt.Fprintf(w, "etl_sink_rows_written_total{pipeline=\"%s\",sink=\"%s\"} %d\n", m.Name, sm.SinkName, sm.RowsWritten)
-				fmt.Fprintf(w, "etl_sink_batches_sent_total{pipeline=\"%s\",sink=\"%s\"} %d\n", m.Name, sm.SinkName, sm.BatchesSent)
-				fmt.Fprintf(w, "etl_sink_write_latency_ms_per_sink{pipeline=\"%s\",sink=\"%s\"} %.2f\n", m.Name, sm.SinkName, sm.WriteLatency)
+				sink := EscapePrometheusLabel(sm.SinkName)
+				fmt.Fprintf(w, "etl_sink_rows_written_total{pipeline=\"%s\",sink=\"%s\"} %d\n", p, sink, sm.RowsWritten)
+				fmt.Fprintf(w, "etl_sink_batches_sent_total{pipeline=\"%s\",sink=\"%s\"} %d\n", p, sink, sm.BatchesSent)
+				fmt.Fprintf(w, "etl_sink_write_latency_ms_per_sink{pipeline=\"%s\",sink=\"%s\"} %.2f\n", p, sink, sm.WriteLatency)
 			}
 			for _, sm := range m.StateMetrics {
-				fmt.Fprintf(w, "etl_state_keys{pipeline=\"%s\",node=\"%s\"} %d\n", m.Name, sm.Node, sm.Keys)
-				fmt.Fprintf(w, "etl_state_bytes{pipeline=\"%s\",node=\"%s\"} %d\n", m.Name, sm.Node, sm.Bytes)
+				node := EscapePrometheusLabel(sm.Node)
+				fmt.Fprintf(w, "etl_state_keys{pipeline=\"%s\",node=\"%s\"} %d\n", p, node, sm.Keys)
+				fmt.Fprintf(w, "etl_state_bytes{pipeline=\"%s\",node=\"%s\"} %d\n", p, node, sm.Bytes)
 				if !sm.UpdatedAt.IsZero() {
-					fmt.Fprintf(w, "etl_state_updated_timestamp_seconds{pipeline=\"%s\",node=\"%s\"} %d\n", m.Name, sm.Node, sm.UpdatedAt.Unix())
+					fmt.Fprintf(w, "etl_state_updated_timestamp_seconds{pipeline=\"%s\",node=\"%s\"} %d\n", p, node, sm.UpdatedAt.Unix())
 				}
 			}
 			for _, tm := range m.TransformMetrics {
+				node := EscapePrometheusLabel(tm.Node)
+				tr := EscapePrometheusLabel(tm.Transform)
 				for metric, value := range tm.Counters {
-					fmt.Fprintf(w, "etl_transform_metric_total{pipeline=\"%s\",node=\"%s\",transform=\"%s\",metric=\"%s\"} %d\n", m.Name, tm.Node, tm.Transform, metric, value)
+					fmt.Fprintf(w, "etl_transform_metric_total{pipeline=\"%s\",node=\"%s\",transform=\"%s\",metric=\"%s\"} %d\n",
+						p, node, tr, EscapePrometheusLabel(metric), value)
 				}
 			}
 		}
+		// Global process counters that are not per-pipeline.
+		fmt.Fprintf(w, "etl_alert_dropped_total %d\n", DefaultRegistry.Counter("alert_dropped_total").Value())
 	}
 }

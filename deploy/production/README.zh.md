@@ -107,7 +107,8 @@ UI：`http://<host>:8000`（Header 或登录方式按部署的 token 策略）�
 
 - [ ] `ETL_API_TOKEN` 已设置且足够长  
 - [ ] `ETL_SPEC_ENCRYPTION_KEY` 已设置（spec 落盘加密）  
-- [ ] `OPENETL_IMAGE` 使用固定版本 tag，不用裸 `latest`  
+- [ ] `OPENETL_IMAGE` 使用固定版本 tag 或 digest（compose 无默认值，禁止 `latest`）  
+- [ ] `ETL_SPEC_ENCRYPTION_KEY` 已设置（compose 必填）  
 - [ ] 元数据 MySQL / Redis 密码非默认  
 - [ ] ODS 表主键与 `pk_columns: [id]` 一致  
 - [ ] Kafka JSON 字段与 `project.fields` / 表结构对齐  
@@ -185,7 +186,8 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 2. 共享同一 MySQL 元数据 + Redis state  
 3. **仅线性 pipeline** 走分布式分发；保持两条链路仍为独立线性 spec  
 
-详见 `docs/runtime-modes.md`、`docs/parallelism-and-batching.md`。
+详见 `docs/runtime-modes.md`、`docs/ops-runbook.md`、`docs/parallelism-and-batching.md`。
+分布式 compose 在 PR-D1 完成前仅为 **beta**，不得作为 standalone 生产证据。
 
 ---
 
@@ -210,6 +212,8 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 | 根 `docker-compose.yml` | 通用生产 standalone；本包是 **带业务 pipes + .env 契约** 的专用包 |
 | `manifest/examples/config.production.yaml` | 配置说明同源；本包 `config.yaml` 可直接挂载 |
 | `docs/runtime-modes.md` | 通用 runbook |
+| `docs/ops-runbook.md` | 升级/备份/恢复/故障 | 
+| `docs/release-checklist.md` | 发布门槛 |
 | `docs/reliability-certification.md` | Kafka/MySQL 可靠性证据边界 |
 
 ---

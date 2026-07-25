@@ -1,5 +1,10 @@
 # OpenETL-Go — Distributed (master + workers) Compose v2
 #
+# *** BETA / PR-D1 residual — NOT standalone production evidence ***
+# Master-worker remains production-candidate until PR-D1 (worker TLS/token,
+# fencing, multi-process e2e) is complete. Do not use this file to claim
+# distributed production ready. Prefer docker-compose.yml for standalone GA.
+#
 # 跨进程共享元数据 + 分布式分片调度：
 #   - 1 个 master：负责任务调度、spec 加载、API/UI
 #   - 2 个 worker：执行分片任务；worker 崩溃后分片自动重分配
@@ -26,15 +31,15 @@ services:
       --binlog-format=ROW
       --default-authentication-plugin=mysql_native_password
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-root}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-openetl}
       MYSQL_USER: ${MYSQL_USER:-openetl}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
       TZ: UTC
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysql", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-change-me-root}", "-e", "SELECT 1"]
+      test: ["CMD", "mysql", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}", "-e", "SELECT 1"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -45,13 +50,13 @@ services:
     image: docker.io/library/redis:7-alpine
     container_name: openetl-dist-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-change-me}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}"]
     environment:
       TZ: UTC
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-change-me}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -59,7 +64,8 @@ services:
 
   # ── Master：调度 + API/UI ──────────────────────────────────────────
   master:
-    image: ${OPENETL_IMAGE:-ghcr.io/a8851625/openetl-go:latest}
+    # Beta profile: still require a pinned image — never default to :latest
+    image: ${OPENETL_IMAGE:?set OPENETL_IMAGE to a pinned tag or digest}
     container_name: openetl-master
     restart: unless-stopped
     depends_on:
@@ -71,12 +77,12 @@ services:
       - "8000:8000"   # Web UI + 代理后的 /api/v2/* 与 /metrics
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      ETL_API_TOKEN: ${ETL_API_TOKEN:-}
+      ETL_API_TOKEN: ${ETL_API_TOKEN:?set ETL_API_TOKEN}
       ETL_SPEC_ENCRYPTION_KEY: ${ETL_SPEC_ENCRYPTION_KEY:-}
       ETL_STORAGE_TYPE: mysql
-      ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD:-change-me}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
+      ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
       ETL_STATE_REDIS_ADDR: redis:6379
-      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD:-change-me}
+      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD}
       ETL_AUDIT_ENABLED: "true"
       LOGGER_FORMAT: json
       ETL_DLQ_TTL: ${ETL_DLQ_TTL:-168h}
@@ -100,7 +106,7 @@ services:
   # ── Workers：执行分片任务 ──────────────────────────────────────────
   # 通过 `--scale worker=N` 扩缩容；每个 worker 用 workerSlots 限制并发分片。
   worker:
-    image: ${OPENETL_IMAGE:-ghcr.io/a8851625/openetl-go:latest}
+    image: ${OPENETL_IMAGE:?set OPENETL_IMAGE to a pinned tag or digest}
     restart: unless-stopped
     depends_on:
       mysql:
@@ -111,12 +117,12 @@ services:
         condition: service_healthy
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      ETL_API_TOKEN: ${ETL_API_TOKEN:-}
+      ETL_API_TOKEN: ${ETL_API_TOKEN:?set ETL_API_TOKEN}
       # Worker 共享同一份 MySQL storage 才能接收 master 派发的任务
       ETL_STORAGE_TYPE: mysql
-      ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD:-change-me}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
+      ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
       ETL_STATE_REDIS_ADDR: redis:6379
-      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD:-change-me}
+      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD}
       LOGGER_FORMAT: json
       ETL_ROLE: worker
       ETL_MASTER_URL: http://master:8001

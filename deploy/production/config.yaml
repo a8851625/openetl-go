@@ -38,16 +38,16 @@ etl:
 
   storage:
     # 生产推荐 mysql；单机可临时 sqlite（不支持多实例）
+    # DSN 必须通过 ETL_STORAGE_DSN 注入，禁止在本文件写死密码。
     type: "mysql"
     mysql:
-      # 被 ETL_STORAGE_DSN 覆盖时以环境变量为准
-      dsn: "openetl:change-me@tcp(mysql:3306)/openetl?parseTime=true&loc=UTC"
+      dsn: ""
     # postgresql:
-    #   dsn: "postgres://openetl:change-me@pg:5432/openetl?sslmode=require"
+    #   dsn: ""
 
   state:
     redis:
-      # 被 ETL_STATE_REDIS_* 覆盖
+      # 被 ETL_STATE_REDIS_* 覆盖；密码禁止写死在本文件
       addr: "redis:6379"
       password: ""
       db: 0

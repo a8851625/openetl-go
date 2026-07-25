@@ -4481,10 +4481,24 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 			checkpointAgeSeconds = int64(time.Since(cp.Timestamp).Seconds())
 		}
 		dlqFileCount := s.dlqWriter.Count(ctx, id)
+		cbState := runner.CircuitBreakerState()
+		health := telemetry.DerivePipelineHealth(telemetry.PipelineHealthInput{
+			Status:               string(runner.Status()),
+			RecordsFailed:        stats.RecordsFailed,
+			RecordsDLQ:           stats.RecordsDLQ,
+			DLQFileCount:         dlqFileCount,
+			LastError:            stats.LastError,
+			CheckpointAgeSeconds: checkpointAgeSeconds,
+			CDCLagMs:             pipelineMetrics.CDCLagMs,
+			SourceReadLatencyMs:  pipelineMetrics.SourceReadLatencyMs,
+			SinkWriteLatencyMs:   pipelineMetrics.SinkWriteLatencyMs,
+			CircuitBreakerState:  cbState,
+		}, healthThresholdsFromEnv())
 		metrics = append(metrics, telemetry.PipelineMetrics{
 			ID:                   id,
 			Name:                 names[id],
 			Status:               string(runner.Status()),
+			Health:               string(health),
 			RecordsRead:          stats.RecordsRead,
 			RecordsWritten:       stats.RecordsWritten,
 			RecordsFailed:        stats.RecordsFailed,
@@ -4503,7 +4517,7 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 			CDCLagMs:             pipelineMetrics.CDCLagMs,
 			BackpressureDepth:    pipelineMetrics.BackpressureDepth,
 			BackpressureCapacity: pipelineMetrics.BackpressureCapacity,
-			CircuitBreakerState:  runner.CircuitBreakerState(),
+			CircuitBreakerState:  cbState,
 			SinkMetrics:          convertSinkMetrics(runner.SinkMetrics()),
 			StateMetrics:         convertStateMetrics(runner.StateMetrics()),
 			TransformMetrics:     convertTransformMetrics(runner.TransformMetrics()),
@@ -4559,37 +4573,222 @@ func convertTransformMetrics(coreMetrics []core.TransformMetrics) []telemetry.Tr
 }
 
 func (s *Server) getHealthStatus() map[string]string {
-	status := map[string]string{}
+	th := healthThresholdsFromEnv()
+	components := make([]telemetry.ComponentHealth, 0, 8)
+	pipelineHealth := map[string]telemetry.PipelineHealth{}
+	extra := map[string]string{}
 
-	// Check storage backend connectivity
+	// Storage backend connectivity — hard dependency for control plane.
 	if s.store != nil {
 		if err := s.store.Ping(); err != nil {
-			status["storage"] = "unhealthy: " + err.Error()
-			status["status"] = "unhealthy"
+			components = append(components, telemetry.ComponentHealth{
+				Name: "storage", Status: telemetry.HealthUnhealthy, Level: telemetry.HealthUnhealthy, Detail: err.Error(),
+			})
 		} else {
-			status["storage"] = "ok"
+			components = append(components, telemetry.ComponentHealth{
+				Name: "storage", Status: telemetry.HealthOK, Level: telemetry.HealthOK,
+			})
+		}
+	} else {
+		components = append(components, telemetry.ComponentHealth{
+			Name: "storage", Status: "skipped", Level: telemetry.HealthOK, Detail: "no store configured",
+		})
+	}
+
+	// Redis state backend — only required when configured; missing config is not unhealthy.
+	components = append(components, s.redisStateHealth())
+
+	// Scheduler process presence.
+	if s.scheduler != nil {
+		components = append(components, telemetry.ComponentHealth{
+			Name: "scheduler", Status: telemetry.HealthOK, Level: telemetry.HealthOK,
+		})
+	} else {
+		components = append(components, telemetry.ComponentHealth{
+			Name: "scheduler", Status: "skipped", Level: telemetry.HealthOK, Detail: "not initialized",
+		})
+	}
+
+	// Worker heartbeats (master / distributed). Standalone skips unless workers registered.
+	components = append(components, s.workerHeartbeatHealth(th))
+
+	// Alert queue drops are degraded signal (process still serving).
+	if s.alertManager != nil {
+		if n := s.alertManager.Dropped(); n > 0 {
+			components = append(components, telemetry.ComponentHealth{
+				Name: "alert_queue", Status: telemetry.HealthDegraded, Level: telemetry.HealthDegraded,
+				Detail: fmt.Sprintf("%d alert(s) dropped", n),
+			})
+			extra["alert_dropped_total"] = strconv.FormatInt(n, 10)
+		} else {
+			components = append(components, telemetry.ComponentHealth{
+				Name: "alert_queue", Status: telemetry.HealthOK, Level: telemetry.HealthOK,
+			})
 		}
 	}
 
-	// Check pipeline statuses
-	failedCount := 0
+	// Per-pipeline business health (lag / checkpoint / DLQ / failed).
+	ctx := context.Background()
 	s.mu.RLock()
-	for name, runner := range s.pipelines {
-		ps := string(runner.Status())
-		status[fmt.Sprintf("pipeline_%s", name)] = ps
-		if ps == "failed" {
-			failedCount++
-		}
+	ids := make([]string, 0, len(s.pipelines))
+	runners := make(map[string]pipeline.RunnerInterface, len(s.pipelines))
+	names := make(map[string]string, len(s.pipelines))
+	for id, runner := range s.pipelines {
+		ids = append(ids, id)
+		runners[id] = runner
+		names[id] = s.pipelineNames[id]
 	}
 	s.mu.RUnlock()
+	sort.Strings(ids)
 
-	if failedCount > 0 {
-		status["status"] = fmt.Sprintf("degraded (%d pipeline(s) failed)", failedCount)
-	} else if status["status"] == "" {
-		status["status"] = "ok"
+	for _, id := range ids {
+		runner := runners[id]
+		stats := runner.Stats()
+		pm := runner.MetricsSnapshot()
+		cpAge := int64(0)
+		if s.cpAdapter != nil {
+			if cp, err := s.cpAdapter.Load(ctx, id); err == nil && cp != nil && !cp.Timestamp.IsZero() {
+				cpAge = int64(time.Since(cp.Timestamp).Seconds())
+			}
+		}
+		dlqCount := 0
+		if s.dlqWriter != nil {
+			dlqCount = s.dlqWriter.Count(ctx, id)
+		}
+		display := names[id]
+		if display == "" {
+			display = id
+		}
+		pipelineHealth[display] = telemetry.DerivePipelineHealth(telemetry.PipelineHealthInput{
+			Status:               string(runner.Status()),
+			RecordsFailed:        stats.RecordsFailed,
+			RecordsDLQ:           stats.RecordsDLQ,
+			DLQFileCount:         dlqCount,
+			LastError:            stats.LastError,
+			CheckpointAgeSeconds: cpAge,
+			CDCLagMs:             pm.CDCLagMs,
+			SourceReadLatencyMs:  pm.SourceReadLatencyMs,
+			SinkWriteLatencyMs:   pm.SinkWriteLatencyMs,
+			CircuitBreakerState:  runner.CircuitBreakerState(),
+		}, th)
 	}
 
-	return status
+	if s.distributed {
+		extra["role"] = "master"
+	} else {
+		extra["role"] = "standalone"
+	}
+	extra["checkpoint_stale_threshold_sec"] = strconv.FormatInt(th.StaleCheckpointSec, 10)
+	extra["cdc_lag_threshold_ms"] = strconv.FormatInt(th.HighCDCLagMs, 10)
+
+	overall, reasons := telemetry.AggregateHealth(components, pipelineHealth)
+	return telemetry.FormatHealthMap(overall, reasons, components, pipelineHealth, extra)
+}
+
+func healthThresholdsFromEnv() telemetry.HealthThresholds {
+	th := telemetry.DefaultHealthThresholds()
+	if v := strings.TrimSpace(os.Getenv("ETL_HEALTH_CHECKPOINT_STALE_SEC")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			th.StaleCheckpointSec = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ETL_HEALTH_CDC_LAG_MS")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			th.HighCDCLagMs = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ETL_HEALTH_WORKER_STALE_SEC")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			th.WorkerStaleSec = n
+		}
+	}
+	return th
+}
+
+func (s *Server) redisStateHealth() telemetry.ComponentHealth {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if !state.RedisConfigured(ctx) {
+		return telemetry.ComponentHealth{
+			Name: "redis_state", Status: "skipped", Level: telemetry.HealthOK,
+			Detail: "not configured",
+		}
+	}
+	store, err := state.NewRedisStoreFromConfig(ctx, nil)
+	if err != nil {
+		return telemetry.ComponentHealth{
+			Name: "redis_state", Status: telemetry.HealthUnhealthy, Level: telemetry.HealthUnhealthy,
+			Detail: err.Error(),
+		}
+	}
+	_ = store.Close()
+	return telemetry.ComponentHealth{
+		Name: "redis_state", Status: telemetry.HealthOK, Level: telemetry.HealthOK,
+	}
+}
+
+func (s *Server) workerHeartbeatHealth(th telemetry.HealthThresholds) telemetry.ComponentHealth {
+	if s.store == nil {
+		return telemetry.ComponentHealth{
+			Name: "workers", Status: "skipped", Level: telemetry.HealthOK, Detail: "no store",
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	workers, err := s.store.ListWorkers(ctx)
+	if err != nil {
+		// Listing workers failing only degrades distributed; storage ping already covers hard outage.
+		level := telemetry.HealthDegraded
+		if s.distributed {
+			level = telemetry.HealthUnhealthy
+		}
+		return telemetry.ComponentHealth{
+			Name: "workers", Status: level, Level: level, Detail: err.Error(),
+		}
+	}
+	if len(workers) == 0 {
+		if s.distributed {
+			return telemetry.ComponentHealth{
+				Name: "workers", Status: telemetry.HealthDegraded, Level: telemetry.HealthDegraded,
+				Detail: "no online workers registered",
+			}
+		}
+		return telemetry.ComponentHealth{
+			Name: "workers", Status: "skipped", Level: telemetry.HealthOK, Detail: "standalone / no workers",
+		}
+	}
+	staleSec := th.WorkerStaleSec
+	if staleSec <= 0 {
+		staleSec = telemetry.DefaultWorkerStaleSec
+	}
+	var online, stale int
+	for _, w := range workers {
+		if strings.EqualFold(w.Status, "offline") {
+			stale++
+			continue
+		}
+		if time.Since(w.LastHeartbeat) > time.Duration(staleSec)*time.Second {
+			stale++
+			continue
+		}
+		online++
+	}
+	if online == 0 && s.distributed {
+		return telemetry.ComponentHealth{
+			Name: "workers", Status: telemetry.HealthUnhealthy, Level: telemetry.HealthUnhealthy,
+			Detail: fmt.Sprintf("0 online / %d stale or offline", stale),
+		}
+	}
+	if stale > 0 {
+		return telemetry.ComponentHealth{
+			Name: "workers", Status: telemetry.HealthDegraded, Level: telemetry.HealthDegraded,
+			Detail: fmt.Sprintf("%d online, %d stale/offline", online, stale),
+		}
+	}
+	return telemetry.ComponentHealth{
+		Name: "workers", Status: telemetry.HealthOK, Level: telemetry.HealthOK,
+		Detail: fmt.Sprintf("%d online", online),
+	}
 }
 
 func (s *Server) StartHTTP(addr string) error {

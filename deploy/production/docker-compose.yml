@@ -85,7 +85,8 @@ services:
       - openetl
 
   openetl-go:
-    image: ${OPENETL_IMAGE:-ghcr.io/a8851625/openetl-go:v0.2.10-beta.1}
+    # 生产必须钉死版本或 digest，禁止 latest；无默认值以免静默漂移
+    image: ${OPENETL_IMAGE:?set OPENETL_IMAGE to a pinned tag or digest}
     container_name: openetl-prod
     restart: unless-stopped
     depends_on:
@@ -99,7 +100,7 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
 
       ETL_API_TOKEN: ${ETL_API_TOKEN:?set ETL_API_TOKEN in .env}
-      ETL_SPEC_ENCRYPTION_KEY: ${ETL_SPEC_ENCRYPTION_KEY:-}
+      ETL_SPEC_ENCRYPTION_KEY: ${ETL_SPEC_ENCRYPTION_KEY:?set ETL_SPEC_ENCRYPTION_KEY in .env}
 
       ETL_STORAGE_TYPE: mysql
       ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
@@ -148,6 +149,7 @@ services:
       - ./config.yaml:/app/manifest/config/config.yaml:ro
       # - ./certs:/app/certs:ro
     healthcheck:
+      # 未挂载 TLS 时用 HTTP；启用 ETL_TLS_* 后改为 https + --no-check-certificate
       test: ["CMD", "wget", "-qO-", "http://localhost:8000/api/v2/health"]
       interval: 30s
       timeout: 5s
