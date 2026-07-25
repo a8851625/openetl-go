@@ -45,6 +45,23 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
+// BackendName reports the logical storage backend for backup manifests.
+func (s *Store) BackendName() string {
+	if s == nil || s.dialect == nil {
+		return "unknown"
+	}
+	switch s.dialect.(type) {
+	case MySQLDialect:
+		return "mysql"
+	case PostgresDialect:
+		return "postgres"
+	case SQLiteDialect:
+		return "sqlite"
+	default:
+		return "sql"
+	}
+}
+
 // SetFailureInjector installs a test/diagnostic hook for persistence
 // operations. It is intentionally small and nil-safe; production callers do
 // not set it. The hook lets recovery tests prove that a mid-transaction error

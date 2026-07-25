@@ -257,6 +257,18 @@ Acceptance for a release:
 
 ### Backup / restore (SQLite)
 
+Logical export (PR-1.3):
+
+```go
+// storage.BackupSQLStore(ctx, store, "./backup", []string{/* known plaintext to ban */})
+// writes openetl-backup-<ts>/{manifest.json,*.jsonl}
+// SecretScan.OK must be true before shipping a dump off-box.
+```
+
+Retention janitor helper: `storage.ApplyRetention` for aged `run_history` / `audit_logs` / `dead_letters`.
+
+### Backup / restore (SQLite) — file copy
+
 ```sh
 # Backup metadata DB while app is stopped or using a consistent copy
 cp ./data/etl.db ./backup/etl.db.$(date +%Y%m%d)
