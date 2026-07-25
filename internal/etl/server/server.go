@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,27 +39,30 @@ import (
 )
 
 type Server struct {
-	ctx              context.Context
-	store            storage.Storage
-	pipelines        map[string]pipeline.RunnerInterface
-	specs            map[string]*pipeline.Spec
-	dagSpecs         map[string]*orchestrator.PipelineSpec
-	pipelineNames    map[string]string
-	pipelineNameRefs map[string]map[string]struct{}
-	cpAdapter        *storage.CheckpointStoreAdapter
-	dlqWriter        *storage.DLQCompatWriter
-	auditAdapter     *storage.AuditWriterAdapter
-	specStore        *EncryptedSpecStore
-	alertManager     *alert.Manager
-	httpServer       *http.Server
-	mu               sync.RWMutex
-	specsDir         string
-	apiToken         string
-	auditEnabled     bool
-	masterNode       *master.Master
-	standaloneWorker *worker.StandaloneWorker
-	pluginMgr        *pluginsystem.Manager
-	restartAttempts  map[string]int
+	ctx               context.Context
+	store             storage.Storage
+	pipelines         map[string]pipeline.RunnerInterface
+	specs             map[string]*pipeline.Spec
+	dagSpecs          map[string]*orchestrator.PipelineSpec
+	pipelineNames     map[string]string
+	pipelineNameRefs  map[string]map[string]struct{}
+	cpAdapter         *storage.CheckpointStoreAdapter
+	dlqWriter         *storage.DLQCompatWriter
+	auditAdapter      *storage.AuditWriterAdapter
+	specStore         *storage.PipelineSpecStore
+	alertManager      *alert.Manager
+	httpServer        *http.Server
+	mu                sync.RWMutex
+	specsDir          string
+	apiToken          string
+	runtimeProfile    RuntimeProfileConfig
+	corsOrigins       []string
+	trustedProxyCIDRs []*net.IPNet
+	auditEnabled      bool
+	masterNode        *master.Master
+	standaloneWorker  *worker.StandaloneWorker
+	pluginMgr         *pluginsystem.Manager
+	restartAttempts   map[string]int
 	// scheduler drives cron/periodic/dependency triggers for pipelines whose
 	// spec.Schedule is set. Pipelines without a Schedule are started immediately
 	// (streaming/once) by StartAll. Wired in NewServer; started in StartAll.
@@ -126,6 +130,27 @@ func isDAGSpecYAML(yamlBytes []byte) bool {
 		}
 	}
 	return false
+}
+
+func applyDAGImportDefaults(spec *orchestrator.PipelineSpec) {
+	if spec == nil {
+		return
+	}
+	if spec.Execution == nil {
+		spec.Execution = &orchestrator.ExecutionConfig{}
+	}
+	if spec.Execution.BatchSize == 0 {
+		spec.Execution.BatchSize = 1000
+	}
+	if spec.Execution.BackpressureBuf == 0 {
+		spec.Execution.BackpressureBuf = 100
+	}
+	if spec.Execution.CheckpointEveryS == 0 {
+		spec.Execution.CheckpointEveryS = 30
+	}
+	if spec.Retry == nil {
+		spec.Retry = &orchestrator.RetryConfig{MaxAttempts: 3, InitialIntervalMs: 1000, MaxIntervalMs: 30000}
+	}
 }
 
 func (s *Server) registerPipelineLocked(id, name string, runner pipeline.RunnerInterface, spec *pipeline.Spec, dagSpec *orchestrator.PipelineSpec) {
@@ -241,27 +266,50 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 	ctx := context.Background()
 	am := alert.NewManager()
 	am.Register(&alert.LogChannel{})
+	profile, err := ValidateRuntimeProfile(ctx, configString(ctx, "ETL_ROLE", "etl.role", "standalone"))
+	if err != nil {
+		return nil, err
+	}
+	corsOrigins, err := parseCORSOrigins(configString(ctx, "ETL_CORS_ORIGINS", "etl.cors.origins", ""), profile.Name == RuntimeProfileProduction)
+	if err != nil {
+		return nil, err
+	}
+	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(configString(ctx, "ETL_TRUSTED_PROXY_CIDRS", "etl.trustedProxyCIDRs", ""))
+	if err != nil {
+		return nil, err
+	}
+	store, err = wrapSecretFieldStore(store)
+	if err != nil {
+		return nil, err
+	}
+	specStore, err := newEncryptedSpecStore(store)
+	if err != nil {
+		return nil, err
+	}
 
 	if specsDir == "" {
 		specsDir = "./pipes"
 	}
 
 	s := &Server{
-		store:            store,
-		pipelines:        make(map[string]pipeline.RunnerInterface),
-		specs:            make(map[string]*pipeline.Spec),
-		dagSpecs:         make(map[string]*orchestrator.PipelineSpec),
-		pipelineNames:    make(map[string]string),
-		pipelineNameRefs: make(map[string]map[string]struct{}),
-		cpAdapter:        storage.NewCheckpointStoreAdapter(store),
-		dlqWriter:        storage.NewDLQCompatWriter(store),
-		auditAdapter:     storage.NewAuditWriterAdapter(store),
-		specStore:        NewEncryptedSpecStore(storage.NewPipelineSpecStore(store)),
-		alertManager:     am,
-		specsDir:         specsDir,
-		apiToken:         configString(ctx, "ETL_API_TOKEN", "etl.apiToken", ""),
-		auditEnabled:     configBool(ctx, "ETL_AUDIT_ENABLED", "etl.audit.enabled", true),
-		restartAttempts:  make(map[string]int),
+		store:             store,
+		pipelines:         make(map[string]pipeline.RunnerInterface),
+		specs:             make(map[string]*pipeline.Spec),
+		dagSpecs:          make(map[string]*orchestrator.PipelineSpec),
+		pipelineNames:     make(map[string]string),
+		pipelineNameRefs:  make(map[string]map[string]struct{}),
+		cpAdapter:         storage.NewCheckpointStoreAdapter(store),
+		dlqWriter:         storage.NewDLQCompatWriter(store),
+		auditAdapter:      storage.NewAuditWriterAdapter(store),
+		specStore:         specStore,
+		alertManager:      am,
+		specsDir:          specsDir,
+		apiToken:          profile.APIToken,
+		runtimeProfile:    profile,
+		corsOrigins:       corsOrigins,
+		trustedProxyCIDRs: trustedProxyCIDRs,
+		auditEnabled:      configBool(ctx, "ETL_AUDIT_ENABLED", "etl.audit.enabled", true),
+		restartAttempts:   make(map[string]int),
 	}
 
 	// Initialize master node and standalone worker (single-process mode)
@@ -421,6 +469,9 @@ func (s *Server) LoadSpecs() error {
 // RestoreFromDB loads pipelines from the storage database, making DB the primary source of truth.
 // YAML files are only used for import/export; on restart pipelines are restored from DB.
 func (s *Server) RestoreFromDB(ctx context.Context) error {
+	if err := s.specStore.ValidateReadable(ctx); err != nil {
+		return fmt.Errorf("validate encrypted pipeline specs: %w", err)
+	}
 	rows, err := s.specStore.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list pipelines from db: %w", err)
@@ -431,7 +482,9 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 		}
 		if row.ID == "" {
 			storage.EnsurePipelineID(row)
-			_ = s.store.SavePipeline(ctx, row)
+			if err := s.specStore.SaveCurrentWithID(ctx, row.ID, row.Name, row.SpecYAML, row.Status); err != nil {
+				return fmt.Errorf("persist generated ID for pipeline %s: %w", row.Name, err)
+			}
 		}
 
 		yamlBytes := []byte(row.SpecYAML)
@@ -592,8 +645,11 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 			}
 			runner := orchestrator.NewDAGRunnerWrapper(exec)
 
-			// Persist spec to storage (best-effort)
-			_ = s.specStore.SaveWithID(ctx, id, displayName, string(yamlBytes), "loaded")
+			if err := s.specStore.SaveWithID(ctx, id, displayName, string(yamlBytes), "loaded"); err != nil {
+				result.Errors[entry.Name()] = fmt.Sprintf("persist pipeline: %v", err)
+				g.Log().Warningf(ctx, "Skip pipeline %s: persist spec: %v", displayName, err)
+				continue
+			}
 
 			s.mu.Lock()
 			s.registerPipelineLocked(id, displayName, runner, nil, &dagSpec)
@@ -650,9 +706,15 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 			s.dispatchIfParallel(ctx, runner, runtime)
 		}
 
-		// Persist spec to storage (best-effort)
-		if yamlBytes, mErr := pipeline.MarshalSpecYAML(spec); mErr == nil {
-			_ = s.specStore.SaveWithID(ctx, id, spec.Name, string(yamlBytes), "loaded")
+		yamlBytes, mErr := pipeline.MarshalSpecYAML(spec)
+		if mErr != nil {
+			result.Errors[entry.Name()] = fmt.Sprintf("marshal pipeline: %v", mErr)
+			continue
+		}
+		if err := s.specStore.SaveWithID(ctx, id, spec.Name, string(yamlBytes), "loaded"); err != nil {
+			result.Errors[entry.Name()] = fmt.Sprintf("persist pipeline: %v", err)
+			g.Log().Warningf(ctx, "Skip pipeline %s: persist spec: %v", spec.Name, err)
+			continue
 		}
 
 		s.mu.Lock()
@@ -755,7 +817,14 @@ func (s *Server) scheduleOf(id string) any {
 }
 
 func (s *Server) schedulerScheduleFor(id string) *orchestrator.ScheduleConfig {
-	sched := orchestratorSchedule(s.scheduleOf(id))
+	return s.resolveScheduleDependencies(orchestratorSchedule(s.scheduleOf(id)))
+}
+
+// resolveScheduleDependencies copies a schedule before resolving dependency
+// names to stable pipeline IDs. Runtime activation can happen before the new
+// spec is visible in s.specs/s.dagSpecs, so callers must pass the candidate
+// schedule explicitly rather than looking it up from the in-memory registry.
+func (s *Server) resolveScheduleDependencies(sched *orchestrator.ScheduleConfig) *orchestrator.ScheduleConfig {
 	if sched == nil {
 		return nil
 	}
@@ -804,21 +873,51 @@ func isDeferredSchedule(sched *orchestrator.ScheduleConfig) bool {
 	return sched != nil && sched.Type != "" && sched.Type != orchestrator.ScheduleStreaming && sched.Type != orchestrator.ScheduleOnce
 }
 
-func (s *Server) registerRuntimeSchedule(ctx context.Context, id string, runner pipeline.RunnerInterface) error {
-	if s.scheduler == nil || runner == nil || s.ctx == nil {
-		return nil
+type runtimeScheduleActivation struct {
+	oldRunner   pipeline.RunnerInterface
+	replacement *orchestrator.ExecutorReplacement
+}
+
+// stageRuntimeSchedule validates and prepares a scheduler swap without
+// changing the live registration. It is used before a current/version
+// transaction commits, so an invalid or injected scheduler failure cannot
+// leave a durable spec behind or activate the candidate runner early.
+func (s *Server) stageRuntimeSchedule(id string, runner pipeline.RunnerInterface, sched *orchestrator.ScheduleConfig) (*runtimeScheduleActivation, error) {
+	activation := &runtimeScheduleActivation{}
+	effectiveSchedule := s.resolveScheduleDependencies(sched)
+	if err := orchestrator.ValidateScheduleConfig(id, effectiveSchedule); err != nil {
+		return nil, err
 	}
-	sched := s.schedulerScheduleFor(id)
-	if !isDeferredSchedule(sched) {
-		return nil
+	if s.scheduler == nil || s.ctx == nil {
+		return activation, nil
 	}
-	s.scheduler.Unregister(id)
-	if err := s.scheduler.RegisterExecutor(id, runner, sched); err != nil {
-		_ = s.store.UpdatePipelineStatus(ctx, id, "failed")
-		return err
+	replacement, err := s.scheduler.PrepareExecutor(id, runner, effectiveSchedule)
+	if err != nil {
+		return nil, err
 	}
-	_ = s.store.UpdatePipelineStatus(ctx, id, "scheduled")
-	return nil
+	activation.replacement = replacement
+	return activation, nil
+}
+
+func (s *Server) rollbackRuntimeSchedule(activation *runtimeScheduleActivation, candidate pipeline.RunnerInterface) {
+	if activation == nil {
+		return
+	}
+	if activation.replacement != nil {
+		activation.replacement.Rollback()
+	}
+	if candidate != nil && candidate != activation.oldRunner {
+		_ = candidate.Stop()
+	}
+}
+
+func (s *Server) commitRuntimeScheduleStatus(ctx context.Context, id string, sched *orchestrator.ScheduleConfig, activation *runtimeScheduleActivation) {
+	if activation != nil && activation.replacement != nil {
+		activation.oldRunner = activation.replacement.Commit()
+	}
+	if isDeferredSchedule(sched) {
+		_ = s.store.UpdatePipelineStatus(ctx, id, "scheduled")
+	}
 }
 
 // dlqJanitorLoop periodically purges DLQ entries older than the configured TTL.
@@ -1583,20 +1682,32 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			runner := orchestrator.NewDAGRunnerWrapper(exec)
+			schedule := orchestratorSchedule(dagSpec.Schedule)
+			activation, err := s.stageRuntimeSchedule(id, runner, schedule)
+			if err != nil {
+				_ = runner.Stop()
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("activate DAG schedule: %v", err)})
+				return
+			}
+			yamlBytes, err := yaml.Marshal(&dagSpec)
+			if err != nil {
+				s.rollbackRuntimeSchedule(activation, runner)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("marshal DAG spec: %v", err)})
+				return
+			}
+			if err := s.specStore.SaveWithID(r.Context(), id, dagSpec.Name, string(yamlBytes), "created"); err != nil {
+				s.rollbackRuntimeSchedule(activation, runner)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist DAG pipeline: %v", err)})
+				return
+			}
 
 			s.mu.Lock()
 			s.registerPipelineLocked(id, dagSpec.Name, runner, nil, &dagSpec)
 			s.mu.Unlock()
-			if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-				return
-			}
-
-			// Persist DAG spec to storage
-			if yamlBytes, mErr := yaml.Marshal(&dagSpec); mErr == nil {
-				_ = s.specStore.SaveWithID(r.Context(), id, dagSpec.Name, string(yamlBytes), "created")
-			}
+			s.commitRuntimeScheduleStatus(r.Context(), id, schedule, activation)
 			s.audit(r, "pipeline.create", id)
 
 			json.NewEncoder(w).Encode(map[string]any{
@@ -1649,27 +1760,41 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 
 		runner, err := s.newRunner(runtime)
 		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		schedule := orchestratorSchedule(spec.Schedule)
+		activation, err := s.stageRuntimeSchedule(id, runner, schedule)
+		if err != nil {
+			_ = runner.Stop()
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("activate pipeline schedule: %v", err)})
+			return
+		}
+		yamlBytes, err := pipeline.MarshalSpecYAML(&spec)
+		if err != nil {
+			s.rollbackRuntimeSchedule(activation, runner)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("marshal pipeline spec: %v", err)})
+			return
+		}
+		if err := s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "created"); err != nil {
+			s.rollbackRuntimeSchedule(activation, runner)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist pipeline: %v", err)})
 			return
 		}
 
 		s.mu.Lock()
 		s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
 		s.mu.Unlock()
-		if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-			return
-		}
+		s.commitRuntimeScheduleStatus(r.Context(), id, schedule, activation)
 
 		if !isDeferredSchedule(orchestratorSchedule(spec.Schedule)) {
 			s.dispatchIfParallel(r.Context(), runner, runtime)
 		}
 
-		// Persist spec to storage
-		if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
-			_ = s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "created")
-		}
 		s.audit(r, "pipeline.create", id)
 
 		json.NewEncoder(w).Encode(map[string]any{
@@ -1765,40 +1890,45 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 			updateWarnings := tapUnimplementedConfigWarningsForDAG(&dagSpec)
 			runtime := runtimeDAGSpec(&dagSpec, id)
-
-			// Stop old runner if exists
-			if s.scheduler != nil {
-				s.scheduler.Unregister(id)
-			}
-			s.mu.Lock()
-			if oldRunner, ok := s.pipelines[id]; ok {
-				oldRunner.Stop()
-			}
-			s.mu.Unlock()
-
-			if req.ResetCheckpoint {
-				s.cpAdapter.Delete(r.Context(), id)
-			}
-
 			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-				return
-			}
-			runner := orchestrator.NewDAGRunnerWrapper(exec)
-
-			s.mu.Lock()
-			s.registerPipelineLocked(id, dagSpec.Name, runner, nil, &dagSpec)
-			s.mu.Unlock()
-			if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-
-			if yamlBytes, mErr := yaml.Marshal(&dagSpec); mErr == nil {
-				_ = s.specStore.SaveWithID(r.Context(), id, dagSpec.Name, string(yamlBytes), "updated")
+			runner := orchestrator.NewDAGRunnerWrapper(exec)
+			s.mu.RLock()
+			oldRunner := s.pipelines[id]
+			s.mu.RUnlock()
+			schedule := orchestratorSchedule(dagSpec.Schedule)
+			yamlBytes, err := yaml.Marshal(&dagSpec)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("marshal DAG spec: %v", err)})
+				return
 			}
+			activation, err := s.stageRuntimeSchedule(id, runner, schedule)
+			if err != nil {
+				_ = runner.Stop()
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("activate DAG schedule: %v", err)})
+				return
+			}
+			if err := s.specStore.SaveWithIDAndCheckpointReset(r.Context(), id, dagSpec.Name, string(yamlBytes), "updated", req.ResetCheckpoint); err != nil {
+				s.rollbackRuntimeSchedule(activation, runner)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist DAG pipeline update: %v", err)})
+				return
+			}
+
+			s.mu.Lock()
+			s.registerPipelineLocked(id, dagSpec.Name, runner, nil, &dagSpec)
+			s.mu.Unlock()
+			s.commitRuntimeScheduleStatus(r.Context(), id, schedule, activation)
+			if oldRunner != nil {
+				_ = oldRunner.Stop()
+			}
+
 			s.audit(r, "pipeline.update", id)
 
 			json.NewEncoder(w).Encode(map[string]any{
@@ -1885,45 +2015,50 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Stop old runner/schedule if exists
-		if s.scheduler != nil {
-			s.scheduler.Unregister(id)
-		}
-		s.mu.Lock()
-		if oldRunner, ok := s.pipelines[id]; ok {
-			oldRunner.Stop()
-		}
-		s.mu.Unlock()
-
-		// Optionally reset checkpoint
-		if req.ResetCheckpoint {
-			s.cpAdapter.Delete(r.Context(), id)
-		}
-
-		// Create new runner
+		// Prepare the new runner before committing persistence; it is not made
+		// visible until current/version/checkpoint changes succeed atomically.
 		runner, err := s.newRunner(runtime)
 		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		s.mu.RLock()
+		oldRunner := s.pipelines[id]
+		s.mu.RUnlock()
+		schedule := orchestratorSchedule(spec.Schedule)
+		yamlBytes, err := pipeline.MarshalSpecYAML(&spec)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("marshal pipeline spec: %v", err)})
+			return
+		}
+		activation, err := s.stageRuntimeSchedule(id, runner, schedule)
+		if err != nil {
+			_ = runner.Stop()
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("activate pipeline schedule: %v", err)})
+			return
+		}
+		if err := s.specStore.SaveWithIDAndCheckpointReset(r.Context(), id, spec.Name, string(yamlBytes), "updated", req.ResetCheckpoint); err != nil {
+			s.rollbackRuntimeSchedule(activation, runner)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist pipeline update: %v", err)})
 			return
 		}
 
 		s.mu.Lock()
 		s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
 		s.mu.Unlock()
-		if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-			return
+		s.commitRuntimeScheduleStatus(r.Context(), id, schedule, activation)
+		if oldRunner != nil {
+			_ = oldRunner.Stop()
 		}
 
 		if !isDeferredSchedule(orchestratorSchedule(spec.Schedule)) {
 			s.dispatchIfParallel(r.Context(), runner, runtime)
 		}
 
-		// Save spec version
-		if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
-			_ = s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "updated")
-		}
 		s.audit(r, "pipeline.update", id)
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":                 id,
@@ -2004,70 +2139,109 @@ func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 
-		s.mu.Lock()
+		s.mu.RLock()
 		spec := s.specs[name]
 		dagSpec := s.dagSpecs[name]
 		runner := s.pipelines[name]
 		if spec == nil && dagSpec == nil {
-			s.mu.Unlock()
+			s.mu.RUnlock()
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]any{"error": "pipeline not found"})
 			return
 		}
+		var nextSpec *pipeline.Spec
+		var nextDAG *orchestrator.PipelineSpec
 		if dagSpec != nil {
-			dagSpec.Schedule = &orchestrator.ScheduleConfig{
+			copyDAG := *dagSpec
+			copyDAG.Schedule = &orchestrator.ScheduleConfig{
 				Type:      orchestrator.ScheduleType(req.Type),
 				Cron:      req.Cron,
 				IntervalS: req.IntervalSec,
 				DependsOn: req.DependsOn,
 			}
+			nextDAG = &copyDAG
 		} else {
-			spec.Schedule = &pipeline.ScheduleConfig{Type: req.Type, Cron: req.Cron, IntervalSec: req.IntervalSec, DependsOn: req.DependsOn}
+			copySpec := *spec
+			copySpec.Schedule = &pipeline.ScheduleConfig{Type: req.Type, Cron: req.Cron, IntervalSec: req.IntervalSec, DependsOn: req.DependsOn}
+			nextSpec = &copySpec
 		}
-		s.mu.Unlock()
+		s.mu.RUnlock()
 
-		if err := s.persistPipelineSchedule(r.Context(), name, "schedule_updated"); err != nil {
+		var nextSchedule *orchestrator.ScheduleConfig
+		if nextDAG != nil {
+			nextSchedule = orchestratorSchedule(nextDAG.Schedule)
+		} else {
+			nextSchedule = orchestratorSchedule(nextSpec.Schedule)
+		}
+		activation, err := s.stageRuntimeSchedule(name, runner, nextSchedule)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("activate schedule: %v", err)})
+			return
+		}
+
+		if err := s.persistPipelineScheduleSnapshot(r.Context(), name, "schedule_updated", nextSpec, nextDAG); err != nil {
+			s.rollbackRuntimeSchedule(activation, runner)
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
-		if s.scheduler != nil {
-			s.scheduler.Unregister(name)
+		s.mu.Lock()
+		if nextDAG != nil {
+			s.dagSpecs[name].Schedule = nextDAG.Schedule
+		} else if nextSpec != nil {
+			s.specs[name].Schedule = nextSpec.Schedule
 		}
-		if err := s.registerRuntimeSchedule(r.Context(), name, runner); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-			return
-		}
+		s.mu.Unlock()
+		s.commitRuntimeScheduleStatus(r.Context(), name, nextSchedule, activation)
 		s.audit(r, "pipeline.schedule.update", name)
 		json.NewEncoder(w).Encode(map[string]any{"id": name, "name": s.pipelineNames[name], "enabled": true, "schedule": req})
 
 	case http.MethodDelete:
-		s.mu.Lock()
+		s.mu.RLock()
 		spec := s.specs[name]
 		dagSpec := s.dagSpecs[name]
 		runner := s.pipelines[name]
 		if spec == nil && dagSpec == nil {
-			s.mu.Unlock()
+			s.mu.RUnlock()
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]any{"error": "pipeline not found"})
 			return
 		}
+		var nextSpec *pipeline.Spec
+		var nextDAG *orchestrator.PipelineSpec
 		if dagSpec != nil {
-			dagSpec.Schedule = nil
+			copyDAG := *dagSpec
+			copyDAG.Schedule = nil
+			nextDAG = &copyDAG
 		} else {
-			spec.Schedule = nil
+			copySpec := *spec
+			copySpec.Schedule = nil
+			nextSpec = &copySpec
 		}
-		s.mu.Unlock()
+		s.mu.RUnlock()
 
-		if err := s.persistPipelineSchedule(r.Context(), name, "schedule_disabled"); err != nil {
+		activation, err := s.stageRuntimeSchedule(name, runner, nil)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("disable schedule: %v", err)})
+			return
+		}
+
+		if err := s.persistPipelineScheduleSnapshot(r.Context(), name, "schedule_disabled", nextSpec, nextDAG); err != nil {
+			s.rollbackRuntimeSchedule(activation, runner)
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
-		if s.scheduler != nil {
-			s.scheduler.Unregister(name)
+		s.mu.Lock()
+		if nextDAG != nil {
+			s.dagSpecs[name].Schedule = nil
+		} else if nextSpec != nil {
+			s.specs[name].Schedule = nil
 		}
+		s.mu.Unlock()
+		s.commitRuntimeScheduleStatus(r.Context(), name, nil, activation)
 		if runner != nil && runner.Status() == pipeline.StatusRunning {
 			_ = s.store.UpdatePipelineStatus(r.Context(), name, "running")
 		} else {
@@ -2082,27 +2256,12 @@ func (s *Server) handlePipelineSchedule(w http.ResponseWriter, r *http.Request, 
 }
 
 func validatePipelineSchedule(req pipelineScheduleRequest) error {
-	switch req.Type {
-	case "streaming", "once":
-		return nil
-	case "cron":
-		if strings.TrimSpace(req.Cron) == "" {
-			return fmt.Errorf("cron schedule requires cron")
-		}
-		return nil
-	case "periodic":
-		if req.IntervalSec <= 0 {
-			return fmt.Errorf("periodic schedule requires interval_sec > 0")
-		}
-		return nil
-	case "dependency":
-		if len(req.DependsOn) == 0 {
-			return fmt.Errorf("dependency schedule requires depends_on list")
-		}
-		return nil
-	default:
-		return fmt.Errorf("unsupported schedule type %q", req.Type)
-	}
+	return orchestrator.ValidateScheduleConfig("schedule", &orchestrator.ScheduleConfig{
+		Type:      orchestrator.ScheduleType(req.Type),
+		Cron:      req.Cron,
+		IntervalS: req.IntervalSec,
+		DependsOn: req.DependsOn,
+	})
 }
 
 func (s *Server) persistPipelineSchedule(ctx context.Context, name, status string) error {
@@ -2110,6 +2269,10 @@ func (s *Server) persistPipelineSchedule(ctx context.Context, name, status strin
 	spec := s.specs[name]
 	dagSpec := s.dagSpecs[name]
 	s.mu.RUnlock()
+	return s.persistPipelineScheduleSnapshot(ctx, name, status, spec, dagSpec)
+}
+
+func (s *Server) persistPipelineScheduleSnapshot(ctx context.Context, name, status string, spec *pipeline.Spec, dagSpec *orchestrator.PipelineSpec) error {
 	if dagSpec != nil {
 		yamlBytes, err := yaml.Marshal(dagSpec)
 		if err != nil {
@@ -2256,21 +2419,26 @@ func (s *Server) handlePipelineDelete(w http.ResponseWriter, r *http.Request, na
 		return
 	}
 
+	// Commit the durable delete (pipeline + versions + checkpoint on built-in
+	// SQL stores) before changing the in-memory runner/scheduler. A storage
+	// failure therefore leaves the last successful runtime state untouched.
+	if err := s.specStore.Delete(r.Context(), name); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("delete pipeline persistence: %v", err)})
+		return
+	}
+
 	if s.scheduler != nil {
 		s.scheduler.Unregister(name)
 	}
-
 	if hasRunner {
-		runner.Stop()
+		if err := runner.Stop(); err != nil {
+			g.Log().Warningf(s.ctx, "Pipeline %s (%s) persisted as deleted but runner stop failed: %v", displayName, name, err)
+		}
 	}
-
 	s.mu.Lock()
 	s.unregisterPipelineLocked(name)
 	s.mu.Unlock()
-
-	// Delete from storage
-	_ = s.specStore.Delete(r.Context(), name)
-	_ = s.cpAdapter.Delete(r.Context(), name)
 
 	s.audit(r, "pipeline.delete", name)
 	g.Log().Infof(s.ctx, "Pipeline deleted via API: %s (%s)", displayName, name)
@@ -2299,6 +2467,18 @@ func (s *Server) handlePipelineVersions(w http.ResponseWriter, r *http.Request, 
 		if versions == nil {
 			versions = []*storage.PipelineVersion{}
 		}
+		for _, v := range versions {
+			if v == nil {
+				continue
+			}
+			masked, maskErr := maskStoredSpecYAML(v.SpecYAML)
+			if maskErr != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": maskErr.Error()})
+				return
+			}
+			v.SpecYAML = masked
+		}
 		json.NewEncoder(w).Encode(map[string]any{"versions": versions})
 
 	case 2:
@@ -2313,7 +2493,7 @@ func (s *Server) handlePipelineVersions(w http.ResponseWriter, r *http.Request, 
 			json.NewEncoder(w).Encode(map[string]any{"error": "invalid version"})
 			return
 		}
-		v, err := s.store.GetPipelineVersion(r.Context(), name, version)
+		v, err := s.specStore.GetVersion(r.Context(), name, version)
 		if err != nil {
 			w.WriteHeader(500)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -2324,6 +2504,13 @@ func (s *Server) handlePipelineVersions(w http.ResponseWriter, r *http.Request, 
 			json.NewEncoder(w).Encode(map[string]any{"error": "version not found"})
 			return
 		}
+		masked, maskErr := maskStoredSpecYAML(v.SpecYAML)
+		if maskErr != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": maskErr.Error()})
+			return
+		}
+		v.SpecYAML = masked
 		json.NewEncoder(w).Encode(map[string]any{"version": v})
 
 	case 3:
@@ -2360,7 +2547,7 @@ func (s *Server) handlePipelineVersions(w http.ResponseWriter, r *http.Request, 
 
 // handlePipelineVersionDiff returns a diff between a historical version and the current spec.
 func (s *Server) handlePipelineVersionDiff(w http.ResponseWriter, r *http.Request, name string, version int) {
-	v, err := s.store.GetPipelineVersion(r.Context(), name, version)
+	v, err := s.specStore.GetVersion(r.Context(), name, version)
 	if err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -2379,25 +2566,55 @@ func (s *Server) handlePipelineVersionDiff(w http.ResponseWriter, r *http.Reques
 
 	currentYAML := ""
 	if currentDAG != nil {
-		if yb, me := yaml.Marshal(currentDAG); me == nil {
+		if yb, me := yaml.Marshal(maskDAGSpecSecrets(currentDAG)); me == nil {
 			currentYAML = string(yb)
 		}
 	} else if currentSpec != nil {
-		if yb, me := pipeline.MarshalSpecYAML(currentSpec); me == nil {
+		if yb, me := pipeline.MarshalSpecYAML(maskSpecSecrets(currentSpec)); me == nil {
 			currentYAML = string(yb)
 		}
 	}
+	historicalYAML, err := maskStoredSpecYAML(v.SpecYAML)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	v.SpecYAML = historicalYAML
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"version":    v,
 		"current":    currentYAML,
-		"historical": v.SpecYAML,
+		"historical": historicalYAML,
 	})
+}
+
+func maskStoredSpecYAML(specYAML string) (string, error) {
+	if isDAGSpecYAML([]byte(specYAML)) {
+		var spec orchestrator.PipelineSpec
+		if err := yaml.Unmarshal([]byte(specYAML), &spec); err != nil {
+			return "", fmt.Errorf("parse stored DAG spec for API response: %w", err)
+		}
+		masked, err := yaml.Marshal(maskDAGSpecSecrets(&spec))
+		if err != nil {
+			return "", fmt.Errorf("marshal stored DAG spec for API response: %w", err)
+		}
+		return string(masked), nil
+	}
+	var spec pipeline.Spec
+	if err := yaml.Unmarshal([]byte(specYAML), &spec); err != nil {
+		return "", fmt.Errorf("parse stored pipeline spec for API response: %w", err)
+	}
+	masked, err := pipeline.MarshalSpecYAML(maskSpecSecrets(&spec))
+	if err != nil {
+		return "", fmt.Errorf("marshal stored pipeline spec for API response: %w", err)
+	}
+	return string(masked), nil
 }
 
 // handlePipelineVersionRollback rolls back to a historical version.
 func (s *Server) handlePipelineVersionRollback(w http.ResponseWriter, r *http.Request, name string, version int) {
-	v, err := s.store.GetPipelineVersion(r.Context(), name, version)
+	v, err := s.specStore.GetVersion(r.Context(), name, version)
 	if err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -2409,56 +2626,145 @@ func (s *Server) handlePipelineVersionRollback(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Parse the version spec
+	if isDAGSpecYAML([]byte(v.SpecYAML)) {
+		s.handleDAGVersionRollback(w, r, name, version, v.SpecYAML)
+		return
+	}
+	s.handleLinearVersionRollback(w, r, name, version, v.SpecYAML)
+}
+
+func (s *Server) handleLinearVersionRollback(w http.ResponseWriter, r *http.Request, id string, version int, specYAML string) {
 	var spec pipeline.Spec
-	if err := yaml.Unmarshal([]byte(v.SpecYAML), &spec); err != nil {
-		w.WriteHeader(500)
+	if err := yaml.Unmarshal([]byte(specYAML), &spec); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("parse version spec: %v", err)})
 		return
 	}
-
-	// Create new runner
 	pipeline.ApplyDefaults(&spec)
 	if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
-	if err := pipeline.ValidateSpec(&spec); err != nil {
+	runtime := runtimeSpec(&spec, id)
+	if err := pipeline.ValidateSpec(runtime); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
-
-	// Stop existing runner only after the target version has been validated.
-	s.mu.RLock()
-	oldRunner, exists := s.pipelines[name]
-	s.mu.RUnlock()
-	if exists {
-		oldRunner.Stop()
-	}
-
-	runtime := runtimeSpec(&spec, name)
 	runner, err := s.newRunner(runtime)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
+	s.mu.RLock()
+	oldRunner := s.pipelines[id]
+	s.mu.RUnlock()
+	schedule := orchestratorSchedule(spec.Schedule)
 
-	s.mu.Lock()
-	s.registerPipelineLocked(name, spec.Name, runner, &spec, nil)
-	s.mu.Unlock()
-
-	// Persist the rollback as a new version
-	if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
-		_ = s.specStore.SaveWithID(r.Context(), name, spec.Name, string(yamlBytes), "rollback")
+	yamlBytes, err := pipeline.MarshalSpecYAML(&spec)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("marshal rollback spec: %v", err)})
+		return
 	}
+	activation, err := s.stageRuntimeSchedule(id, runner, schedule)
+	if err != nil {
+		_ = runner.Stop()
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("activate rollback schedule: %v", err)})
+		return
+	}
+	if err := s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "rollback"); err != nil {
+		s.rollbackRuntimeSchedule(activation, runner)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist pipeline rollback: %v", err)})
+		return
+	}
+	s.mu.Lock()
+	s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
+	s.mu.Unlock()
+	s.commitRuntimeScheduleStatus(r.Context(), id, schedule, activation)
+	if oldRunner != nil {
+		_ = oldRunner.Stop()
+	}
+	if !isDeferredSchedule(schedule) {
+		s.dispatchIfParallel(r.Context(), runner, runtime)
+	}
+	s.finishVersionRollback(w, r, id, spec.Name, version)
+}
 
-	s.audit(r, "pipeline.rollback", name)
-	g.Log().Infof(s.ctx, "Pipeline rolled back to version %d: %s", version, name)
+func (s *Server) handleDAGVersionRollback(w http.ResponseWriter, r *http.Request, id string, version int, specYAML string) {
+	var spec orchestrator.PipelineSpec
+	if err := yaml.Unmarshal([]byte(specYAML), &spec); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("parse DAG version spec: %v", err)})
+		return
+	}
+	if strings.TrimSpace(spec.Name) == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "name is required"})
+		return
+	}
+	if err := s.resolveDAGConnections(r.Context(), &spec); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	if problems := validateDAGRuntimeStateRequirements(&spec); len(problems) > 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
+		return
+	}
+	runtime := runtimeDAGSpec(&spec, id)
+	exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	runner := orchestrator.NewDAGRunnerWrapper(exec)
+	s.mu.RLock()
+	oldRunner := s.pipelines[id]
+	s.mu.RUnlock()
+	schedule := orchestratorSchedule(spec.Schedule)
+
+	yamlBytes, err := yaml.Marshal(&spec)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("marshal DAG rollback spec: %v", err)})
+		return
+	}
+	activation, err := s.stageRuntimeSchedule(id, runner, schedule)
+	if err != nil {
+		_ = runner.Stop()
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("activate DAG rollback schedule: %v", err)})
+		return
+	}
+	if err := s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "rollback"); err != nil {
+		s.rollbackRuntimeSchedule(activation, runner)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist DAG rollback: %v", err)})
+		return
+	}
+	s.mu.Lock()
+	s.registerPipelineLocked(id, spec.Name, runner, nil, &spec)
+	s.mu.Unlock()
+	s.commitRuntimeScheduleStatus(r.Context(), id, schedule, activation)
+	if oldRunner != nil {
+		_ = oldRunner.Stop()
+	}
+	s.finishVersionRollback(w, r, id, spec.Name, version)
+}
+
+func (s *Server) finishVersionRollback(w http.ResponseWriter, r *http.Request, id, displayName string, version int) {
+	s.audit(r, "pipeline.rollback", id)
+	g.Log().Infof(s.ctx, "Pipeline rolled back to version %d: %s", version, id)
 	json.NewEncoder(w).Encode(map[string]any{
-		"id":      name,
-		"name":    spec.Name,
+		"id":      id,
+		"name":    displayName,
 		"version": version,
 		"status":  "rolled_back",
 	})
@@ -2558,6 +2864,89 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 		yamlContent = string(b)
 	}
 
+	if isDAGSpecYAML([]byte(yamlContent)) {
+		var dagSpec orchestrator.PipelineSpec
+		if err := yaml.Unmarshal([]byte(yamlContent), &dagSpec); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("parse DAG yaml: %v", err)})
+			return
+		}
+		applyDAGImportDefaults(&dagSpec)
+		if strings.TrimSpace(dagSpec.Name) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "name is required"})
+			return
+		}
+		if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		if problems := validateDAGRuntimeStateRequirements(&dagSpec); len(problems) > 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
+			return
+		}
+
+		s.mu.RLock()
+		existingID, resolveErr := s.resolvePipelineRefLocked(dagSpec.Name)
+		oldDagSpec := s.dagSpecs[existingID]
+		exists := resolveErr == nil
+		s.mu.RUnlock()
+		if exists && oldDagSpec != nil {
+			preserveDAGSpecSecrets(&dagSpec, oldDagSpec)
+		}
+		id := existingID
+		if !exists {
+			id = newPipelineInstanceID()
+		}
+		runtime := runtimeDAGSpec(&dagSpec, id)
+		exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		runner := orchestrator.NewDAGRunnerWrapper(exec)
+		schedule := orchestratorSchedule(dagSpec.Schedule)
+		s.mu.RLock()
+		oldRunner := s.pipelines[id]
+		s.mu.RUnlock()
+		yamlBytes, err := yaml.Marshal(&dagSpec)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		activation, err := s.stageRuntimeSchedule(id, runner, schedule)
+		if err != nil {
+			_ = runner.Stop()
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("activate imported DAG schedule: %v", err)})
+			return
+		}
+		if err := s.specStore.SaveWithID(r.Context(), id, dagSpec.Name, string(yamlBytes), "imported"); err != nil {
+			s.rollbackRuntimeSchedule(activation, runner)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist imported DAG spec: %v", err)})
+			return
+		}
+		s.mu.Lock()
+		s.registerPipelineLocked(id, dagSpec.Name, runner, nil, &dagSpec)
+		s.mu.Unlock()
+		s.commitRuntimeScheduleStatus(r.Context(), id, schedule, activation)
+		if exists && oldRunner != nil {
+			_ = oldRunner.Stop()
+		}
+		action := "created"
+		if exists {
+			action = "updated"
+		}
+		s.audit(r, "spec.import."+action, id)
+		json.NewEncoder(w).Encode(map[string]any{"id": id, "name": dagSpec.Name, "action": action})
+		return
+	}
+
 	var spec pipeline.Spec
 	if err := yaml.Unmarshal([]byte(yamlContent), &spec); err != nil {
 		w.WriteHeader(400)
@@ -2598,22 +2987,37 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 		runtime := runtimeSpec(&spec, id)
 		runner, err := s.newRunner(runtime)
 		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		schedule := orchestratorSchedule(spec.Schedule)
+		yamlBytes, err := pipeline.MarshalSpecYAML(&spec)
+		if err != nil {
+			_ = runner.Stop()
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("marshal imported pipeline spec: %v", err)})
+			return
+		}
+		activation, err := s.stageRuntimeSchedule(id, runner, schedule)
+		if err != nil {
+			_ = runner.Stop()
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("activate imported pipeline schedule: %v", err)})
+			return
+		}
+		if err := s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "imported"); err != nil {
+			s.rollbackRuntimeSchedule(activation, runner)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist imported pipeline spec: %v", err)})
 			return
 		}
 		s.mu.Lock()
 		s.registerPipelineLocked(id, spec.Name, runner, &spec, nil)
 		s.mu.Unlock()
-		if err := s.registerRuntimeSchedule(r.Context(), id, runner); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-			return
-		}
+		s.commitRuntimeScheduleStatus(r.Context(), id, schedule, activation)
 		if !isDeferredSchedule(orchestratorSchedule(spec.Schedule)) {
 			s.dispatchIfParallel(r.Context(), runner, runtime)
-		}
-		if yamlBytes, mErr := pipeline.MarshalSpecYAML(&spec); mErr == nil {
-			_ = s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "imported")
 		}
 		s.audit(r, "spec.import.create", id)
 		json.NewEncoder(w).Encode(map[string]any{"id": id, "name": spec.Name, "action": "created"})
@@ -2624,6 +3028,7 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePipelinesPut(ctx context.Context, id string, spec *pipeline.Spec) error {
 	s.mu.RLock()
 	oldSpec := s.specs[id]
+	oldRunner := s.pipelines[id]
 	s.mu.RUnlock()
 	if oldSpec != nil {
 		preserveLinearSpecSecrets(spec, oldSpec)
@@ -2635,35 +3040,38 @@ func (s *Server) handlePipelinesPut(ctx context.Context, id string, spec *pipeli
 		return err
 	}
 
-	if s.scheduler != nil {
-		s.scheduler.Unregister(id)
-	}
-
-	s.mu.Lock()
-	if oldRunner, ok := s.pipelines[id]; ok {
-		oldRunner.Stop()
-	}
-	s.mu.Unlock()
-
 	runtime := runtimeSpec(spec, id)
 	runner, err := s.newRunner(runtime)
 	if err != nil {
 		return err
 	}
+	schedule := orchestratorSchedule(spec.Schedule)
+	yamlBytes, err := pipeline.MarshalSpecYAML(spec)
+	if err != nil {
+		_ = runner.Stop()
+		return fmt.Errorf("marshal imported pipeline spec: %w", err)
+	}
+	activation, err := s.stageRuntimeSchedule(id, runner, schedule)
+	if err != nil {
+		_ = runner.Stop()
+		return fmt.Errorf("activate imported pipeline schedule: %w", err)
+	}
+	if err := s.specStore.SaveWithID(ctx, id, spec.Name, string(yamlBytes), "imported"); err != nil {
+		s.rollbackRuntimeSchedule(activation, runner)
+		return fmt.Errorf("persist imported pipeline spec: %w", err)
+	}
 
 	s.mu.Lock()
 	s.registerPipelineLocked(id, spec.Name, runner, spec, nil)
 	s.mu.Unlock()
-	if err := s.registerRuntimeSchedule(ctx, id, runner); err != nil {
-		return err
+	s.commitRuntimeScheduleStatus(ctx, id, schedule, activation)
+	if oldRunner != nil {
+		_ = oldRunner.Stop()
 	}
-	if !isDeferredSchedule(orchestratorSchedule(spec.Schedule)) {
+	if !isDeferredSchedule(schedule) {
 		s.dispatchIfParallel(ctx, runner, runtime)
 	}
 
-	if yamlBytes, mErr := pipeline.MarshalSpecYAML(spec); mErr == nil {
-		_ = s.specStore.SaveWithID(ctx, id, spec.Name, string(yamlBytes), "imported")
-	}
 	return nil
 }
 
@@ -2809,7 +3217,11 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 
 	case "checkpoint/reset":
 		if r.Method == http.MethodPost {
-			s.cpAdapter.Delete(r.Context(), id)
+			if err := s.cpAdapter.Delete(r.Context(), id); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("reset checkpoint: %v", err)})
+				return
+			}
 			s.audit(r, "checkpoint.reset", id)
 			json.NewEncoder(w).Encode(map[string]any{"status": "reset"})
 		}
@@ -3125,6 +3537,7 @@ func (s *Server) handleCheckpointAction(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodDelete:
 		if err := s.cpAdapter.Delete(r.Context(), name); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
@@ -4191,9 +4604,13 @@ func (s *Server) StartHTTP(addr string) error {
 	var handler http.Handler = mux
 	handler = s.bodyLimitMiddleware(handler, 10<<20)
 	handler = s.panicRecoveryMiddleware(handler)
-	handler = s.corsMiddleware(handler)
-	handler = s.rateLimitMiddleware(handler, 100) // 100 req/sec per IP
+	// CORS must run before authentication so preflight requests can complete
+	// without credentials. Security headers wrap the complete chain so rejected
+	// auth, rate-limit, and CORS responses receive the same baseline headers.
 	handler = s.authMiddleware(handler)
+	handler = s.rateLimitMiddleware(handler, 100) // 100 req/sec per IP
+	handler = s.corsMiddleware(handler)
+	handler = s.securityHeadersMiddleware(handler)
 
 	s.httpServer = &http.Server{
 		Addr:              addr,
@@ -4239,13 +4656,45 @@ func (s *Server) bodyLimitMiddleware(next http.Handler, maxBytes int64) http.Han
 	})
 }
 
-// corsMiddleware adds permissive CORS headers for browser-based API access.
+// corsMiddleware applies an explicit origin allow-list. Development keeps the
+// historical wildcard behavior; production defaults to same-origin only.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Token")
-		w.Header().Set("Access-Control-Max-Age", "3600")
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		allowed := origin == "" || s.originAllowed(origin)
+		sameHostOrigin := origin != "" && sameOrigin(r, origin)
+		if !allowed && sameHostOrigin {
+			allowed = true
+		}
+		if origin != "" && !allowed {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if origin != "" {
+			matched := false
+			for _, allowed := range s.corsOrigins {
+				if allowed == "*" {
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+					matched = true
+					break
+				}
+				if allowed == origin {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Add("Vary", "Origin")
+					matched = true
+					break
+				}
+			}
+			if !matched && sameHostOrigin {
+				// Same-origin requests do not need CORS, but returning the exact
+				// origin also makes a same-host preflight deterministic.
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Add("Vary", "Origin")
+			}
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Token")
+			w.Header().Set("Access-Control-Max-Age", "3600")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -4280,13 +4729,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler, limit int) http.Handler 
 	}()
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		if idx := strings.LastIndex(ip, ":"); idx != -1 {
-			ip = ip[:idx]
-		}
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			ip = strings.TrimSpace(strings.Split(forwarded, ",")[0])
-		}
+		ip := s.clientIP(r)
 
 		mu.Lock()
 		b, ok := buckets[ip]
@@ -4347,6 +4790,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("WWW-Authenticate", `Bearer realm="openetl-etl-api"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]any{"error": "unauthorized"})
 			return
@@ -4359,7 +4803,7 @@ func (s *Server) audit(r *http.Request, action, target string) {
 	if !s.auditEnabled {
 		return
 	}
-	_ = s.auditAdapter.Write(r.Context(), action, r.Method, r.URL.Path, target, r.RemoteAddr)
+	_ = s.auditAdapter.Write(r.Context(), action, r.Method, r.URL.Path, target, s.clientIP(r))
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -4422,6 +4866,40 @@ func (s *Server) dispatchIfParallel(ctx context.Context, runner pipeline.RunnerI
 
 // ── Settings API (LLM config etc.) ────────────────────────────────────
 
+// isSettingsMaskedSecret matches the historical GET /settings masking form
+// used for llm_api_key (first 4 chars + "****").
+func isSettingsMaskedSecret(incoming, real string) bool {
+	if real == "" || incoming == "" {
+		return false
+	}
+	if isSecretPlaceholder(incoming) || looksLikeMaskedSecret(incoming, real) {
+		return true
+	}
+	if len(real) > 4 && incoming == real[:4]+"****" {
+		return true
+	}
+	return false
+}
+
+func maskSettingsMap(settings map[string]string) map[string]string {
+	if settings == nil {
+		return nil
+	}
+	out := make(map[string]string, len(settings))
+	for k, v := range settings {
+		if storage.IsSecretFieldKey(k) && v != "" {
+			if len(v) > 4 {
+				out[k] = v[:4] + "****"
+			} else {
+				out[k] = "****"
+			}
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.Method {
@@ -4431,11 +4909,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
-		// Mask api_key for security
-		if v, ok := settings["llm_api_key"]; ok && len(v) > 4 {
-			settings["llm_api_key"] = v[:4] + "****"
-		}
-		json.NewEncoder(w).Encode(settings)
+		json.NewEncoder(w).Encode(maskSettingsMap(settings))
 	case http.MethodPost:
 		var req map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -4443,10 +4917,24 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
 			return
 		}
+		// Preserve previously stored secret settings when the client resubmits a
+		// masked placeholder from GET /settings (e.g. llm_api_key="sk-1****").
+		existing, _ := s.store.ListSettings(r.Context())
 		for k, v := range req {
+			if storage.IsSecretFieldKey(k) {
+				old := existing[k]
+				if isSecretPlaceholder(v) || looksLikeMaskedSecret(v, old) || isSettingsMaskedSecret(v, old) {
+					if old == "" {
+						// Drop pure placeholders rather than storing a mask.
+						continue
+					}
+					v = old
+				}
+			}
 			if err := s.store.SetSetting(r.Context(), k, v); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				// Never echo the submitted secret back through the error path.
+				json.NewEncoder(w).Encode(map[string]any{"error": "failed to save setting " + k})
 				return
 			}
 		}

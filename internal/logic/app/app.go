@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -38,8 +37,10 @@ import (
 
 // sApp 应用实例
 type sApp struct {
-	etlServer *etlserver.Server
-	etlCancel context.CancelFunc
+	etlServer   *etlserver.Server
+	etlCancel   context.CancelFunc
+	etlProxy    *httputil.ReverseProxy
+	etlProxyErr error
 }
 
 func init() {
@@ -54,6 +55,13 @@ func NewApp() service.IApp {
 // SetupStaticFiles 配置静态文件服务（前端 UI）
 func (a *sApp) SetupStaticFiles() {
 	s := g.Server()
+	if proxy, err := newETLReverseProxy(context.Background()); err != nil {
+		a.etlProxyErr = err
+		g.Log().Errorf(context.Background(), "Configure ETL reverse proxy failed: %v", err)
+	} else {
+		a.etlProxy = proxy
+	}
+	s.Use(a.frontendSecurityHeaders)
 
 	s.BindHandler("/api/v2/*", a.etlReverseProxy)
 	s.BindHandler("/metrics", a.etlReverseProxy)
@@ -153,22 +161,21 @@ func contentTypeFor(filePath string) string {
 
 // etlReverseProxy 将 /api/v2/* 和 /metrics 请求代理到 ETL API 服务器
 func (a *sApp) etlReverseProxy(r *ghttp.Request) {
-	ctx := r.Context()
-	target := g.Cfg().MustGet(ctx, "etl.address", ":8001").String()
-	if !strings.HasPrefix(target, "http") {
-		target = "http://127.0.0.1" + target
-	}
-	targetURL, err := url.Parse(target)
-	if err != nil {
-		r.Response.WriteStatus(502)
+	if a.etlProxyErr != nil {
+		r.Response.WriteStatus(http.StatusBadGateway)
 		return
 	}
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
-		w.WriteHeader(http.StatusBadGateway)
+	if a.etlProxy == nil {
+		proxy, err := newETLReverseProxy(r.Context())
+		if err != nil {
+			a.etlProxyErr = err
+			r.Response.WriteStatus(http.StatusBadGateway)
+			return
+		}
+		a.etlProxy = proxy
 	}
 	r.Response.BufferWriter.Flush()
-	proxy.ServeHTTP(r.Response.RawWriter(), r.Request)
+	a.etlProxy.ServeHTTP(r.Response.RawWriter(), r.Request)
 }
 
 // StartETLAsync 异步启动 ETL 管道服务
@@ -188,6 +195,10 @@ func (a *sApp) StartETLAsync(ctx context.Context) {
 	g.Log().Infof(ctx, "Storage backend initialized: type=%s", storageType)
 
 	role := readRole(ctx)
+	if _, err := etlserver.ValidateRuntimeProfile(ctx, role); err != nil {
+		g.Log().Fatalf(ctx, "Runtime profile validation failed: %v", err)
+		return
+	}
 
 	// Startup validation: distributed roles require shared (non-sqlite) storage —
 	// a file-backed sqlite DB cannot be shared across processes, so checkpoint
@@ -222,7 +233,8 @@ func (a *sApp) StartETLAsync(ctx context.Context) {
 		server.RegisterWebhookAlert(webhook)
 	}
 	if err := server.RestoreFromDB(ctx); err != nil {
-		g.Log().Warningf(ctx, "Restore from DB failed (may be empty): %v", err)
+		g.Log().Fatalf(ctx, "Restore encrypted pipeline specs from DB failed: %v", err)
+		return
 	}
 	// Load YAML files as seeds for first-time setup (skips existing pipelines)
 	if _, err := server.ReloadSpecs(ctx); err != nil {
@@ -298,8 +310,22 @@ func (a *sApp) startWorkerRole(ctx context.Context, store storage.Storage) {
 	// Build the executor deps from the shared store (same adapters the Server uses).
 	am := alert.NewManager()
 	am.Register(&alert.LogChannel{})
+	specCipher, err := storage.NewSpecCipherFromEnv()
+	if err != nil {
+		g.Log().Fatalf(ctx, "Initialize worker pipeline spec encryption failed: %v", err)
+		return
+	}
+	// Match control-plane secret field encryption so workers can read encrypted
+	// connection catalog / settings values if a path needs them.
+	store = storage.NewSecretFieldStore(store, specCipher)
+	specStore := storage.NewPipelineSpecStore(store, specCipher)
+	if err := specStore.ValidateReadable(ctx); err != nil {
+		g.Log().Fatalf(ctx, "Validate worker pipeline specs failed: %v", err)
+		return
+	}
 	deps := worker.ExecutorDeps{
 		Store:     store,
+		SpecStore: specStore,
 		CPAdapter: storage.NewCheckpointStoreAdapter(store),
 		DLQWriter: storage.NewDLQCompatWriter(store),
 		AlertMgr:  am,

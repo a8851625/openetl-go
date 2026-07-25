@@ -2,152 +2,96 @@ package server
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/base64"
-	"errors"
-	"io"
-	"os"
-	"sync"
+	"fmt"
 
 	"github.com/gogf/gf/v2/frame/g"
 
 	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
-// specEncryption provides AES-256-GCM encryption for sensitive spec data at rest.
-// The encryption key is read from ETL_SPEC_ENCRYPTION_KEY (base64-encoded 32-byte key).
-// If the key is not set, encryption is disabled (plaintext storage — with a warning).
-var (
-	encKey      []byte
-	encKeyOnce  sync.Once
-	encDisabled bool
-)
-
-func initEncryptionKey() {
-	encKeyOnce.Do(func() {
-		keyB64 := os.Getenv("ETL_SPEC_ENCRYPTION_KEY")
-		if keyB64 == "" {
-			encDisabled = true
-			g.Log().Warningf(nil,
-				"ETL_SPEC_ENCRYPTION_KEY is not set — pipeline specs (including credentials) "+
-					"will be stored in plaintext. Set this for production deployments.")
-			return
-		}
-		key, err := base64.StdEncoding.DecodeString(keyB64)
-		if err != nil || len(key) != 32 {
-			g.Log().Errorf(nil, "ETL_SPEC_ENCRYPTION_KEY must be a base64-encoded 32-byte key — encryption disabled")
-			encDisabled = true
-			return
-		}
-		encKey = key
-	})
+// newEncryptedSpecStore is the single construction path for pipeline spec
+// persistence used by the control plane. The underlying storage adapter owns
+// encryption/decryption so every current/version read follows the same rules.
+func newEncryptedSpecStore(store storage.Storage) (*storage.PipelineSpecStore, error) {
+	cipher, err := storage.NewSpecCipherFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("initialize pipeline spec encryption: %w", err)
+	}
+	if !cipher.Enabled() {
+		g.Log().Warningf(nil,
+			"ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured")
+	}
+	return storage.NewPipelineSpecStore(store, cipher), nil
 }
 
-// encryptSpec encrypts plaintext spec YAML using AES-256-GCM.
-// Returns the plaintext unchanged if encryption is disabled.
-func encryptSpec(plaintext string) string {
-	initEncryptionKey()
-	if encDisabled || plaintext == "" {
-		return plaintext
-	}
-
-	block, err := aes.NewCipher(encKey)
+// wrapSecretFieldStore applies field-level encryption for connection catalog
+// and settings secrets using the same key material as pipeline specs.
+func wrapSecretFieldStore(store storage.Storage) (storage.Storage, error) {
+	cipher, err := storage.NewSpecCipherFromEnv()
 	if err != nil {
-		return plaintext
+		return nil, fmt.Errorf("initialize secret field encryption: %w", err)
 	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return plaintext
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return plaintext
-	}
-
-	// Prefix "enc:" to mark encrypted content
-	encrypted := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-	return "enc:" + base64.StdEncoding.EncodeToString(encrypted)
+	return storage.NewSecretFieldStore(store, cipher), nil
 }
 
-// decryptSpec decrypts an AES-256-GCM encrypted spec.
-// Returns the input unchanged if it's not encrypted (no "enc:" prefix).
-func decryptSpec(stored string) string {
-	initEncryptionKey()
-	if stored == "" || len(stored) < 4 || stored[:4] != "enc:" {
-		return stored // not encrypted
-	}
-
-	if encDisabled {
-		return stored // can't decrypt — key missing
-	}
-
-	data, err := base64.StdEncoding.DecodeString(stored[4:])
-	if err != nil {
-		return stored
-	}
-
-	block, err := aes.NewCipher(encKey)
-	if err != nil {
-		return stored
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return stored
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return stored
-	}
-
-	plaintext, err := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
-	if err != nil {
-		return stored
-	}
-
-	return string(plaintext)
-}
-
-// GenerateEncryptionKey generates a random 32-byte AES key encoded as base64.
-// Useful for operators to generate a key for ETL_SPEC_ENCRYPTION_KEY.
+// GenerateEncryptionKey generates a random base64-encoded 32-byte AES key for
+// ETL_SPEC_ENCRYPTION_KEY.
 func GenerateEncryptionKey() (string, error) {
-	key := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		return "", errors.New("generate key: " + err.Error())
-	}
-	return base64.StdEncoding.EncodeToString(key), nil
+	return storage.GenerateSpecEncryptionKey()
 }
 
-// EncryptedSpecStore wraps PipelineSpecStore with AES-256-GCM encryption
-// for spec YAML at rest. When encryption is disabled (no key set), it
-// passes through unchanged.
+// The helpers below retain source compatibility for older package-local
+// callers. Runtime code uses storage.PipelineSpecStore directly, so crypto
+// failures are returned rather than converted into YAML parse warnings.
+func encryptSpec(plaintext string) string {
+	cipher, err := storage.NewSpecCipherFromEnv()
+	if err != nil {
+		return plaintext
+	}
+	encoded, err := cipher.Encrypt(plaintext)
+	if err != nil {
+		return plaintext
+	}
+	return encoded
+}
+
+func decryptSpec(stored string) string {
+	cipher, err := storage.NewSpecCipherFromEnv()
+	if err != nil {
+		return stored
+	}
+	plaintext, err := cipher.Decrypt(stored)
+	if err != nil {
+		return stored
+	}
+	return plaintext
+}
+
+// EncryptedSpecStore is retained as a compatibility wrapper for package-local
+// integrations written before the storage-level adapter was introduced.
 type EncryptedSpecStore struct {
 	inner *storage.PipelineSpecStore
 }
 
 func NewEncryptedSpecStore(inner *storage.PipelineSpecStore) *EncryptedSpecStore {
+	if inner != nil {
+		if cipher, err := storage.NewSpecCipherFromEnv(); err == nil {
+			inner = inner.WithCipher(cipher)
+		}
+	}
 	return &EncryptedSpecStore{inner: inner}
 }
 
 func (e *EncryptedSpecStore) Save(ctx context.Context, name, specYAML, status string) error {
-	return e.inner.Save(ctx, name, encryptSpec(specYAML), status)
+	return e.inner.Save(ctx, name, specYAML, status)
 }
 
 func (e *EncryptedSpecStore) SaveWithID(ctx context.Context, id, name, specYAML, status string) error {
-	return e.inner.SaveWithID(ctx, id, name, encryptSpec(specYAML), status)
+	return e.inner.SaveWithID(ctx, id, name, specYAML, status)
 }
 
 func (e *EncryptedSpecStore) Get(ctx context.Context, name string) (string, error) {
-	yaml, err := e.inner.Get(ctx, name)
-	if err != nil {
-		return "", err
-	}
-	return decryptSpec(yaml), nil
+	return e.inner.Get(ctx, name)
 }
 
 func (e *EncryptedSpecStore) List(ctx context.Context) ([]*storage.PipelineRow, error) {
@@ -159,13 +103,5 @@ func (e *EncryptedSpecStore) Delete(ctx context.Context, name string) error {
 }
 
 func (e *EncryptedSpecStore) Versions(ctx context.Context, name string) ([]*storage.PipelineVersion, error) {
-	versions, err := e.inner.Versions(ctx, name)
-	if err != nil {
-		return nil, err
-	}
-	// Decrypt each version's spec_yaml in place
-	for _, v := range versions {
-		v.SpecYAML = decryptSpec(v.SpecYAML)
-	}
-	return versions, nil
+	return e.inner.Versions(ctx, name)
 }

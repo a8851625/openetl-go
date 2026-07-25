@@ -15,31 +15,34 @@ import (
 )
 
 type runtimeFlags struct {
-	config       string
-	dataDir      string
-	logDir       string
-	pluginsDir   string
-	schemasDir   string
-	specsDir     string
-	host         string
-	port         string
-	etlAPIHost   string
-	etlAPIPort   string
-	storageType  string
-	storageDSN   string
-	sqlitePath   string
-	apiToken     string
-	tlsCert      string
-	tlsKey       string
-	role         string
-	masterURL    string
-	workerID     string
-	workerSlots  string
-	workerLabels string
-	auditEnabled string
-	loggerFormat string
-	printHelp    bool
-	seen         map[string]bool
+	config        string
+	dataDir       string
+	logDir        string
+	pluginsDir    string
+	schemasDir    string
+	specsDir      string
+	host          string
+	port          string
+	etlAPIHost    string
+	etlAPIPort    string
+	storageType   string
+	storageDSN    string
+	sqlitePath    string
+	apiToken      string
+	profile       string
+	insecureDev   string
+	tlsCert       string
+	tlsKey        string
+	tlsServerName string
+	role          string
+	masterURL     string
+	workerID      string
+	workerSlots   string
+	workerLabels  string
+	auditEnabled  string
+	loggerFormat  string
+	printHelp     bool
+	seen          map[string]bool
 }
 
 func applyRuntimeFlags() (*runtimeFlags, error) {
@@ -86,8 +89,11 @@ func parseRuntimeFlags(args []string, output io.Writer) (*runtimeFlags, error) {
 	fs.StringVar(&opts.storageDSN, "storage-dsn", "", "MySQL/PostgreSQL storage DSN")
 	fs.StringVar(&opts.sqlitePath, "sqlite-path", "", "SQLite metadata database path")
 	fs.StringVar(&opts.apiToken, "api-token", "", "ETL API token")
-	fs.StringVar(&opts.tlsCert, "tls-cert", "", "ETL API TLS certificate file")
-	fs.StringVar(&opts.tlsKey, "tls-key", "", "ETL API TLS key file")
+	fs.StringVar(&opts.profile, "profile", "", "runtime profile: development|production")
+	fs.StringVar(&opts.insecureDev, "insecure-dev", "", "explicit production-gate bypass: true|false")
+	fs.StringVar(&opts.tlsCert, "tls-cert", "", "UI/API TLS certificate file")
+	fs.StringVar(&opts.tlsKey, "tls-key", "", "UI/API TLS key file")
+	fs.StringVar(&opts.tlsServerName, "tls-server-name", "", "TLS server name used by the local UI-to-API proxy")
 	fs.StringVar(&opts.role, "role", "", "runtime role: standalone|master|worker")
 	fs.StringVar(&opts.masterURL, "master-url", "", "master API URL for worker role")
 	fs.StringVar(&opts.workerID, "worker-id", "", "worker identifier")
@@ -139,8 +145,11 @@ func applyRuntimeEnvOverrides(flagSeen map[string]bool) {
 	envString(flagSeen, "worker-slots", "ETL_WORKER_SLOTS", func(v string) { mustSetConfig("etl.workerSlots", atoiOrString(v)) })
 	envString(flagSeen, "worker-labels", "ETL_WORKER_LABELS", func(v string) { mustSetConfig("etl.workerLabels", v) })
 	envString(flagSeen, "api-token", "ETL_API_TOKEN", func(v string) { mustSetConfig("etl.apiToken", v) })
+	envString(flagSeen, "profile", "ETL_PROFILE", func(v string) { mustSetConfig("etl.profile", v) })
+	envString(flagSeen, "insecure-dev", "ETL_INSECURE_DEV", func(v string) { mustSetConfig("etl.insecureDevelopment", atobOrString(v)) })
 	envString(flagSeen, "tls-cert", "ETL_TLS_CERT", func(v string) { mustSetConfig("etl.tls.cert", v) })
 	envString(flagSeen, "tls-key", "ETL_TLS_KEY", func(v string) { mustSetConfig("etl.tls.key", v) })
+	envString(flagSeen, "tls-server-name", "ETL_TLS_SERVER_NAME", func(v string) { mustSetConfig("etl.tls.serverName", v) })
 	envString(flagSeen, "audit-enabled", "ETL_AUDIT_ENABLED", func(v string) { mustSetConfig("etl.audit.enabled", atobOrString(v)) })
 	envString(flagSeen, "logger-format", "LOGGER_FORMAT", func(v string) { mustSetConfig("logger.format", v) })
 }
@@ -163,8 +172,11 @@ func applyRuntimeFlagOverrides(opts *runtimeFlags) error {
 	}
 	setStringFlag(opts, "sqlite-path", opts.sqlitePath, "etl.storage.sqlite.path", "ETL_SQLITE_PATH")
 	setStringFlag(opts, "api-token", opts.apiToken, "etl.apiToken", "ETL_API_TOKEN")
+	setStringFlag(opts, "profile", opts.profile, "etl.profile", "ETL_PROFILE")
+	setStringFlag(opts, "insecure-dev", opts.insecureDev, "etl.insecureDevelopment", "ETL_INSECURE_DEV")
 	setStringFlag(opts, "tls-cert", opts.tlsCert, "etl.tls.cert", "ETL_TLS_CERT")
 	setStringFlag(opts, "tls-key", opts.tlsKey, "etl.tls.key", "ETL_TLS_KEY")
+	setStringFlag(opts, "tls-server-name", opts.tlsServerName, "etl.tls.serverName", "ETL_TLS_SERVER_NAME")
 	setStringFlag(opts, "role", opts.role, "etl.role", "ETL_ROLE")
 	setStringFlag(opts, "master-url", opts.masterURL, "etl.masterURL", "ETL_MASTER_URL")
 	setStringFlag(opts, "worker-id", opts.workerID, "etl.workerID", "ETL_WORKER_ID")
@@ -226,6 +238,17 @@ func validateRuntimeFlags(opts *runtimeFlags) error {
 	if opts.auditEnabled != "" {
 		if _, err := strconv.ParseBool(opts.auditEnabled); err != nil {
 			return fmt.Errorf("invalid --audit-enabled %q: must be true or false", opts.auditEnabled)
+		}
+	}
+	if opts.insecureDev != "" {
+		if _, err := strconv.ParseBool(opts.insecureDev); err != nil {
+			return fmt.Errorf("invalid --insecure-dev %q: must be true or false", opts.insecureDev)
+		}
+	}
+	if opts.profile != "" {
+		profile := strings.ToLower(strings.TrimSpace(opts.profile))
+		if profile != "development" && profile != "dev" && profile != "production" && profile != "prod" {
+			return fmt.Errorf("invalid --profile %q: must be development or production", opts.profile)
 		}
 	}
 	for _, item := range []struct {
@@ -370,6 +393,8 @@ func logRuntimeSummary() {
 		"plugins_dir":    g.Cfg().MustGet(ctx, "etl.pluginsDir", "./data/plugins").String(),
 		"tls_enabled":    g.Cfg().MustGet(ctx, "etl.tls.cert", "").String() != "" && g.Cfg().MustGet(ctx, "etl.tls.key", "").String() != "",
 		"api_auth":       g.Cfg().MustGet(ctx, "etl.apiToken", "").String() != "",
+		"profile":        g.Cfg().MustGet(ctx, "etl.profile", "development").String(),
+		"insecure_dev":   g.Cfg().MustGet(ctx, "etl.insecureDevelopment", false).Bool(),
 		"worker_labels":  g.Cfg().MustGet(ctx, "etl.workerLabels", "").String(),
 	}
 	g.Log().Infof(ctx, "Runtime config: %+v", summary)
@@ -399,8 +424,11 @@ Flags:
   --storage-dsn DSN          MySQL/PostgreSQL storage DSN. Env: ETL_STORAGE_DSN
   --sqlite-path PATH         SQLite metadata DB path. Env: ETL_SQLITE_PATH
   --api-token TOKEN          ETL API token. Env: ETL_API_TOKEN. Sensitive.
-  --tls-cert PATH            ETL API TLS certificate. Env: ETL_TLS_CERT
-  --tls-key PATH             ETL API TLS key. Env: ETL_TLS_KEY. Sensitive path.
+  --profile PROFILE          development or production. Env: ETL_PROFILE
+  --insecure-dev BOOL        Explicit production-gate bypass for development only. Env: ETL_INSECURE_DEV
+  --tls-cert PATH            UI/API TLS certificate. Env: ETL_TLS_CERT
+  --tls-key PATH             UI/API TLS key. Env: ETL_TLS_KEY. Sensitive path.
+  --tls-server-name NAME     TLS name used by the local UI-to-API proxy. Env: ETL_TLS_SERVER_NAME
   --role ROLE                standalone, master, or worker. Env: ETL_ROLE
   --master-url URL           Master API URL for worker role. Env: ETL_MASTER_URL
   --worker-id ID             Worker identifier. Env: ETL_WORKER_ID

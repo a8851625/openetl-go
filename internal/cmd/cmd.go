@@ -34,6 +34,9 @@ var (
 			// 打印版本号
 			g.Log().Infof(ctx, "OpenETL-Go Version: %s", consts.Version)
 			logRuntimeSummary()
+			if err := app.ConfigureHTTPSTopology(ctx); err != nil {
+				return err
+			}
 
 			a := service.App()
 
