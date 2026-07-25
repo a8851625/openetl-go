@@ -193,11 +193,13 @@ func (s *Store) migrate() error {
 // runVersionedMigrations applies incremental schema changes tracked by
 // the _schema_version table.
 func (s *Store) runVersionedMigrations() error {
-	s.db.Exec(`CREATE TABLE IF NOT EXISTS _schema_version (
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS _schema_version (
 		version     INT PRIMARY KEY,
 		description VARCHAR(255),
 		applied_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-	) ENGINE=InnoDB`)
+	) ENGINE=InnoDB`); err != nil {
+		return fmt.Errorf("create _schema_version: %w", err)
+	}
 
 	type migration struct {
 		version     int
@@ -224,7 +226,9 @@ func (s *Store) runVersionedMigrations() error {
 
 	for _, m := range migrations {
 		var exists int
-		s.db.QueryRow("SELECT COUNT(*) FROM _schema_version WHERE version = ?", m.version).Scan(&exists)
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM _schema_version WHERE version = ?", m.version).Scan(&exists); err != nil {
+			return fmt.Errorf("read schema version %d: %w", m.version, err)
+		}
 		if exists > 0 {
 			continue
 		}
@@ -243,7 +247,9 @@ func (s *Store) runVersionedMigrations() error {
 			_, _ = s.db.Exec(`CREATE UNIQUE INDEX idx_pipelines_id ON pipelines(id)`)
 			_, _ = s.db.Exec(`CREATE INDEX idx_pipelines_name ON pipelines(name)`)
 		}
-		s.db.Exec("INSERT INTO _schema_version (version, description) VALUES (?, ?)", m.version, m.description)
+		if _, err := s.db.Exec("INSERT INTO _schema_version (version, description) VALUES (?, ?)", m.version, m.description); err != nil {
+			return fmt.Errorf("record schema version %d: %w", m.version, err)
+		}
 	}
 	if err := s.backfillPipelineIDs(); err != nil {
 		return err

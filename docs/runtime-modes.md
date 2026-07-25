@@ -163,10 +163,31 @@ version row, and (when requested) checkpoint reset. Delete uses the same
 boundary for the pipeline, retained versions, and checkpoint. The API prepares
 the replacement runner first and only swaps the in-memory runner/scheduler
 after that transaction commits; an injected storage failure returns non-2xx
-and leaves the last successful runtime state available for restart. Evidence
-commands:
+and leaves the last successful runtime state available for restart.
+
+### Schema migration lock and concurrent version allocation
+
+Every SQL backend opens under `sqlstore.WithMigrationLock` so master/worker
+processes cannot race DDL:
+
+- SQLite: process-local mutex + `_migration_lock` lease row
+- MySQL: `GET_LOCK('openetl_go_schema_migration', 30)` on a dedicated connection
+- PostgreSQL: `pg_advisory_lock` with a stable 64-bit key
+
+Versioned migrations (`_schema_version`) treat create/read/DDL/record as
+explicit errors. A failed step does **not** insert the version row, so the next
+startup retries instead of treating a half-applied schema as complete.
+
+Pipeline version numbers are allocated under the unique `(pipeline, version)`
+constraint. Concurrent `SavePipelineWithVersion` callers that observe the same
+`MAX(version)` retry the whole current/version/checkpoint transaction rather
+than invent a duplicate version.
+
+Evidence commands:
 
 ```sh
+go test ./internal/etl/storage/sqlstore -count=1 -run 'MigrationLock|ConcurrentPipelineVersion|ConcurrentSQLiteStoreOpen|MigrationFailure'
+go test ./internal/etl/storage -count=1 -run 'TestSQLiteConformance|Atomic|Concurrent'
 ./hack/e2e-spec-encryption-recovery.sh
 ./hack/e2e-control-plane-persistence.sh
 CONTAINER_CLI=podman ./hack/e2e-storage-mysql.sh

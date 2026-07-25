@@ -194,7 +194,7 @@ PR-0.2 本轮证据（Round 2/5）：
 
 | Criterion | Evidence | Result | Residual |
 | --- | --- | --- | --- |
-| current/version 原子提交 | `internal/etl/storage/sqlstore/store.go` `SavePipelineWithVersion*`；`TestPipelineSpecStoreAtomic*`；`TestSQLiteConformance/PipelineAtomicLifecycle` | passed | 并发 version 分配仍属于 PR-1.2 |
+| current/version 原子提交 | `internal/etl/storage/sqlstore/store.go` `SavePipelineWithVersion*`；`TestPipelineSpecStoreAtomic*`；`TestSQLiteConformance/PipelineAtomicLifecycle` | passed | 并发 version 分配见 PR-1.2 |
 | checkpoint reset 与 spec 提交同一边界 | `SavePipelineWithVersionAndCheckpointReset`；`TestPipelineUpdateCheckpointFailureRollsBackSpecAndCheckpoint`；MySQL/PostgreSQL conformance | passed | Redis 高频 state 不在本事务范围 |
 | create/update/import/rollback storage failure 不激活半成品 runner | `internal/etl/server/storage_fault_test.go` 全套 API fault-injection tests；`hack/e2e-control-plane-persistence.sh` | passed | scheduler 注册失败后的补偿为后续 bounded follow-up |
 | delete 同时清理 current/version/checkpoint | `DeletePipelineWithCheckpoint`；`TestPipelineDeleteStorageFailureKeepsRuntimeRowsVersionsAndCheckpoint`；三 backend conformance | passed | 外部备份/恢复仍属于 PR-1.3 |
@@ -396,8 +396,18 @@ Non-goals: PR-1.3 backup/restore/janitor scripts；PR-2 path certification；RBA
 Dependency: PR-1.1 delivered
 Acceptance: 1) migration 有显式 schema version/lock/失败终止；2) 并发 migration 只有一个执行 DDL；3) migration error 阻止半迁移启动；4) 并发 pipeline update 不重复 version 且冲突明确；5) current/version/checkpoint 边界与 PR-0 一致
 Evidence: storage concurrency/migration tests、三 backend conformance、docs/runtime-modes.md
-Result: active
+Result: delivered
 ```
+
+PR-1.2 本轮证据（Round 2/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| 三 backend migration 显式 schema version + lock | `sqlstore.WithMigrationLock`（SQLite lease / MySQL `GET_LOCK` / PG advisory）；`MigrateSQLite` / `mysql.New` / `postgres.New` 均在 lock 内执行 | passed | — |
+| 并发 migration 仅一个执行 DDL | `TestSQLiteMigrationLockSerializesCallbacks`；`TestConcurrentSQLiteStoreOpenMigratesOnce` | passed | MySQL/PG 依赖原生 advisory lock + e2e open |
+| migration error 阻止半迁移 | `runVersionedMigrations` 显式错误；失败不写入 `_schema_version`；`TestSQLiteMigrationFailureDoesNotRecordSchemaVersion`；`TestSQLiteMigrationLockPropagatesFailure` | passed | 前向 upgrade smoke 在 PR-1.3 |
+| 并发 `SavePipelineWithVersion` 无重复 version | unique `(pipeline, version)` + 冲突重试；`TestConcurrentPipelineVersionAllocationIsUnique` | passed | — |
+| current/version/checkpoint 事务边界与 PR-0 一致 | `savePipelineWithVersionOnce` 单事务；`TestPipelineSpecStoreAtomic*`；conformance `PipelineAtomicLifecycle` | passed | — |
 
 PR-1.1 本轮证据（Round 1/5）：
 
@@ -427,7 +437,7 @@ Residual/follow-up: PR-1.2
 内部增量（一次只推进一个）：
 
 1. `PR-1.1` Secret envelope：connection/settings 字段级加密、key ID 和 rotation。`delivered`
-2. `PR-1.2` Storage migration：显式错误、migration lock、并发 pipeline version 分配。`active`
+2. `PR-1.2` Storage migration：显式错误、migration lock、并发 pipeline version 分配。`delivered`
 3. `PR-1.3` 恢复与保留：三个 backend 的 upgrade/backup/restore smoke 和 retention/janitor。
 
 范围：
