@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
@@ -203,11 +204,26 @@ func (a *AuditWriterAdapter) List(ctx context.Context, limit int) ([]*AuditEntry
 
 // PipelineSpecStore provides YAML spec persistence on top of Storage.
 type PipelineSpecStore struct {
-	store Storage
+	store  Storage
+	cipher *SpecCipher
 }
 
-func NewPipelineSpecStore(s Storage) *PipelineSpecStore {
-	return &PipelineSpecStore{store: s}
+func NewPipelineSpecStore(s Storage, ciphers ...*SpecCipher) *PipelineSpecStore {
+	var cipher *SpecCipher
+	if len(ciphers) > 0 {
+		cipher = ciphers[0]
+	}
+	return &PipelineSpecStore{store: s, cipher: cipher}
+}
+
+// WithCipher returns a view over the same storage backend using the supplied
+// crypto policy. It keeps the legacy one-argument constructor source-compatible
+// while allowing server/worker startup to inject one validated cipher.
+func (p *PipelineSpecStore) WithCipher(cipher *SpecCipher) *PipelineSpecStore {
+	if p == nil {
+		return nil
+	}
+	return &PipelineSpecStore{store: p.store, cipher: cipher}
 }
 
 func (p *PipelineSpecStore) Save(ctx context.Context, name, specYAML, status string) error {
@@ -215,16 +231,57 @@ func (p *PipelineSpecStore) Save(ctx context.Context, name, specYAML, status str
 }
 
 func (p *PipelineSpecStore) SaveWithID(ctx context.Context, id, name, specYAML, status string) error {
-	row := &PipelineRow{ID: id, Name: name, SpecYAML: specYAML, Status: status}
+	return p.SaveWithIDAndCheckpointReset(ctx, id, name, specYAML, status, false)
+}
+
+func (p *PipelineSpecStore) SaveWithIDAndCheckpointReset(ctx context.Context, id, name, specYAML, status string, resetCheckpoint bool) error {
+	storedYAML, err := p.encrypt(specYAML)
+	if err != nil {
+		return err
+	}
+	row := &PipelineRow{ID: id, Name: name, SpecYAML: storedYAML, Status: status}
+	if atomicStore, ok := p.store.(interface {
+		SavePipelineWithVersionAndCheckpointReset(context.Context, *PipelineRow, string, bool) error
+	}); ok {
+		return atomicStore.SavePipelineWithVersionAndCheckpointReset(ctx, row, storedYAML, resetCheckpoint)
+	}
+	if atomicStore, ok := p.store.(interface {
+		SavePipelineWithVersion(context.Context, *PipelineRow, string) error
+	}); ok {
+		if err := atomicStore.SavePipelineWithVersion(ctx, row, storedYAML); err != nil {
+			return err
+		}
+		if resetCheckpoint {
+			return p.store.DeleteCheckpoint(ctx, row.ID)
+		}
+		return nil
+	}
 	if err := p.store.SavePipeline(ctx, row); err != nil {
 		return err
 	}
-	_, err := p.store.SavePipelineVersion(ctx, row.ID, specYAML)
-	return err
+	_, err = p.store.SavePipelineVersion(ctx, row.ID, storedYAML)
+	if err != nil {
+		return err
+	}
+	if resetCheckpoint {
+		return p.store.DeleteCheckpoint(ctx, row.ID)
+	}
+	return nil
+}
+
+// SaveCurrentWithID updates only the current pipeline row. It is used for
+// compatibility repairs (for example assigning an ID to a legacy row) where
+// creating a new historical version during restore would be misleading.
+func (p *PipelineSpecStore) SaveCurrentWithID(ctx context.Context, id, name, specYAML, status string) error {
+	storedYAML, err := p.encrypt(specYAML)
+	if err != nil {
+		return err
+	}
+	return p.store.SavePipeline(ctx, &PipelineRow{ID: id, Name: name, SpecYAML: storedYAML, Status: status})
 }
 
 func (p *PipelineSpecStore) Get(ctx context.Context, name string) (string, error) {
-	row, err := p.store.GetPipeline(ctx, name)
+	row, err := p.GetRow(ctx, name)
 	if err != nil {
 		return "", err
 	}
@@ -234,16 +291,193 @@ func (p *PipelineSpecStore) Get(ctx context.Context, name string) (string, error
 	return row.SpecYAML, nil
 }
 
+func (p *PipelineSpecStore) GetRow(ctx context.Context, name string) (*PipelineRow, error) {
+	row, err := p.store.GetPipeline(ctx, name)
+	if err != nil || row == nil {
+		return row, err
+	}
+	return p.decryptRow(row)
+}
+
 func (p *PipelineSpecStore) List(ctx context.Context) ([]*PipelineRow, error) {
-	return p.store.ListPipelines(ctx)
+	rows, err := p.store.ListPipelines(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*PipelineRow, 0, len(rows))
+	for _, row := range rows {
+		decrypted, err := p.decryptRow(row)
+		if err != nil {
+			ref := "<unknown>"
+			if row != nil {
+				ref = row.ID
+				if ref == "" {
+					ref = row.Name
+				}
+			}
+			return nil, fmt.Errorf("decrypt pipeline %s: %w", ref, err)
+		}
+		result = append(result, decrypted)
+	}
+	return result, nil
 }
 
 func (p *PipelineSpecStore) Delete(ctx context.Context, name string) error {
+	if atomicStore, ok := p.store.(interface {
+		DeletePipelineWithCheckpoint(context.Context, string) error
+	}); ok {
+		return atomicStore.DeletePipelineWithCheckpoint(ctx, name)
+	}
 	return p.store.DeletePipeline(ctx, name)
 }
 
 func (p *PipelineSpecStore) Versions(ctx context.Context, name string) ([]*PipelineVersion, error) {
-	return p.store.ListPipelineVersions(ctx, name)
+	refs, err := p.versionRefs(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	all := make([]*PipelineVersion, 0)
+	seen := make(map[string]struct{})
+	for _, ref := range refs {
+		versions, listErr := p.store.ListPipelineVersions(ctx, ref)
+		if listErr != nil {
+			return nil, listErr
+		}
+		for _, version := range versions {
+			if version == nil {
+				continue
+			}
+			key := fmt.Sprintf("%d:%d", version.ID, version.Version)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			all = append(all, version)
+		}
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Version != all[j].Version {
+			return all[i].Version > all[j].Version
+		}
+		return all[i].CreatedAt.After(all[j].CreatedAt)
+	})
+	result := make([]*PipelineVersion, 0, len(all))
+	for _, version := range all {
+		decrypted, err := p.decryptVersion(version)
+		if err != nil {
+			versionNumber := 0
+			if version != nil {
+				versionNumber = version.Version
+			}
+			return nil, fmt.Errorf("decrypt pipeline %s version %d: %w", name, versionNumber, err)
+		}
+		result = append(result, decrypted)
+	}
+	return result, nil
+}
+
+func (p *PipelineSpecStore) GetVersion(ctx context.Context, name string, version int) (*PipelineVersion, error) {
+	refs, err := p.versionRefs(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	var v *PipelineVersion
+	for _, ref := range refs {
+		v, err = p.store.GetPipelineVersion(ctx, ref, version)
+		if err != nil {
+			return nil, err
+		}
+		if v != nil {
+			break
+		}
+	}
+	if v == nil {
+		return nil, nil
+	}
+	decrypted, err := p.decryptVersion(v)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt pipeline %s version %d: %w", name, version, err)
+	}
+	return decrypted, nil
+}
+
+func (p *PipelineSpecStore) versionRefs(ctx context.Context, name string) ([]string, error) {
+	refs := []string{name}
+	row, err := p.store.GetPipeline(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if row != nil && row.Name != "" && row.Name != name {
+		refs = append(refs, row.Name)
+	}
+	return refs, nil
+}
+
+// ValidateReadable checks both current rows and historical versions before a
+// process starts serving work. Crypto failures therefore stop startup instead
+// of surfacing later as a skipped pipeline or a broken rollback request.
+func (p *PipelineSpecStore) ValidateReadable(ctx context.Context) error {
+	rows, err := p.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		ref := row.ID
+		if ref == "" {
+			ref = row.Name
+		}
+		if _, err := p.Versions(ctx, ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *PipelineSpecStore) Cipher() *SpecCipher {
+	return p.cipher
+}
+
+func (p *PipelineSpecStore) encrypt(specYAML string) (string, error) {
+	if p.cipher == nil {
+		return specYAML, nil
+	}
+	return p.cipher.Encrypt(specYAML)
+}
+
+func (p *PipelineSpecStore) decrypt(specYAML string) (string, error) {
+	if p.cipher == nil {
+		return specYAML, nil
+	}
+	return p.cipher.Decrypt(specYAML)
+}
+
+func (p *PipelineSpecStore) decryptRow(row *PipelineRow) (*PipelineRow, error) {
+	if row == nil {
+		return nil, nil
+	}
+	specYAML, err := p.decrypt(row.SpecYAML)
+	if err != nil {
+		return nil, err
+	}
+	copy := *row
+	copy.SpecYAML = specYAML
+	return &copy, nil
+}
+
+func (p *PipelineSpecStore) decryptVersion(version *PipelineVersion) (*PipelineVersion, error) {
+	if version == nil {
+		return nil, nil
+	}
+	specYAML, err := p.decrypt(version.SpecYAML)
+	if err != nil {
+		return nil, err
+	}
+	copy := *version
+	copy.SpecYAML = specYAML
+	return &copy, nil
 }
 
 // MarshalCheckpointPosition is a helper for serializing checkpoint positions.
@@ -253,4 +487,205 @@ func MarshalCheckpointPosition(v any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("marshal checkpoint position: %w", err)
 	}
 	return json.RawMessage(data), nil
+}
+
+// ── SecretFieldStore adapter ─────────────────────────────────────────
+
+// SecretFieldStore wraps Storage and encrypts connection/settings secret
+// fields at rest while exposing decrypted values to runtime callers.
+// API masking remains a separate presentation concern in the control plane.
+type SecretFieldStore struct {
+	Storage
+	cipher *SpecCipher
+}
+
+// NewSecretFieldStore returns a storage view that applies field-level secret
+// encryption. A nil or disabled cipher keeps development/legacy plaintext
+// writes, but encrypted rows still fail closed on read without a matching key.
+func NewSecretFieldStore(inner Storage, cipher *SpecCipher) Storage {
+	if inner == nil {
+		return nil
+	}
+	if _, ok := inner.(*SecretFieldStore); ok {
+		return inner
+	}
+	return &SecretFieldStore{Storage: inner, cipher: cipher}
+}
+
+// Cipher exposes the configured field cipher for rotation helpers/tests.
+func (s *SecretFieldStore) Cipher() *SpecCipher {
+	if s == nil {
+		return nil
+	}
+	return s.cipher
+}
+
+// SavePipelineWithVersion forwards the optional atomic current/version write
+// so PipelineSpecStore type assertions keep working through this wrapper.
+func (s *SecretFieldStore) SavePipelineWithVersion(ctx context.Context, row *PipelineRow, specYAML string) error {
+	if atomicStore, ok := s.Storage.(interface {
+		SavePipelineWithVersion(context.Context, *PipelineRow, string) error
+	}); ok {
+		return atomicStore.SavePipelineWithVersion(ctx, row, specYAML)
+	}
+	if err := s.Storage.SavePipeline(ctx, row); err != nil {
+		return err
+	}
+	_, err := s.Storage.SavePipelineVersion(ctx, row.ID, specYAML)
+	return err
+}
+
+// SavePipelineWithVersionAndCheckpointReset forwards the optional atomic write
+// that also resets the checkpoint in the same transaction.
+func (s *SecretFieldStore) SavePipelineWithVersionAndCheckpointReset(ctx context.Context, row *PipelineRow, specYAML string, resetCheckpoint bool) error {
+	if atomicStore, ok := s.Storage.(interface {
+		SavePipelineWithVersionAndCheckpointReset(context.Context, *PipelineRow, string, bool) error
+	}); ok {
+		return atomicStore.SavePipelineWithVersionAndCheckpointReset(ctx, row, specYAML, resetCheckpoint)
+	}
+	if err := s.SavePipelineWithVersion(ctx, row, specYAML); err != nil {
+		return err
+	}
+	if resetCheckpoint {
+		return s.Storage.DeleteCheckpoint(ctx, row.ID)
+	}
+	return nil
+}
+
+// DeletePipelineWithCheckpoint forwards the optional atomic delete boundary.
+func (s *SecretFieldStore) DeletePipelineWithCheckpoint(ctx context.Context, ref string) error {
+	if atomicStore, ok := s.Storage.(interface {
+		DeletePipelineWithCheckpoint(context.Context, string) error
+	}); ok {
+		return atomicStore.DeletePipelineWithCheckpoint(ctx, ref)
+	}
+	if err := s.Storage.DeletePipeline(ctx, ref); err != nil {
+		return err
+	}
+	return s.Storage.DeleteCheckpoint(ctx, ref)
+}
+
+func (s *SecretFieldStore) SaveConnection(ctx context.Context, c *ConnectionEntry) error {
+	if c == nil {
+		return fmt.Errorf("connection entry is nil")
+	}
+	stored := *c
+	cfg, err := EncryptConfigSecrets(s.cipher, c.Config)
+	if err != nil {
+		return err
+	}
+	stored.Config = cfg
+	return s.Storage.SaveConnection(ctx, &stored)
+}
+
+func (s *SecretFieldStore) GetConnection(ctx context.Context, name string) (*ConnectionEntry, error) {
+	c, err := s.Storage.GetConnection(ctx, name)
+	if err != nil || c == nil {
+		return c, err
+	}
+	return s.decryptConnection(c)
+}
+
+func (s *SecretFieldStore) ListConnections(ctx context.Context) ([]*ConnectionEntry, error) {
+	list, err := s.Storage.ListConnections(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*ConnectionEntry, 0, len(list))
+	for _, c := range list {
+		dec, err := s.decryptConnection(c)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, dec)
+	}
+	return out, nil
+}
+
+func (s *SecretFieldStore) GetSetting(ctx context.Context, key string) (string, error) {
+	val, err := s.Storage.GetSetting(ctx, key)
+	if err != nil || val == "" {
+		return val, err
+	}
+	return DecryptSettingValue(s.cipher, key, val)
+}
+
+func (s *SecretFieldStore) SetSetting(ctx context.Context, key, value string) error {
+	stored, err := EncryptSettingValue(s.cipher, key, value)
+	if err != nil {
+		return err
+	}
+	return s.Storage.SetSetting(ctx, key, stored)
+}
+
+func (s *SecretFieldStore) ListSettings(ctx context.Context) (map[string]string, error) {
+	all, err := s.Storage.ListSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(all))
+	for k, v := range all {
+		plain, err := DecryptSettingValue(s.cipher, k, v)
+		if err != nil {
+			return nil, err
+		}
+		out[k] = plain
+	}
+	return out, nil
+}
+
+// ReencryptSecrets rewrites every connection secret field and secret setting
+// with the current key. Call during a controlled rotation while previous keys
+// remain configured for decryption.
+func (s *SecretFieldStore) ReencryptSecrets(ctx context.Context) error {
+	if s == nil || s.cipher == nil || !s.cipher.Enabled() {
+		return fmt.Errorf("%w; set ETL_SPEC_ENCRYPTION_KEY before re-encrypting secrets", ErrSpecEncryptionKeyUnavailable)
+	}
+	conns, err := s.ListConnections(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range conns {
+		if err := s.SaveConnection(ctx, c); err != nil {
+			return fmt.Errorf("re-encrypt connection %q: %w", c.Name, err)
+		}
+	}
+	settings, err := s.ListSettings(ctx)
+	if err != nil {
+		return err
+	}
+	for k, v := range settings {
+		if !IsSecretFieldKey(k) || v == "" {
+			continue
+		}
+		if err := s.SetSetting(ctx, k, v); err != nil {
+			return fmt.Errorf("re-encrypt setting %q: %w", k, err)
+		}
+	}
+	return nil
+}
+
+func (s *SecretFieldStore) decryptConnection(c *ConnectionEntry) (*ConnectionEntry, error) {
+	if c == nil {
+		return nil, nil
+	}
+	cfg, err := DecryptConfigSecrets(s.cipher, c.Config)
+	if err != nil {
+		return nil, err
+	}
+	copy := *c
+	copy.Config = cfg
+	return &copy, nil
+}
+
+// UnwrapStorage returns the innermost non-wrapper Storage implementation.
+// Useful for dump scanners and raw SQL assertions in tests.
+func UnwrapStorage(s Storage) Storage {
+	for {
+		sf, ok := s.(*SecretFieldStore)
+		if !ok {
+			return s
+		}
+		s = sf.Storage
+	}
 }

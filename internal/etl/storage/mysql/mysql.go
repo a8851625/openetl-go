@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -32,7 +33,7 @@ func New(dsn string) (*Store, error) {
 		return nil, fmt.Errorf("ping mysql: %w", err)
 	}
 	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
+	if err := sqlstore.WithMigrationLock(context.Background(), db, sqlstore.MySQLDialect{}, s.migrate); err != nil {
 		db.Close()
 		return nil, err
 	}

@@ -50,6 +50,22 @@ dzhcore
 # Playwright CLI recordings (transient screenshots-in-progress live here)
 /.playwright-cli/
 
+# Local Go build caches and agent scratch dirs
+.tmp-go-cache/
+.tmp-go-cache-race/
+.opencode/
+
+# Local binary / accidental root build artifacts
+/openetl-go
+/main
+
+# Root-level package.json is only for local agent tooling, not the product
+/package.json
+/package-lock.json
+
+# Transient UI review screenshots
+/web/screenshots/
+
 # 但不忽略这三个子目录及其内容
 !addons/dict/
 !addons/space/

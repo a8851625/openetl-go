@@ -18,6 +18,7 @@ import (
 // storage. The worker binary (A11-redo Inc 6) constructs this once at startup.
 type ExecutorDeps struct {
 	Store     storage.Storage
+	SpecStore *storage.PipelineSpecStore
 	CPAdapter core.CheckpointStore
 	DLQWriter pipeline.DLQWriter
 	AlertMgr  *alert.Manager
@@ -37,9 +38,20 @@ type ExecutorDeps struct {
 // (PollLoop) MUST NOT mark the task completed in that case — it leaves the task
 // "running" so master.ReassignStaleTasks re-queues it after deregistration.
 func ExecuteShard(ctx context.Context, deps ExecutorDeps, task *storage.TaskAssignment) error {
-	row, err := deps.Store.GetPipeline(ctx, task.Pipeline)
+	specStore := deps.SpecStore
+	if specStore == nil {
+		cipher, err := storage.NewSpecCipherFromEnv()
+		if err != nil {
+			return fmt.Errorf("initialize pipeline spec encryption: %w", err)
+		}
+		specStore = storage.NewPipelineSpecStore(deps.Store, cipher)
+	}
+	row, err := specStore.GetRow(ctx, task.Pipeline)
 	if err != nil {
 		return fmt.Errorf("load pipeline %s: %w", task.Pipeline, err)
+	}
+	if row == nil {
+		return fmt.Errorf("load pipeline %s: not found", task.Pipeline)
 	}
 	var spec pipeline.Spec
 	if err := yaml.Unmarshal([]byte(row.SpecYAML), &spec); err != nil {

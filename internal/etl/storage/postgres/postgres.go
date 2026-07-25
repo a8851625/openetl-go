@@ -50,7 +50,9 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	s := &Store{db: db, pool: pool}
-	if err := s.migrate(ctx); err != nil {
+	if err := sqlstore.WithMigrationLock(ctx, db, sqlstore.PostgresDialect{}, func() error {
+		return s.migrate(ctx)
+	}); err != nil {
 		db.Close()
 		pool.Close()
 		return nil, err

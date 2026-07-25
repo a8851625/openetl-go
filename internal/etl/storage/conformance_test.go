@@ -23,6 +23,7 @@ func runConformanceSuite(t *testing.T, newStore func(t *testing.T) (storage.Stor
 	t.Run("PipelineDuplicateNamesUseID", func(t *testing.T) { testPipelineDuplicateNamesUseID(t, newStore) })
 	t.Run("PipelineStatus", func(t *testing.T) { testPipelineStatus(t, newStore) })
 	t.Run("PipelineVersions", func(t *testing.T) { testPipelineVersions(t, newStore) })
+	t.Run("PipelineAtomicLifecycle", func(t *testing.T) { testPipelineAtomicLifecycle(t, newStore) })
 	t.Run("CheckpointCRUD", func(t *testing.T) { testCheckpointCRUD(t, newStore) })
 	t.Run("CheckpointConcurrent", func(t *testing.T) { testCheckpointConcurrent(t, newStore) })
 	t.Run("DLQ", func(t *testing.T) { testDLQ(t, newStore) })
@@ -34,6 +35,7 @@ func runConformanceSuite(t *testing.T, newStore func(t *testing.T) (storage.Stor
 	t.Run("Plugins", func(t *testing.T) { testPlugins(t, newStore) })
 	t.Run("Connections", func(t *testing.T) { testConnections(t, newStore) })
 	t.Run("Settings", func(t *testing.T) { testSettings(t, newStore) })
+	t.Run("SecretFields", func(t *testing.T) { testSecretFields(t, newStore) })
 }
 
 // ── Pipeline definitions ─────────────────────────────────────────────
@@ -193,6 +195,52 @@ func testPipelineVersions(t *testing.T, newStore func(t *testing.T) (storage.Sto
 	// Most-recent first.
 	if list[0].Version != 2 {
 		t.Errorf("first version = %d, want 2 (most recent first)", list[0].Version)
+	}
+}
+
+func testPipelineAtomicLifecycle(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())) {
+	s, cleanup := newStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	atomicSave, ok := s.(interface {
+		SavePipelineWithVersion(context.Context, *storage.PipelineRow, string) error
+	})
+	if !ok {
+		t.Fatal("built-in storage backend does not implement atomic pipeline/version save")
+	}
+	atomicDelete, ok := s.(interface {
+		DeletePipelineWithCheckpoint(context.Context, string) error
+	})
+	if !ok {
+		t.Fatal("built-in storage backend does not implement atomic pipeline lifecycle delete")
+	}
+
+	row := &storage.PipelineRow{ID: "atomic-conformance-id", Name: "atomic-conformance", SpecYAML: "name: atomic-conformance\n", Status: "created"}
+	if err := atomicSave.SavePipelineWithVersion(ctx, row, row.SpecYAML); err != nil {
+		t.Fatalf("atomic save: %v", err)
+	}
+	loaded, err := s.GetPipeline(ctx, row.ID)
+	if err != nil || loaded == nil || loaded.SpecYAML != row.SpecYAML {
+		t.Fatalf("atomic current row: loaded=%#v err=%v", loaded, err)
+	}
+	versions, err := s.ListPipelineVersions(ctx, row.ID)
+	if err != nil || len(versions) != 1 || versions[0].SpecYAML != row.SpecYAML {
+		t.Fatalf("atomic versions: versions=%#v err=%v", versions, err)
+	}
+	if err := s.SaveCheckpoint(ctx, &storage.CheckpointRecord{JobName: row.ID, Source: "file", Position: json.RawMessage(`{"offset":1}`), Timestamp: time.Now()}); err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+	if err := atomicDelete.DeletePipelineWithCheckpoint(ctx, row.ID); err != nil {
+		t.Fatalf("atomic delete: %v", err)
+	}
+	if got, err := s.GetPipeline(ctx, row.ID); err != nil || got != nil {
+		t.Fatalf("pipeline survived atomic delete: row=%#v err=%v", got, err)
+	}
+	if got, err := s.ListPipelineVersions(ctx, row.ID); err != nil || len(got) != 0 {
+		t.Fatalf("versions survived atomic delete: versions=%#v err=%v", got, err)
+	}
+	if got, err := s.LoadCheckpoint(ctx, row.ID); err != nil || got != nil {
+		t.Fatalf("checkpoint survived atomic delete: checkpoint=%#v err=%v", got, err)
 	}
 }
 
@@ -750,6 +798,71 @@ func testSettings(t *testing.T, newStore func(t *testing.T) (storage.Storage, fu
 	if all["k1"] != "v2" {
 		t.Errorf("list = %+v", all)
 	}
+}
+
+// testSecretFields verifies field-level secret encryption when the backend is
+// wrapped with SecretFieldStore. Raw backends without a cipher keep plaintext
+// for development compatibility; the assertion still proves round-trip.
+func testSecretFields(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())) {
+	raw, cleanup := newStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = 9
+	}
+	// Encode without importing encoding/base64 into this file's existing imports set
+	// by using SpecCipher's Generate helper + explicit override via NewSpecCipher
+	// with a known base64 key produced below.
+	const keyB64 = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=" // 32 x 0x09
+	cipher, err := storage.NewSpecCipher("conformance", keyB64, "")
+	if err != nil {
+		t.Fatalf("NewSpecCipher: %v", err)
+	}
+	s := storage.NewSecretFieldStore(raw, cipher)
+
+	const secret = "conformance-secret-value"
+	if err := s.SaveConnection(ctx, &storage.ConnectionEntry{
+		Name:   "secret-conn",
+		Kind:   "source",
+		Type:   "kafka",
+		Config: map[string]any{"password": secret, "topic": "t"},
+	}); err != nil {
+		t.Fatalf("SaveConnection: %v", err)
+	}
+	got, err := s.GetConnection(ctx, "secret-conn")
+	if err != nil || got == nil || got.Config["password"] != secret {
+		t.Fatalf("GetConnection decrypted: err=%v got=%+v", err, got)
+	}
+	if err := s.SetSetting(ctx, "llm_api_key", secret); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	val, err := s.GetSetting(ctx, "llm_api_key")
+	if err != nil || val != secret {
+		t.Fatalf("GetSetting decrypted: err=%v val=%q", err, val)
+	}
+
+	// Direct raw store should not expose plaintext when the wrapper wrote ciphertext.
+	rawConn, err := raw.GetConnection(ctx, "secret-conn")
+	if err != nil || rawConn == nil {
+		t.Fatalf("raw GetConnection: err=%v", err)
+	}
+	rawPW, _ := rawConn.Config["password"].(string)
+	if rawPW == secret || !stringsHasPrefix(rawPW, "enc:v1:conformance:") {
+		t.Fatalf("raw password not encrypted: %q", rawPW)
+	}
+	rawSetting, err := raw.GetSetting(ctx, "llm_api_key")
+	if err != nil {
+		t.Fatalf("raw GetSetting: %v", err)
+	}
+	if rawSetting == secret || !stringsHasPrefix(rawSetting, "enc:v1:conformance:") {
+		t.Fatalf("raw setting not encrypted: %q", rawSetting)
+	}
+}
+
+func stringsHasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
 // jsonEqual reports whether two raw JSON documents are semantically equal,

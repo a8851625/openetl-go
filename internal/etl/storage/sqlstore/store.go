@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/storage"
@@ -30,8 +31,10 @@ type Dialect interface {
 
 // Store implements storage.Storage with one shared SQL code path.
 type Store struct {
-	db      *sql.DB
-	dialect Dialect
+	db              *sql.DB
+	dialect         Dialect
+	failureMu       sync.RWMutex
+	failureInjector func(operation string) error
 }
 
 func New(db *sql.DB, dialect Dialect) *Store {
@@ -40,6 +43,26 @@ func New(db *sql.DB, dialect Dialect) *Store {
 
 func (s *Store) DB() *sql.DB {
 	return s.db
+}
+
+// SetFailureInjector installs a test/diagnostic hook for persistence
+// operations. It is intentionally small and nil-safe; production callers do
+// not set it. The hook lets recovery tests prove that a mid-transaction error
+// rolls back both the current pipeline row and its version row.
+func (s *Store) SetFailureInjector(fn func(operation string) error) {
+	s.failureMu.Lock()
+	s.failureInjector = fn
+	s.failureMu.Unlock()
+}
+
+func (s *Store) injectFailure(operation string) error {
+	s.failureMu.RLock()
+	fn := s.failureInjector
+	s.failureMu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(operation)
 }
 
 func (s *Store) exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -62,12 +85,16 @@ func (s *Store) Ping() error {
 }
 
 func (s *Store) MigrateSQLite() error {
-	return s.migrate()
+	return WithMigrationLock(context.Background(), s.db, s.dialect, s.migrateUnlocked)
 }
 
 // ── Migrations ───────────────────────────────────────────────────────
 
 func (s *Store) migrate() error {
+	return s.migrateUnlocked()
+}
+
+func (s *Store) migrateUnlocked() error {
 	migrations := []string{
 		`CREATE TABLE IF NOT EXISTS pipelines (
 			id          TEXT PRIMARY KEY,
@@ -200,13 +227,16 @@ func (s *Store) migrate() error {
 
 // runVersionedMigrations applies incremental schema changes tracked by
 // the _schema_version table. Each migration is idempotent and recorded
-// so it only runs once.
+// so it only runs once. Failures abort before recording the version so a
+// half-applied step is not treated as complete on the next startup.
 func (s *Store) runVersionedMigrations() error {
-	s.db.Exec(`CREATE TABLE IF NOT EXISTS _schema_version (
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS _schema_version (
 		version     INTEGER PRIMARY KEY,
 		description TEXT,
 		applied_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`)
+	)`); err != nil {
+		return fmt.Errorf("create _schema_version: %w", err)
+	}
 
 	type migration struct {
 		version     int
@@ -234,7 +264,9 @@ func (s *Store) runVersionedMigrations() error {
 
 	for _, m := range migrations {
 		var exists int
-		s.db.QueryRow("SELECT COUNT(*) FROM _schema_version WHERE version = ?", m.version).Scan(&exists)
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM _schema_version WHERE version = ?", m.version).Scan(&exists); err != nil {
+			return fmt.Errorf("read schema version %d: %w", m.version, err)
+		}
 		if exists > 0 {
 			continue
 		}
@@ -257,7 +289,9 @@ func (s *Store) runVersionedMigrations() error {
 				return fmt.Errorf("create pipeline name index: %w", err)
 			}
 		}
-		s.db.Exec("INSERT INTO _schema_version (version, description) VALUES (?, ?)", m.version, m.description)
+		if _, err := s.db.Exec("INSERT INTO _schema_version (version, description) VALUES (?, ?)", m.version, m.description); err != nil {
+			return fmt.Errorf("record schema version %d: %w", m.version, err)
+		}
 	}
 	if err := s.backfillPipelineIDs(); err != nil {
 		return err
@@ -377,6 +411,104 @@ func (s *Store) SavePipeline(ctx context.Context, row *storage.PipelineRow) erro
 	return err
 }
 
+// SavePipelineWithVersion persists the current row and its historical version
+// in one SQL transaction. All built-in SQL backends embed sqlstore.Store, so
+// PipelineSpecStore can discover this capability without expanding the public
+// Storage interface used by external test doubles/plugins.
+func (s *Store) SavePipelineWithVersion(ctx context.Context, row *storage.PipelineRow, specYAML string) error {
+	return s.savePipelineWithVersion(ctx, row, specYAML, false)
+}
+
+// SavePipelineWithVersionAndCheckpointReset extends the atomic current/version
+// commit with an optional checkpoint delete used by incompatible spec updates.
+func (s *Store) SavePipelineWithVersionAndCheckpointReset(ctx context.Context, row *storage.PipelineRow, specYAML string, resetCheckpoint bool) error {
+	return s.savePipelineWithVersion(ctx, row, specYAML, resetCheckpoint)
+}
+
+func (s *Store) savePipelineWithVersion(ctx context.Context, row *storage.PipelineRow, specYAML string, resetCheckpoint bool) error {
+	if row == nil {
+		return fmt.Errorf("pipeline row is required")
+	}
+	if row.ID == "" {
+		if existing, err := s.GetPipeline(ctx, row.Name); err == nil && existing != nil {
+			row.ID = existing.ID
+		}
+	}
+	storage.EnsurePipelineID(row)
+
+	// Retry allocation under the unique (pipeline, version) constraint so two
+	// concurrent updaters cannot both observe the same MAX(version) and commit
+	// a duplicate version number. The current/version/checkpoint boundary stays
+	// one transaction per attempt.
+	const maxAttempts = 8
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := s.savePipelineWithVersionOnce(ctx, row, specYAML, resetCheckpoint)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isUniqueVersionConflict(err) {
+			return err
+		}
+	}
+	return fmt.Errorf("allocate pipeline version after %d attempts: %w", maxAttempts, lastErr)
+}
+
+func (s *Store) savePipelineWithVersionOnce(ctx context.Context, row *storage.PipelineRow, specYAML string, resetCheckpoint bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin pipeline/version transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := s.injectFailure("pipeline.current"); err != nil {
+		return fmt.Errorf("save current pipeline: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(s.dialect.PipelineUpsert()), row.ID, row.Name, row.SpecYAML, row.Status); err != nil {
+		return fmt.Errorf("save current pipeline: %w", err)
+	}
+
+	if err := s.injectFailure("pipeline.version"); err != nil {
+		return fmt.Errorf("save pipeline version: %w", err)
+	}
+	var maxVer sql.NullInt64
+	if err := tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT MAX(version) FROM pipeline_versions WHERE pipeline=?`), row.ID).Scan(&maxVer); err != nil {
+		return fmt.Errorf("read next pipeline version: %w", err)
+	}
+	version := 1
+	if maxVer.Valid {
+		version = int(maxVer.Int64) + 1
+	}
+	if _, err := tx.ExecContext(ctx,
+		s.dialect.Bind(`INSERT INTO pipeline_versions (pipeline, version, spec_yaml) VALUES (?, ?, ?)`),
+		row.ID, version, specYAML); err != nil {
+		return fmt.Errorf("save pipeline version %d: %w", version, err)
+	}
+	if resetCheckpoint {
+		if err := s.injectFailure("checkpoint.delete"); err != nil {
+			return fmt.Errorf("reset pipeline checkpoint: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM checkpoints WHERE job_name=? OR job_name=?`), row.ID, row.Name); err != nil {
+			return fmt.Errorf("reset pipeline checkpoint: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit pipeline/version transaction: %w", err)
+	}
+	return nil
+}
+
+func isUniqueVersionConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique") ||
+		strings.Contains(msg, "duplicate") ||
+		strings.Contains(msg, "constraint")
+}
+
 func (s *Store) GetPipeline(ctx context.Context, ref string) (*storage.PipelineRow, error) {
 	row := &storage.PipelineRow{}
 	err := s.queryRow(ctx,
@@ -410,8 +542,53 @@ func (s *Store) ListPipelines(ctx context.Context) ([]*storage.PipelineRow, erro
 }
 
 func (s *Store) DeletePipeline(ctx context.Context, ref string) error {
+	if err := s.injectFailure("pipeline.delete"); err != nil {
+		return err
+	}
 	_, err := s.exec(ctx, `DELETE FROM pipelines WHERE id=? OR name=?`, ref, ref)
 	return err
+}
+
+// DeletePipelineWithCheckpoint removes a pipeline, its historical versions,
+// and its checkpoint in one transaction. It is the lifecycle counterpart to
+// SavePipelineWithVersion and prevents a successful API delete from leaving
+// orphaned versions or a checkpoint that can resurrect stale state.
+func (s *Store) DeletePipelineWithCheckpoint(ctx context.Context, ref string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin pipeline delete transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := s.injectFailure("pipeline.delete"); err != nil {
+		return fmt.Errorf("delete pipeline: %w", err)
+	}
+	var id, name string
+	err = tx.QueryRowContext(ctx,
+		s.dialect.Bind(`SELECT id, name FROM pipelines WHERE id=? OR name=? ORDER BY created_at LIMIT 1`),
+		ref, ref,
+	).Scan(&id, &name)
+	if err == sql.ErrNoRows {
+		id, name = ref, ref
+	} else if err != nil {
+		return fmt.Errorf("resolve pipeline for delete: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM pipeline_versions WHERE pipeline=? OR pipeline=?`), id, name); err != nil {
+		return fmt.Errorf("delete pipeline versions: %w", err)
+	}
+	if err := s.injectFailure("checkpoint.delete"); err != nil {
+		return fmt.Errorf("delete pipeline checkpoint: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM checkpoints WHERE job_name=? OR job_name=?`), id, name); err != nil {
+		return fmt.Errorf("delete pipeline checkpoint: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM pipelines WHERE id=? OR name=?`), ref, ref); err != nil {
+		return fmt.Errorf("delete pipeline row: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit pipeline delete transaction: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) UpdatePipelineStatus(ctx context.Context, ref string, status string) error {
@@ -424,16 +601,27 @@ func (s *Store) UpdatePipelineStatus(ctx context.Context, ref string, status str
 // ── Pipeline versions ────────────────────────────────────────────────
 
 func (s *Store) SavePipelineVersion(ctx context.Context, name string, specYAML string) (int, error) {
-	var maxVer sql.NullInt64
-	_ = s.queryRow(ctx, `SELECT MAX(version) FROM pipeline_versions WHERE pipeline=?`, name).Scan(&maxVer)
-	version := 1
-	if maxVer.Valid {
-		version = int(maxVer.Int64) + 1
+	const maxAttempts = 8
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		var maxVer sql.NullInt64
+		_ = s.queryRow(ctx, `SELECT MAX(version) FROM pipeline_versions WHERE pipeline=?`, name).Scan(&maxVer)
+		version := 1
+		if maxVer.Valid {
+			version = int(maxVer.Int64) + 1
+		}
+		_, err := s.exec(ctx,
+			`INSERT INTO pipeline_versions (pipeline, version, spec_yaml) VALUES (?, ?, ?)`,
+			name, version, specYAML)
+		if err == nil {
+			return version, nil
+		}
+		lastErr = err
+		if !isUniqueVersionConflict(err) {
+			return 0, err
+		}
 	}
-	_, err := s.exec(ctx,
-		`INSERT INTO pipeline_versions (pipeline, version, spec_yaml) VALUES (?, ?, ?)`,
-		name, version, specYAML)
-	return version, err
+	return 0, fmt.Errorf("allocate pipeline version after %d attempts: %w", maxAttempts, lastErr)
 }
 
 func (s *Store) GetPipelineVersion(ctx context.Context, name string, version int) (*storage.PipelineVersion, error) {
@@ -489,6 +677,9 @@ func (s *Store) LoadCheckpoint(ctx context.Context, jobName string) (*storage.Ch
 }
 
 func (s *Store) DeleteCheckpoint(ctx context.Context, jobName string) error {
+	if err := s.injectFailure("checkpoint.delete"); err != nil {
+		return err
+	}
 	_, err := s.exec(ctx, `DELETE FROM checkpoints WHERE job_name=?`, jobName)
 	return err
 }
