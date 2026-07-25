@@ -50,7 +50,9 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	s := &Store{db: db, pool: pool}
-	if err := s.migrate(ctx); err != nil {
+	if err := sqlstore.WithMigrationLock(ctx, db, sqlstore.PostgresDialect{}, func() error {
+		return s.migrate(ctx)
+	}); err != nil {
 		db.Close()
 		pool.Close()
 		return nil, err
@@ -213,11 +215,13 @@ func (s *Store) migrate(ctx context.Context) error {
 // runVersionedMigrations applies incremental schema changes tracked by
 // the _schema_version table.
 func (s *Store) runVersionedMigrations(ctx context.Context) error {
-	s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS _schema_version (
+	if _, err := s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS _schema_version (
 		version     INTEGER PRIMARY KEY,
 		description TEXT,
 		applied_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-	)`)
+	)`); err != nil {
+		return fmt.Errorf("create _schema_version: %w", err)
+	}
 
 	type migration struct {
 		version     int
@@ -244,7 +248,9 @@ func (s *Store) runVersionedMigrations(ctx context.Context) error {
 
 	for _, m := range migrations {
 		var exists int
-		s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM _schema_version WHERE version = $1", m.version).Scan(&exists)
+		if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM _schema_version WHERE version = $1", m.version).Scan(&exists); err != nil {
+			return fmt.Errorf("read schema version %d: %w", m.version, err)
+		}
 		if exists > 0 {
 			continue
 		}
@@ -261,7 +267,9 @@ func (s *Store) runVersionedMigrations(ctx context.Context) error {
 			_, _ = s.pool.Exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_pipelines_id ON pipelines(id)`)
 			_, _ = s.pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_pipelines_name ON pipelines(name)`)
 		}
-		s.pool.Exec(ctx, "INSERT INTO _schema_version (version, description) VALUES ($1, $2)", m.version, m.description)
+		if _, err := s.pool.Exec(ctx, "INSERT INTO _schema_version (version, description) VALUES ($1, $2)", m.version, m.description); err != nil {
+			return fmt.Errorf("record schema version %d: %w", m.version, err)
+		}
 	}
 	if err := s.backfillPipelineIDs(ctx); err != nil {
 		return err

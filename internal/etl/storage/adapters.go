@@ -215,12 +215,40 @@ func (p *PipelineSpecStore) Save(ctx context.Context, name, specYAML, status str
 }
 
 func (p *PipelineSpecStore) SaveWithID(ctx context.Context, id, name, specYAML, status string) error {
+	return p.SaveWithIDAndCheckpointReset(ctx, id, name, specYAML, status, false)
+}
+
+// SaveWithIDAndCheckpointReset persists current/version (and optional checkpoint
+// reset) through the atomic backend path when available so concurrent version
+// allocation and PR-0 transaction boundaries stay consistent.
+func (p *PipelineSpecStore) SaveWithIDAndCheckpointReset(ctx context.Context, id, name, specYAML, status string, resetCheckpoint bool) error {
 	row := &PipelineRow{ID: id, Name: name, SpecYAML: specYAML, Status: status}
+	if atomicStore, ok := p.store.(interface {
+		SavePipelineWithVersionAndCheckpointReset(context.Context, *PipelineRow, string, bool) error
+	}); ok {
+		return atomicStore.SavePipelineWithVersionAndCheckpointReset(ctx, row, specYAML, resetCheckpoint)
+	}
+	if atomicStore, ok := p.store.(interface {
+		SavePipelineWithVersion(context.Context, *PipelineRow, string) error
+	}); ok {
+		if err := atomicStore.SavePipelineWithVersion(ctx, row, specYAML); err != nil {
+			return err
+		}
+		if resetCheckpoint {
+			return p.store.DeleteCheckpoint(ctx, row.ID)
+		}
+		return nil
+	}
 	if err := p.store.SavePipeline(ctx, row); err != nil {
 		return err
 	}
-	_, err := p.store.SavePipelineVersion(ctx, row.ID, specYAML)
-	return err
+	if _, err := p.store.SavePipelineVersion(ctx, row.ID, specYAML); err != nil {
+		return err
+	}
+	if resetCheckpoint {
+		return p.store.DeleteCheckpoint(ctx, row.ID)
+	}
+	return nil
 }
 
 func (p *PipelineSpecStore) Get(ctx context.Context, name string) (string, error) {
@@ -239,6 +267,11 @@ func (p *PipelineSpecStore) List(ctx context.Context) ([]*PipelineRow, error) {
 }
 
 func (p *PipelineSpecStore) Delete(ctx context.Context, name string) error {
+	if atomicStore, ok := p.store.(interface {
+		DeletePipelineWithCheckpoint(context.Context, string) error
+	}); ok {
+		return atomicStore.DeletePipelineWithCheckpoint(ctx, name)
+	}
 	return p.store.DeletePipeline(ctx, name)
 }
 
