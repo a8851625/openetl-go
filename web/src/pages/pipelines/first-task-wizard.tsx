@@ -744,7 +744,7 @@ export function FirstTaskWizard({
         </div>
         {opts?.connectionSelected ? (
           <div className="mb-2 text-[11px] text-emerald-700" data-testid={`${testId}-scope-hint`}>
-            {t('wizard.connectionFirst')}
+            {t('field.behaviorOnlyHint')}
           </div>
         ) : (
           <div className="mb-2 text-[11px] text-muted-foreground" data-testid={`${testId}-scope-hint`}>
@@ -1197,6 +1197,45 @@ export function FirstTaskWizard({
                             </div>
                             <div className="flex shrink-0 gap-1">
                               <Button
+                                data-testid={`wizard-transform-move-up-${index}`}
+                                variant="ghost"
+                                size="sm"
+                                className="px-2"
+                                onClick={() => moveTransform(index, -1)}
+                                disabled={index === 0}
+                                title="Move up"
+                                aria-label="Move up"
+                              >
+                                ↑
+                              </Button>
+                              <Button
+                                data-testid={`wizard-transform-move-down-${index}`}
+                                variant="ghost"
+                                size="sm"
+                                className="px-2"
+                                onClick={() => moveTransform(index, 1)}
+                                disabled={index === transformConfigs.length - 1}
+                                title="Move down"
+                                aria-label="Move down"
+                              >
+                                ↓
+                              </Button>
+                              <Button
+                                data-testid={`wizard-transform-dry-run-${index}`}
+                                variant="secondary"
+                                size="sm"
+                                className="px-2"
+                                onClick={() => {
+                                  setTransformMoreOpen(true);
+                                  dryRunThroughStage(index);
+                                }}
+                                disabled={busy === `stage-${index}`}
+                                title="Dry-run through this stage"
+                                aria-label={`Dry-run stage ${index + 1}`}
+                              >
+                                <PlayIcon />
+                              </Button>
+                              <Button
                                 data-testid={`wizard-transform-remove-${index}`}
                                 variant="destructive"
                                 size="sm"
@@ -1233,6 +1272,19 @@ export function FirstTaskWizard({
               >
                 {transformMoreOpen ? t('wizard.hideOptions') : t('wizard.moreOptions')}
               </Button>
+              {/* Stage dry-run feedback stays visible even when advanced options collapse. */}
+              {stageDryRunResult?.result !== undefined && (
+                <div data-testid={`wizard-transform-stage-result-${stageDryRunResult.index}`} className="mt-3 rounded border border-emerald-100 bg-card p-2">
+                  <div className="mb-1 text-[11px] font-semibold text-emerald-700">Stage {stageDryRunResult.index + 1} output</div>
+                  <pre className="max-h-36 overflow-auto text-xs">{prettyJSON(stageDryRunResult.result)}</pre>
+                </div>
+              )}
+              {stageDryRunResult?.error && (
+                <div data-testid={`wizard-transform-stage-error-${stageDryRunResult.index}`} className="mt-3 rounded border border-rose-100 bg-card p-2 text-xs text-rose-700">
+                  <div className="mb-1 font-semibold">Stage {(stageDryRunResult.index ?? 0) + 1} failed</div>
+                  <pre className="max-h-36 overflow-auto whitespace-pre-wrap">{stageDryRunResult.error}</pre>
+                </div>
+              )}
               {transformMoreOpen && (
                 <div className="mt-3 space-y-3 rounded-lg border border-dashed border-border p-3">
                   <div className="flex flex-wrap gap-2">
@@ -1270,18 +1322,6 @@ export function FirstTaskWizard({
                     <div className="rounded-lg border border-primary/20 bg-accent/40 p-3">
                       <div className="mb-2 text-xs font-semibold text-primary">Dry-run output</div>
                       <pre className="max-h-56 overflow-auto text-xs">{prettyJSON(dryRunResult)}</pre>
-                    </div>
-                  )}
-                  {stageDryRunResult?.result !== undefined && (
-                    <div data-testid={`wizard-transform-stage-result-${stageDryRunResult.index}`} className="rounded border border-emerald-100 bg-card p-2">
-                      <div className="mb-1 text-[11px] font-semibold text-emerald-700">Stage {stageDryRunResult.index + 1} output</div>
-                      <pre className="max-h-36 overflow-auto text-xs">{prettyJSON(stageDryRunResult.result)}</pre>
-                    </div>
-                  )}
-                  {stageDryRunResult?.error && (
-                    <div data-testid={`wizard-transform-stage-error-${stageDryRunResult.index}`} className="rounded border border-rose-100 bg-card p-2 text-xs text-rose-700">
-                      <div className="mb-1 font-semibold">Stage {(stageDryRunResult.index ?? 0) + 1} failed</div>
-                      <pre className="max-h-36 overflow-auto whitespace-pre-wrap">{stageDryRunResult.error}</pre>
                     </div>
                   )}
                 </div>
@@ -1527,6 +1567,15 @@ export function FirstTaskWizard({
               <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
                 batch {batchSize} · cp {checkpointIntervalSec}s · DLQ {dlqEnabled ? 'on' : 'off'}
               </div>
+              <a
+                href="/api/v2/docs"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex text-xs font-medium text-primary hover:underline"
+                data-testid="wizard-docs-link"
+              >
+                API docs
+              </a>
               <p className="text-[11px] leading-relaxed text-muted-foreground">{t('wizard.summaryFoot')}</p>
             </div>
           </aside>
