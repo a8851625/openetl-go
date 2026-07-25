@@ -15,6 +15,7 @@
 
 ### Reliability and security
 
+- PR-1.3 backup/restore/upgrade/janitor: control-plane JSON backup covers 11 object classes with reconcile; legacy SQLite forward upgrade and fail-closed startup; retention janitor (DLQ/audit/run/task) with hard caps, health status, and failure alerts; e2e `hack/e2e-backup-restore-*` / `hack/e2e-storage-upgrade-*`.
 - Closed the PR-0 control-plane gate: encrypted spec restart/rollback, atomic current/version/checkpoint boundaries, scheduler prepare/commit compensation, production fail-closed profile, CORS/trusted-proxy/security headers, and the two-port TLS topology now have current-version evidence.
 - Kept the UI API token in page memory and added `hack/e2e-ui-token.sh` as a focused browser gate; `.dockerignore` now excludes local Go/race caches, build outputs, and screenshots from production image contexts.
 - **PR-2 main-path failure reconciliation**:
@@ -25,6 +26,8 @@
 
 ### Validation
 
+- `./hack/e2e-backup-restore-sqlite.sh`
+- `./hack/e2e-storage-upgrade-sqlite.sh`
 - `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
 - `go test ./internal/etl/server/ -run 'PluginSchema'`
 - `go test ./internal/etl/server/ -run PathContract`

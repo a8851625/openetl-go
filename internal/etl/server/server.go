@@ -73,6 +73,8 @@ type Server struct {
 	distributed    bool
 	dlqTTL         time.Duration
 	dlqMaxCount    int
+	retention      RetentionConfig
+	janitor        *janitorState
 	schemaRegistry *SchemaRegistry
 	// connDeprecations collects behavior-field deprecation warnings emitted
 	// by resolveLinearEndpoint during a single spec validate/load pass.
@@ -329,7 +331,7 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 		return nil
 	})
 
-	// DLQ governance: TTL and max count from env/config
+	// DLQ governance: TTL and max count from env/config (also loaded into retention).
 	if ttl := os.Getenv("ETL_DLQ_TTL"); ttl != "" {
 		if d, err := time.ParseDuration(ttl); err == nil {
 			s.dlqTTL = d
@@ -340,6 +342,7 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 			// parsed
 		}
 	}
+	s.initJanitor(ctx)
 
 	// Schema Registry
 	schemasDir := configString(ctx, "ETL_SCHEMAS_DIR", "etl.schemasDir", "./data/schemas")
@@ -795,9 +798,9 @@ func (s *Server) StartAll(ctx context.Context) error {
 	// Start the auto-restart reconciler.
 	go s.reconcilerLoop(ctx)
 
-	// Start the DLQ janitor for TTL-based cleanup.
-	if s.dlqTTL > 0 {
-		go s.dlqJanitorLoop(ctx)
+	// Start the retention janitor for DLQ / audit / run / task cleanup.
+	if s.retention.enabled() {
+		go s.retentionJanitorLoop(ctx)
 	}
 
 	return nil
@@ -920,30 +923,14 @@ func (s *Server) commitRuntimeScheduleStatus(ctx context.Context, id string, sch
 	}
 }
 
-// dlqJanitorLoop periodically purges DLQ entries older than the configured TTL.
+// dlqJanitorLoop is retained as a thin wrapper for tests that still call it;
+// production StartAll uses retentionJanitorLoop (PR-1.3).
 func (s *Server) dlqJanitorLoop(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			s.purgeExpiredDLQ(ctx)
-		case <-ctx.Done():
-			return
-		}
-	}
+	s.retentionJanitorLoop(ctx)
 }
 
 func (s *Server) purgeExpiredDLQ(ctx context.Context) {
-	cutoff := time.Now().Add(-s.dlqTTL)
-	deleted, err := s.store.DeleteDeadLettersByFilter(ctx, storage.DLQFilter{Until: cutoff, Limit: 10000})
-	if err != nil {
-		g.Log().Warningf(ctx, "DLQ janitor: purge failed: %v", err)
-		return
-	}
-	if deleted > 0 {
-		g.Log().Infof(ctx, "DLQ janitor: purged %d entries older than %s", deleted, cutoff.Format(time.RFC3339))
-	}
+	s.runRetentionJanitor(ctx)
 }
 
 // reconcilerLoop periodically checks for failed pipelines and restarts them
@@ -4624,6 +4611,19 @@ func (s *Server) getHealthStatus() map[string]string {
 			components = append(components, telemetry.ComponentHealth{
 				Name: "alert_queue", Status: telemetry.HealthOK, Level: telemetry.HealthOK,
 			})
+		}
+	}
+
+// Retention / janitor observability (PR-1.3) — surface on health extra map.
+	js := s.JanitorStatusSnapshot()
+	extra["janitor"] = js.ConfigSummary
+	if js.Enabled {
+		if !js.LastRunAt.IsZero() {
+			extra["janitor_last_run"] = js.LastRunAt.Format(time.RFC3339)
+			extra["janitor_last_deleted"] = fmt.Sprintf("%d", js.LastDeleted)
+		}
+		if js.LastError != "" {
+			extra["janitor_last_error"] = js.LastError
 		}
 	}
 

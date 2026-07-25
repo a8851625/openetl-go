@@ -280,7 +280,13 @@ Resource baselines: [resource-baseline.md](./resource-baseline.md).
 
 ## Production runbook (minimum)
 
-### Backup / restore (SQLite)
+### Backup / restore (control-plane metadata)
+
+Backup covers pipelines, versions, checkpoints, DLQ, audit, runs, workers,
+tasks, plugins, connections and settings. Secret fields remain as `enc:v1`
+envelopes in the JSON snapshot (never re-encoded to plaintext).
+
+#### SQLite (file copy — simplest)
 
 Logical export (PR-1.3):
 
@@ -295,20 +301,65 @@ Retention janitor helper: `storage.ApplyRetention` for aged `run_history` / `aud
 ### Backup / restore (SQLite) — file copy
 
 ```sh
-# Backup metadata DB while app is stopped or using a consistent copy
+# Prefer a consistent copy: stop the process or use a filesystem snapshot.
+mkdir -p ./backup
 cp ./data/etl.db ./backup/etl.db.$(date +%Y%m%d)
 
 # Restore
 cp ./backup/etl.db.YYYYMMDD ./data/etl.db
 ```
 
-MySQL/PostgreSQL: use vendor `mysqldump` / `pg_dump` on the storage DSN database. Specs under `pipes/` and plugin WASM under `data/plugins/` should be version-controlled or snapshotted separately.
+#### Portable JSON backup (all backends)
 
-### Retention
+Use the Go backup package (also exercised by e2e):
 
-- DLQ: use `GET/DELETE /api/v2/dlq/{pipeline}` and storage TTL policies when configured.
-- Audit: disable with `ETL_AUDIT_ENABLED=false` only when compliance allows.
-- Finished tasks: monitor `task_assignments` growth; distributed mode reassigns stale tasks via master heartbeat.
+```sh
+# Hermetic smoke (always)
+bash hack/e2e-backup-restore-sqlite.sh
+
+# External backends (require container runtime)
+CONTAINER_CLI=docker bash hack/e2e-backup-restore-mysql.sh
+CONTAINER_CLI=docker bash hack/e2e-backup-restore-postgres.sh
+```
+
+Programmatic path (tests / ops tooling):
+
+1. `backup.Export(ctx, store, backup.Options{Backend: "sqlite"})`
+2. `backup.WriteFile(path, snap)` (mode `0600`)
+3. `backup.Restore(ctx, store, snap, backup.Options{ClearBeforeRestore: true})`
+4. `backup.Reconcile(ctx, store, snap)` — object counts + critical tables must match
+
+#### MySQL / PostgreSQL (vendor dump)
+
+```sh
+# MySQL
+mysqldump --single-transaction -u ... -p... openetl > backup-openetl-$(date +%Y%m%d).sql
+
+# PostgreSQL
+pg_dump --format=custom "$ETL_STORAGE_DSN" > backup-openetl-$(date +%Y%m%d).dump
+```
+
+Also snapshot `pipes/` and plugin WASM under `data/plugins/` if they are not
+fully represented in the control-plane DB.
+
+### Retention / janitor
+
+Configurable TTLs with hard caps and failure alerts:
+
+| Env | Config key | Default | Cap |
+|-----|------------|---------|-----|
+| `ETL_DLQ_TTL` | `etl.retention.dlqTTL` | off | — |
+| `ETL_DLQ_MAX_COUNT` | `etl.retention.dlqMaxCount` | off | 1_000_000 |
+| `ETL_AUDIT_TTL` | `etl.retention.auditTTL` | off | — |
+| `ETL_RUN_HISTORY_TTL` | `etl.retention.runHistoryTTL` | off | — |
+| `ETL_TASK_TTL` | `etl.retention.taskTTL` | off | — |
+| `ETL_JANITOR_INTERVAL` | `etl.retention.interval` | `5m` | — |
+| `ETL_JANITOR_BATCH_LIMIT` | `etl.retention.batchLimit` | `10000` | 100_000 |
+
+- Janitor status is exposed on `GET /api/v2/health` (`janitor`, `janitor_last_run`, `janitor_last_deleted`, `janitor_last_error`).
+- Purge failures emit a warning alert (`retention janitor failure`) via the configured alert channels.
+- Manual DLQ: `GET/DELETE /api/v2/dlq/{pipeline}`.
+- Do not set `ETL_AUDIT_ENABLED=false` in production unless compliance allows.
 
 ### DLQ backlog
 
@@ -326,10 +377,21 @@ MySQL/PostgreSQL: use vendor `mysqldump` / `pg_dump` on the storage DSN database
 
 ### Upgrade / rollback
 
-1. Backup storage + `pipes/` + plugins
+1. **Backup** storage (JSON snapshot or vendor dump) + `pipes/` + plugins
 2. Deploy new image/binary (`make image TAG=...` or pack release)
-3. Run `bash hack/e2e-runtime-smoke.sh` and a production-candidate e2e subset
-4. Rollback: redeploy previous image and restore storage snapshot if schema migration fails
+3. On start, storage runs versioned migrations under a migration lock:
+   - SQLite lease / MySQL `GET_LOCK` / PG advisory lock
+   - Any migration error **blocks startup** (no half-migrated schema)
+4. Smoke:
+   ```sh
+   bash hack/e2e-storage-upgrade-sqlite.sh
+   CONTAINER_CLI=docker bash hack/e2e-storage-upgrade-mysql.sh
+   CONTAINER_CLI=docker bash hack/e2e-storage-upgrade-postgres.sh
+   bash hack/e2e-runtime-smoke.sh
+   ```
+5. **Rollback**: redeploy previous image and restore the storage snapshot if
+   schema migration fails. Do not start the new binary against a half-written DB;
+   the process will refuse to open it.
 
 ### Metrics to watch
 

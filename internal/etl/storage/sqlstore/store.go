@@ -27,6 +27,9 @@ type Dialect interface {
 	SettingKeyColumn() string
 	BoolValue(v bool) any
 	RunHistoryInsertReturningID() bool
+	// SupportsDeleteLimit reports whether DELETE ... LIMIT N is legal.
+	// PostgreSQL returns false and requires a ctid/subquery form.
+	SupportsDeleteLimit() bool
 }
 
 // Store implements storage.Storage with one shared SQL code path.
@@ -747,18 +750,21 @@ func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) err
 func (s *Store) GetDeadLetterByID(ctx context.Context, jobName string, id int64) (*storage.DLQRecord, error) {
 	rec := &storage.DLQRecord{}
 	var recJSON string
+	var errMsg, errClass sql.NullString
 	err := s.queryRow(ctx,
 		`SELECT id, job_name, record_json, error, error_class, attempt,
 		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
 		 FROM dead_letters WHERE job_name=? AND id=?`,
 		jobName, id,
-	).Scan(&rec.ID, &rec.JobName, &recJSON, &rec.Error, &rec.ErrorClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt)
+	).Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	rec.Error = errMsg.String
+	rec.ErrorClass = errClass.String
 	if err := json.Unmarshal([]byte(recJSON), &rec.Record); err != nil {
 		return nil, err
 	}
@@ -776,9 +782,12 @@ func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) (
 	for rows.Next() {
 		rec := &storage.DLQRecord{}
 		var recJSON string
-		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &rec.Error, &rec.ErrorClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt); err != nil {
+		var errMsg, errClass sql.NullString
+		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt); err != nil {
 			return nil, err
 		}
+		rec.Error = errMsg.String
+		rec.ErrorClass = errClass.String
 		if err := json.Unmarshal([]byte(recJSON), &rec.Record); err != nil {
 			continue
 		}
@@ -789,11 +798,46 @@ func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) (
 
 func (s *Store) DeleteDeadLettersByFilter(ctx context.Context, filter storage.DLQFilter) (int64, error) {
 	qb := newDLQDeleteBuilder(filter)
-	res, err := s.exec(ctx, qb.query, qb.args...)
+	q := qb.query
+	// modernc SQLite and PostgreSQL both reject bare DELETE ... LIMIT;
+	// rewrite every limited delete into a portable subquery form.
+	if filter.Limit > 0 {
+		q = rewriteLimitedDelete(q, filter.Limit, s.dialect.SupportsDeleteLimit())
+	}
+	res, err := s.exec(ctx, q, qb.args...)
 	if err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// rewriteLimitedDelete turns "DELETE FROM t WHERE pred LIMIT N" into a
+// portable form. PostgreSQL uses ctid; SQLite/MySQL use id (or rowid fallback).
+// supportsBareLimit is reserved for future dialects that accept DELETE LIMIT
+// natively; today all three backends use the subquery form for consistency.
+func rewriteLimitedDelete(query string, limit int, supportsBareLimit bool) string {
+	_ = supportsBareLimit
+	const marker = " LIMIT "
+	idx := strings.LastIndex(strings.ToUpper(query), marker)
+	if idx < 0 || limit <= 0 {
+		return query
+	}
+	body := strings.TrimSpace(query[:idx])
+	upper := strings.ToUpper(body)
+	fromIdx := strings.Index(upper, " FROM ")
+	whereIdx := strings.Index(upper, " WHERE ")
+	if fromIdx < 0 || whereIdx < 0 || whereIdx <= fromIdx {
+		return query
+	}
+	table := strings.TrimSpace(body[fromIdx+len(" FROM ") : whereIdx])
+	pred := strings.TrimSpace(body[whereIdx+len(" WHERE "):])
+	// Prefer id-based subquery (works on SQLite/MySQL/Postgres for tables with id).
+	// For tables without id the caller should not pass limit, or use purgeByTime
+	// which knows the PK column.
+	return fmt.Sprintf(
+		`DELETE FROM %s WHERE id IN (SELECT id FROM %s WHERE %s ORDER BY created_at ASC LIMIT %d)`,
+		table, table, pred, limit,
+	)
 }
 
 func (s *Store) DeleteDeadLetterByID(ctx context.Context, id int64) error {
@@ -866,8 +910,13 @@ type dlqDeleteBuilder struct {
 }
 
 func newDLQDeleteBuilder(f storage.DLQFilter) *dlqDeleteBuilder {
-	where := []string{"job_name = ?"}
-	args := []any{f.JobName}
+	var where []string
+	var args []any
+	// Empty JobName means cross-pipeline purge (janitor TTL / max-count paths).
+	if f.JobName != "" {
+		where = append(where, "job_name = ?")
+		args = append(args, f.JobName)
+	}
 	if !f.From.IsZero() {
 		where = append(where, "created_at >= ?")
 		args = append(args, f.From)
@@ -888,7 +937,17 @@ func newDLQDeleteBuilder(f storage.DLQFilter) *dlqDeleteBuilder {
 		where = append(where, "record_json LIKE ?")
 		args = append(args, "%"+f.Contains+"%")
 	}
-	q := fmt.Sprintf(`DELETE FROM dead_letters WHERE %s`, strings.Join(where, " AND "))
+	if len(where) == 0 {
+		// Refuse unscoped DELETE FROM dead_letters; callers must set a filter.
+		return &dlqDeleteBuilder{query: `DELETE FROM dead_letters WHERE 1=0`, args: nil}
+	}
+	pred := strings.Join(where, " AND ")
+	q := fmt.Sprintf(`DELETE FROM dead_letters WHERE %s`, pred)
+	if f.Limit > 0 {
+		// SQLite/MySQL accept LIMIT on DELETE. Postgres needs a ctid subquery;
+		// DeleteDeadLettersByFilter rewrites when the dialect forbids LIMIT.
+		q = fmt.Sprintf(`%s LIMIT %d`, q, f.Limit)
+	}
 	return &dlqDeleteBuilder{query: q, args: args}
 }
 
@@ -1577,4 +1636,101 @@ func (s *Store) ListSettings(ctx context.Context) (map[string]string, error) {
 		result[k] = v
 	}
 	return result, rows.Err()
+}
+
+// ── Retention / inventory (PR-1.3) ───────────────────────────────────
+
+// PurgeAuditBefore deletes audit_logs with created_at <= cutoff.
+// limit caps rows deleted when > 0; 0 means unlimited.
+func (s *Store) PurgeAuditBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	return s.purgeByTime(ctx, "audit_logs", "created_at <= ?", "created_at", cutoff, limit)
+}
+
+// PurgeRunHistoryBefore deletes finished run_history rows with started_at <= cutoff.
+func (s *Store) PurgeRunHistoryBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	return s.purgeByTime(ctx, "run_history",
+		"finished_at IS NOT NULL AND started_at <= ?", "started_at", cutoff, limit)
+}
+
+// PurgeFinishedTasksBefore deletes terminal task_assignments with finished_at <= cutoff.
+func (s *Store) PurgeFinishedTasksBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	return s.purgeByTime(ctx, "task_assignments",
+		"status IN ('completed','failed','cancelled') AND finished_at IS NOT NULL AND finished_at <= ?",
+		"finished_at", cutoff, limit)
+}
+
+func (s *Store) purgeByTime(ctx context.Context, table, pred, orderCol string, cutoff time.Time, limit int) (int64, error) {
+	var q string
+	if limit > 0 {
+		// Portable limited delete via id subquery (works on SQLite/MySQL/Postgres).
+		q = fmt.Sprintf(
+			`DELETE FROM %s WHERE id IN (SELECT id FROM %s WHERE %s ORDER BY %s ASC LIMIT %d)`,
+			table, table, pred, orderCol, limit,
+		)
+	} else {
+		q = fmt.Sprintf(`DELETE FROM %s WHERE %s`, table, pred)
+	}
+	res, err := s.exec(ctx, q, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// CountObjects returns row counts for every control-plane table covered by backup.
+func (s *Store) CountObjects(ctx context.Context) (storage.ObjectCounts, error) {
+	var c storage.ObjectCounts
+	tables := []struct {
+		name string
+		dst  *int
+	}{
+		{"pipelines", &c.Pipelines},
+		{"pipeline_versions", &c.PipelineVersions},
+		{"checkpoints", &c.Checkpoints},
+		{"dead_letters", &c.DeadLetters},
+		{"audit_logs", &c.AuditLogs},
+		{"run_history", &c.RunHistory},
+		{"workers", &c.Workers},
+		{"task_assignments", &c.Tasks},
+		{"plugins", &c.Plugins},
+		{"connections", &c.Connections},
+		{"settings", &c.Settings},
+	}
+	for _, t := range tables {
+		var n int
+		if err := s.queryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, t.name)).Scan(&n); err != nil {
+			// connections may be missing on very old DBs; treat as zero.
+			if strings.Contains(err.Error(), "no such table") || strings.Contains(err.Error(), "doesn't exist") {
+				*t.dst = 0
+				continue
+			}
+			return c, fmt.Errorf("count %s: %w", t.name, err)
+		}
+		*t.dst = n
+	}
+	return c, nil
+}
+
+// SchemaVersions lists applied _schema_version rows ordered by version.
+func (s *Store) SchemaVersions(ctx context.Context) ([]storage.SchemaVersionRow, error) {
+	rows, err := s.query(ctx, `SELECT version, description, applied_at FROM _schema_version ORDER BY version`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []storage.SchemaVersionRow
+	for rows.Next() {
+		var r storage.SchemaVersionRow
+		var applied sql.NullTime
+		var desc sql.NullString
+		if err := rows.Scan(&r.Version, &desc, &applied); err != nil {
+			return nil, err
+		}
+		r.Description = desc.String
+		if applied.Valid {
+			r.AppliedAt = applied.Time
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

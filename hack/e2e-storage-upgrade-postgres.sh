@@ -1,17 +1,18 @@
-#!/usr/bin/env bash
-# PR-1.3: PostgreSQL logical backup + snapshot backup/restore against throwaway container.
-set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
+#!/bin/sh
+# PR-1.3: PostgreSQL upgrade + backup/restore smoke.
+set -eu
 
-. "$ROOT/hack/container-cli.sh"
+ROOT_DIR="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
+
+. "$ROOT_DIR/hack/container-cli.sh"
 detect_container_cli
 
-CONTAINER="etl-backup-test-pg"
-DB="openetl_backup"
+CONTAINER="etl-upgrade-test-pg"
+DB="openetl_upgrade"
 USER="etl"
 PASS="etl123"
-HOST_PORT="15433"
+HOST_PORT="15434"
 
 cleanup() {
   "$CONTAINER_CLI" rm -f "$CONTAINER" >/dev/null 2>&1 || true
@@ -37,26 +38,19 @@ while [ "$i" -lt 60 ]; do
   i=$((i + 1)); sleep 2
 done
 if [ "$i" -ge 60 ]; then
-  echo "!! PostgreSQL not ready"; exit 1
+  echo "!! PostgreSQL did not become ready"; exit 1
 fi
 
-export POSTGRES_DSN="postgres://${USER}:${PASS}@127.0.0.1:${HOST_PORT}/${DB}?sslmode=disable"
+DSN="postgres://${USER}:${PASS}@127.0.0.1:${HOST_PORT}/${DB}?sslmode=disable"
 
-echo "==> unit: BackupSQLStore + ApplyRetention"
-go test ./internal/etl/storage/ -count=1 -run 'Backup|Retention'
-
-OUT="$(mktemp -d)"
-echo "==> Postgres BackupSQLStore smoke → $OUT"
-go run ./hack/cmd/postgres-backup-smoke "$OUT"
-
-echo "==> Snapshot backup/restore path against PostgreSQL"
+echo "==> PostgreSQL upgrade + backup/restore path"
 if "$CONTAINER_CLI" ps --format '{{.Names}}' 2>/dev/null | grep -q '^etl-go-dev$'; then
   DEV_DSN="postgres://${USER}:${PASS}@host.docker.internal:${HOST_PORT}/${DB}?sslmode=disable"
   "$CONTAINER_CLI" exec -e POSTGRES_DSN="$DEV_DSN" -w /workspace etl-go-dev \
     go test -count=1 -v -run 'TestBackupRestoreUpgradePath/postgres' ./internal/etl/storage/
 else
   echo "   (host Go toolchain)"
-  go test -count=1 -v -run 'TestBackupRestoreUpgradePath/postgres' ./internal/etl/storage/
+  POSTGRES_DSN="$DSN" go test -count=1 -v -run 'TestBackupRestoreUpgradePath/postgres' ./internal/etl/storage/
 fi
 
-echo "PR-1.3 Postgres backup e2e PASS"
+echo "==> PostgreSQL storage upgrade: PASS"
