@@ -29,7 +29,7 @@
 | `P3` | `queued` | maturity/readiness/certification 事实源 |
 | `P4` | `queued` | 首次任务向导、状态语义、deep link、故障自助；当前 UI e2e 为 91 passed/17 failed |
 | `P5` | `delivered` | 业务健康、运维、CI、资源基线、发布门槛 |
-| `PR-D1` | `queued` | distributed worker 认证、fencing、真实三进程恢复 |
+| `PR-D1` | `delivered` | distributed worker 认证、fencing、真实三进程恢复 |
 
 P0 仍是路线图最高优先级。若凭据不可得而要开发其他项目，必须由产品/用户显式确认 priority switch；本文件不自动领取下一项。
 

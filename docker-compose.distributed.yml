@@ -1,20 +1,29 @@
 # OpenETL-Go — Distributed (master + workers) Compose v2
 #
-# *** BETA / PR-D1 residual — NOT standalone production evidence ***
-# Master-worker remains production-candidate until PR-D1 (worker TLS/token,
-# fencing, multi-process e2e) is complete. Do not use this file to claim
-# distributed production ready. Prefer docker-compose.yml for standalone GA.
+# ★ MATURITY: beta / production-candidate (PR-D1 gate)
+#   Distributed mode is NOT covered by the standalone production-ready claim.
+#   Boundaries that remain even after PR-D1:
+#     - single master (no multi-master consensus)
+#     - DAG executors stay master-local
+#     - single continuous shard is not multi-active HA
 #
 # 跨进程共享元数据 + 分布式分片调度：
 #   - 1 个 master：负责任务调度、spec 加载、API/UI
-#   - 2 个 worker：执行分片任务；worker 崩溃后分片自动重分配
+#   - 2 个 worker：执行分片任务；worker 崩溃后分片自动重分配（lease/generation CAS）
 #   - MySQL：共享 storage（pipeline spec / checkpoint / DLQ / worker / task）
 #   - Redis：state/cache backend（lookup / deduplicate / window / join）
 #
 # 线性 spec 才走分布式分发；DAG spec 与 streaming 源在 master 本地执行。
-# 见 docs/quickstart.zh.md「分布式部署如何配置」与 AGENTS.md。
+# 见 docs/quickstart.zh.md「分布式部署如何配置」、docs/runtime-modes.md 与 AGENTS.md。
+#
+# 安全默认（PR-D1.1）：
+#   - ETL_API_TOKEN 必填（master 与 worker 共享同一 token）
+#   - 生产应使用 HTTPS（ETL_TLS_CERT/KEY + ETL_MASTER_URL=https://...）
+#   - 禁止依赖裸 http://master:8001 作为生产默认；本文件仅供 demo/e2e
 #
 # 用法：
+#   export ETL_API_TOKEN="$(openssl rand -hex 16)"
+#   export ETL_SPEC_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 #   CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman || command -v docker)}"
 #   "$CONTAINER_CLI" compose -f docker-compose.distributed.yml up -d
 #
@@ -75,9 +84,12 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"   # Web UI + 代理后的 /api/v2/* 与 /metrics
+      # 8001 为 worker 直连 API；生产请经 TLS 终止或内网 mTLS 暴露
+      - "8001:8001"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      ETL_API_TOKEN: ${ETL_API_TOKEN:?set ETL_API_TOKEN}
+      # Required: shared token for API + worker transport (PR-D1.1)
+      ETL_API_TOKEN: ${ETL_API_TOKEN:?set ETL_API_TOKEN to a non-placeholder secret >=16 chars}
       ETL_SPEC_ENCRYPTION_KEY: ${ETL_SPEC_ENCRYPTION_KEY:-}
       ETL_STORAGE_TYPE: mysql
       ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
@@ -87,10 +99,15 @@ services:
       LOGGER_FORMAT: json
       ETL_DLQ_TTL: ${ETL_DLQ_TTL:-168h}
       ETL_ROLE: master
+      # Optional TLS for production-candidate deploys:
+      # ETL_TLS_CERT: /certs/tls.crt
+      # ETL_TLS_KEY: /certs/tls.key
+      # ETL_TLS_SERVER_NAME: master
     volumes:
       - openetl-data:/app/data
       - ./pipes:/app/pipes:ro
       - master-logs:/app/logs
+      # - ./certs:/certs:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8000/api/v2/health"]
       interval: 30s
@@ -105,6 +122,8 @@ services:
 
   # ── Workers：执行分片任务 ──────────────────────────────────────────
   # 通过 `--scale worker=N` 扩缩容；每个 worker 用 workerSlots 限制并发分片。
+  # register/heartbeat/poll/report/deregister 均携带 ETL_API_TOKEN（PR-D1.1）。
+  # 任务所有权使用 generation CAS + lease；旧 owner 完成会被 fencing（PR-D1.2）。
   worker:
     image: ${OPENETL_IMAGE:?set OPENETL_IMAGE to a pinned tag or digest}
     restart: unless-stopped
@@ -117,20 +136,27 @@ services:
         condition: service_healthy
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      ETL_API_TOKEN: ${ETL_API_TOKEN:?set ETL_API_TOKEN}
+      ETL_API_TOKEN: ${ETL_API_TOKEN:?set ETL_API_TOKEN to a non-placeholder secret >=16 chars}
       # Worker 共享同一份 MySQL storage 才能接收 master 派发的任务
       ETL_STORAGE_TYPE: mysql
       ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
       ETL_STATE_REDIS_ADDR: redis:6379
-      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD:-change-me}
+      ETL_SPEC_ENCRYPTION_KEY: ${ETL_SPEC_ENCRYPTION_KEY:-}
       LOGGER_FORMAT: json
       ETL_ROLE: worker
-      ETL_MASTER_URL: http://master:8001
+      # Demo/e2e default is plain HTTP. Production-candidate: https://master:8001
+      # and mount matching CA / set ETL_WORKER_TLS_SERVER_NAME.
+      ETL_MASTER_URL: ${ETL_MASTER_URL:-http://master:8001}
       # 每个 worker 进程最大并发分片任务数
       ETL_WORKER_SLOTS: ${WORKER_SLOTS:-4}
+      # 仅本地自签证书 e2e 可开；生产必须为 false/unset
+      ETL_WORKER_TLS_INSECURE: ${ETL_WORKER_TLS_INSECURE:-}
+      ETL_WORKER_TLS_SERVER_NAME: ${ETL_WORKER_TLS_SERVER_NAME:-}
       # worker-id 缺省由容器 hostname 派生；`--scale` 时自动唯一
     volumes:
       - worker-data:/app/data
+      # - ./certs:/certs:ro
     deploy:
       resources:
         limits:

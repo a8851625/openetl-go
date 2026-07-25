@@ -226,14 +226,32 @@ func (m *Master) handleWorkerAction(w http.ResponseWriter, r *http.Request) {
 	case "poll":
 		if r.Method == http.MethodPost {
 			var req struct {
-				TaskID string `json:"task_id,omitempty"`
+				TaskID     string `json:"task_id,omitempty"`
+				Generation int64  `json:"generation,omitempty"`
+				Status     string `json:"status,omitempty"`
+				LastError  string `json:"last_error,omitempty"`
 			}
 			var res struct {
 				Status string `json:"status,omitempty"`
+				Error  string `json:"error,omitempty"`
 			}
 			_ = decodeJSON(r, &req)
 			if req.TaskID != "" {
-				_ = m.dispatch.ReportTaskResult(r.Context(), req.TaskID, "completed")
+				status := req.Status
+				if status == "" {
+					status = "completed"
+				}
+				if err := m.dispatch.ReportTaskResult(r.Context(), req.TaskID, workerID, req.Generation, status, req.LastError); err != nil {
+					if err == storage.ErrTaskFenced {
+						w.WriteHeader(http.StatusConflict)
+						res.Status = "fenced"
+						res.Error = err.Error()
+						writeJSON(w, res)
+						return
+					}
+					http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+					return
+				}
 				res.Status = "acknowledged"
 				writeJSON(w, res)
 				return
@@ -257,6 +275,34 @@ func (m *Master) handleWorkerAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, map[string]any{"status": "ok"})
+		}
+	case "report":
+		if r.Method == http.MethodPost {
+			var req struct {
+				TaskID     string `json:"task_id"`
+				Generation int64  `json:"generation"`
+				Status     string `json:"status"`
+				LastError  string `json:"last_error,omitempty"`
+			}
+			if err := decodeJSON(r, &req); err != nil || req.TaskID == "" {
+				http.Error(w, `{"error":"task_id is required"}`, 400)
+				return
+			}
+			status := req.Status
+			if status == "" {
+				status = "completed"
+			}
+			if err := m.dispatch.ReportTaskResult(r.Context(), req.TaskID, workerID, req.Generation, status, req.LastError); err != nil {
+				if err == storage.ErrTaskFenced {
+					w.WriteHeader(http.StatusConflict)
+					writeJSON(w, map[string]any{"status": "fenced", "error": err.Error()})
+					return
+				}
+				http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+				return
+			}
+			writeJSON(w, map[string]any{"status": "acknowledged"})
+			return
 		}
 	case "deregister":
 		if r.Method == http.MethodDelete {

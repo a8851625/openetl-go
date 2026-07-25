@@ -277,6 +277,11 @@ func (s *Store) runVersionedMigrations() error {
 		{10, "add min_runtime_version to plugins", "ALTER TABLE plugins ADD COLUMN min_runtime_version TEXT NOT NULL DEFAULT ''"},
 		{11, "add manifest_json to plugins", "ALTER TABLE plugins ADD COLUMN manifest_json TEXT NOT NULL DEFAULT ''"},
 		{12, "add manifest_validated to plugins", "ALTER TABLE plugins ADD COLUMN manifest_validated INTEGER DEFAULT 0"},
+		// PR-D1.2: task ownership fencing (lease / generation / attempt history).
+		{13, "add generation to task_assignments", "ALTER TABLE task_assignments ADD COLUMN generation INTEGER DEFAULT 0"},
+		{14, "add attempt to task_assignments", "ALTER TABLE task_assignments ADD COLUMN attempt INTEGER DEFAULT 0"},
+		{15, "add lease_expires_at to task_assignments", "ALTER TABLE task_assignments ADD COLUMN lease_expires_at DATETIME"},
+		{16, "add last_error to task_assignments", "ALTER TABLE task_assignments ADD COLUMN last_error TEXT DEFAULT ''"},
 	}
 
 	for _, m := range migrations {
@@ -1025,17 +1030,116 @@ func (s *Store) CreateTask(ctx context.Context, task *storage.TaskAssignment) er
 		}
 	}
 	_, err := s.exec(ctx,
-		`INSERT INTO task_assignments (task_id, pipeline, worker_id, status, assigned_at, shard_index, shard_total, required_labels)
-		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)`,
-		task.TaskID, task.Pipeline, task.WorkerID, task.Status, task.ShardIndex, task.ShardTotal, labelsJSON)
+		`INSERT INTO task_assignments (task_id, pipeline, worker_id, status, assigned_at, shard_index, shard_total, required_labels, generation, attempt, lease_expires_at, last_error)
+		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?)`,
+		task.TaskID, task.Pipeline, task.WorkerID, task.Status, task.ShardIndex, task.ShardTotal, labelsJSON,
+		task.Generation, task.Attempt, task.LeaseExpiresAt, task.LastError)
 	return err
 }
 
 func (s *Store) UpdateTask(ctx context.Context, task *storage.TaskAssignment) error {
 	_, err := s.exec(ctx,
-		`UPDATE task_assignments SET status=?, worker_id=?, started_at=?, finished_at=? WHERE task_id=?`,
-		task.Status, task.WorkerID, task.StartedAt, task.FinishedAt, task.TaskID)
+		`UPDATE task_assignments SET status=?, worker_id=?, started_at=?, finished_at=?, generation=?, attempt=?, lease_expires_at=?, last_error=? WHERE task_id=?`,
+		task.Status, task.WorkerID, task.StartedAt, task.FinishedAt, task.Generation, task.Attempt, task.LeaseExpiresAt, task.LastError, task.TaskID)
 	return err
+}
+
+// ClaimTask finds the oldest pending task whose RequiredLabels are satisfied by
+// workerLabels and CAS-claims it under workerID. Generation and attempt are
+// incremented; a lease is granted for leaseTTL (defaults to DefaultTaskLeaseTTL).
+func (s *Store) ClaimTask(ctx context.Context, workerID string, workerLabels map[string]string, leaseTTL time.Duration) (*storage.TaskAssignment, error) {
+	if workerID == "" {
+		return nil, fmt.Errorf("claim task: worker id is required")
+	}
+	if leaseTTL <= 0 {
+		leaseTTL = storage.DefaultTaskLeaseTTL
+	}
+	tasks, err := s.ListTasks(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	leaseUntil := now.Add(leaseTTL)
+	for _, t := range tasks {
+		if t.Status != "pending" {
+			continue
+		}
+		if !taskLabelsMatch(workerLabels, t.RequiredLabels) {
+			continue
+		}
+		newGen := t.Generation + 1
+		newAttempt := t.Attempt + 1
+		res, err := s.exec(ctx,
+			`UPDATE task_assignments
+			 SET status='assigned', worker_id=?, generation=?, attempt=?, assigned_at=?, started_at=NULL, finished_at=NULL, lease_expires_at=?, last_error=''
+			 WHERE task_id=? AND status='pending' AND generation=?`,
+			workerID, newGen, newAttempt, now, leaseUntil, t.TaskID, t.Generation)
+		if err != nil {
+			return nil, err
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			// Lost the race — another worker claimed it; try the next pending task.
+			continue
+		}
+		t.WorkerID = workerID
+		t.Status = "assigned"
+		t.Generation = newGen
+		t.Attempt = newAttempt
+		t.AssignedAt = &now
+		t.StartedAt = nil
+		t.FinishedAt = nil
+		t.LeaseExpiresAt = &leaseUntil
+		t.LastError = ""
+		return t, nil
+	}
+	return nil, nil
+}
+
+// CASUpdateTask updates a task only when the caller still owns the generation.
+func (s *Store) CASUpdateTask(ctx context.Context, task *storage.TaskAssignment) error {
+	if task == nil || task.TaskID == "" {
+		return fmt.Errorf("cas update task: task_id is required")
+	}
+	res, err := s.exec(ctx,
+		`UPDATE task_assignments
+		 SET status=?, worker_id=?, started_at=?, finished_at=?, lease_expires_at=?, last_error=?, attempt=?
+		 WHERE task_id=? AND worker_id=? AND generation=?`,
+		task.Status, task.WorkerID, task.StartedAt, task.FinishedAt, task.LeaseExpiresAt, task.LastError, task.Attempt,
+		task.TaskID, task.WorkerID, task.Generation)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return storage.ErrTaskFenced
+	}
+	return nil
+}
+
+// GetTask returns a single task by task_id (including terminal statuses).
+func (s *Store) GetTask(ctx context.Context, taskID string) (*storage.TaskAssignment, error) {
+	rows, err := s.query(ctx,
+		`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at, required_labels, generation, attempt, lease_expires_at, last_error
+		 FROM task_assignments WHERE task_id=? LIMIT 1`, taskID)
+	if err != nil {
+		if isMissingTaskFenceCols(err) {
+			return s.getTaskLegacy(ctx, taskID)
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	tasks, err := scanTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+	return tasks[0], nil
 }
 
 func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.TaskAssignment, error) {
@@ -1048,6 +1152,141 @@ func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.Task
 		// out pending ones under the LIMIT (ST-1). The active-task count is
 		// bounded by total in-flight shards, so 1000 is effectively unlimited.
 		rows, err = s.query(ctx,
+			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at, required_labels, generation, attempt, lease_expires_at, last_error
+			 FROM task_assignments
+			 WHERE status IN ('pending','assigned','running')
+			 ORDER BY assigned_at DESC LIMIT 1000`)
+	} else {
+		rows, err = s.query(ctx,
+			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at, required_labels, generation, attempt, lease_expires_at, last_error
+			 FROM task_assignments WHERE pipeline=? ORDER BY assigned_at DESC LIMIT 1000`, pipeline)
+	}
+	if err != nil {
+		// Fallback for DBs where the migration hasn't been applied yet:
+		// retry without fencing columns / required_labels.
+		if isMissingTaskFenceCols(err) {
+			return s.listTasksNoFence(ctx, pipeline)
+		}
+		if strings.Contains(err.Error(), "no such column: required_labels") {
+			return s.listTasksNoLabels(ctx, pipeline)
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+func isMissingTaskFenceCols(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no such column: generation") ||
+		strings.Contains(msg, "no such column: attempt") ||
+		strings.Contains(msg, "no such column: lease_expires_at") ||
+		strings.Contains(msg, "no such column: last_error") ||
+		strings.Contains(msg, "Unknown column 'generation'") ||
+		strings.Contains(msg, "Unknown column 'attempt'") ||
+		strings.Contains(msg, "Unknown column 'lease_expires_at'") ||
+		strings.Contains(msg, "Unknown column 'last_error'")
+}
+
+func taskLabelsMatch(workerLabels, required map[string]string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	for k, v := range required {
+		if workerLabels == nil || workerLabels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func scanTasks(rows *sql.Rows) ([]*storage.TaskAssignment, error) {
+	var result []*storage.TaskAssignment
+	for rows.Next() {
+		t := &storage.TaskAssignment{}
+		var workerID sql.NullString
+		var assignedAt, startedAt, finishedAt, leaseAt sql.NullTime
+		var labelsStr, lastError string
+		var generation sql.NullInt64
+		var attempt sql.NullInt64
+		if err := rows.Scan(
+			&t.ID, &t.TaskID, &t.Pipeline, &t.ShardIndex, &t.ShardTotal, &workerID, &t.Status,
+			&assignedAt, &startedAt, &finishedAt, &labelsStr,
+			&generation, &attempt, &leaseAt, &lastError,
+		); err != nil {
+			return nil, err
+		}
+		t.WorkerID = workerID.String
+		t.Generation = generation.Int64
+		t.Attempt = int(attempt.Int64)
+		t.LastError = lastError
+		if assignedAt.Valid {
+			t.AssignedAt = &assignedAt.Time
+		}
+		if startedAt.Valid {
+			t.StartedAt = &startedAt.Time
+		}
+		if finishedAt.Valid {
+			t.FinishedAt = &finishedAt.Time
+		}
+		if leaseAt.Valid {
+			t.LeaseExpiresAt = &leaseAt.Time
+		}
+		if labelsStr != "" && labelsStr != "{}" {
+			_ = json.Unmarshal([]byte(labelsStr), &t.RequiredLabels)
+		}
+		result = append(result, t)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) getTaskLegacy(ctx context.Context, taskID string) (*storage.TaskAssignment, error) {
+	rows, err := s.query(ctx,
+		`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at, required_labels
+		 FROM task_assignments WHERE task_id=? LIMIT 1`, taskID)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such column: required_labels") {
+			return s.getTaskNoLabels(ctx, taskID)
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	tasks, err := scanTasksLegacy(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+	return tasks[0], nil
+}
+
+func (s *Store) getTaskNoLabels(ctx context.Context, taskID string) (*storage.TaskAssignment, error) {
+	rows, err := s.query(ctx,
+		`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at
+		 FROM task_assignments WHERE task_id=? LIMIT 1`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tasks, err := scanTasksNoLabels(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+	return tasks[0], nil
+}
+
+func (s *Store) listTasksNoFence(ctx context.Context, pipeline string) ([]*storage.TaskAssignment, error) {
+	var rows *sql.Rows
+	var err error
+	if pipeline == "" {
+		rows, err = s.query(ctx,
 			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at, required_labels
 			 FROM task_assignments
 			 WHERE status IN ('pending','assigned','running')
@@ -1058,14 +1297,16 @@ func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.Task
 			 FROM task_assignments WHERE pipeline=? ORDER BY assigned_at DESC LIMIT 1000`, pipeline)
 	}
 	if err != nil {
-		// Fallback for DBs where the migration hasn't been applied yet:
-		// retry without the required_labels column.
 		if strings.Contains(err.Error(), "no such column: required_labels") {
 			return s.listTasksNoLabels(ctx, pipeline)
 		}
 		return nil, err
 	}
 	defer rows.Close()
+	return scanTasksLegacy(rows)
+}
+
+func scanTasksLegacy(rows *sql.Rows) ([]*storage.TaskAssignment, error) {
 	var result []*storage.TaskAssignment
 	for rows.Next() {
 		t := &storage.TaskAssignment{}
@@ -1093,27 +1334,7 @@ func (s *Store) ListTasks(ctx context.Context, pipeline string) ([]*storage.Task
 	return result, rows.Err()
 }
 
-// listTasksNoLabels is a fallback for databases that haven't yet applied
-// migration 8 (required_labels). It returns tasks without label info so the
-// dispatcher treats them as unconstrained (backwards-compatible).
-func (s *Store) listTasksNoLabels(ctx context.Context, pipeline string) ([]*storage.TaskAssignment, error) {
-	var rows *sql.Rows
-	var err error
-	if pipeline == "" {
-		rows, err = s.query(ctx,
-			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at
-			 FROM task_assignments
-			 WHERE status IN ('pending','assigned','running')
-			 ORDER BY assigned_at DESC LIMIT 1000`)
-	} else {
-		rows, err = s.query(ctx,
-			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at
-			 FROM task_assignments WHERE pipeline=? ORDER BY assigned_at DESC LIMIT 1000`, pipeline)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+func scanTasksNoLabels(rows *sql.Rows) ([]*storage.TaskAssignment, error) {
 	var result []*storage.TaskAssignment
 	for rows.Next() {
 		t := &storage.TaskAssignment{}
@@ -1135,6 +1356,30 @@ func (s *Store) listTasksNoLabels(ctx context.Context, pipeline string) ([]*stor
 		result = append(result, t)
 	}
 	return result, rows.Err()
+}
+
+// listTasksNoLabels is a fallback for databases that haven't yet applied
+// migration 8 (required_labels). It returns tasks without label info so the
+// dispatcher treats them as unconstrained (backwards-compatible).
+func (s *Store) listTasksNoLabels(ctx context.Context, pipeline string) ([]*storage.TaskAssignment, error) {
+	var rows *sql.Rows
+	var err error
+	if pipeline == "" {
+		rows, err = s.query(ctx,
+			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at
+			 FROM task_assignments
+			 WHERE status IN ('pending','assigned','running')
+			 ORDER BY assigned_at DESC LIMIT 1000`)
+	} else {
+		rows, err = s.query(ctx,
+			`SELECT id, task_id, pipeline, shard_index, shard_total, worker_id, status, assigned_at, started_at, finished_at
+			 FROM task_assignments WHERE pipeline=? ORDER BY assigned_at DESC LIMIT 1000`, pipeline)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasksNoLabels(rows)
 }
 
 // ── Plugin registry ──────────────────────────────────────────────────

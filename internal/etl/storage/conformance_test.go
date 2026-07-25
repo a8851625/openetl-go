@@ -647,6 +647,30 @@ func testTasks(t *testing.T, newStore func(t *testing.T) (storage.Storage, func(
 	if len(list) != 1 || list[0].Status != "running" {
 		t.Errorf("unexpected: %+v", list)
 	}
+
+	// PR-D1.2: claim + CAS fencing must be available on every backend.
+	if err := s.CreateTask(ctx, &storage.TaskAssignment{
+		TaskID: "t-claim", Pipeline: "p-2", Status: "pending",
+	}); err != nil {
+		t.Fatalf("create claim task: %v", err)
+	}
+	claimed, err := s.ClaimTask(ctx, "w-claim", nil, time.Second)
+	if err != nil || claimed == nil || claimed.TaskID != "t-claim" {
+		t.Fatalf("claim: task=%v err=%v", claimed, err)
+	}
+	if claimed.Generation != 1 || claimed.Attempt != 1 {
+		t.Fatalf("claim gen/attempt = %d/%d", claimed.Generation, claimed.Attempt)
+	}
+	claimed.Status = "completed"
+	fin := time.Now()
+	claimed.FinishedAt = &fin
+	if err := s.CASUpdateTask(ctx, claimed); err != nil {
+		t.Fatalf("cas complete: %v", err)
+	}
+	got, err := s.GetTask(ctx, "t-claim")
+	if err != nil || got == nil || got.Status != "completed" {
+		t.Fatalf("get after cas: %+v err=%v", got, err)
+	}
 }
 
 // ── Plugins ──────────────────────────────────────────────────────────

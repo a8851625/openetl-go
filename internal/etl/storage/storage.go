@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
@@ -120,6 +121,19 @@ type TaskAssignment struct {
 	ShardTotal int    `json:"shard_total"`
 	WorkerID   string `json:"worker_id,omitempty"`
 	Status     string `json:"status"`
+	// Generation is a fencing token. Every successful claim increments it; all
+	// subsequent ownership updates must present the same generation (CAS).
+	// An old worker whose lease expired cannot complete a task reassigned to a
+	// newer owner (PR-D1.2).
+	Generation int64 `json:"generation"`
+	// Attempt counts claim cycles (including requeues after crash/failure).
+	// History is retained; requeue does not reset the counter (PR-D1.2).
+	Attempt int `json:"attempt"`
+	// LeaseExpiresAt is the soft ownership deadline. Master requeues assigned/
+	// running tasks past this deadline (or whose worker is offline).
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+	// LastError records the most recent execution / requeue reason for ops.
+	LastError string `json:"last_error,omitempty"`
 	// RequiredLabels are the worker_selector.match_labels from the pipeline
 	// spec. A worker may only claim this task if its registered Labels match
 	// every entry here. Empty means any worker may claim it.
@@ -128,6 +142,17 @@ type TaskAssignment struct {
 	StartedAt      *time.Time        `json:"started_at,omitempty"`
 	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
 }
+
+// ErrTaskFenced is returned when a CAS ownership update fails because the
+// task generation/worker no longer matches (another owner claimed it).
+var ErrTaskFenced = fmt.Errorf("task ownership fenced: generation or worker mismatch")
+
+// DefaultTaskMaxAttempts is used when a task exhausts requeue budget and
+// must enter a visible terminal failed state.
+const DefaultTaskMaxAttempts = 5
+
+// DefaultTaskLeaseTTL is the ownership lease granted on claim/heartbeat-renew.
+const DefaultTaskLeaseTTL = 30 * time.Second
 
 // PluginEntry records an installed extism plugin.
 type PluginEntry struct {
@@ -218,7 +243,18 @@ type Storage interface {
 	// ── Task assignments ──────────────────────────────────────────────
 
 	CreateTask(ctx context.Context, task *TaskAssignment) error
+	// UpdateTask is an unconditional status write kept for back-compat and
+	// admin tooling. Ownership-sensitive paths must use ClaimTask / CASUpdateTask.
 	UpdateTask(ctx context.Context, task *TaskAssignment) error
+	// ClaimTask atomically claims a pending task for workerID, bumping
+	// generation/attempt and granting a lease. Returns nil,nil when no pending
+	// task matches required labels.
+	ClaimTask(ctx context.Context, workerID string, workerLabels map[string]string, leaseTTL time.Duration) (*TaskAssignment, error)
+	// CASUpdateTask updates status fields only when task_id + worker_id +
+	// generation still match. Returns ErrTaskFenced on mismatch.
+	CASUpdateTask(ctx context.Context, task *TaskAssignment) error
+	// GetTask returns one task by task_id, including terminal rows.
+	GetTask(ctx context.Context, taskID string) (*TaskAssignment, error)
 	ListTasks(ctx context.Context, pipeline string) ([]*TaskAssignment, error)
 
 	// ── Plugin registry ───────────────────────────────────────────────

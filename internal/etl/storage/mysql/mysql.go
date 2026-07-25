@@ -222,6 +222,11 @@ func (s *Store) runVersionedMigrations() error {
 		{10, "add min_runtime_version to plugins", "ALTER TABLE plugins ADD COLUMN min_runtime_version VARCHAR(64) NOT NULL DEFAULT ''"},
 		{11, "add manifest_json to plugins", "ALTER TABLE plugins ADD COLUMN manifest_json LONGTEXT"},
 		{12, "add manifest_validated to plugins", "ALTER TABLE plugins ADD COLUMN manifest_validated TINYINT(1) DEFAULT 0"},
+		// PR-D1.2: task ownership fencing (lease / generation / attempt history).
+		{13, "add generation to task_assignments", "ALTER TABLE task_assignments ADD COLUMN generation BIGINT DEFAULT 0"},
+		{14, "add attempt to task_assignments", "ALTER TABLE task_assignments ADD COLUMN attempt INT DEFAULT 0"},
+		{15, "add lease_expires_at to task_assignments", "ALTER TABLE task_assignments ADD COLUMN lease_expires_at DATETIME(3) NULL"},
+		{16, "add last_error to task_assignments", "ALTER TABLE task_assignments ADD COLUMN last_error TEXT"},
 	}
 
 	for _, m := range migrations {

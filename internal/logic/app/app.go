@@ -338,6 +338,9 @@ func (a *sApp) startWorkerRole(ctx context.Context, store storage.Storage) {
 		Labels:    readWorkerRoleLabels(ctx),
 		MasterURL: masterURL,
 		Store:     store,
+		// Propagate API token so worker→master register/heartbeat/poll/report
+		// succeed when the master enforces ETL_API_TOKEN (PR-D1.1).
+		APIToken: strings.TrimSpace(os.Getenv("ETL_API_TOKEN")),
 	})
 	w.SetTaskExecutor(func(ctx context.Context, task *storage.TaskAssignment) error {
 		return worker.ExecuteShard(ctx, deps, task)
