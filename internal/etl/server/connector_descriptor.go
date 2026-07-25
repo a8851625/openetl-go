@@ -321,7 +321,7 @@ func connectorEvidence(kind, typ string) string {
 		"source:file":               "hack/e2e.sh and hack/e2e-ui.sh cover file source paths",
 		"source:http":               "hack/e2e-http-source.sh covers HTTP source pagination/auth headers",
 		"source:mysql_batch":        "hack/e2e.sh and hack/e2e-mysql-postgres.sh cover MySQL batch reads",
-		"source:mysql_cdc":          "hack/e2e-path-mysql-cdc-mysql.sh (path mysql_cdc__mysql_upsert), hack/e2e-cdc-mysql.sh, and hack/e2e-cdc-crash-recovery.sh cover MySQL CDC",
+		"source:mysql_cdc":          "hack/e2e-path-mysql-cdc-mysql.sh (path mysql_cdc__mysql_upsert), hack/e2e-cdc-mysql.sh, hack/e2e-cdc-postgres.sh, and hack/e2e-cdc-crash-recovery.sh cover MySQL CDC",
 		"source:mysql_snapshot_cdc": "hack/e2e-snapshot-cdc-clickhouse.sh (path mysql_snap_cdc__ch_rmt), hack/e2e-snapshot-cdc.sh, and hack/e2e-snapshot-cdc-crash.sh cover integrated snapshot+CDC",
 		"source:postgres_cdc":       "hack/e2e-postgres-cdc.sh covers PostgreSQL CDC source insert/update/delete and checkpoint restart into MySQL; on_truncate defaults to error (PR-2.3)",
 		"source:kafka":              "hack/e2e-kafka.sh, hack/e2e-kafka-raw-ods.sh, hack/e2e-wide-table.sh, and hack/e2e-debezium-mysql.sh cover Kafka source paths",
