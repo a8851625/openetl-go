@@ -154,7 +154,7 @@ func TestConcurrentSQLiteStoreOpenMigratesOnce(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM _schema_version`).Scan(&n); err != nil {
 		t.Fatalf("count schema versions: %v", err)
 	}
-	if n < 12 {
-		t.Fatalf("schema versions = %d, want at least 12", n)
+	if n < 16 {
+		t.Fatalf("schema versions = %d, want at least 16", n)
 	}
 }

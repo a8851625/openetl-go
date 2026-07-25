@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Added
+- **PR-D1 Distributed worker 认证与 fencing**
+  - Worker 统一 authenticated HTTP client：`X-API-Token`/`Bearer`、超时、5xx 重试、可选 TLS（`ETL_WORKER_TLS_*`）。
+  - Task ownership：`generation` / `attempt` / `lease_expires_at` / `last_error`；`ClaimTask` + `CASUpdateTask` fencing。
+  - 旧 worker lease 失效后提交完成返回 `ErrTaskFenced` / HTTP 409，不能覆盖新 owner。
+  - 有界 requeue：worker offline 或 lease 过期回 pending；超过 `DefaultTaskMaxAttempts` 进入可见 `failed`。
+  - `hack/e2e-distributed.sh` 覆盖 hermetic fence/auth + MySQL integration + 可选多进程 smoke。
+  - `docker-compose.distributed.yml` 强制 `ETL_API_TOKEN`，并标注 beta / 非 multi-master 边界。
+
 ### 新增
 
 - **dbt transform（Phase 1）**：`type: dbt` 将 batch 写入 staging 表 → `dbt run --select <model>` → 读取输出表；支持 `postgres` / `duckdb` adapter。dbt 为可选能力，不引入核心依赖。

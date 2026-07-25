@@ -143,7 +143,7 @@ Roadmap 状态只使用以下值：
 | P3 | 证据治理 | maturity 与当前版本实际认证证据一致 | `PR-2` 定义 path gate | `queued` |
 | P4 | 易上手 | 30 分钟首次任务与 10 分钟故障定位目标可验证 | `PR-0` 安全/profile 约定 | `queued` |
 | P5 | 易维护、可观测 | 业务健康、资源基线、CI 和 production runbook 成为发布门槛 | `PR-1`、`PR-2` | `queued` |
-| `PR-D1` | distributed 可靠性 | worker 认证、fencing、重试和真实多进程恢复通过 | standalone 收口后，或显式提前 | `queued` |
+| `PR-D1` | distributed 可靠性 | worker 认证、fencing、重试和真实多进程恢复通过 | standalone 收口后，或显式提前 | `delivered` |
 
 ### PR-0：控制面持久化一致性与安全默认值
 
@@ -505,7 +505,7 @@ PR-1.3 本轮证据（Round 3/5 · partial）：
 
 ### PR-D1：Distributed 安全与任务所有权
 
-状态：`queued`
+状态：`delivered`（2026-07-25 · PR-D1.1/.2/.3）
 
 本项是独立的 distributed profile 门槛，不阻塞 standalone production ready。完成前，master-worker 只能声明 production candidate/beta，且必须继续公开单 master、DAG master-local、单 continuous shard 非 multi-active HA 的边界。
 
@@ -530,6 +530,18 @@ PR-1.3 本轮证据（Round 3/5 · partial）：
 - worker SIGKILL 后任务在超时内被重新分配并从相同 checkpoint namespace 恢复；允许的重放由 PR-2 的 sink 契约吸收。
 - master restart 后 pending/assigned/running task 状态可恢复；失败任务遵循可配置 attempts/backoff，超过上限后进入可见终态并触发告警。
 - `hack/e2e-distributed.sh` 或替代脚本真正启动三个以上独立进程/容器，并在 release evidence 中记录测试拓扑与结果。
+
+
+#### PR-D1 证据（2026-07-25）
+
+| 切片 | 证据 | 结果 | 备注 |
+|------|------|------|------|
+| D1.1 Worker transport | `internal/etl/worker/transport.go` + `transport_test.go`；`TestWorkerHTTPAuthAndFencing` | passed | `X-API-Token`/`Bearer`、超时、5xx 重试；错误 token 拒绝注册 |
+| D1.2 Task ownership | `ClaimTask`/`CASUpdateTask`；`task_fence_test.go`；`master/fence_test.go` | passed | generation CAS；旧 owner 完成 fenced；lease/max-attempts requeue |
+| D1.3 拓扑 | `hack/e2e-distributed.sh`；`TestDistributed*` integration；可选 `OPENETL_BIN` 多进程 smoke | passed (hermetic+integration) | MySQL 共享 store + master HTTP + 2 workers；compose 强制 token 并标 beta |
+| 边界 | `docker-compose.distributed.yml`、`docs/runtime-modes.md` | documented | 单 master、DAG master-local、单 continuous shard 非 multi-active HA |
+
+Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard multi-active；跨地域 active-active。
 
 ## 排队中的工作
 

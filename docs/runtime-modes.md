@@ -233,9 +233,24 @@ Not multi-active HA: losing the process (or the single worker holding the contin
 Compose references:
 
 - `docker-compose.yml` — production standalone (app + MySQL + Redis)
-- `docker-compose.distributed.yml` — master + scalable workers
+- `docker-compose.distributed.yml` — master + scalable workers (**beta / production-candidate**, PR-D1)
 - `docker-compose.quickstart.yml` — demo path
 - `docker-compose.dev.yml` — full local dependency harness
+
+### Distributed maturity (PR-D1)
+
+Distributed master/worker is a **beta / production-candidate** profile, independent of standalone production-ready claims.
+
+Required for distributed deploys:
+
+- Shared `ETL_API_TOKEN` on master and every worker (worker client sends `X-API-Token` + `Bearer`).
+- Prefer `ETL_MASTER_URL=https://...` with verifiable TLS; `ETL_WORKER_TLS_INSECURE` is e2e-only.
+- Task ownership uses `generation` CAS + `lease_expires_at`; stale owners receive HTTP 409 / `ErrTaskFenced`.
+- Requeue on worker offline or lease expiry; attempts beyond `DefaultTaskMaxAttempts` become visible `failed`.
+
+Still out of scope: multi-master consensus, cross-worker DAG, multi-active single continuous shard.
+
+Evidence: `hack/e2e-distributed.sh`, `internal/etl/worker/transport_test.go`, `internal/etl/storage/sqlstore/task_fence_test.go`, `internal/etl/master/fence_test.go`.
 
 ## Smoke checks
 

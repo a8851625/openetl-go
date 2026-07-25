@@ -1,11 +1,9 @@
 package worker
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -44,6 +42,13 @@ type Worker struct {
 	// ExecuteShard — so distributed workers over-subscribed beyond Slots.)
 	inFlight int64
 
+	// client is the authenticated master HTTP client (PR-D1.1). Nil in
+	// standalone mode where masterURL is empty and store is polled directly.
+	client *MasterClient
+
+	// leaseTTL is the ownership lease granted on claim (also used by store CAS).
+	leaseTTL time.Duration
+
 	ctx       context.Context
 	cancel    context.CancelFunc
 	stopCh    chan struct{}
@@ -66,6 +71,12 @@ type Config struct {
 	Labels    map[string]string
 	MasterURL string
 	Store     storage.Storage
+	// APIToken authenticates worker → master calls. Prefer ETL_API_TOKEN.
+	APIToken string
+	// Transport optionally overrides the default authenticated client.
+	Transport *TransportConfig
+	// LeaseTTL overrides the ownership lease on claim (tests may shorten it).
+	LeaseTTL time.Duration
 }
 
 // New creates a new Worker instance.
@@ -76,7 +87,7 @@ func New(cfg Config) *Worker {
 	if cfg.Slots <= 0 {
 		cfg.Slots = 4
 	}
-	return &Worker{
+	w := &Worker{
 		ID:        cfg.ID,
 		Host:      cfg.Host,
 		Port:      cfg.Port,
@@ -86,7 +97,22 @@ func New(cfg Config) *Worker {
 		store:     cfg.Store,
 		executors: map[string]*orchestrator.DAGExecutor{},
 		stopCh:    make(chan struct{}),
+		leaseTTL:  storage.DefaultTaskLeaseTTL,
 	}
+	if cfg.LeaseTTL > 0 {
+		w.leaseTTL = cfg.LeaseTTL
+	}
+	if cfg.MasterURL != "" {
+		tc := TransportConfigFromEnv()
+		if cfg.Transport != nil {
+			tc = *cfg.Transport
+		}
+		if cfg.APIToken != "" {
+			tc.APIToken = cfg.APIToken
+		}
+		w.client = NewMasterClient(cfg.MasterURL, tc)
+	}
+	return w
 }
 
 // Start registers the worker with the master and begins heartbeats.
@@ -146,23 +172,29 @@ func (w *Worker) register(ctx context.Context) error {
 	// closes the connection, and the client sees EOF on register (a real bug
 	// that broke the distributed worker binary). reportTaskDone already uses
 	// bytes.NewReader for the same reason.
-	resp, err := http.Post(w.masterURL+"/api/v2/workers", "application/json", bytes.NewReader(bodyJSON))
+	if w.client == nil {
+		// Standalone / test path without HTTP master.
+		return nil
+	}
+	resp, err := w.client.PostJSON(ctx, "/api/v2/workers", bodyJSON, true)
 	if err != nil {
 		return fmt.Errorf("register request: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return fmt.Errorf("register unauthorized (status %d): check ETL_API_TOKEN", resp.StatusCode)
+	}
+	if resp.StatusCode != 200 {
 		return fmt.Errorf("register returned %d", resp.StatusCode)
 	}
 	return nil
 }
 
 func (w *Worker) deregister(ctx context.Context) {
-	if w.masterURL == "" {
+	if w.masterURL == "" || w.client == nil {
 		return
 	}
-	req, _ := http.NewRequestWithContext(ctx, "DELETE", w.masterURL+"/api/v2/workers/"+w.ID+"/deregister", nil)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := w.client.Delete(ctx, "/api/v2/workers/"+w.ID+"/deregister")
 	if err != nil {
 		g.Log().Warningf(ctx, "Worker deregister failed: %v", err)
 		return
@@ -191,12 +223,20 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 }
 
 func (w *Worker) sendHeartbeat(ctx context.Context) error {
-	req, _ := http.NewRequestWithContext(ctx, "POST", w.masterURL+"/api/v2/workers/"+w.ID+"/heartbeat", nil)
-	resp, err := http.DefaultClient.Do(req)
+	if w.client == nil {
+		return nil
+	}
+	resp, err := w.client.PostJSON(ctx, "/api/v2/workers/"+w.ID+"/heartbeat", nil, true)
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return fmt.Errorf("heartbeat unauthorized (status %d)", resp.StatusCode)
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("heartbeat returned %d", resp.StatusCode)
+	}
 	return nil
 }
 

@@ -244,6 +244,11 @@ func (s *Store) runVersionedMigrations(ctx context.Context) error {
 		{10, "add min_runtime_version to plugins", "ALTER TABLE plugins ADD COLUMN IF NOT EXISTS min_runtime_version TEXT NOT NULL DEFAULT ''"},
 		{11, "add manifest_json to plugins", "ALTER TABLE plugins ADD COLUMN IF NOT EXISTS manifest_json TEXT NOT NULL DEFAULT ''"},
 		{12, "add manifest_validated to plugins", "ALTER TABLE plugins ADD COLUMN IF NOT EXISTS manifest_validated BOOLEAN DEFAULT FALSE"},
+		// PR-D1.2: task ownership fencing (lease / generation / attempt history).
+		{13, "add generation to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS generation BIGINT DEFAULT 0"},
+		{14, "add attempt to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS attempt INTEGER DEFAULT 0"},
+		{15, "add lease_expires_at to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ"},
+		{16, "add last_error to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT ''"},
 	}
 
 	for _, m := range migrations {

@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ### Added
+- **PR-D1 Distributed worker auth & fencing**: authenticated worker HTTP client (token/TLS/timeout/retry); task `generation`/`attempt`/`lease` CAS ownership; stale-owner completion fenced; bounded requeue; `hack/e2e-distributed.sh` + token-required distributed compose (still beta).
+
+### Added
 
 - **dbt transform (Phase 1)**: `type: dbt` stages a batch, runs `dbt run --select <model>`, and reads the model output. Adapters: `postgres` / `duckdb`. dbt remains an optional host dependency.
 - Schema/descriptor registration, `docs/components/transform-dbt.md`, and skippable `hack/e2e-dbt.sh`.

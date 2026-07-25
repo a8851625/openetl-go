@@ -15,14 +15,35 @@ import (
 // TaskDispatcher extracts shard runners from a ParallelRunner and assigns them
 // to available workers. If no workers are available, shards run inline.
 type TaskDispatcher struct {
-	store    storage.Storage
-	registry *WorkerRegistry
-	mu       sync.Mutex
+	store       storage.Storage
+	registry    *WorkerRegistry
+	mu          sync.Mutex
+	leaseTTL    time.Duration
+	maxAttempts int
 }
 
 // NewTaskDispatcher creates a task dispatch coordinator.
 func NewTaskDispatcher(store storage.Storage, registry *WorkerRegistry) *TaskDispatcher {
-	return &TaskDispatcher{store: store, registry: registry}
+	return &TaskDispatcher{
+		store:       store,
+		registry:    registry,
+		leaseTTL:    storage.DefaultTaskLeaseTTL,
+		maxAttempts: storage.DefaultTaskMaxAttempts,
+	}
+}
+
+// SetLeaseTTL overrides the ownership lease granted on claim/renew.
+func (d *TaskDispatcher) SetLeaseTTL(ttl time.Duration) {
+	if ttl > 0 {
+		d.leaseTTL = ttl
+	}
+}
+
+// SetMaxAttempts overrides the requeue budget before a task is permanently failed.
+func (d *TaskDispatcher) SetMaxAttempts(n int) {
+	if n > 0 {
+		d.maxAttempts = n
+	}
 }
 
 // ShardSource represents something that has numbered instances (ParallelRunner).
@@ -50,6 +71,8 @@ func (d *TaskDispatcher) DispatchShards(ctx context.Context, pipelineName string
 			ShardIndex:     i, // A11-redo: worker reads these to build the right single-shard Runner
 			ShardTotal:     count,
 			Status:         "pending",
+			Generation:     0,
+			Attempt:        0,
 			RequiredLabels: requiredLabels,
 		}
 		if err := d.store.CreateTask(ctx, task); err != nil {
@@ -80,21 +103,35 @@ func (d *TaskDispatcher) WaitShard(ctx context.Context, pipelineName string, idx
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		tasks, err := d.store.ListTasks(ctx, pipelineName)
-		if err != nil {
-			return pipeline.StatusFailed, fmt.Errorf("list tasks for %s: %w", taskID, err)
-		}
-		for _, t := range tasks {
-			if t.TaskID != taskID {
-				continue
+		// Prefer GetTask so terminal rows are visible even after ListTasks
+		// filters them out of the active set.
+		if getter, ok := d.store.(interface {
+			GetTask(context.Context, string) (*storage.TaskAssignment, error)
+		}); ok {
+			if t, err := getter.GetTask(ctx, taskID); err == nil && t != nil {
+				switch t.Status {
+				case "completed":
+					return pipeline.StatusCompleted, nil
+				case "failed":
+					return pipeline.StatusFailed, fmt.Errorf("shard %s failed: %s", taskID, t.LastError)
+				}
 			}
-			switch t.Status {
-			case "completed":
-				return pipeline.StatusCompleted, nil
-			case "failed":
-				return pipeline.StatusFailed, fmt.Errorf("shard %s failed", taskID)
+		} else {
+			tasks, err := d.store.ListTasks(ctx, pipelineName)
+			if err != nil {
+				return pipeline.StatusFailed, fmt.Errorf("list tasks for %s: %w", taskID, err)
 			}
-			// pending/assigned/running → keep waiting
+			for _, t := range tasks {
+				if t.TaskID != taskID {
+					continue
+				}
+				switch t.Status {
+				case "completed":
+					return pipeline.StatusCompleted, nil
+				case "failed":
+					return pipeline.StatusFailed, fmt.Errorf("shard %s failed: %s", taskID, t.LastError)
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -104,11 +141,11 @@ func (d *TaskDispatcher) WaitShard(ctx context.Context, pipelineName string, idx
 	}
 }
 
-// AssignNextTask is called by the worker poll endpoint. It searches for the
+// AssignNextTask is called by the worker poll endpoint. It CAS-claims the
 // oldest pending task whose RequiredLabels are satisfied by the given worker's
-// registered Labels, and assigns it. A task with no RequiredLabels is claimable
-// by any worker; a task with RequiredLabels requires the worker to match every
-// key/value exactly (worker_selector.match_labels enforcement).
+// registered Labels. A task with no RequiredLabels is claimable by any worker;
+// a task with RequiredLabels requires the worker to match every key/value
+// exactly (worker_selector.match_labels enforcement).
 func (d *TaskDispatcher) AssignNextTask(ctx context.Context, workerID string) (*storage.TaskAssignment, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -121,30 +158,16 @@ func (d *TaskDispatcher) AssignNextTask(ctx context.Context, workerID string) (*
 		workerLabels = nil
 	}
 
-	tasks, err := d.store.ListTasks(ctx, "")
+	task, err := d.store.ClaimTask(ctx, workerID, workerLabels, d.leaseTTL)
 	if err != nil {
-		return nil, fmt.Errorf("list tasks: %w", err)
+		return nil, fmt.Errorf("claim task: %w", err)
 	}
-	for _, t := range tasks {
-		if t.Status != "pending" {
-			continue
-		}
-		if !labelsMatch(workerLabels, t.RequiredLabels) {
-			continue
-		}
-		now := time.Now()
-		t.WorkerID = workerID
-		t.Status = "assigned"
-		t.AssignedAt = &now
-		if err := d.store.UpdateTask(ctx, t); err != nil {
-			g.Log().Warningf(ctx, "UpdateTask %s: %v", t.TaskID, err)
-			continue
-		}
-		g.Log().Infof(ctx, "Task %s assigned to worker %s (task labels=%v, worker labels=%v)",
-			t.TaskID, workerID, t.RequiredLabels, workerLabels)
-		return t, nil
+	if task == nil {
+		return nil, nil
 	}
-	return nil, nil
+	g.Log().Infof(ctx, "Task %s assigned to worker %s gen=%d attempt=%d (task labels=%v, worker labels=%v)",
+		task.TaskID, workerID, task.Generation, task.Attempt, task.RequiredLabels, workerLabels)
+	return task, nil
 }
 
 // lookupWorkerLabels returns the Labels registered for the given worker ID.
@@ -176,25 +199,44 @@ func labelsMatch(workerLabels, required map[string]string) bool {
 	return true
 }
 
-// ReportTaskResult updates the task status after execution.
-func (d *TaskDispatcher) ReportTaskResult(ctx context.Context, taskID string, status string) error {
-	tasks, err := d.store.ListTasks(ctx, "")
+// ReportTaskResult updates the task status after execution using generation CAS.
+// An old worker whose lease was reassigned cannot overwrite the new owner.
+func (d *TaskDispatcher) ReportTaskResult(ctx context.Context, taskID, workerID string, generation int64, status, lastError string) error {
+	task, err := d.store.GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	for _, t := range tasks {
-		if t.TaskID == taskID {
-			now := time.Now()
-			t.Status = status
-			t.FinishedAt = &now
-			return d.store.UpdateTask(ctx, t)
-		}
+	if task == nil {
+		return fmt.Errorf("task %s not found", taskID)
 	}
-	return fmt.Errorf("task %s not found", taskID)
+	// Ownership check before write so diagnostics stay clear.
+	if workerID != "" && task.WorkerID != "" && task.WorkerID != workerID {
+		return storage.ErrTaskFenced
+	}
+	if generation > 0 && task.Generation != generation {
+		return storage.ErrTaskFenced
+	}
+	now := time.Now()
+	task.Status = status
+	task.FinishedAt = &now
+	if lastError != "" {
+		task.LastError = lastError
+	}
+	if workerID != "" {
+		task.WorkerID = workerID
+	}
+	if generation > 0 {
+		task.Generation = generation
+	}
+	if err := d.store.CASUpdateTask(ctx, task); err != nil {
+		return err
+	}
+	return nil
 }
 
-// ReassignStaleTasks checks for tasks assigned to workers whose heartbeat is
-// stale and reassigns them back to pending.
+// ReassignStaleTasks checks for tasks whose worker is offline or whose lease
+// has expired and requeues them (bounded by maxAttempts). Attempt history is
+// retained; generation is left unchanged until the next successful claim.
 func (d *TaskDispatcher) ReassignStaleTasks(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -207,16 +249,50 @@ func (d *TaskDispatcher) ReassignStaleTasks(ctx context.Context) {
 		}
 	}
 
+	now := time.Now()
 	tasks, _ := d.store.ListTasks(ctx, "")
 	for _, t := range tasks {
-		if t.Status == "assigned" || t.Status == "running" {
-			if t.WorkerID != "" && !online[t.WorkerID] {
-				g.Log().Warningf(ctx, "Reassigning stale task %s from offline worker %s", t.TaskID, t.WorkerID)
-				t.Status = "pending"
-				t.WorkerID = ""
-				t.AssignedAt = nil
-				_ = d.store.UpdateTask(ctx, t)
-			}
+		if t.Status != "assigned" && t.Status != "running" {
+			continue
 		}
+		stale := false
+		reason := ""
+		if t.WorkerID != "" && !online[t.WorkerID] {
+			stale = true
+			reason = fmt.Sprintf("worker %s offline", t.WorkerID)
+		} else if t.LeaseExpiresAt != nil && now.After(*t.LeaseExpiresAt) {
+			stale = true
+			reason = "lease expired"
+		}
+		if !stale {
+			continue
+		}
+
+		// Bound requeue budget: if attempts already at/above max, fail visibly.
+		if t.Attempt >= d.maxAttempts {
+			g.Log().Warningf(ctx, "Task %s exceeded max attempts (%d); marking failed (reason=%s)", t.TaskID, d.maxAttempts, reason)
+			t.Status = "failed"
+			t.LastError = fmt.Sprintf("exceeded max attempts (%d): %s", d.maxAttempts, reason)
+			finished := now
+			t.FinishedAt = &finished
+			// Use unconditional UpdateTask for master-side terminalization so a
+			// dead generation does not leave the task stuck.
+			_ = d.store.UpdateTask(ctx, t)
+			continue
+		}
+
+		g.Log().Warningf(ctx, "Reassigning stale task %s from worker %s gen=%d attempt=%d reason=%s",
+			t.TaskID, t.WorkerID, t.Generation, t.Attempt, reason)
+		t.Status = "pending"
+		t.WorkerID = ""
+		t.AssignedAt = nil
+		t.StartedAt = nil
+		t.FinishedAt = nil
+		t.LeaseExpiresAt = nil
+		t.LastError = reason
+		// Keep generation so a late completion from the old owner still fails CAS
+		// (new claim will bump generation further). Attempt is preserved and
+		// incremented on the next claim.
+		_ = d.store.UpdateTask(ctx, t)
 	}
 }
