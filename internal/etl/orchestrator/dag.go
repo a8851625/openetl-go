@@ -193,6 +193,23 @@ func (d *DAG) Validate() error {
 	return nil
 }
 
+// ValidateProduction applies production path safety gates that structural
+// Validate() intentionally leaves open for unit/test fixtures (PR-2.3):
+// multi-sink fanout is non-atomic across sinks and must opt in via allowUnsafe.
+func (d *DAG) ValidateProduction(allowUnsafe bool) error {
+	if err := d.Validate(); err != nil {
+		return err
+	}
+	if !allowUnsafe && len(d.Sinks()) > 1 {
+		return fmt.Errorf(
+			"dag has %d sink nodes: cross-sink fanout is not atomic under at-least-once delivery; "+
+				"set allow_unsafe: true only after accepting partial multi-sink write on crash/replay, or use a single sink",
+			len(d.Sinks()),
+		)
+	}
+	return nil
+}
+
 // detectCycle returns an error if the DAG contains a cycle.
 func (d *DAG) detectCycle() error {
 	inDegree := map[string]int{}

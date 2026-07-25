@@ -379,6 +379,32 @@ func checkPostgresCDCSourceConfig(spec *pipeline.Spec, result *PreflightResult) 
 			}
 		}
 	}
+	// PR-2.3: TRUNCATE is not mapped to target DELETE. Default fail-closed.
+	onTruncate := strings.ToLower(strings.TrimSpace(stringField(cfg, "on_truncate", "error")))
+	if onTruncate == "" {
+		onTruncate = "error"
+	}
+	switch onTruncate {
+	case "error":
+		// production-safe default — no issue
+	case "skip":
+		if !spec.AllowUnsafe {
+			addStaticFieldError(result, "postgres-cdc-on-truncate", "source.config.on_truncate",
+				"postgres_cdc on_truncate=skip leaves residual sink rows after source TRUNCATE",
+				"keep on_truncate=error (default), or set allow_unsafe: true only after accepting residual sink rows")
+		} else {
+			result.Issues = append(result.Issues, PreflightIssue{
+				Level:       "warning",
+				Check:       "postgres-cdc-on-truncate",
+				Message:     "postgres_cdc on_truncate=skip with allow_unsafe: residual sink rows after TRUNCATE are accepted by operator",
+				Remediation: "truncate/rebuild the sink table after source TRUNCATE, or implement target-side delete",
+			})
+		}
+	default:
+		addStaticFieldError(result, "postgres-cdc-on-truncate", "source.config.on_truncate",
+			fmt.Sprintf("postgres_cdc on_truncate %q is invalid", onTruncate),
+			"set source.config.on_truncate to error (default) or skip")
+	}
 }
 
 // ── Sink: static config checks ───────────────────────────────────────

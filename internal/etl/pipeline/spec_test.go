@@ -61,6 +61,36 @@ func TestValidateSpecRequiresExplicitUnsafeOptIn(t *testing.T) {
 	}
 }
 
+func TestValidateSpecPostgresCDCOnTruncate(t *testing.T) {
+	base := &Spec{
+		Name: "pg-truncate-boundary",
+		Source: SourceSpec{Type: "postgres_cdc", Config: map[string]any{
+			"host": "localhost", "user": "u", "database": "db", "on_truncate": "skip",
+		}},
+		Sink:                  SinkSpec{Type: "mysql", Config: map[string]any{"batch_mode": "upsert", "pk_columns": []any{"id"}}},
+		BatchSize:             1,
+		CheckpointIntervalSec: 1,
+		BackpressureBuffer:    1,
+		Retry:                 &RetrySpec{MaxAttempts: 1, InitialIntervalMs: 1, MaxIntervalMs: 1},
+	}
+	if err := ValidateSpec(base); err == nil || !strings.Contains(err.Error(), "on_truncate=skip") {
+		t.Fatalf("ValidateSpec() error = %v, want on_truncate=skip rejection", err)
+	}
+	base.AllowUnsafe = true
+	if err := ValidateSpec(base); err != nil {
+		t.Fatalf("ValidateSpec() with allow_unsafe = true error = %v", err)
+	}
+	base.AllowUnsafe = false
+	base.Source.Config["on_truncate"] = "error"
+	if err := ValidateSpec(base); err != nil {
+		t.Fatalf("ValidateSpec() on_truncate=error error = %v", err)
+	}
+	base.Source.Config["on_truncate"] = "drop"
+	if err := ValidateSpec(base); err == nil || !strings.Contains(err.Error(), "on_truncate") {
+		t.Fatalf("ValidateSpec() invalid on_truncate error = %v", err)
+	}
+}
+
 func TestApplyDefaultsSetsSourceDefaultSchedule(t *testing.T) {
 	spec := &Spec{
 		Name:   "cdc-default",

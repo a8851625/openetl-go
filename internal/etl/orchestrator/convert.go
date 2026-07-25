@@ -68,8 +68,9 @@ func ConvertLinearSpec(spec *pipeline.Spec) (*PipelineSpec, error) {
 	})
 
 	dagSpec := &PipelineSpec{
-		Name: spec.Name,
-		DAG:  dag,
+		Name:        spec.Name,
+		AllowUnsafe: spec.AllowUnsafe,
+		DAG:         dag,
 		Execution: &ExecutionConfig{
 			BatchSize:        spec.BatchSize,
 			BackpressureBuf:  spec.BackpressureBuffer,

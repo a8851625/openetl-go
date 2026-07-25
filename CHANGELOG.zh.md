@@ -8,18 +8,30 @@
 
 - **dbt transform（Phase 1）**：`type: dbt` 将 batch 写入 staging 表 → `dbt run --select <model>` → 读取输出表；支持 `postgres` / `duckdb` adapter。dbt 为可选能力，不引入核心依赖。
 - 配置 schema / connector descriptor 注册 `dbt`；组件文档 `docs/components/transform-dbt.md`；可跳过 E2E `hack/e2e-dbt.sh`。
+- **PR-2 path contract**：`docs/path-contract.md` + `GET /api/v2/paths/contracts`，可从 descriptor 追溯 write mode / business key / storage / RPO/RTO。
 
 ### 可靠性与安全
 
 - PR-0 控制面收口：加密 spec restart/rollback、current/version/checkpoint 原子边界、scheduler prepare/commit compensation、production profile fail-closed、CORS/trusted-proxy/security headers 和双端口 TLS topology 均有当前版本证据。
 - UI API token 改为页面内存语义，并新增 `hack/e2e-ui-token.sh` focused browser gate；`.dockerignore` 排除本地 Go/race cache、构建产物和截图，避免污染生产镜像构建上下文。
+- **PR-2 主链路故障对账**：
+  - 强制 path `mysql_cdc__mysql_upsert`：`hack/e2e-path-mysql-cdc-mysql.sh`（happy / crash / checkpoint reset / sink outage+DLQ replay，业务键对账 silent_loss=0）
+  - 强制 path `mysql_snap_cdc__ch_rmt`：`hack/e2e-snapshot-cdc-clickhouse.sh` + crash 脚本
+  - 边界：PostgreSQL CDC `on_truncate` 默认 error；DAG 多 sink fanout 与 CDC→file/S3 默认阻断，需 `allow_unsafe`
+  - 发布声明列出 at-least-once 重复边界与 RPO/RTO（见 path-contract / reliability-certification）
 
 ### 验证
 
 - `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
 - `go test ./internal/etl/server/ -run 'PluginSchema'`
+- `go test ./internal/etl/server/ -run PathContract`
+- `go test ./internal/etl/pipeline/ -run 'Unsafe|OnTruncate'`
+- `go test ./internal/etl/orchestrator/ -run MultiSink`
 - `go test ./... -count=1`
 - `go test -race ./internal/etl/orchestrator ./internal/etl/server -count=1`
+- `./hack/e2e-path-contract-smoke.sh`
+- `./hack/e2e-path-mysql-cdc-mysql.sh`
+- `./hack/e2e-snapshot-cdc-clickhouse.sh`
 - `./hack/e2e-spec-encryption-recovery.sh`
 - `./hack/e2e-control-plane-persistence.sh`
 - `CONTAINER_CLI=podman ./hack/e2e-storage-mysql.sh`

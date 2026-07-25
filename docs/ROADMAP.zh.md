@@ -139,7 +139,7 @@ Roadmap 状态只使用以下值：
 | --- | --- | --- | --- | --- |
 | `PR-0` | 可靠、安全、持久化一致 | API/内存/DB 一致；加密恢复和生产安全默认值通过 | 当前 P0 完成或显式切换 | `delivered` |
 | `PR-1` | 易维护、安全 | secret、migration、backup/restore、upgrade/rollback 可重复 | `PR-0` | `active` (1.1/1.2 delivered · 1.3 backup e2e SQLite+MySQL+PG passed; upgrade path residual) |
-| `PR-2` | 数据一致性 | 主推荐链路通过 crash/reset/outage/DLQ replay 对账 | `PR-0`，并复用 `PR-1` storage gate | `queued` |
+| `PR-2` | 数据一致性 | 主推荐链路通过 crash/reset/outage/DLQ replay 对账 | `PR-0`，并复用 `PR-1` storage gate | `delivered` |
 | P3 | 证据治理 | maturity 与当前版本实际认证证据一致 | `PR-2` 定义 path gate | `queued` |
 | P4 | 易上手 | 30 分钟首次任务与 10 分钟故障定位目标可验证 | `PR-0` 安全/profile 约定 | `queued` |
 | P5 | 易维护、可观测 | 业务健康、资源基线、CI 和 production runbook 成为发布门槛 | `PR-1`、`PR-2` | `queued` |
@@ -474,7 +474,7 @@ PR-1.3 本轮证据（Round 3/5 · partial）：
 
 ### PR-2：数据一致性契约与生产链路认证
 
-状态：`queued`
+状态：`delivered`（2026-07-25 · SEL-217）
 
 目标：把“默认 at-least-once”变成可验证、可解释的生产契约，保证不静默丢数据，并把可能重复限制在已声明、可吸收或可对账的边界内。
 

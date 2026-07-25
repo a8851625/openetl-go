@@ -440,6 +440,14 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 			}
 		}
 		if err := s.execContext(ctx, execDDL); err != nil {
+			// Checkpoint reset / at-least-once replay can re-deliver ADD COLUMN
+			// after the column already exists — treat as success (PR-2).
+			msg := strings.ToLower(err.Error())
+			if strings.Contains(msg, "already exists") || strings.Contains(msg, "column with this name already exists") {
+				delete(s.schemas, table)
+				delete(s.engineCache, table)
+				return nil
+			}
 			return fmt.Errorf("execute DDL %q: %w", execDDL, err)
 		}
 		delete(s.schemas, table)
@@ -657,7 +665,17 @@ func (s *ClickHouseSink) applyDDL(ctx context.Context, ddlRec core.Record) error
 	// MySQL for ADD COLUMN / DROP COLUMN / MODIFY COLUMN, but not all
 	// statements will translate. Failures are returned as errors so the
 	// pipeline can route them to DLQ.
+	//
+	// Checkpoint reset / at-least-once replay can re-deliver ADD COLUMN after
+	// the column already exists. Treat that as success so schema-drift paths
+	// remain idempotent under PR-2 fault matrices.
 	if err := s.execContext(ctx, ddl); err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "already exists") || strings.Contains(msg, "column with this name already exists") {
+			delete(s.schemas, ddlRec.Metadata.Table)
+			delete(s.engineCache, ddlRec.Metadata.Table)
+			return nil
+		}
 		return fmt.Errorf("execute DDL %q: %w", ddl, err)
 	}
 
