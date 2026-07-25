@@ -18,6 +18,132 @@
 - For each completed roadmap item, update evidence rather than only adding new plans: tests run, e2e coverage, docs updated, maturity metadata changed, or known residual gaps.
 - If a task reveals more work than expected, split follow-ups into a bounded backlog section and continue finishing the original deliverable. Avoid repeatedly rewriting acceptance criteria midstream.
 
+## Roadmap-to-Delivery Workflow
+
+All implementation work follows one closed loop:
+
+```text
+sync current state -> claim one roadmap item -> split bounded increments
+    -> implement a vertical slice -> test at acceptance scope
+    -> reconcile evidence and update roadmap -> claim the next item
+```
+
+The loop is a delivery rule, not a suggestion. Do not start coding from a stale summary, an untracked idea, or a test failure without first mapping it to a roadmap item or an explicitly authorized bounded follow-up.
+
+### 1. Sync before claiming
+
+- Read the current `docs/ROADMAP.zh.md`, the relevant component/reliability documents, and the working tree status before selecting work. Treat the current files and commands as authoritative; previous conversation summaries are navigation hints only.
+- Identify the current highest-priority item, its status, dependencies, acceptance criteria, and required evidence. Confirm whether an `active` item already exists.
+- Inspect existing user changes with `git status`/`git diff` and preserve them. Do not reset, checkout, clean, or overwrite unrelated work.
+- Check whether the task is for the standalone production profile, a connector/path certification, the distributed profile, UI/onboarding, or another explicitly named roadmap scope. Do not use evidence from one profile to claim another.
+
+### 2. Claim exactly one item
+
+- Claim the highest-priority eligible `queued` item, or continue the already `active` item. Never claim two primary items at once.
+- A `blocked_external` item is not eligible until its documented credential/service/authorization input is available. Record the missing input and the unblock condition; do not silently replace the current top priority with a lower item.
+- Before implementation, record a short claim in the task/PR or work log: roadmap ID, objective, why it is eligible now, scope, non-goals, dependencies, and intended evidence.
+- Set the roadmap status to `active` only for the one item actually being worked. Do not invent `in_progress`; the allowed states are `active`, `blocked_external`, `queued`, `delivered`, and `deferred`.
+- Changing priority, moving an item ahead of the current top task, or turning a follow-up into a new roadmap item requires an explicit user/product decision and a note in the roadmap.
+
+### 3. Split the requirement before coding
+
+For the claimed item, create bounded increments (for example `PR-0.1`, `PR-0.2`, `PR-0.3`). Each increment must state:
+
+- one observable outcome and the smallest vertical slice that can deliver it;
+- explicit non-goals and the interfaces/files it is allowed to touch;
+- acceptance checks, test data, failure/recovery scenarios, and the evidence artifact to update;
+- data semantics and rollback behavior, especially for checkpoint, DLQ, replay, idempotency, schema drift, and secret handling;
+- dependencies and a precise external blocker, if any.
+
+Do not split only by file or layer. A valid increment closes a user-visible or operationally verifiable behavior from configuration/API/UI through runtime and persistence where applicable. If the split reveals adjacent work, put it in a bounded follow-up section and keep the current acceptance criteria unchanged.
+
+### 4. Preflight the implementation
+
+- Locate the existing implementation, registration path, config/schema descriptor, docs, and nearest tests before editing. Prefer extending the established `Source -> Transform -> Sink` contract over adding a parallel execution model.
+- For a data path, write down the source position, checkpoint boundary, sink acknowledgement, duplicate strategy, DLQ behavior, and restart/reset expectation before changing code.
+- For a security or storage change, identify plaintext/secret paths, migration compatibility, backup/restore impact, and failure-atomicity requirements before coding.
+- For UI work, use the real descriptor/introspection/preflight/API spec; do not create a static UI-only execution semantic.
+
+### 5. Implement the smallest vertical slice
+
+- Make the smallest change that satisfies the claimed increment, including necessary tests and documentation. Avoid opportunistic refactors, new connectors, broad abstractions, or unverified maturity upgrades.
+- Preserve the documented at-least-once contract. A retry, replay, checkpoint, or sink change must not silently turn a possible duplicate into a possible loss.
+- Keep production claims conservative while evidence is incomplete: use `beta`, `experimental`, `production_with_review`, or an explicit warning instead of changing metadata to `production` early.
+- Treat persistence and lifecycle errors as user-visible outcomes. Do not ignore save, delete, checkpoint, migration, or task-state errors merely to keep a happy-path test green.
+- Update the relevant component/runbook/evidence document in the same delivery slice when behavior or operational requirements change.
+
+### 6. Test and verify at the acceptance scope
+
+Run the narrowest useful checks first, then broaden them in proportion to risk:
+
+1. formatting, static checks, and targeted unit tests;
+2. package integration/conformance tests and `-race` where concurrency or lifecycle state is involved;
+3. backend-specific tests for every storage/connector backend still advertised by the item;
+4. the relevant `hack/e2e-*.sh`, UI, crash/restart, outage, checkpoint-reset, DLQ/replay, and duplicate-absorption scenarios;
+5. real external-environment certification when the roadmap item requires credentials or a remote service.
+
+For every result, record `passed`, `failed`, `skipped`, or `blocked` with the reason. A missing DSN, image, service, or credential is a skip/blocker, not a pass. A narrow unit test cannot certify a cross-process, multi-backend, or production connector requirement.
+
+Data-path changes must test, where applicable:
+
+- normal write and source/sink schema or preflight validation;
+- crash after sink acknowledgement and before checkpoint commit;
+- application restart and checkpoint reset/replay;
+- source/sink/Redis outage, retry/backoff, DLQ persistence and replay;
+- duplicate absorption or the explicitly documented duplicate boundary;
+- schema drift, delete/update semantics, and reconciliation by business key/version.
+
+Use the repository's container selection rules and commands. If local Go is unavailable, use the documented `CONTAINER_CLI` invocation; do not substitute an untracked local toolchain result for the required container or e2e evidence.
+
+### 7. Reconcile the result against the roadmap
+
+Before declaring completion, create an acceptance matrix:
+
+| Criterion | Evidence (command/file/run) | Result | Residual or blocker |
+| --- | --- | --- | --- |
+| stated acceptance criterion | exact test/e2e/doc/release evidence | pass/fail/skip/block | concrete next action |
+
+Then inspect the final diff and run `git diff --check`. Confirm that:
+
+- no secret, token, password, generated artifact, or debug/demo control was introduced into the wrong surface;
+- API response, in-memory lifecycle, storage rows, checkpoint/DLQ state, docs, metrics, and maturity metadata agree;
+- the test scope matches the claim scope (standalone vs distributed, connector path, storage backend, and release version);
+- known residual gaps are written down rather than hidden by a broad “passed” statement.
+
+### 8. Close, hand off, and loop
+
+- Mark an item `delivered` only when every mandatory acceptance criterion has passing evidence and the required docs/changelog/maturity metadata are updated. “Code merged” or “unit tests pass” alone is not completion.
+- Keep the item `active` when implementation or required evidence remains. Mark it `blocked_external` only when the missing condition is genuinely external and the exact input, owner, and unblock test are recorded. Do not mark work blocked merely because it is difficult or incomplete.
+- If the original scope is complete but follow-up work remains, add a bounded follow-up with its own acceptance criteria; do not expand the completed item retroactively.
+- After `delivered`, return to the top of `docs/ROADMAP.zh.md`, select the next eligible item by preserved priority, and repeat from step 1. Do not automatically start the next item in the same change if the user has not authorized a priority switch.
+- If no eligible item remains, leave the roadmap evidence current and provide a handoff listing completed work, skipped/blocked checks, residual risks, and the next recommended claim.
+
+### Default autonomous round limit
+
+- Unless the user specifies otherwise, one roadmap execution request has a default limit of **5 rounds**.
+- One round means one complete bounded claim-to-close cycle: claim one roadmap increment, implement it, run its acceptance checks, and close or hand it off. Tool calls, individual test retries, and planning substeps do not count as extra rounds.
+- Record the counter as `Round: n/5` in the work log or handoff. Do not claim a sixth increment automatically after `Round: 5/5`.
+- At the limit, finish only the safe closeout of the current round, update roadmap evidence, and stop with a handoff listing the next eligible item. Continue, reset, or extend the counter only after an explicit user prompt; do not infer permission from silence.
+- If the user specifies a different limit (including `0` for planning-only), that limit takes precedence for the request. A later explicit “continue” starts a new five-round window unless the user supplies another number.
+- If a round becomes `blocked_external`, it still consumes the round and must end with the exact missing input, owner, unblock test, and next claim; do not spin on the same blocker within the remaining rounds.
+
+### Minimal claim/close record
+
+Use this compact record in a PR, task note, or final handoff:
+
+```text
+Round: <n>/<limit>
+Roadmap item: <P0 / PR-0.1 / ...>
+Profile/path: <standalone|distributed|connector path>
+Objective: <one observable outcome>
+Scope: <files/components allowed>
+Non-goals: <explicit exclusions>
+Acceptance: <numbered checks>
+Evidence: <commands, e2e, docs, release record>
+Result: <delivered|active|blocked_external>
+Residual/follow-up: <bounded next item or none>
+```
+
 - Local Go may be unavailable; use `CONTAINER_CLI="${CONTAINER_CLI:-$(command -v docker || command -v podman)}"; "$CONTAINER_CLI" run --rm -v "$PWD:/workspace" -v openetl-go_go-cache:/go -v openetl-go_go-build-cache:/root/.cache/go-build -w /workspace etl-go-dev:latest sh -c "go test ./..."` for tests.
 
 ## Container Runtime Selection

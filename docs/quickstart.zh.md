@@ -186,7 +186,7 @@ curl http://localhost:8000/metrics
 
 - [ ] 设置 `ETL_API_TOKEN` 环境变量
 - [ ] 设置 `ETL_SPEC_ENCRYPTION_KEY` 加密 spec
-- [ ] 配置 TLS（`ETL_TLS_CERT`、`ETL_TLS_KEY`）
+- [ ] 配置 TLS（`ETL_TLS_CERT`、`ETL_TLS_KEY`），并把 `ETL_TLS_SERVER_NAME` 设为证书 SAN
 - [ ] 配置告警渠道（`ALERT_DINGTALK_WEBHOOK` / `ALERT_FEISHU_WEBHOOK` / `ALERT_SLACK_WEBHOOK`）
 - [ ] 设置 DLQ 过期（`ETL_DLQ_TTL=168h`）
 - [ ] 验证所有 CDC 管道使用幂等 sink（UPSERT 模式）
@@ -194,6 +194,10 @@ curl http://localhost:8000/metrics
 - [ ] MySQL binlog 配置 `ROW` 格式 + `FULL` row image
 - [ ] PostgreSQL 配置 `wal_level=logical`
 - [ ] 设置资源限制（Docker 或 systemd 的 CPU/内存限制）
+
+上方 quickstart compose 仍是 HTTP 演示环境。生产 `docker-compose.yml`
+通过 `https://localhost:8000` 提供 UI 和代理 API；`8001` 同样为 HTTPS，
+通常只保留在内部网络。
 
 ---
 

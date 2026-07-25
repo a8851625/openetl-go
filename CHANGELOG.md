@@ -9,10 +9,25 @@
 - **dbt transform (Phase 1)**: `type: dbt` stages a batch, runs `dbt run --select <model>`, and reads the model output. Adapters: `postgres` / `duckdb`. dbt remains an optional host dependency.
 - Schema/descriptor registration, `docs/components/transform-dbt.md`, and skippable `hack/e2e-dbt.sh`.
 
+### Reliability and security
+
+- Closed the PR-0 control-plane gate: encrypted spec restart/rollback, atomic current/version/checkpoint boundaries, scheduler prepare/commit compensation, production fail-closed profile, CORS/trusted-proxy/security headers, and the two-port TLS topology now have current-version evidence.
+- Kept the UI API token in page memory and added `hack/e2e-ui-token.sh` as a focused browser gate; `.dockerignore` now excludes local Go/race caches, build outputs, and screenshots from production image contexts.
+
 ### Validation
 
 - `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
 - `go test ./internal/etl/server/ -run 'PluginSchema'`
+- `go test ./... -count=1`
+- `go test -race ./internal/etl/orchestrator ./internal/etl/server -count=1`
+- `./hack/e2e-spec-encryption-recovery.sh`
+- `./hack/e2e-control-plane-persistence.sh`
+- `CONTAINER_CLI=podman ./hack/e2e-storage-mysql.sh`
+- `CONTAINER_CLI=podman ./hack/e2e-storage-postgres.sh`
+- `CONTAINER_CLI=podman ./hack/e2e-production-profile.sh`
+- `./hack/e2e-tls-topology.sh`
+- `./hack/e2e-runtime-smoke.sh`
+- `./hack/e2e-ui-token.sh`
 
 ## [v0.2.11-beta.2] — 2026-07-22 — UI prototype alignment and IA cleanup
 

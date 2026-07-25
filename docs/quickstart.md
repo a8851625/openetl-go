@@ -193,7 +193,7 @@ curl http://localhost:8000/metrics
 
 - [ ] Set `ETL_API_TOKEN` environment variable
 - [ ] Set `ETL_SPEC_ENCRYPTION_KEY` to encrypt specs at rest
-- [ ] Configure TLS (`ETL_TLS_CERT`, `ETL_TLS_KEY`)
+- [ ] Configure TLS (`ETL_TLS_CERT`, `ETL_TLS_KEY`) and set `ETL_TLS_SERVER_NAME` to a certificate SAN
 - [ ] Configure alert channels (`ALERT_DINGTALK_WEBHOOK` / `ALERT_FEISHU_WEBHOOK` / `ALERT_SLACK_WEBHOOK`)
 - [ ] Set DLQ TTL (`ETL_DLQ_TTL=168h`)
 - [ ] Verify all CDC pipelines use idempotent sinks (UPSERT mode)
@@ -201,6 +201,10 @@ curl http://localhost:8000/metrics
 - [ ] Configure MySQL `binlog_format=ROW` + `binlog_row_image=FULL`
 - [ ] Configure PostgreSQL `wal_level=logical`
 - [ ] Set resource limits (CPU/memory via Docker or systemd)
+
+The quickstart compose above remains an HTTP demo. The production
+`docker-compose.yml` serves the UI and proxied API at
+`https://localhost:8000`; port `8001` is HTTPS too and should remain internal.
 
 ---
 

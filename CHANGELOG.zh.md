@@ -9,10 +9,25 @@
 - **dbt transform（Phase 1）**：`type: dbt` 将 batch 写入 staging 表 → `dbt run --select <model>` → 读取输出表；支持 `postgres` / `duckdb` adapter。dbt 为可选能力，不引入核心依赖。
 - 配置 schema / connector descriptor 注册 `dbt`；组件文档 `docs/components/transform-dbt.md`；可跳过 E2E `hack/e2e-dbt.sh`。
 
+### 可靠性与安全
+
+- PR-0 控制面收口：加密 spec restart/rollback、current/version/checkpoint 原子边界、scheduler prepare/commit compensation、production profile fail-closed、CORS/trusted-proxy/security headers 和双端口 TLS topology 均有当前版本证据。
+- UI API token 改为页面内存语义，并新增 `hack/e2e-ui-token.sh` focused browser gate；`.dockerignore` 排除本地 Go/race cache、构建产物和截图，避免污染生产镜像构建上下文。
+
 ### 验证
 
 - `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
 - `go test ./internal/etl/server/ -run 'PluginSchema'`
+- `go test ./... -count=1`
+- `go test -race ./internal/etl/orchestrator ./internal/etl/server -count=1`
+- `./hack/e2e-spec-encryption-recovery.sh`
+- `./hack/e2e-control-plane-persistence.sh`
+- `CONTAINER_CLI=podman ./hack/e2e-storage-mysql.sh`
+- `CONTAINER_CLI=podman ./hack/e2e-storage-postgres.sh`
+- `CONTAINER_CLI=podman ./hack/e2e-production-profile.sh`
+- `./hack/e2e-tls-topology.sh`
+- `./hack/e2e-runtime-smoke.sh`
+- `./hack/e2e-ui-token.sh`
 
 ## [v0.2.11-beta.2] — 2026-07-22 — UI 原型对齐与信息架构收口
 
