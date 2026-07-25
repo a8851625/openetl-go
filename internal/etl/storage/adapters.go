@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -632,6 +633,52 @@ func (s *SecretFieldStore) ListSettings(ctx context.Context) (map[string]string,
 		out[k] = plain
 	}
 	return out, nil
+}
+
+// ── RetentionPurger / DB() forwarding (PR-1.3) ───────────────────────
+
+func (s *SecretFieldStore) PurgeAuditBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if p, ok := s.Storage.(RetentionPurger); ok {
+		return p.PurgeAuditBefore(ctx, cutoff, limit)
+	}
+	return 0, fmt.Errorf("storage backend does not support audit purge")
+}
+
+func (s *SecretFieldStore) PurgeRunHistoryBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if p, ok := s.Storage.(RetentionPurger); ok {
+		return p.PurgeRunHistoryBefore(ctx, cutoff, limit)
+	}
+	return 0, fmt.Errorf("storage backend does not support run-history purge")
+}
+
+func (s *SecretFieldStore) PurgeFinishedTasksBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if p, ok := s.Storage.(RetentionPurger); ok {
+		return p.PurgeFinishedTasksBefore(ctx, cutoff, limit)
+	}
+	return 0, fmt.Errorf("storage backend does not support task purge")
+}
+
+func (s *SecretFieldStore) CountObjects(ctx context.Context) (ObjectCounts, error) {
+	if p, ok := s.Storage.(RetentionPurger); ok {
+		return p.CountObjects(ctx)
+	}
+	return ObjectCounts{}, fmt.Errorf("storage backend does not support object counts")
+}
+
+func (s *SecretFieldStore) SchemaVersions(ctx context.Context) ([]SchemaVersionRow, error) {
+	if p, ok := s.Storage.(RetentionPurger); ok {
+		return p.SchemaVersions(ctx)
+	}
+	return nil, fmt.Errorf("storage backend does not support schema versions")
+}
+
+// DB exposes the underlying *sql.DB when the inner store does, so backup wipe
+// can clear tables through the SecretFieldStore wrapper.
+func (s *SecretFieldStore) DB() *sql.DB {
+	if p, ok := s.Storage.(interface{ DB() *sql.DB }); ok {
+		return p.DB()
+	}
+	return nil
 }
 
 // ReencryptSecrets rewrites every connection secret field and secret setting

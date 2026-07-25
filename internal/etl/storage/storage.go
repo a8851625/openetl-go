@@ -241,3 +241,42 @@ type Storage interface {
 	SetSetting(ctx context.Context, key, value string) error
 	ListSettings(ctx context.Context) (map[string]string, error)
 }
+
+// ObjectCounts is a point-in-time inventory of control-plane tables used by
+// backup/restore reconciliation and upgrade smoke checks (PR-1.3).
+type ObjectCounts struct {
+	Pipelines        int `json:"pipelines"`
+	PipelineVersions int `json:"pipeline_versions"`
+	Checkpoints      int `json:"checkpoints"`
+	DeadLetters      int `json:"dead_letters"`
+	AuditLogs        int `json:"audit_logs"`
+	RunHistory       int `json:"run_history"`
+	Workers          int `json:"workers"`
+	Tasks            int `json:"task_assignments"`
+	Plugins          int `json:"plugins"`
+	Connections      int `json:"connections"`
+	Settings         int `json:"settings"`
+}
+
+// RetentionPurger is an optional storage capability for janitor retention.
+// Backends that implement it can purge expired audit/run/task rows safely.
+type RetentionPurger interface {
+	// PurgeAuditBefore deletes audit_logs rows with created_at <= cutoff.
+	// limit caps rows deleted per call (0 = unlimited).
+	PurgeAuditBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error)
+	// PurgeRunHistoryBefore deletes finished run_history rows with started_at <= cutoff.
+	PurgeRunHistoryBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error)
+	// PurgeFinishedTasksBefore deletes terminal task_assignments with finished_at <= cutoff.
+	PurgeFinishedTasksBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error)
+	// CountObjects returns table row counts for backup/restore reconciliation.
+	CountObjects(ctx context.Context) (ObjectCounts, error)
+	// SchemaVersions returns applied _schema_version rows (version, description).
+	SchemaVersions(ctx context.Context) ([]SchemaVersionRow, error)
+}
+
+// SchemaVersionRow is one applied schema migration record.
+type SchemaVersionRow struct {
+	Version     int       `json:"version"`
+	Description string    `json:"description"`
+	AppliedAt   time.Time `json:"applied_at,omitempty"`
+}

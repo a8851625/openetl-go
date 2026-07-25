@@ -46,6 +46,7 @@ func (SQLiteDialect) BoolValue(v bool) any {
 	return 0
 }
 func (SQLiteDialect) RunHistoryInsertReturningID() bool { return false }
+func (SQLiteDialect) SupportsDeleteLimit() bool         { return true }
 
 type MySQLDialect struct{ SQLiteDialect }
 
@@ -98,6 +99,7 @@ func (PostgresDialect) Bind(query string) string {
 }
 func (PostgresDialect) RunHistoryInsertReturningID() bool { return true }
 func (PostgresDialect) BoolValue(v bool) any              { return v }
+func (PostgresDialect) SupportsDeleteLimit() bool         { return false }
 func (PostgresDialect) PipelineUpsert() string            { return SQLiteDialect{}.PipelineUpsert() }
 func (PostgresDialect) CheckpointUpsert() string          { return SQLiteDialect{}.CheckpointUpsert() }
 func (PostgresDialect) WorkerUpsert() string              { return SQLiteDialect{}.WorkerUpsert() }

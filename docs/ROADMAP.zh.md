@@ -438,7 +438,19 @@ Residual/follow-up: PR-1.2
 
 1. `PR-1.1` Secret envelope：connection/settings 字段级加密、key ID 和 rotation。`delivered`
 2. `PR-1.2` Storage migration：显式错误、migration lock、并发 pipeline version 分配。`delivered`
-3. `PR-1.3` 恢复与保留：三个 backend 的 upgrade/backup/restore smoke 和 retention/janitor。
+3. `PR-1.3` 恢复与保留：三个 backend 的 upgrade/backup/restore smoke 和 retention/janitor。`delivered`
+
+PR-1.3 本轮证据（Round 3/5）：
+
+| 验收项 | 证据 | 结果 | 备注 |
+|--------|------|------|------|
+| SQLite 前向升级（legacy schema → current） | `TestSQLiteForwardUpgradeFromLegacySchema`；`hack/e2e-storage-upgrade-sqlite.sh` | passed | id backfill + `_schema_version` 记录 |
+| 失败升级阻止启动 | `TestSQLiteUpgradeFailureBlocksStartup`；`WithMigrationLock` 错误传播；PR-1.2 半迁移不写版本 | passed | 三 backend 共用 lock 语义 |
+| 备份覆盖 11 类对象 | `internal/etl/storage/backup` Export；`TestBackupRestoreRoundTripSQLite` | passed | pipelines/versions/checkpoints/DLQ/audit/runs/workers/tasks/plugins/connections/settings |
+| 恢复后对账 | `backup.Reconcile`；`TestBackupRestoreUpgradePath`（sqlite 恒跑；mysql/pg 需 DSN） | passed | critical 表计数 + checkpoint/DLQ 内容 |
+| retention/janitor 配置·上限·告警 | `internal/etl/server/janitor.go`；`TestRetentionJanitorPurgesDLQAndAudit`；`TestRetentionConfigHardCaps`；health `janitor*` 字段 | passed | DLQ/audit/run/task TTL；batch/max 硬上限；失败 alert |
+| e2e 脚本 | `hack/e2e-backup-restore-*.sh`；`hack/e2e-storage-upgrade-*.sh`；runbook `docs/runtime-modes.md` | passed | 外部 backend 无容器时记 skipped |
+
 
 范围：
 

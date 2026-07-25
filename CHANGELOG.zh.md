@@ -11,11 +11,16 @@
 
 ### 可靠性与安全
 
+- PR-1.3 backup/restore/upgrade/janitor：控制面 JSON 备份覆盖 11 类对象并对账；legacy SQLite 前向升级与失败阻止启动；retention janitor（DLQ/audit/run/task）含硬上限、health 状态与失败告警；e2e `hack/e2e-backup-restore-*` / `hack/e2e-storage-upgrade-*`。
+
+
 - PR-0 控制面收口：加密 spec restart/rollback、current/version/checkpoint 原子边界、scheduler prepare/commit compensation、production profile fail-closed、CORS/trusted-proxy/security headers 和双端口 TLS topology 均有当前版本证据。
 - UI API token 改为页面内存语义，并新增 `hack/e2e-ui-token.sh` focused browser gate；`.dockerignore` 排除本地 Go/race cache、构建产物和截图，避免污染生产镜像构建上下文。
 
 ### 验证
 
+- `./hack/e2e-backup-restore-sqlite.sh`
+- `./hack/e2e-storage-upgrade-sqlite.sh`
 - `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
 - `go test ./internal/etl/server/ -run 'PluginSchema'`
 - `go test ./... -count=1`
