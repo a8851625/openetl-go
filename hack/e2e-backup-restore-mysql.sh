@@ -1,12 +1,49 @@
 #!/usr/bin/env bash
-# PR-1.3 MySQL backup-restore — requires CONTAINER_CLI + live MySQL.
+# PR-1.3: MySQL logical backup against throwaway container.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-if [[ -z "${MYSQL_DSN:-}" && -z "${CONTAINER_CLI:-}" ]]; then
-  echo "SKIP: set MYSQL_DSN or CONTAINER_CLI=podman to run MySQL backup e2e"
-  exit 0
+
+. "$ROOT/hack/container-cli.sh"
+detect_container_cli
+
+CONTAINER="etl-backup-test-mysql"
+DB="openetl_backup"
+ROOT_PASS="root123456"
+HOST_PORT="13401"
+
+cleanup() {
+  "$CONTAINER_CLI" rm -f "$CONTAINER" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+
+echo "==> Start throwaway MySQL for backup e2e (port $HOST_PORT)"
+cleanup
+"$CONTAINER_CLI" run -d --name "$CONTAINER" \
+  -e MYSQL_ROOT_PASSWORD="$ROOT_PASS" \
+  -e MYSQL_DATABASE="$DB" \
+  -p "$HOST_PORT:3306" \
+  docker.io/library/mysql:8.0 >/dev/null
+
+echo "==> Wait for MySQL"
+i=0
+while [ "$i" -lt 60 ]; do
+  if "$CONTAINER_CLI" exec "$CONTAINER" mysql -h localhost -u root -p"$ROOT_PASS" -e "SELECT 1" >/dev/null 2>&1; then
+    break
+  fi
+  i=$((i + 1)); sleep 2
+done
+if [ "$i" -ge 60 ]; then
+  echo "!! MySQL not ready"; exit 1
 fi
-# Reuse storage mysql e2e harness when available; logical backup unit tests cover API.
+
+export MYSQL_DSN="root:${ROOT_PASS}@tcp(127.0.0.1:${HOST_PORT})/${DB}?parseTime=true&multiStatements=true"
+
+echo "==> SQLite unit Backup/Retention"
 go test ./internal/etl/storage/ -count=1 -run 'Backup|Retention'
-echo "PR-1.3 mysql path: unit gates PASS (full container dump residual)"
+
+OUT="$(mktemp -d)"
+echo "==> MySQL BackupSQLStore smoke → $OUT"
+go run ./hack/cmd/mysql-backup-smoke "$OUT"
+
+echo "PR-1.3 MySQL backup e2e PASS"

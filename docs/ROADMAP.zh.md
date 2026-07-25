@@ -138,7 +138,7 @@ Roadmap 状态只使用以下值：
 | 阶段 | 面向目标 | 退出结果 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
 | `PR-0` | 可靠、安全、持久化一致 | API/内存/DB 一致；加密恢复和生产安全默认值通过 | 当前 P0 完成或显式切换 | `delivered` |
-| `PR-1` | 易维护、安全 | secret、migration、backup/restore、upgrade/rollback 可重复 | `PR-0` | `active` (1.1/1.2 delivered · 1.3 SQLite done, MySQL/PG scripted skip) |
+| `PR-1` | 易维护、安全 | secret、migration、backup/restore、upgrade/rollback 可重复 | `PR-0` | `active` (1.1/1.2 delivered · 1.3 backup e2e SQLite+MySQL+PG passed; upgrade path residual) |
 | `PR-2` | 数据一致性 | 主推荐链路通过 crash/reset/outage/DLQ replay 对账 | `PR-0`，并复用 `PR-1` storage gate | `queued` |
 | P3 | 证据治理 | maturity 与当前版本实际认证证据一致 | `PR-2` 定义 path gate | `queued` |
 | P4 | 易上手 | 30 分钟首次任务与 10 分钟故障定位目标可验证 | `PR-0` 安全/profile 约定 | `queued` |
@@ -438,16 +438,18 @@ Residual/follow-up: PR-1.2
 
 1. `PR-1.1` Secret envelope：connection/settings 字段级加密、key ID 和 rotation。`delivered`
 2. `PR-1.2` Storage migration：显式错误、migration lock、并发 pipeline version 分配。`delivered`
-3. `PR-1.3` 恢复与保留：三个 backend 的 upgrade/backup/restore smoke 和 retention/janitor。`partial`
+3. `PR-1.3` 恢复与保留：三个 backend 的 upgrade/backup/restore smoke 和 retention/janitor。`partial`（backup 三 backend 逻辑导出已过；upgrade 路径 residual）
 
 PR-1.3 本轮证据（Round 3/5 · partial）：
 
 | Criterion | Evidence | Result | Residual |
 | --- | --- | --- | --- |
-| SQLite logical backup + manifest | `storage.BackupSQLStore`；`TestBackupSQLStoreAndSecretScan`；`hack/e2e-backup-restore-sqlite.sh` | passed | MySQL/PG dump 脚本待补 |
+| SQLite logical backup + manifest | `storage.BackupSQLStore`；`TestBackupSQLStoreAndSecretScan`；`hack/e2e-backup-restore-sqlite.sh` | passed | — |
+| MySQL logical backup e2e | `hack/e2e-backup-restore-mysql.sh` + `hack/cmd/mysql-backup-smoke`（throwaway MySQL 8） | passed | 完整 mysqldump 物理 restore 可选 |
+| Postgres logical backup e2e | `hack/e2e-backup-restore-postgres.sh` + `hack/cmd/postgres-backup-smoke` | passed | 完整 pg_dump 物理 restore 可选 |
 | 备份明文 secret 扫描 | `ScanPlaintextSecrets`；已知 secret 命中则 `OK=false` | passed | 运维 re-encrypt CLI 后续 |
 | retention/janitor（run/audit/dlq） | `ApplyRetention`；`TestApplyRetentionDeletesAgedRows`；既有 DLQ janitor | passed | 配置化 TTL 接入 production profile 待补 |
-| 物理 copy restore runbook | `docs/runtime-modes.md` Backup/restore | passed | 三 backend 自动化 restore e2e 待补 |
+| 物理 copy restore runbook | `docs/runtime-modes.md` Backup/restore | passed | 跨版本 upgrade e2e 仍 residual |
 
 
 
