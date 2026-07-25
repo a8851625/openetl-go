@@ -10,7 +10,14 @@ import { ConnectionsPage } from './ConnectionsPage';
 import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from '@/components/ui/sonner';
 import { AppShell, type AppPage, type NavGroup } from '@/components/layout/app-shell';
-import { api, getToken, normalizePipelines, pipelineKey, useApi } from '@/lib/api';
+import {
+  api,
+  getToken,
+  normalizePipelines,
+  pipelineKey,
+  setToken as setApiToken,
+  useApi,
+} from '@/lib/api';
 import { showToast, type ToastFn } from '@/lib/toast';
 import {
   navigate,
@@ -472,7 +479,7 @@ function App() {
           if (route.page === 'settings') navigate({ page: 'dashboard' });
         }}
         onSaveToken={() => {
-          window.localStorage.setItem('etl_api_token', token);
+          setApiToken(token);
           setRefreshKey((n) => n + 1);
           toast('success', t('settings.tokenSaved'));
         }}

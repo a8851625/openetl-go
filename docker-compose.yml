@@ -25,15 +25,15 @@ services:
       --binlog-format=ROW
       --default-authentication-plugin=mysql_native_password
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-root}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-openetl}
       MYSQL_USER: ${MYSQL_USER:-openetl}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set}
       TZ: UTC
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysql", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-change-me-root}", "-e", "SELECT 1"]
+      test: ["CMD", "mysql", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}", "-e", "SELECT 1"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -48,13 +48,13 @@ services:
     image: docker.io/library/redis:7-alpine
     container_name: openetl-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-change-me}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
     environment:
       TZ: UTC
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-change-me}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -64,7 +64,7 @@ services:
   openetl-go:
     # 生产推荐：使用已发布的稳定 tag 镜像，或本地构建：
     #   build: { context: ., dockerfile: Dockerfile }
-    image: ${OPENETL_IMAGE:-ghcr.io/a8851625/openetl-go:latest}
+    image: ${OPENETL_IMAGE:?OPENETL_IMAGE must be a pinned release tag or digest}
     container_name: openetl-go
     restart: unless-stopped
     depends_on:
@@ -73,23 +73,25 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000"   # Web UI + 代理后的 /api/v2/* 与 /metrics
-      # - "8001:8001" # ETL API 直连端口；生产建议只暴露 8000，8001 留在内部网络
+      - "8000:8000"   # HTTPS Web UI + 代理后的 /api/v2/* 与 /metrics
+      # - "8001:8001" # HTTPS ETL API 直连端口；生产建议只暴露 8000，8001 留在内部网络
     environment:
       TZ: ${TZ:-Asia/Shanghai}
 
-      # ── 必改：API 与加密 ─────────────────────────────────────────
-      # 强烈建议通过 .env 注入；这里留空仅用于首次启动演示。
-      ETL_API_TOKEN: ${ETL_API_TOKEN:-}
-      ETL_SPEC_ENCRYPTION_KEY: ${ETL_SPEC_ENCRYPTION_KEY:-}
+      ETL_PROFILE: production
+
+      # ── 必填：API 与加密 ─────────────────────────────────────────
+      ETL_API_TOKEN: ${ETL_API_TOKEN:?ETL_API_TOKEN must be set}
+      ETL_SPEC_ENCRYPTION_KEY: ${ETL_SPEC_ENCRYPTION_KEY:?ETL_SPEC_ENCRYPTION_KEY must be set}
+      ETL_SPEC_ENCRYPTION_KEY_ID: ${ETL_SPEC_ENCRYPTION_KEY_ID:-primary}
 
       # ── Storage：MySQL 元数据（生产推荐，替代 SQLite）─────────────
       ETL_STORAGE_TYPE: mysql
-      ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD:-change-me}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
+      ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
 
       # ── State backend：Redis ─────────────────────────────────────
       ETL_STATE_REDIS_ADDR: redis:6379
-      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD:-change-me}
+      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
       ETL_STATE_REDIS_DB: "0"
 
       # ── Audit 与日志 ─────────────────────────────────────────────
@@ -99,9 +101,10 @@ services:
       # ── DLQ retention ────────────────────────────────────────────
       ETL_DLQ_TTL: ${ETL_DLQ_TTL:-168h}
 
-      # ── TLS（可选，启用后 8001 走 HTTPS）─────────────────────────
-      # ETL_TLS_CERT: /app/certs/tls.crt
-      # ETL_TLS_KEY:  /app/certs/tls.key
+      # ── TLS（生产必填；同一证书由 UI/API topology 复用）──────────
+      ETL_TLS_CERT: /app/certs/tls.crt
+      ETL_TLS_KEY: /app/certs/tls.key
+      ETL_TLS_SERVER_NAME: ${ETL_TLS_SERVER_NAME:?ETL_TLS_SERVER_NAME must match the TLS certificate SAN}
 
       # ── 告警 webhook（可选）──────────────────────────────────────
       # ALERT_DINGTALK_WEBHOOK: ${ALERT_DINGTALK_WEBHOOK:-}
@@ -120,10 +123,10 @@ services:
       - openetl-logs:/app/logs
       # 覆盖内嵌默认 config.yaml（可选；上面 env 已足够，挂载仅作高级覆盖）
       # - ./config.yaml:/app/manifest/config/config.yaml:ro
-      # TLS 证书挂载点（启用 ETL_TLS_* 时使用）
-      # - ./certs:/app/certs:ro
+      # TLS 证书必须由部署者提供，不能提交到仓库。
+      - ${OPENETL_CERTS_DIR:?OPENETL_CERTS_DIR must point to TLS certificates}:/app/certs:ro
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8000/api/v2/health"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://localhost:8000/api/v2/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

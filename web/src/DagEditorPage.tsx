@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/components/theme-provider';
+import { getToken } from '@/lib/api';
 
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -1559,7 +1560,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
 // ── Helper ────────────────────────────────────────────────────────────
 
 async function apiPost(path: string, body: unknown, method: string = 'POST') {
-  const token = window.localStorage.getItem('etl_api_token') || '';
+  const token = getToken();
   const res = await fetch(path, {
     method,
     headers: { 'Content-Type': 'application/json', ...(token ? { 'X-API-Token': token } : {}) },
@@ -1570,7 +1571,7 @@ async function apiPost(path: string, body: unknown, method: string = 'POST') {
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const token = window.localStorage.getItem('etl_api_token') || '';
+  const token = getToken();
   const res = await fetch(path, {
     headers: { ...(token ? { 'X-API-Token': token } : {}) },
   });

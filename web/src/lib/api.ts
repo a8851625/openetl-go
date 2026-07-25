@@ -6,8 +6,23 @@ import type {
   PipelineStats,
 } from './types';
 
-export function getToken() {
-  return window.localStorage.getItem('etl_api_token') || '';
+// API credentials intentionally live only for the lifetime of this page.  A
+// persistent localStorage token is readable by every script running in the UI
+// origin and survives browser restarts, so it is not an acceptable default for
+// a self-hosted production console.  The settings dialog can repopulate this
+// value after an explicit user action.
+let memoryToken = '';
+
+export function getToken(): string {
+  return memoryToken;
+}
+
+export function setToken(value: string): void {
+  memoryToken = value.trim();
+}
+
+export function clearToken(): void {
+  memoryToken = '';
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

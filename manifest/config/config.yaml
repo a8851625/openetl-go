@@ -21,12 +21,18 @@ server:
 # ETL 管道模式:启动后加载 pipes/ 下声明式管道,并对外暴露 /api/v2/*。
 etl:
   enabled: true
+  profile: "development"  # production|development; ETL_PROFILE overrides
+  insecureDevelopment: false # ETL_INSECURE_DEV=true is an explicit bypass only
+  cors:
+    origins: "" # comma-separated origins; production empty means same-origin only
+  trustedProxyCIDRs: "" # only these proxies may supply X-Forwarded-For
   address: ":8001"
   # API token 也可通过 ETL_API_TOKEN 或 --api-token 指定；生产必须设置。
   apiToken: ""
   tls:
-    cert: ""            # ETL_TLS_CERT / --tls-cert
-    key: ""             # ETL_TLS_KEY / --tls-key
+    cert: ""            # ETL_TLS_CERT / --tls-cert; shared by UI and API
+    key: ""             # ETL_TLS_KEY / --tls-key; shared by UI and API
+    serverName: ""      # ETL_TLS_SERVER_NAME / --tls-server-name; UI→API TLS name
   # 进程角色(分布式): standalone(默认,单进程) | master | worker
   # master/worker 要求 storage.type 为 mysql/postgresql(跨进程共享元数据)。
   # 环境变量 ETL_ROLE 覆盖此值。DAG 管道不分片,仅线性 spec 走分布式分发。

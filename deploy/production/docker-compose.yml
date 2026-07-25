@@ -1,0 +1,180 @@
+# OpenETL-Go — 生产 standalone 部署包
+#
+# 组件：
+#   - openetl-go：ETL 运行时 + UI（:8000）
+#   - mysql：元数据（spec / checkpoint / DLQ / audit）
+#   - redis：运行时 state（db0）+ 可选业务缓存 sink（db1）
+#
+# 业务 Kafka / 业务 ODS MySQL 默认在 compose 外；通过 .env 注入地址。
+#
+# 用法（在仓库根或本目录）：
+#   cp deploy/production/.env.example deploy/production/.env
+#   # 编辑 .env：填 token、密码、Kafka/ODS 地址
+#   docker compose --env-file deploy/production/.env \
+#     -f deploy/production/docker-compose.yml up -d
+#
+# 健康检查：
+#   curl -fsS -H "X-API-Token: $ETL_API_TOKEN" http://127.0.0.1:8000/api/v2/health
+
+name: openetl-production
+
+services:
+  mysql:
+    image: docker.io/library/mysql:8.0
+    container_name: openetl-prod-mysql
+    restart: unless-stopped
+    command: >
+      --binlog-format=ROW
+      --default-authentication-plugin=mysql_native_password
+      --max-connections=200
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-openetl}
+      MYSQL_USER: ${MYSQL_USER:-openetl}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      TZ: UTC
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "127.0.0.1",
+          "-uroot",
+          "-p${MYSQL_ROOT_PASSWORD}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    networks:
+      - openetl
+    # 生产默认不暴露；调试可打开：
+    # ports: ["13306:3306"]
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    container_name: openetl-prod-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-1gb}
+      - --maxmemory-policy
+      - allkeys-lru
+    environment:
+      TZ: UTC
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    networks:
+      - openetl
+
+  openetl-go:
+    image: ${OPENETL_IMAGE:-ghcr.io/a8851625/openetl-go:v0.2.10-beta.1}
+    container_name: openetl-prod
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${OPENETL_HTTP_PORT:-8000}:8000"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+
+      ETL_API_TOKEN: ${ETL_API_TOKEN:?set ETL_API_TOKEN in .env}
+      ETL_SPEC_ENCRYPTION_KEY: ${ETL_SPEC_ENCRYPTION_KEY:-}
+
+      ETL_STORAGE_TYPE: mysql
+      ETL_STORAGE_DSN: "${MYSQL_USER:-openetl}:${MYSQL_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE:-openetl}?parseTime=true&loc=UTC"
+
+      ETL_STATE_REDIS_ADDR: redis:6379
+      ETL_STATE_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      ETL_STATE_REDIS_DB: ${ETL_STATE_REDIS_DB:-0}
+
+      ETL_AUDIT_ENABLED: "true"
+      LOGGER_FORMAT: json
+      ETL_DLQ_TTL: ${ETL_DLQ_TTL:-168h}
+      ETL_ROLE: standalone
+
+      # 业务管道 ${VAR} 展开（Kafka / ODS MySQL / Cache Redis）
+      KAFKA_BROKER_1: ${KAFKA_BROKER_1:?set KAFKA_BROKER_1}
+      KAFKA_BROKER_2: ${KAFKA_BROKER_2:-}
+      KAFKA_BROKER_3: ${KAFKA_BROKER_3:-}
+      KAFKA_TOPIC_ORDERS: ${KAFKA_TOPIC_ORDERS:-orders}
+      KAFKA_SASL_USER: ${KAFKA_SASL_USER:-}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:-}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-}
+
+      ODS_MYSQL_HOST: ${ODS_MYSQL_HOST:?set ODS_MYSQL_HOST}
+      ODS_MYSQL_PORT: ${ODS_MYSQL_PORT:-3306}
+      ODS_MYSQL_USER: ${ODS_MYSQL_USER:?set ODS_MYSQL_USER}
+      ODS_MYSQL_PASSWORD: ${ODS_MYSQL_PASSWORD:?set ODS_MYSQL_PASSWORD}
+      ODS_MYSQL_DATABASE: ${ODS_MYSQL_DATABASE:-ods}
+      ODS_MYSQL_TABLE: ${ODS_MYSQL_TABLE:-orders}
+
+      CACHE_REDIS_HOST: ${CACHE_REDIS_HOST:-redis}
+      CACHE_REDIS_PORT: ${CACHE_REDIS_PORT:-6379}
+      # 默认与 state Redis 同密码；独立实例时在 .env 设 CACHE_REDIS_PASSWORD
+      CACHE_REDIS_PASSWORD: ${CACHE_REDIS_PASSWORD:-}
+      CACHE_REDIS_DB: ${CACHE_REDIS_DB:-1}
+      CACHE_REDIS_KEY_PREFIX: ${CACHE_REDIS_KEY_PREFIX:-order:}
+
+      # ALERT_DINGTALK_WEBHOOK: ${ALERT_DINGTALK_WEBHOOK:-}
+      # ALERT_FEISHU_WEBHOOK: ${ALERT_FEISHU_WEBHOOK:-}
+      # ALERT_SLACK_WEBHOOK: ${ALERT_SLACK_WEBHOOK:-}
+      # ETL_TLS_CERT: /app/certs/tls.crt
+      # ETL_TLS_KEY: /app/certs/tls.key
+    volumes:
+      - openetl-data:/app/data
+      - openetl-logs:/app/logs
+      - ./pipes:/app/pipes:ro
+      - ./config.yaml:/app/manifest/config/config.yaml:ro
+      # - ./certs:/app/certs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/api/v2/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    deploy:
+      resources:
+        limits:
+          cpus: "${OPENETL_CPU_LIMIT:-2.0}"
+          memory: ${OPENETL_MEM_LIMIT:-2g}
+        reservations:
+          cpus: "0.5"
+          memory: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - openetl
+
+networks:
+  openetl:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  openetl-data:
+  openetl-logs:

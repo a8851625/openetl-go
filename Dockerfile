@@ -43,7 +43,8 @@ EXPOSE 8000 8001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:8000/api/v2/health || exit 1
+  CMD wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 || \
+      wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1
 
 # Run
 CMD ["./main"]

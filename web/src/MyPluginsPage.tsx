@@ -20,6 +20,7 @@ import { ToneBadge } from '@/components/shared/status-badge';
 import { showToast as notifyToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/components/theme-provider';
+import { getToken } from '@/lib/api';
 
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -195,8 +196,6 @@ const DEFAULT_SAMPLE: Record<string, any> = {
 };
 
 // ── API ─────────────────────────────────────────────────────────────────
-
-function getToken() { return window.localStorage.getItem('etl_api_token') || ''; }
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();

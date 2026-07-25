@@ -1,4 +1,9 @@
 node_modules
+.tmp-go-cache/
+.tmp-go-cache-race/
+.opencode/
+openetl-go
+web/screenshots/
 .git
 data/
 data-demo/

@@ -22,6 +22,7 @@ import {
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
+import { getToken } from '@/lib/api';
 
 type ConnectorKind = 'source' | 'sink' | 'transform';
 
@@ -55,10 +56,6 @@ type ConnectorDescriptor = {
 
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
-
-function getToken() {
-  return window.localStorage.getItem('etl_api_token') || '';
-}
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();

@@ -1,0 +1,62 @@
+# 生产链路 B：Kafka（同 topic）→ Redis 主键 + 自定义前缀
+#
+# - 与 MySQL 链路独立 group_id / checkpoint / DLQ
+# - key = key_prefix + key_field，例如 order:12345
+# - data_type: hash 对同一 key 覆盖写，崩溃重放幂等
+# - Redis sink 成熟度为 experimental；上线前请做 crash/replay 自测
+#
+# 注意：
+#   - 不要用 data_type: list（默认非幂等）
+#   - state Redis 用 db0，业务缓存建议 db1 或独立实例
+
+name: kafka-orders-to-redis
+
+source:
+  type: kafka
+  config:
+    brokers:
+      - "${KAFKA_BROKER_1}"
+      - "${KAFKA_BROKER_2:-}"
+      - "${KAFKA_BROKER_3:-}"
+    topic: ${KAFKA_TOPIC_ORDERS}
+    group_id: openetl-prod-orders-redis
+    format: json
+    initial_offset: latest
+    # sasl_user: ${KAFKA_SASL_USER}
+    # sasl_password: ${KAFKA_SASL_PASSWORD}
+    # sasl_mechanism: ${KAFKA_SASL_MECHANISM}
+    # tls: true
+
+transforms:
+  - type: project
+    config:
+      fields:
+        - id
+        - status
+        - amount
+        - currency
+        - user_id
+        - updated_at
+
+sink:
+  type: redis
+  config:
+    host: ${CACHE_REDIS_HOST}
+    port: ${CACHE_REDIS_PORT:-6379}
+    password: ${CACHE_REDIS_PASSWORD}
+    db: ${CACHE_REDIS_DB:-1}
+    key_field: id
+    key_prefix: ${CACHE_REDIS_KEY_PREFIX:-order:}
+    data_type: hash
+    # ttl_seconds: 86400
+    pipeline_chunk_size: 500
+
+parallelism:
+  sharding:
+    logical_shards: 12
+  execution:
+    max_active_shards: 12
+
+batch_size: 500
+flush_interval_ms: 1000
+checkpoint_interval_sec: 5

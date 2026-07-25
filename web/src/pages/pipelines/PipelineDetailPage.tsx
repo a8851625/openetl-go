@@ -8,7 +8,7 @@ import { MiniStat, Progress } from '@/components/shared/progress';
 import { PipelineHealthBadge, HealthDot } from '@/components/shared/pipeline-health-badge';
 import { PipelinePath } from '@/components/shared/pipeline-path';
 import { confirmAction } from '@/components/shared/confirm-dialog';
-import { api, pipelineKey, pipelineRef } from '@/lib/api';
+import { api, getToken, pipelineKey, pipelineRef } from '@/lib/api';
 import { fmtTime, ratio } from '@/lib/format';
 import {
   deriveModeLabel,
@@ -100,7 +100,7 @@ export function PipelineDetailPage({
         .catch(async () => {
           // export may return raw yaml text
           try {
-            const token = localStorage.getItem('etl_api_token') || '';
+            const token = getToken();
             const headers: Record<string, string> = {};
             if (token) headers['X-API-Token'] = token;
             const res = await fetch(`/api/v2/pipelines/${ref}/export`, { headers });

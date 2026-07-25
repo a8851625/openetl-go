@@ -1,0 +1,68 @@
+# 生产链路 A：Kafka（多分区）→ MySQL 主键 upsert
+#
+# - 12 分区 topic 时建议 logical_shards=12（≤ 分区数）
+# - 与 Redis 链路使用不同 consumer group，独立 checkpoint / DLQ
+# - 默认 at-least-once；MySQL upsert 吸收崩溃重放
+#
+# 上线前：
+#   1. 在 ODS MySQL 执行 sql/init-ods-orders.sql
+#   2. 确认 topic 分区数 ≥ parallelism.sharding.logical_shards
+#   3. preflight：POST /api/v2/specs/validate
+
+name: kafka-orders-to-mysql
+
+source:
+  type: kafka
+  config:
+    # 多 broker 用列表；空项会被忽略。不要写成 "host1:9092,host2:9092" 单字符串。
+    brokers:
+      - "${KAFKA_BROKER_1}"
+      - "${KAFKA_BROKER_2:-}"
+      - "${KAFKA_BROKER_3:-}"
+    topic: ${KAFKA_TOPIC_ORDERS}
+    group_id: openetl-prod-orders-mysql
+    format: json
+    # 首次无 checkpoint 时从最新消费；全量历史请改为 earliest 并评估回放窗口
+    initial_offset: latest
+    # 需要 SASL 时取消注释并填 .env
+    # sasl_user: ${KAFKA_SASL_USER}
+    # sasl_password: ${KAFKA_SASL_PASSWORD}
+    # sasl_mechanism: ${KAFKA_SASL_MECHANISM}
+    # tls: true
+
+transforms:
+  # 按实际消息字段裁剪；没有的字段可删掉本段
+  - type: project
+    config:
+      fields:
+        - id
+        - status
+        - amount
+        - currency
+        - user_id
+        - updated_at
+
+sink:
+  type: mysql
+  config:
+    host: ${ODS_MYSQL_HOST}
+    port: ${ODS_MYSQL_PORT:-3306}
+    user: ${ODS_MYSQL_USER}
+    password: ${ODS_MYSQL_PASSWORD}
+    database: ${ODS_MYSQL_DATABASE}
+    table: ${ODS_MYSQL_TABLE}
+    batch_mode: upsert
+    pk_columns: ["id"]
+    # 生产建议目标表由 DBA 预建（见 sql/init-ods-orders.sql）
+    auto_create: false
+
+parallelism:
+  sharding:
+    # Kafka：多 runner 进同一 group，由 broker 分配分区；不要超过 topic 分区数
+    logical_shards: 12
+  execution:
+    max_active_shards: 12
+
+batch_size: 500
+flush_interval_ms: 1000
+checkpoint_interval_sec: 5

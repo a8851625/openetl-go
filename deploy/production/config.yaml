@@ -1,0 +1,65 @@
+# OpenETL-Go 生产运行配置（裸机 / systemd / 容器高级覆盖）
+#
+# 挂载路径（容器）：
+#   ./config.yaml → /app/manifest/config/config.yaml:ro
+#
+# 优先级：CLI flags > 环境变量 > 本文件 > 内置默认。
+# 敏感项（token / 密码 / DSN）请用环境变量注入，不要写死在本文件。
+
+server:
+  address: ":8000"
+  openapiPath: "/api.json"
+  swaggerPath: "/swagger"
+
+etl:
+  enabled: true
+  address: ":8001"
+  # 生产必须通过 ETL_API_TOKEN 注入；此处保持空
+  apiToken: ""
+  tls:
+    cert: ""
+    key: ""
+
+  # standalone：单机生产默认
+  # 水平扩展：改 role=master|worker，并使用 MySQL/PG 元数据（见 docker-compose.distributed.yml）
+  role: "standalone"
+  masterURL: ""
+  workerID: ""
+  workerSlots: 8
+
+  specsDir: "./pipes"
+  checkpointDir: "./data/checkpoint"
+  dlqDir: "./data/dlq"
+  pluginsDir: "./data/plugins"
+  schemasDir: "./data/schemas"
+
+  audit:
+    enabled: true
+
+  storage:
+    # 生产推荐 mysql；单机可临时 sqlite（不支持多实例）
+    type: "mysql"
+    mysql:
+      # 被 ETL_STORAGE_DSN 覆盖时以环境变量为准
+      dsn: "openetl:change-me@tcp(mysql:3306)/openetl?parseTime=true&loc=UTC"
+    # postgresql:
+    #   dsn: "postgres://openetl:change-me@pg:5432/openetl?sslmode=require"
+
+  state:
+    redis:
+      # 被 ETL_STATE_REDIS_* 覆盖
+      addr: "redis:6379"
+      password: ""
+      db: 0
+      keyPrefix: "openetl:state"
+
+  alert:
+    webhook: ""
+
+logger:
+  level: "all"
+  stdout: true
+  path: "./logs"
+  file: "openetl-{Y-m-d}.log"
+  rotate: "daily"
+  backups: 30

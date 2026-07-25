@@ -13,6 +13,7 @@ import {
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
+import { getToken } from '@/lib/api';
 
 type WorkerInfo = {
   id: string;
@@ -24,10 +25,6 @@ type WorkerInfo = {
   last_heartbeat: string;
   registered_at: string;
 };
-
-function getToken() {
-  return window.localStorage.getItem('etl_api_token') || '';
-}
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();

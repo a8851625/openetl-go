@@ -16,6 +16,7 @@ import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { StatusDot, ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
 import { ScheduleEditorDialog } from '@/components/schedule-editor-dialog';
+import { getToken } from '@/lib/api';
 
 type Pipeline = { id?: string; name: string; status: string; stats?: Record<string, number> };
 type Schedule = { type: string; cron?: string; interval_sec?: number; depends_on?: string[] };
@@ -33,10 +34,6 @@ type RunHistory = {
 
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
-
-function getToken() {
-  return window.localStorage.getItem('etl_api_token') || '';
-}
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();

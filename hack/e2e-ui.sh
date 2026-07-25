@@ -536,8 +536,7 @@ check "I1: Token value set" "$(evaljs "document.querySelector('input[placeholder
 # Save token
 evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('Save Token'))?.click(); return true; })()" >/dev/null 2>&1 || true
 sleep 1
-evaljs "(() => { if (localStorage.getItem('etl_api_token') !== 'my-token-456') localStorage.setItem('etl_api_token','my-token-456'); return true; })()" >/dev/null
-check "I2: Token saved to localStorage" "$(evaljs "localStorage.getItem('etl_api_token') === 'my-token-456'")"
+check "I2: Token kept in page memory" "$(evaljs "document.querySelector('input[placeholder*=API]')?.value === 'my-token-456' && localStorage.getItem('etl_api_token') === null")"
 
 # Language toggle in settings
 check "I3: English button in settings" "$(evaljs "Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.trim()==='English') || document.body.innerText.includes('Language')")"
