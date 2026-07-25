@@ -337,6 +337,7 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
                 setFilter(e.target.value);
                 setRefreshKey((n) => n + 1);
               }}
+              data-testid="dlq-record-filter"
             />
             <Button
               variant="secondary"
