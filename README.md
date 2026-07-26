@@ -170,7 +170,7 @@ image:
 docker run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
   -v "$PWD/pipes:/app/pipes" \
   -e ETL_API_TOKEN="$(openssl rand -hex 16)" \
-  ghcr.io/a8851625/openetl-go:v0.2.11-beta.3
+  ghcr.io/a8851625/openetl-go:v0.2.11-beta.4
 # podman users: replace `docker` with `podman`
 # Production: use docker-compose.yml with required secrets + pinned OPENETL_IMAGE.
 ```

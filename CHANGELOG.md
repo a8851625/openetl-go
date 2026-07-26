@@ -4,48 +4,46 @@
 
 ## [Unreleased]
 
-### Added
-- **PR-D1 Distributed worker auth & fencing**: authenticated worker HTTP client (token/TLS/timeout/retry); task `generation`/`attempt`/`lease` CAS ownership; stale-owner completion fenced; bounded requeue; `hack/e2e-distributed.sh` + token-required distributed compose (still beta).
+## [v0.2.11-beta.4] — 2026-07-26 — Production-ready control plane / reliability / distributed beta closeout
 
-### Added
+### Highlights
 
-- **dbt transform (Phase 1)**: `type: dbt` stages a batch, runs `dbt run --select <model>`, and reads the model output. Adapters: `postgres` / `duckdb`. dbt remains an optional host dependency.
-- Schema/descriptor registration, `docs/components/transform-dbt.md`, and skippable `hack/e2e-dbt.sh`.
-- **PR-2 path contract**: `docs/path-contract.md` + `GET /api/v2/paths/contracts` for write mode / business key / storage / RPO-RTO traceability.
+- **PR-0 / PR-1 control-plane security base**: encrypted spec restart/rollback, atomic current/version/checkpoint boundaries, scheduler prepare/commit compensation, production fail-closed profile, CORS/trusted-proxy/security headers, two-port TLS topology; UI API token stays page-memory only.
+- **PR-1.3 backup/restore/upgrade/janitor**: control-plane JSON backup covers 11 object classes with reconcile; legacy SQLite forward upgrade fails closed; retention janitor (DLQ/audit/run/task) with hard caps, health status, and failure alerts.
+- **PR-2 main-path failure reconciliation + path contract**: `docs/path-contract.md` + `GET /api/v2/paths/contracts`; forced paths `mysql_cdc__mysql_upsert` / `mysql_snap_cdc__ch_rmt` cover happy / crash / checkpoint reset / sink outage+DLQ replay (silent_loss=0).
+- **P5 business health and release gates**: `/api/v2/health` business health, CI production gate, `docs/ops-runbook.md` / `docs/release-checklist.md` / `docs/resource-baseline.md`.
+- **PR-D1 distributed worker auth & fencing (still beta)**: authenticated worker HTTP client, task generation/attempt/lease CAS ownership, stale-owner 409 fencing, bounded requeue; `docker-compose.distributed.yml` requires `ETL_API_TOKEN`.
+- **Connector / transform increments**: dbt transform Phase 1 (postgres/duckdb); `rest_source` + SaaS template connectors; distinct/sort/cast/coalesce/limit/skip/sample; Kafka source fetch tuning; typed auto_create / soft-delete type fix; streaming placement scale-out.
 
-### Reliability and security
+### Semantics
 
-- PR-1.3 backup/restore/upgrade/janitor: control-plane JSON backup covers 11 object classes with reconcile; legacy SQLite forward upgrade and fail-closed startup; retention janitor (DLQ/audit/run/task) with hard caps, health status, and failure alerts; e2e `hack/e2e-backup-restore-*` / `hack/e2e-storage-upgrade-*`.
-- Closed the PR-0 control-plane gate: encrypted spec restart/rollback, atomic current/version/checkpoint boundaries, scheduler prepare/commit compensation, production fail-closed profile, CORS/trusted-proxy/security headers, and the two-port TLS topology now have current-version evidence.
-- Kept the UI API token in page memory and added `hack/e2e-ui-token.sh` as a focused browser gate; `.dockerignore` now excludes local Go/race caches, build outputs, and screenshots from production image contexts.
-- **PR-2 main-path failure reconciliation**:
-  - Forced path `mysql_cdc__mysql_upsert` via `hack/e2e-path-mysql-cdc-mysql.sh` (happy / crash / checkpoint reset / sink outage+DLQ replay; silent_loss=0)
-  - Forced path `mysql_snap_cdc__ch_rmt` via `hack/e2e-snapshot-cdc-clickhouse.sh` + crash scripts
-  - Boundaries: PostgreSQL CDC `on_truncate` defaults to `error`; multi-sink fanout and CDC→file/S3 remain blocked unless `allow_unsafe`
-  - Release notes declare at-least-once duplicate bounds and RPO/RTO
+- Default remains **checkpointed at-least-once**; crash may replay the last batch; absorb duplicates via business keys / upsert / RMT.
+- PostgreSQL CDC `on_truncate` defaults to `error`; multi-sink fanout and CDC→file/S3 stay blocked unless `allow_unsafe`.
+- Distributed remains **beta / non multi-master**; MaxCompute writer is still unimplemented.
 
-### Validation
+### Validation (local closeout)
 
-- `./hack/e2e-backup-restore-sqlite.sh`
-- `./hack/e2e-storage-upgrade-sqlite.sh`
-- `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
-- `go test ./internal/etl/server/ -run 'PluginSchema'`
-- `go test ./internal/etl/server/ -run PathContract`
-- `go test ./internal/etl/pipeline/ -run 'Unsafe|OnTruncate'`
-- `go test ./internal/etl/orchestrator/ -run MultiSink`
-- `go test ./... -count=1`
-- `go test -race ./internal/etl/orchestrator ./internal/etl/server -count=1`
-- `./hack/e2e-path-contract-smoke.sh`
-- `./hack/e2e-path-mysql-cdc-mysql.sh`
-- `./hack/e2e-snapshot-cdc-clickhouse.sh`
-- `./hack/e2e-spec-encryption-recovery.sh`
-- `./hack/e2e-control-plane-persistence.sh`
-- `CONTAINER_CLI=podman ./hack/e2e-storage-mysql.sh`
-- `CONTAINER_CLI=podman ./hack/e2e-storage-postgres.sh`
-- `CONTAINER_CLI=podman ./hack/e2e-production-profile.sh`
-- `./hack/e2e-tls-topology.sh`
-- `./hack/e2e-runtime-smoke.sh`
-- `./hack/e2e-ui-token.sh`
+- `go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...`
+- `go test -count=1 ./internal/etl/... ./internal/logic/...`
+- `go test ./internal/etl/telemetry ./internal/etl/alert -count=1`
+- `./hack/check-release-assets.sh`
+
+### Evidence matrix
+
+| Item | Result |
+| --- | --- |
+| Unit + package tests | passed |
+| Release assets pin / secrets | passed |
+| SQLite backup/upgrade e2e | historical evidence under PR-1.3 scripts |
+| MySQL/Postgres storage/backup | skip without external env; not production-certified by skip |
+| Path contract forced paths | PR-2 e2e script evidence |
+| Distributed PR-D1 | beta; e2e-distributed covers fence/auth |
+
+### Residual
+
+- MaxCompute writer / remote permission / production maturity not implemented
+- Distributed multi-master and cross-worker strong consistency out of scope
+- External-backend e2e requires credentials for certification
 
 ## [v0.2.11-beta.2] — 2026-07-22 — UI prototype alignment and IA cleanup
 

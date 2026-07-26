@@ -4,56 +4,46 @@
 
 ## [Unreleased]
 
-### Added
-- **PR-D1 Distributed worker 认证与 fencing**
-  - Worker 统一 authenticated HTTP client：`X-API-Token`/`Bearer`、超时、5xx 重试、可选 TLS（`ETL_WORKER_TLS_*`）。
-  - Task ownership：`generation` / `attempt` / `lease_expires_at` / `last_error`；`ClaimTask` + `CASUpdateTask` fencing。
-  - 旧 worker lease 失效后提交完成返回 `ErrTaskFenced` / HTTP 409，不能覆盖新 owner。
-  - 有界 requeue：worker offline 或 lease 过期回 pending；超过 `DefaultTaskMaxAttempts` 进入可见 `failed`。
-  - `hack/e2e-distributed.sh` 覆盖 hermetic fence/auth + MySQL integration + 可选多进程 smoke。
-  - `docker-compose.distributed.yml` 强制 `ETL_API_TOKEN`，并标注 beta / 非 multi-master 边界。
+## [v0.2.11-beta.4] — 2026-07-26 — Production-ready 控制面 / 可靠性 / 分布式 beta 收口
 
-### 新增
+### 亮点
 
-- **dbt transform（Phase 1）**：`type: dbt` 将 batch 写入 staging 表 → `dbt run --select <model>` → 读取输出表；支持 `postgres` / `duckdb` adapter。dbt 为可选能力，不引入核心依赖。
-- 配置 schema / connector descriptor 注册 `dbt`；组件文档 `docs/components/transform-dbt.md`；可跳过 E2E `hack/e2e-dbt.sh`。
-- **PR-2 path contract**：`docs/path-contract.md` + `GET /api/v2/paths/contracts`，可从 descriptor 追溯 write mode / business key / storage / RPO/RTO。
+- **PR-0 / PR-1 控制面安全底座**：加密 spec restart/rollback、current/version/checkpoint 原子边界、scheduler prepare/commit compensation、production profile fail-closed、CORS/trusted-proxy/security headers、双端口 TLS topology；UI API token 改为页面内存语义。
+- **PR-1.3 backup/restore/upgrade/janitor**：控制面 JSON 备份覆盖 11 类对象并对账；legacy SQLite 前向升级与失败阻止启动；retention janitor（DLQ/audit/run/task）含硬上限、health 状态与失败告警。
+- **PR-2 主链路故障对账 + path contract**：`docs/path-contract.md` + `GET /api/v2/paths/contracts`；强制 path `mysql_cdc__mysql_upsert` / `mysql_snap_cdc__ch_rmt` 覆盖 happy / crash / checkpoint reset / sink outage+DLQ replay（silent_loss=0）。
+- **P5 业务健康与发布门槛**：`/api/v2/health` 业务健康、CI production gate、`docs/ops-runbook.md` / `docs/release-checklist.md` / `docs/resource-baseline.md`。
+- **PR-D1 Distributed worker 认证与 fencing（仍 beta）**：authenticated worker HTTP client、task generation/attempt/lease CAS ownership、stale-owner 409 fencing、有界 requeue；`docker-compose.distributed.yml` 强制 `ETL_API_TOKEN`。
+- **连接器 / Transform 增量**：dbt transform Phase 1（postgres/duckdb）；`rest_source` 与 SaaS 模板连接器；distinct/sort/cast/coalesce/limit/skip/sample；Kafka source fetch 调优参数；typed auto_create / soft-delete 类型修复；streaming placement scale-out。
 
-### 可靠性与安全
+### 语义边界
 
-- PR-1.3 backup/restore/upgrade/janitor：控制面 JSON 备份覆盖 11 类对象并对账；legacy SQLite 前向升级与失败阻止启动；retention janitor（DLQ/audit/run/task）含硬上限、health 状态与失败告警；e2e `hack/e2e-backup-restore-*` / `hack/e2e-storage-upgrade-*`。
+- 默认仍是 **checkpointed at-least-once**；崩溃可能重放最后一批，靠业务键/upsert/RMT 吸收重复。
+- PostgreSQL CDC `on_truncate` 默认 `error`；DAG 多 sink fanout 与 CDC→file/S3 默认阻断，需 `allow_unsafe`。
+- Distributed 仍是 **beta / 非 multi-master**；MaxCompute writer 仍未实现。
 
+### 验证（本机收口）
 
-- PR-0 控制面收口：加密 spec restart/rollback、current/version/checkpoint 原子边界、scheduler prepare/commit compensation、production profile fail-closed、CORS/trusted-proxy/security headers 和双端口 TLS topology 均有当前版本证据。
-- UI API token 改为页面内存语义，并新增 `hack/e2e-ui-token.sh` focused browser gate；`.dockerignore` 排除本地 Go/race cache、构建产物和截图，避免污染生产镜像构建上下文。
-- **PR-2 主链路故障对账**：
-  - 强制 path `mysql_cdc__mysql_upsert`：`hack/e2e-path-mysql-cdc-mysql.sh`（happy / crash / checkpoint reset / sink outage+DLQ replay，业务键对账 silent_loss=0）
-  - 强制 path `mysql_snap_cdc__ch_rmt`：`hack/e2e-snapshot-cdc-clickhouse.sh` + crash 脚本
-  - 边界：PostgreSQL CDC `on_truncate` 默认 error；DAG 多 sink fanout 与 CDC→file/S3 默认阻断，需 `allow_unsafe`
-  - 发布声明列出 at-least-once 重复边界与 RPO/RTO（见 path-contract / reliability-certification）
+- `go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...`
+- `go test -count=1 ./internal/etl/... ./internal/logic/...`
+- `go test ./internal/etl/telemetry ./internal/etl/alert -count=1`
+- `./hack/check-release-assets.sh`
 
-### 验证
+### 证据矩阵（发布声明）
 
-- `./hack/e2e-backup-restore-sqlite.sh`
-- `./hack/e2e-storage-upgrade-sqlite.sh`
-- `go test ./internal/etl/transform/ -run 'DBT|ParsePostgres'`
-- `go test ./internal/etl/server/ -run 'PluginSchema'`
-- `go test ./internal/etl/server/ -run PathContract`
-- `go test ./internal/etl/pipeline/ -run 'Unsafe|OnTruncate'`
-- `go test ./internal/etl/orchestrator/ -run MultiSink`
-- `go test ./... -count=1`
-- `go test -race ./internal/etl/orchestrator ./internal/etl/server -count=1`
-- `./hack/e2e-path-contract-smoke.sh`
-- `./hack/e2e-path-mysql-cdc-mysql.sh`
-- `./hack/e2e-snapshot-cdc-clickhouse.sh`
-- `./hack/e2e-spec-encryption-recovery.sh`
-- `./hack/e2e-control-plane-persistence.sh`
-- `CONTAINER_CLI=podman ./hack/e2e-storage-mysql.sh`
-- `CONTAINER_CLI=podman ./hack/e2e-storage-postgres.sh`
-- `CONTAINER_CLI=podman ./hack/e2e-production-profile.sh`
-- `./hack/e2e-tls-topology.sh`
-- `./hack/e2e-runtime-smoke.sh`
-- `./hack/e2e-ui-token.sh`
+| 项 | 结果 |
+| --- | --- |
+| Unit + package tests | passed |
+| Release assets pin / secrets | passed |
+| SQLite backup/upgrade e2e | 见 Unreleased 历史证据（`hack/e2e-backup-restore-sqlite.sh` 等） |
+| MySQL/Postgres storage/backup | 无外部环境时 skip，不记为 production 认证 |
+| Path contract forced paths | 见 PR-2 e2e 脚本证据 |
+| Distributed PR-D1 | beta；e2e-distributed 覆盖 fence/auth |
+
+### Residual
+
+- MaxCompute writer / 远程权限 / production maturity 未实现
+- Distributed multi-master 与跨 worker 强一致不在本版本
+- 外部后端 e2e 需凭据环境单独认证
 
 ## [v0.2.11-beta.2] — 2026-07-22 — UI 原型对齐与信息架构收口
 
