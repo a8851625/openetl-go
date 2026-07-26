@@ -64,6 +64,19 @@ jobs:
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          IMAGE="ghcr.io/a8851625/openetl-go:$VERSION"
-          docker build --platform=linux/amd64 -f Dockerfile.goreleaser -t "$IMAGE" .
+          # Root .dockerignore intentionally excludes ./openetl-go so multi-stage
+          # production builds do not ship a host binary. Stage a clean context
+          # for Dockerfile.goreleaser instead of fighting dockerignore.
+          STAGE="$(mktemp -d)"
+          trap 'rm -rf "$STAGE"' EXIT
+          cp openetl-go "$STAGE/openetl-go"
+          cp Dockerfile.goreleaser "$STAGE/Dockerfile"
+          cp -R manifest "$STAGE/manifest"
+
+          # Publish both unprefixed (goreleaser-style) and v-prefixed tags so
+          # docs/compose pins and historical README examples keep working.
+          IMAGE="ghcr.io/a8851625/openetl-go:${VERSION}"
+          IMAGE_V="ghcr.io/a8851625/openetl-go:v${VERSION}"
+          docker build --platform=linux/amd64 -t "$IMAGE" -t "$IMAGE_V" "$STAGE"
           docker push "$IMAGE"
+          docker push "$IMAGE_V"
