@@ -8,6 +8,7 @@ import { MiniStat, Progress } from '@/components/shared/progress';
 import { PipelineHealthBadge, HealthDot } from '@/components/shared/pipeline-health-badge';
 import { PipelinePath } from '@/components/shared/pipeline-path';
 import { confirmAction } from '@/components/shared/confirm-dialog';
+import { TextDiffView } from '@/components/shared/text-diff-view';
 import { api, getToken, pipelineKey, pipelineRef } from '@/lib/api';
 import { fmtTime, ratio } from '@/lib/format';
 import {
@@ -588,24 +589,14 @@ export function PipelineDetailPage({
                           ✕
                         </Button>
                       </div>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div>
-                          <div className="mb-1 text-[11px] font-semibold text-muted-foreground">
-                            {t('pipe.diffHistorical')} (v{diffData.version})
-                          </div>
-                          <pre className="max-h-72 overflow-auto rounded-lg bg-rose-50 p-2 text-[11px] dark:bg-rose-950/30">
-                            {diffData.historical || '(empty)'}
-                          </pre>
-                        </div>
-                        <div>
-                          <div className="mb-1 text-[11px] font-semibold text-muted-foreground">
-                            {t('pipe.diffCurrent')}
-                          </div>
-                          <pre className="max-h-72 overflow-auto rounded-lg bg-emerald-50 p-2 text-[11px] dark:bg-emerald-950/30">
-                            {diffData.current || '(empty)'}
-                          </pre>
-                        </div>
-                      </div>
+                      <TextDiffView
+                        historical={diffData.historical || ''}
+                        current={diffData.current || ''}
+                        leftTitle={`${t('pipe.diffHistorical')} (v${diffData.version})`}
+                        rightTitle={t('pipe.diffCurrent')}
+                        maxHeightClass="max-h-72"
+                        testId="pipe-version-diff-body"
+                      />
                     </div>
                   )}
                   {diffError && <ErrorBox message={diffError} />}

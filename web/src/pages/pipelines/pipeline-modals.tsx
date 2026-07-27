@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Modal } from '@/components/shared/modal';
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { confirmAction } from '@/components/shared/confirm-dialog';
+import { TextDiffView } from '@/components/shared/text-diff-view';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -342,23 +343,15 @@ export function PipelineVersionsModal({
                   ✕
                 </Button>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="mb-1 text-xs font-semibold text-muted-foreground">
-                    {t('pipe.diffHistorical')} (v{diffData.version})
-                  </div>
-                  <pre className="max-h-64 overflow-x-auto overflow-y-auto rounded-lg bg-rose-50 p-2 text-xs dark:bg-rose-950/30">
-                    {diffData.historical || '(empty)'}
-                  </pre>
-                </div>
-                <div>
-                  <div className="mb-1 text-xs font-semibold text-muted-foreground">
-                    {t('pipe.diffCurrent')}
-                  </div>
-                  <pre className="max-h-64 overflow-x-auto overflow-y-auto rounded-lg bg-emerald-50 p-2 text-xs dark:bg-emerald-950/30">
-                    {diffData.current || '(empty)'}
-                  </pre>
-                </div>
+              <CardContent>
+                <TextDiffView
+                  historical={diffData.historical || ''}
+                  current={diffData.current || ''}
+                  leftTitle={`${t('pipe.diffHistorical')} (v${diffData.version})`}
+                  rightTitle={t('pipe.diffCurrent')}
+                  maxHeightClass="max-h-64"
+                  testId="pipe-version-diff-modal-body"
+                />
               </CardContent>
             </Card>
           )}
