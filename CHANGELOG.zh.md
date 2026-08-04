@@ -4,6 +4,58 @@
 
 ## [Unreleased]
 
+## [v0.2.11] — 2026-08-04 — Standalone production-ready 正式版（控制面 / 可靠性收口）
+
+首个非 beta 正式版本。将 `v0.2.11-beta.*` 的控制面、可靠性、备份恢复、path contract 与运维工作提升为 **standalone production-ready** 正式发布。分布式（master-worker）仍为 **beta / production-candidate**，受 `PR-D1` 门槛约束；experimental connector（MaxCompute writer）仍未实现。
+
+### Production-ready 范围（standalone）
+
+- **PR-0 控制面持久化与安全默认值**（delivered）：API/内存/DB 一致；加密 spec restart/rollback；current/version/checkpoint 原子边界；scheduler prepare/commit 补偿；production fail-closed profile；CORS / trusted-proxy / 安全响应头；双端口 TLS 拓扑。
+- **PR-1 易维护与安全**（delivered，含 1.3）：connection/settings secret envelope；migration conformance；backup/restore/upgrade/rollback runbook；retention janitor（DLQ/audit/run/task）硬上限、健康状态与失败告警。
+- **PR-2 数据一致性**（delivered）：两条主推荐链路通过 crash / checkpoint-reset / sink-outage / DLQ-replay 对账，`silent_loss=0`：
+  - `mysql_cdc__mysql_upsert` —— MySQL CDC → MySQL upsert（稳定 PK 吸收重放）。
+  - `mysql_snap_cdc__ch_rmt` —— MySQL snapshot+CDC → ClickHouse ReplacingMergeTree（`pk_columns` + `_version`；查当前态需 `FINAL` 或物化）。
+- **P5 运维与发布门槛**（delivered）：`/api/v2/health` 业务健康、CI production gate、`docs/ops-runbook.md`、`docs/release-checklist.md`、`docs/resource-baseline.md`。
+
+### 语义（不变）
+
+- 默认仍是 **checkpointed at-least-once**；sink ack 之后、checkpoint commit 之前的崩溃可能重放最后一个 batch，靠业务键 / upsert / RMT / 显式 deduplicate 吸收。
+- PostgreSQL CDC `on_truncate` 默认 `error`；多 sink fanout 与 CDC → file/S3 默认拦截，需显式 `allow_unsafe`。
+- 源 binlog 与 sink 不在同一分布式事务中；非原子 fanout 作为残余边界写入文档。
+
+### 范围外 / 残余边界（未达 production）
+
+- **分布式（master-worker）：beta / production-candidate。** 已交付认证 worker HTTP client、task generation/attempt/lease CAS ownership、stale-owner 409 fencing 与 bounded requeue（`PR-D1`），但 multi-master 与跨 worker 强一致性不在范围；`docker-compose.distributed.yml` 要求 `ETL_API_TOKEN`。
+- **MaxCompute / ODPS**：仅注册 descriptor/config/schema/partition 校验与 preflight 拦截 writer-disabled pipeline；SDK 批量 writer、远程权限/表检查、DLQ/retry e2e 与生产成熟度未实现。
+- **外部 storage backend e2e**（MySQL/PostgreSQL backup/restore conformance）：无凭据则 skip；SQLite 由单测 + 脚本认证。skip 的外部 backend 不计入该 backend 的生产认证。
+- 分布式 multi-master 与跨 worker 强一致性仍不在范围。
+
+### 验证（发布收口）
+
+- `go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...` —— passed
+- `go test -count=1 ./internal/etl/... ./internal/logic/...` —— passed
+- `go test ./internal/etl/telemetry ./internal/etl/alert -count=1` —— passed
+- `./hack/check-release-assets.sh` —— passed
+- `go build .`（pure Go，含 Lua）—— passed
+
+### 证据矩阵
+
+| 项目 | 结果 |
+| --- | --- |
+| 代码门槛（vet / unit / health / assets） | passed |
+| PR-0 控制面持久化与安全默认值 | delivered |
+| PR-1 secret / migration / backup-restore / upgrade | delivered（含 1.3） |
+| PR-2 path contract（主推荐链路） | delivered；e2e 脚本见 `docs/path-contract.md` |
+| SQLite backup/upgrade conformance | passed（单测 + 脚本） |
+| MySQL/PostgreSQL storage/backup | 无外部环境则 skip；非认证 |
+| Distributed PR-D1（auth/fencing/requeue） | delivered（beta）；`e2e-distributed` 覆盖 fence/auth |
+
+### 自 v0.2.11-beta.4 以来的增量
+
+- fix(ui)：pipeline 版本 diff 只高亮变更行
+- fix(docker)：重建前端并嵌入镜像 binary
+- fix(ci)：将 binary 排除在 dockerignore 之外以修复 beta 镜像发布
+
 ## [v0.2.11-beta.4] — 2026-07-26 — Production-ready 控制面 / 可靠性 / 分布式 beta 收口
 
 ### 亮点

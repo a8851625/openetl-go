@@ -4,6 +4,84 @@
 
 ## [Unreleased]
 
+## [v0.2.11] — 2026-08-04 — Standalone production-ready release (control plane / reliability closeout)
+
+This is the first non-beta release. It promotes the `v0.2.11-beta.*` control-plane,
+reliability, backup/restore, path-contract, and operations work to a **standalone
+production-ready** release. Distributed (master-worker) mode remains
+**beta / production-candidate** and is gated by `PR-D1`; experimental connectors
+(MaxCompute writer) remain unimplemented.
+
+### Production-ready scope (standalone)
+
+- **PR-0 control-plane persistence & security defaults** (delivered): API/memory/DB
+  consistency, encrypted spec restart/rollback, atomic current/version/checkpoint
+  boundaries, scheduler prepare/commit compensation, production fail-closed profile,
+  CORS / trusted-proxy / security headers, two-port TLS topology.
+- **PR-1 maintainability & security** (delivered, incl. 1.3): connection/settings
+  secret envelope, migration conformance, backup/restore/upgrade/rollback runbooks,
+  retention janitor (DLQ/audit/run/task) with hard caps, health status, failure alerts.
+- **PR-2 data consistency** (delivered): two forced main paths certified against
+  crash / checkpoint-reset / sink-outage / DLQ-replay with `silent_loss=0`:
+  - `mysql_cdc__mysql_upsert` — MySQL CDC → MySQL upsert (stable PK absorbs replay).
+  - `mysql_snap_cdc__ch_rmt` — MySQL snapshot+CDC → ClickHouse ReplacingMergeTree
+    (`pk_columns` + `_version`; `FINAL`/materialized for current state).
+- **P5 operations & release gates** (delivered): `/api/v2/health` business health,
+  CI production gate, `docs/ops-runbook.md`, `docs/release-checklist.md`,
+  `docs/resource-baseline.md`.
+
+### Semantics (unchanged)
+
+- Default remains **checkpointed at-least-once**; a crash after sink acknowledgement
+  and before checkpoint commit may replay the last batch — absorb via business keys /
+  upsert / RMT / explicit deduplicate.
+- PostgreSQL CDC `on_truncate` defaults to `error`; multi-sink fanout and
+  CDC → file/S3 stay blocked unless `allow_unsafe`.
+- Source binlog and sink are not in a distributed transaction; non-atomic fanout is
+  documented as a residual boundary.
+
+### Out of scope / residual boundaries (not production)
+
+- **Distributed (master-worker) mode: beta / production-candidate.** Authenticated
+  worker HTTP client, task generation/attempt/lease CAS ownership, stale-owner 409
+  fencing, and bounded requeue are delivered (`PR-D1`), but multi-master and
+  cross-worker strong consistency are out of scope; `docker-compose.distributed.yml`
+  requires `ETL_API_TOKEN`.
+- **MaxCompute / ODPS**: registered for descriptor/config/schema/partition
+  validation and preflight blocks writer-disabled pipelines; the SDK-backed batch
+  writer, remote permission/table checks, DLQ/retry e2e, and production maturity
+  are not implemented.
+- **External storage-backend e2e** (MySQL/PostgreSQL backup/restore conformance):
+  skipped without credentials; SQLite is certified by unit + script. Skipped
+  external backends do not count as production certification for that backend.
+- Distributed multi-master and cross-worker strong consistency remain out of scope.
+
+### Validation (release closeout)
+
+- `go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...` — passed
+- `go test -count=1 ./internal/etl/... ./internal/logic/...` — passed
+- `go test ./internal/etl/telemetry ./internal/etl/alert -count=1` — passed
+- `./hack/check-release-assets.sh` — passed
+- `go build .` (pure Go, Lua included) — passed
+
+### Evidence matrix
+
+| Item | Result |
+| --- | --- |
+| Code gates (vet / unit / health / assets) | passed |
+| PR-0 control-plane persistence & security defaults | delivered |
+| PR-1 secret / migration / backup-restore / upgrade | delivered (incl. 1.3) |
+| PR-2 path contracts (forced main paths) | delivered; e2e scripts referenced in `docs/path-contract.md` |
+| SQLite backup/upgrade conformance | passed (unit + script) |
+| MySQL/PostgreSQL storage/backup | skip without external env; not certified by skip |
+| Distributed PR-D1 (auth/fencing/requeue) | delivered as beta; `e2e-distributed` covers fence/auth |
+
+### Increments since v0.2.11-beta.4
+
+- fix(ui): highlight only changed lines in pipeline version diff
+- fix(docker): rebuild frontend and embed UI into image binary
+- fix(ci): stage binary outside dockerignore for beta image publish
+
 ## [v0.2.11-beta.4] — 2026-07-26 — Production-ready control plane / reliability / distributed beta closeout
 
 ### Highlights
