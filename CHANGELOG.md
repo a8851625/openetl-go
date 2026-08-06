@@ -4,6 +4,92 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.1] — 2026-08-06 — Lightweight DWH scenario + Kafka CDC relay link (beta)
+
+First beta targeting the "lightweight data warehouse" scenario. Adds the
+minimal MySQL → OpenETL-Go → Doris topology plus batch spec generators, and
+fills the three engine gaps needed to relay CDC over Kafka without losing
+INSERT/UPDATE/DELETE semantics. This is scenario work and is **not** bound to a
+`PR-*` gate in `docs/ROADMAP.zh.md`; the Kafka relay link has unit and
+e2e evidence but not yet certification-grade crash/replay reconciliation, so
+it ships as beta.
+
+### Added
+
+- **Lightweight DWH orchestration & tooling**
+  - `docker-compose.lightweight-dwh.yml` + `docs/lightweight-dwh.md`: minimal
+    two-component topology (OpenETL-Go + Doris, no Kafka / MinIO / Airflow /
+    standalone BI), with deploy, target-DB, spec, and common-adjustment notes
+    (remote source, multiple source DBs, fragmented primary keys) plus an
+    optional Kafka relay section.
+  - `hack/gen-doris-specs-by-table.sh`: for DBs with highly fragmented PKs,
+    generates one `mysql_batch → doris` spec per table (query-only, no binlog,
+    cron staggered per table).
+  - `hack/gen-doris-specs-grouped.sh`: same scenario but groups tables by real
+    PK into `mysql_snapshot_cdc → doris` specs, collapsing hundreds of tables to
+    "number of distinct PK shapes" specs.
+- **Kafka CDC relay link (mysql_cdc → kafka → mysql/doris)**
+  - `kafka` sink: new `topic_template` (e.g. `cdc-{db}-{table}`) routes each
+    record to a per-source-table topic instead of one static topic.
+  - `kafka` source: new `format: envelope` parses OpenETL's own envelope
+    (`{event_id,op,table,key,data,timestamp}`) and restores
+    INSERT/UPDATE/DELETE so the relayed chain behaves like a direct CDC
+    consumer (Doris / MySQL upsert+delete).
+  - `mysql_batch` source: now emits `Metadata.Database` so downstream
+    (`topic_template={db}-{table}`, table_mapping routing, audit) gets the
+    source DB name.
+
+### Semantic boundaries (Kafka relay link)
+
+- **The envelope carries `Data` (after-image) only, not `Before` (pre-image).**
+  MySQL CDC update/delete therefore have only the after-image after relay;
+  downstream transforms/sinks that depend on `Before` (e.g. compact back-fill
+  from pre-image) are unsupported across a Kafka relay. Doris / MySQL
+  upsert+delete use the primary-key row in `Data` and are unaffected.
+- **`topic_template` mode skips the sink's topic validation/auto-create**, relying
+  on broker-side `auto.create.topics.enable=true` (Redpanda default) or
+  pre-created topics; if the template references `{db}`/`{table}` but the record
+  lacks that metadata, `Write` returns a hard error rather than silently
+  falling back to the static topic.
+- Default remains **checkpointed at-least-once**; replay boundaries of the
+  relayed chain match a direct CDC link.
+
+### Robustness fixes (new code this round)
+
+- `kafka` sink `topic_template`: a placeholder referencing `{db}`/`{table}`
+  with missing metadata now returns a hard error (previously it silently fell
+  back to the static topic, mixing unrelated tables into one destination);
+  `Open` emits a warning when it skips topic validation, prompting broker
+  auto-create or topic pre-creation.
+
+### Verification (local closeout)
+
+- `go vet ./internal/etl/...` — passed
+- `go test ./internal/etl/source/ ./internal/etl/sink/ -count=1` (with `-race`) — passed
+- Unit: `TestKafkaSinkTopicTemplateRoutesByMetadata`,
+  `TestKafkaSinkTopicTemplateEmptyResolutionErrors`,
+  `TestKafkaHandlerEnvelopeRestoresCDCSemantics`,
+  `TestKafkaHandlerEnvelopeMalformedFallsBackToValue`,
+  `TestMySQLBatchReaderFillsDatabaseMetadata` — passed
+- `hack/e2e-cdc-kafka-relay.sh`: MySQL CDC → Kafka(topic_template) →
+  Kafka(envelope) → MySQL, verifying INSERT/UPDATE/DELETE reach the target
+  consistently with the source — passed (Redpanda + MySQL containers, live run)
+
+### Out of scope / residual boundaries
+
+- The Kafka relay link has **no certification-grade crash/replay
+  reconciliation** yet (e.g. SIGKILL mid-producer, checkpoint-reset replay,
+  consumer-group rebalance); this round covers only the happy-path
+  INSERT/UPDATE/DELETE semantic restoration. Full certification is a follow-up.
+- `mysql_batch.Database` e2e coverage is provided by a unit test (sqlmock); the
+  lightweight-DWH `mysql_batch → doris` path has no live Doris e2e (requires an
+  external Doris image).
+- This work is **not bound to a `PR-*` gate** in `docs/ROADMAP.zh.md`; it is
+  scenario delivery. Promoting it to a certified path requires a roadmap
+  increment plus crash/replay evidence.
+- Distributed (master-worker) remains beta / production-candidate; MaxCompute
+  writer still unimplemented.
+
 ## [v0.2.11] — 2026-08-04 — Standalone production-ready release (control plane / reliability closeout)
 
 This is the first non-beta release. It promotes the `v0.2.11-beta.*` control-plane,

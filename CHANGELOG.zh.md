@@ -4,6 +4,45 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.1] — 2026-08-06 — 轻量数仓场景 + Kafka CDC 中转链路（beta）
+
+首个面向「轻量数仓」场景的 beta。新增 MySQL 业务库 → OpenETL-Go → Doris 的最简拓扑编排与批量建表工具，并补齐 Kafka 作为 CDC 中转链路所需的三项引擎能力。本轮工作为场景化交付，未绑定 `docs/ROADMAP.zh.md` 的 `PR-*` 门槛项；Kafka 中转链路已有单测与端到端 e2e 证据，但尚未完成认证级别的 crash/replay 对账，故标记 beta。
+
+### 新增
+
+- **轻量数仓（Lightweight DWH）编排与工具**
+  - `docker-compose.lightweight-dwh.yml` + `docs/lightweight-dwh.md`：OpenETL-Go + Doris 两组件最简数仓拓扑（无 Kafka / 无 MinIO / 无 Airflow / 无独立 BI），含部署、建库、抽数 spec、源库不在宿主机/多源库/主键碎片化等常见调整与可选 Kafka 中转说明。
+  - `hack/gen-doris-specs-by-table.sh`：针对主键高度碎片化的库，「一表一 spec」批量生成 `mysql_batch → doris` 离线抽数 spec（纯查询、无 binlog 依赖、按表序号错峰 cron）。
+  - `hack/gen-doris-specs-grouped.sh`：同场景按真实主键分组生成 `mysql_snapshot_cdc → doris` spec，把上百张表收敛到「主键种类数」个 spec。
+- **Kafka CDC 中转链路（mysql_cdc → kafka → mysql/doris）**
+  - `kafka` sink 新增 `topic_template`（如 `cdc-{db}-{table}`），按记录 metadata 动态路由到各源表独立 topic，不再混写单一静态 topic。
+  - `kafka` source 新增 `format: envelope`，解析 OpenETL 自家 envelope（`{event_id,op,table,key,data,timestamp}`），还原 INSERT/UPDATE/DELETE 语义，使中转链路下游（如 Doris / MySQL upsert+delete）表现与直连 CDC 一致。
+  - `mysql_batch` source 补齐 `Metadata.Database`，让下游（`topic_template={db}-{table}`、table_mapping 路由、审计）能拿到源库名。
+
+### 语义边界（Kafka 中转链路）
+
+- **envelope 只携带 `Data`（后镜像），不携带 `Before`（前镜像）**。因此 MySQL CDC 的 update/delete 经中转后只有 after-image；依赖 `Before` 的下游 transform/sink（如用前镜像回填的 compact）在中转链路不可用。Doris / MySQL 的 upsert+delete 靠 `Data` 里的主键行，不受影响。
+- **`topic_template` 模式跳过 sink 的 topic 校验/自动创建**，依赖 broker 端 `auto.create.topics.enable=true`（Redpanda 默认开启）或预建 topic；模板引用 `{db}`/`{table}` 但 record 无对应 metadata 时 `Write` 硬报错而非静默落到默认 topic。
+- 默认仍是 **checkpointed at-least-once**；中转链路的重放边界与直连 CDC 一致。
+
+### 健壮性修复（本轮新代码）
+
+- `kafka` sink `topic_template`：占位符引用 `{db}`/`{table}` 但 metadata 缺失时返回硬错误（原先静默 fallback 到静态 topic，会把不相关表混进同一 topic）；`Open` 跳过 topic 校验时打 warning 日志，提示需开 broker auto-create 或预建 topic。
+
+### 验证（本机收口）
+
+- `go vet ./internal/etl/...` —— passed
+- `go test ./internal/etl/source/ ./internal/etl/sink/ -count=1`（含 `-race`）—— passed
+- 单测：`TestKafkaSinkTopicTemplateRoutesByMetadata`、`TestKafkaSinkTopicTemplateEmptyResolutionErrors`、`TestKafkaHandlerEnvelopeRestoresCDCSemantics`、`TestKafkaHandlerEnvelopeMalformedFallsBackToValue`、`TestMySQLBatchReaderFillsDatabaseMetadata` —— passed
+- `hack/e2e-cdc-kafka-relay.sh`：MySQL CDC → Kafka(topic_template) → Kafka(envelope) → MySQL，覆盖 INSERT/UPDATE/DELETE 经中转后目标表与源一致 —— passed（Redpanda + MySQL 容器，实跑）
+
+### 范围外 / 残余边界
+
+- Kafka 中转链路**未做认证级 crash/replay 对账**（如 SIGKILL producer 中途、checkpoint reset 重放、consumer group rebalance），本轮仅覆盖 happy path 的 INSERT/UPDATE/DELETE 语义还原。完整认证列为后续 follow-up。
+- `mysql_batch.Database` 的 e2e 覆盖由单测（sqlmock）保证；轻量数仓 `mysql_batch → doris` 路径未跑真实 Doris e2e（需外部 Doris 镜像）。
+- 本轮工作**未挂到 `docs/ROADMAP.zh.md` 的 `PR-*` 门槛**，属于场景化交付；如需提升为认证链路，需补 roadmap 增量并完成对应 crash/replay 证据。
+- 分布式（master-worker）仍为 beta / production-candidate；MaxCompute writer 仍未实现。
+
 ## [v0.2.11] — 2026-08-04 — Standalone production-ready 正式版（控制面 / 可靠性收口）
 
 首个非 beta 正式版本。将 `v0.2.11-beta.*` 的控制面、可靠性、备份恢复、path contract 与运维工作提升为 **standalone production-ready** 正式发布。分布式（master-worker）仍为 **beta / production-candidate**，受 `PR-D1` 门槛约束；experimental connector（MaxCompute writer）仍未实现。

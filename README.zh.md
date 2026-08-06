@@ -132,7 +132,7 @@ Kafka/MySQL CDC 事实流
 docker run -d --name openetl-go -p 8000:8000 -p 8001:8001 \
   -v "$PWD/pipes:/app/pipes" \
   -e ETL_API_TOKEN="$(openssl rand -hex 16)" \
-  ghcr.io/a8851625/openetl-go:v0.2.11
+  ghcr.io/a8851625/openetl-go:v0.2.12-beta.1
 # podman 用户: 把 docker 换成 podman
 # 生产部署请用 docker-compose.yml（必填 secret + 固定 OPENETL_IMAGE）。
 ```
