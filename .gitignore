@@ -66,6 +66,11 @@ dzhcore
 # Transient UI review screenshots
 /web/screenshots/
 
+# Locally generated DWH spec trees (produced by hack/gen-doris-specs-*.sh
+# against real source DBs; may contain credentials — do not commit).
+/pipes-dwh/
+/pipes-dwh-cdc/
+
 # 但不忽略这三个子目录及其内容
 !addons/dict/
 !addons/space/

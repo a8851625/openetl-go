@@ -34,6 +34,7 @@ type KafkaSink struct {
 	name            string
 	brokers         []string
 	topic           string
+	topicTemplate   string
 	keyColumn       string
 	compression     string
 	saslUser        string
@@ -74,6 +75,11 @@ func NewKafkaSink(config map[string]any) (*KafkaSink, error) {
 	if v, ok := config["topic"]; ok {
 		if vs, ok := v.(string); ok {
 			s.topic = vs
+		}
+	}
+	if v, ok := config["topic_template"]; ok {
+		if vs, ok := v.(string); ok {
+			s.topicTemplate = vs
 		}
 	}
 	if v, ok := config["key_column"]; ok {
@@ -210,6 +216,18 @@ func (s *KafkaSink) Open(ctx context.Context) error {
 	}
 	s.producer = producer
 
+	// With topic_template, topics are derived per record from record metadata
+	// (e.g. "cdc-{db}-{table}"), so there is no single static topic to validate
+	// upfront. Topic existence then relies on broker-side auto-create (or the
+	// topics being pre-created). Warn loudly: if auto.create.topics.enable is
+	// off on the broker, the first SendMessages will fail late with
+	// UNKNOWN_TOPIC_OR_PARTITION, which is harder to diagnose than a missing
+	// topic error during preflight.
+	if s.topicTemplate != "" {
+		g.Log().Warningf(ctx, "kafka sink (topic_template=%s): topic validation/auto-create is skipped; destinations are derived per record — ensure broker auto.create.topics.enable=true or pre-create all routed topics", s.topicTemplate)
+		return nil
+	}
+
 	// Validate / auto-create the target topic using a cluster admin client.
 	admin, err := sarama.NewClusterAdmin(s.brokers, cfg)
 	if err != nil {
@@ -271,6 +289,13 @@ func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error
 			Value:     sarama.ByteEncoder(value),
 			Timestamp: time.Now(),
 		}
+		if s.topicTemplate != "" {
+			resolved, err := s.topicForRecord(rec)
+			if err != nil {
+				return err
+			}
+			msg.Topic = resolved
+		}
 
 		// Set partition key for ordering
 		if s.keyColumn != "" {
@@ -297,6 +322,31 @@ func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error
 	}
 	s.recordMetrics(len(records), time.Since(start))
 	return nil
+}
+
+// topicForRecord resolves the destination topic for a record. With
+// topic_template set (e.g. "cdc-{db}-{table}"), placeholders are substituted
+// from record metadata; otherwise the static configured topic is used. If the
+// template references {db}/{table} but the record carries no such metadata,
+// it is treated as a configuration error rather than silently emitting a
+// malformed topic (e.g. "cdc--") or falling back to the static topic, which
+// would mix unrelated tables into one destination.
+func (s *KafkaSink) topicForRecord(rec core.Record) (string, error) {
+	if s.topicTemplate == "" {
+		return s.topic, nil
+	}
+	if strings.Contains(s.topicTemplate, "{db}") && rec.Metadata.Database == "" {
+		return "", fmt.Errorf("kafka sink: topic_template %q references {db} but record has no database metadata", s.topicTemplate)
+	}
+	if strings.Contains(s.topicTemplate, "{table}") && rec.Metadata.Table == "" {
+		return "", fmt.Errorf("kafka sink: topic_template %q references {table} but record has no table metadata", s.topicTemplate)
+	}
+	topic := strings.ReplaceAll(s.topicTemplate, "{db}", rec.Metadata.Database)
+	topic = strings.ReplaceAll(topic, "{table}", rec.Metadata.Table)
+	if topic == "" {
+		return "", fmt.Errorf("kafka sink: topic_template %q resolved to empty", s.topicTemplate)
+	}
+	return topic, nil
 }
 
 func (s *KafkaSink) Close() error {

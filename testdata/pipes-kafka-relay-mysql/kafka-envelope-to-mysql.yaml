@@ -1,0 +1,41 @@
+name: "kafka-envelope-to-mysql"
+# Kafka -> MySQL relay leg. format=envelope reconstructs the original CDC
+# operation (INSERT/UPDATE/DELETE) from the OpenETL envelope written by the
+# first leg, so the MySQL sink applies upsert + delete exactly like a direct
+# CDC consumer.
+source:
+  type: kafka
+  config:
+    brokers:
+      - "host.docker.internal:19092"
+    topic: "relay-customers"
+    group_id: "envelope-relay-e2e"
+    format: "envelope"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: mysql
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_target"
+    table: "customers"
+    pk_columns:
+      - "id"
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

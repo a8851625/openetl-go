@@ -1,0 +1,41 @@
+name: "mysql-cdc-to-kafka-relay"
+# CDC -> Kafka relay leg. Uses topic_template so each source table is routed
+# to its own topic (relay-<table>); the sink skips static-topic validation
+# and relies on broker-side auto-create (Redpanda default). The envelope
+# written here is consumed by the second leg with format=envelope.
+source:
+  type: mysql_cdc
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    server_id: 1301
+    tables:
+      - "customers"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: kafka
+  config:
+    brokers:
+      - "host.docker.internal:19092"
+    topic: "relay-deadletter"
+    topic_template: "relay-{table}"
+    key_column: "id"
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 10
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

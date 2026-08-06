@@ -324,6 +324,40 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 			}
 
 			switch {
+			case h.reader.source.format == "envelope":
+				// OpenETL kafkaEnvelope (as written by the kafka sink):
+				// {event_id, op, table, key, data, timestamp}. Restores the
+				// original operation/table/row so downstream sinks (e.g. Doris
+				// upsert+delete) behave exactly like a direct CDC consumer.
+				var env struct {
+					EventID   string         `json:"event_id"`
+					Op        string         `json:"op"`
+					Table     string         `json:"table"`
+					Key       string         `json:"key"`
+					Data      map[string]any `json:"data"`
+					Timestamp string         `json:"timestamp"`
+				}
+				if err := json.Unmarshal(msg.Value, &env); err == nil && env.Data != nil {
+					switch env.Op {
+					case "UPDATE":
+						rec.Operation = core.OpUpdate
+					case "DELETE":
+						rec.Operation = core.OpDelete
+					default:
+						rec.Operation = core.OpInsert
+					}
+					if env.Table != "" {
+						rec.Metadata.Table = env.Table
+					}
+					if env.Key != "" {
+						rec.Metadata.Key = env.Key
+					}
+					for k, v := range env.Data {
+						data[k] = v
+					}
+				} else {
+					data["value"] = string(msg.Value)
+				}
 			case h.reader.source.format == "json" && h.reader.source.valueColumn == "":
 				var parsed map[string]any
 				if err := json.Unmarshal(msg.Value, &parsed); err == nil {

@@ -1,0 +1,99 @@
+# ════════════════════════════════════════════════════════════════════
+# OpenETL-Go + Apache Doris — 最简轻量数仓（无 Kafka / 无 MinIO / 无独立 BI）
+#
+#   docker compose -f docker-compose.lightweight-dwh.yml up -d
+#
+# 服务:
+#   openetl     OpenETL-Go 抽数+调度+Web UI   http://localhost:8000
+#   doris-fe    Doris Frontend (查询入口)     http://localhost:8030  / MySQL :9030
+#   doris-be    Doris Backend (存储+计算)
+#
+# 链路:
+#   业务库 ──binlog/批量(OpenETL-Go 直连)──► Stream Load ──► Doris
+#
+# 说明:
+#   - Doris 的 FE/BE 启动配方沿用 hack/e2e-doris.sh（已验证可用）：
+#     FE_SERVERS / FE_ID / BE_ADDR 环境变量 + 固定子网 IP。
+#   - 三个容器在同一个自定义网络 dwh-net，互用服务名寻址
+#     (openetl→doris-fe:8030, openetl→doris-fe:9030)。
+#   - 如要换 Doris 版本，改下方 DORIS_VERSION 即可。
+# ════════════════════════════════════════════════════════════════════
+
+# build arg：Doris 版本（与 hack/e2e-doris.sh 默认值一致）
+# compose 不直接支持顶层变量默认值给 image 用，故在此声明
+# 使用：保持不变即可。如需升级改这两个 tag。
+
+services:
+  # ── OpenETL-Go：同步 + 调度 + Web UI ───────────────────────────────
+  openetl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openetl-go:lightweight-dwh
+    container_name: dwh-openetl
+    restart: unless-stopped
+    depends_on:
+      - doris-fe
+    environment:
+      TZ: "Asia/Shanghai"            # cron 按北京时间
+      ETL_API_TOKEN: "change-me"     # ⚠️ 生产请改强 token
+      ETL_STORAGE_TYPE: "sqlite"     # 元数据；团队大了换 mysql
+      ETL_STORAGE_DSN: "file::memory:?cache=shared"  # 占位；实际用下面挂载的文件
+    ports:
+      - "8000:8000"                  # Web UI + REST API
+    volumes:
+      - ./data-dwh:/app/data         # SQLite 元数据 + DLQ 持久化
+      - ./pipes-dwh:/app/manifest/pipes  # 你的 spec 放这里，启动自动加载
+    networks:
+      - dwh-net
+
+  # ── Doris FE：查询入口 + Stream Load + Web ─────────────────────────
+  doris-fe:
+    image: docker.io/apache/doris:fe-2.1.11
+    container_name: dwh-doris-fe
+    restart: unless-stopped
+    # 沿用 hack/e2e-doris.sh 的权威启动配方
+    environment:
+      FE_SERVERS: "fe1:172.31.90.2:9010"
+      FE_ID: "1"
+    ports:
+      - "8030:8030"                  # FE HTTP / Stream Load / Web UI
+      - "9030:9030"                  # FE MySQL 协议（查询/DDL）
+    networks:
+      dwh-net:
+        ipv4_address: 172.31.90.2
+    volumes:
+      - doris-fe-meta:/opt/apache-doris/fe/doris-meta
+      - doris-fe-log:/opt/apache-doris/fe/log
+
+  # ── Doris BE：存储 + 计算 ──────────────────────────────────────────
+  doris-be:
+    image: docker.io/apache/doris:be-2.1.11
+    container_name: dwh-doris-be
+    restart: unless-stopped
+    depends_on:
+      - doris-fe
+    environment:
+      FE_SERVERS: "fe1:172.31.90.2:9010"
+      BE_ADDR: "172.31.90.3:9050"
+    # BE 是内存大户。内存吃紧时在下方 deploy.resources 或 docker run
+    # 用 --mem-limit 限制，并调小 be.conf 的 mem_limit（默认 80%）。
+    volumes:
+      - doris-be-storage:/opt/apache-doris/be/storage
+      - doris-be-log:/opt/apache-doris/be/log
+    networks:
+      dwh-net:
+        ipv4_address: 172.31.90.3
+
+networks:
+  dwh-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.90.0/24     # 与 hack/e2e-doris.sh 一致
+
+volumes:
+  doris-fe-meta:
+  doris-fe-log:
+  doris-be-storage:
+  doris-be-log:

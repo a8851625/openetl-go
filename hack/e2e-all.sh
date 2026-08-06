@@ -33,6 +33,7 @@ TESTS=(
   "e2e-lookup-query.sh|lookup query async I/O miss/timeout/lock-wait DLQ"
   "e2e-kafka.sh|Kafka source/sink crash/restart/rebalance/replay (Redpanda)"
   "e2e-kafka-raw-ods.sh|Kafka raw parser/flat_map -> lookup -> Kafka ODS"
+  "e2e-cdc-kafka-relay.sh|MySQL CDC -> Kafka(topic_template) -> Kafka(envelope) -> MySQL upsert/delete"
   "e2e-maxcompute.sh|Kafka ODS->MaxCompute partitioned table (env-gated)"
   "e2e-debezium-mysql.sh|Debezium Kafka CDC->MySQL ODS"
   "e2e-lookup-state.sh|Kafka lookup StateStore crash recovery"

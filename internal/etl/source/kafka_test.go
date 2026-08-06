@@ -135,6 +135,111 @@ func TestKafkaHandlerDoesNotMarkOnConsume(t *testing.T) {
 	}
 }
 
+// TestKafkaHandlerEnvelopeRestoresCDCSemantics verifies that format=envelope
+// reconstructs the original operation/table/key/data from an OpenETL kafka
+// sink envelope, so a Kafka-relayed chain (MySQL CDC -> Kafka -> Doris)// behaves like a direct CDC consumer (insert/update/delete preserved).
+func TestKafkaHandlerEnvelopeRestoresCDCSemantics(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "cdc-events", format: "envelope"}
+	reader := &kafkaReader{
+		source:           src,
+		records:          make(chan core.Record, 8),
+		offsets:          make(map[int32]int64),
+		committedOffsets: make(map[int32]int64),
+		sessions:         make(map[int32]sarama.ConsumerGroupSession),
+	}
+	sess := newFakeSession()
+	defer sess.cancel()
+	handler := &kafkaHandler{reader: reader}
+
+	// Build the exact envelope the kafka sink emits, for a DELETE carrying the
+	// primary-key row (matches mysql_cdc / mysql_snapshot_cdc delete events).
+	envBytes, err := json.Marshal(map[string]any{
+		"event_id":  "evt-42",
+		"op":       string(core.OpDelete),
+		"table":    "orders",
+		"key":      "42",
+		"data":     map[string]any{"order_id": float64(42)},
+		"timestamp": "2026-08-06T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	claim := &fakeConsumerGroupClaim{ch: make(chan *sarama.ConsumerMessage, 1)}
+	claim.ch <- &sarama.ConsumerMessage{
+		Topic:     "cdc-events",
+		Partition: 0,
+		Offset:    7,
+		Value:     envBytes,
+	}
+	close(claim.ch)
+
+	if err := handler.ConsumeClaim(sess, claim); err != nil {
+		t.Fatalf("ConsumeClaim: %v", err)
+	}
+
+	select {
+	case rec := <-reader.records:
+		if rec.Operation != core.OpDelete {
+			t.Errorf("operation = %q, want DELETE", rec.Operation)
+		}
+		if rec.Metadata.Table != "orders" {
+			t.Errorf("metadata table = %q, want orders", rec.Metadata.Table)
+		}
+		if rec.Metadata.Key != "42" {
+			t.Errorf("metadata key = %q, want 42", rec.Metadata.Key)
+		}
+		if got, ok := rec.Data["order_id"].(float64); !ok || got != 42 {
+			t.Errorf("data.order_id = %#v, want 42", rec.Data["order_id"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("envelope record not delivered")
+	}
+}
+
+// TestKafkaHandlerEnvelopeMalformedFallsBackToValue verifies that a message
+// claiming format=envelope but failing to unmarshal (or carrying nil data)
+// degrades gracefully to data[value]=raw, instead of dropping the record.
+func TestKafkaHandlerEnvelopeMalformedFallsBackToValue(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "cdc-events", format: "envelope"}
+	reader := &kafkaReader{
+		source:           src,
+		records:          make(chan core.Record, 8),
+		offsets:          make(map[int32]int64),
+		committedOffsets: make(map[int32]int64),
+		sessions:         make(map[int32]sarama.ConsumerGroupSession),
+	}
+	sess := newFakeSession()
+	defer sess.cancel()
+	handler := &kafkaHandler{reader: reader}
+
+	claim := &fakeConsumerGroupClaim{ch: make(chan *sarama.ConsumerMessage, 1)}
+	claim.ch <- &sarama.ConsumerMessage{
+		Topic:     "cdc-events",
+		Partition: 0,
+		Offset:    9,
+		Value:     []byte("not-json-at-all"),
+	}
+	close(claim.ch)
+
+	if err := handler.ConsumeClaim(sess, claim); err != nil {
+		t.Fatalf("ConsumeClaim: %v", err)
+	}
+
+	select {
+	case rec := <-reader.records:
+		// Default operation stays INSERT, default table stays the source topic.
+		if rec.Operation != core.OpInsert {
+			t.Errorf("operation = %q, want INSERT on malformed envelope", rec.Operation)
+		}
+		if got := rec.Data["value"]; got != "not-json-at-all" {
+			t.Errorf("data.value = %#v, want raw fallback", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("malformed envelope record not delivered")
+	}
+}
+
 // TestKafkaCheckpointForRecordMarksOffset verifies that after pipeline commit,
 // calling CheckpointForRecord marks the NEXT offset so a restart resumes after
 // the committed record.

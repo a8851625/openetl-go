@@ -1,0 +1,5 @@
+{"data":{"order_id":"ORD-001","customer_id":1,"amount":15000,"status":"paid","product":"laptop"}}
+{"data":{"order_id":"ORD-002","customer_id":2,"amount":500,"status":"paid","product":"mouse"}}
+{"data":{"order_id":"ORD-003","customer_id":3,"amount":25000,"status":"pending","product":"server"}}
+{"data":{"order_id":"ORD-004","customer_id":1,"amount":1200,"status":"paid","product":"keyboard"}}
+{"data":{"order_id":"ORD-005","customer_id":2,"amount":9800,"status":"test","product":"monitor"}}

@@ -397,7 +397,7 @@ source:
 | `topic` | yes | | Kafka topic to consume. |
 | `group_id` | no | `etl-consumer` | Consumer group ID. All logical shards of a pipeline share this group so Kafka assigns partitions across shards. |
 | `topic_partitions` | no | | Optional static partition-count hint for offline validate when brokers are unreachable. When `logical_shards > topic_partitions`, validate warns excess shards will idle. Prefer preflight live metadata in production; recommended `logical_shards` equals topic partition count. |
-| `format` | no | `json` | Message format: `json` or `text`. |
+| `format` | no | `json` | Message format: `json`, `text`, or `envelope`. `envelope` consumes OpenETL `kafka`-sink envelopes (`{event_id,op,table,key,data,timestamp}`) and restores the original INSERT/UPDATE/DELETE operation plus source table/key/data, so a Kafka-relayed chain (e.g. MySQL CDC -> Kafka -> Doris) behaves like a direct CDC consumer. Note: the envelope carries `Data` (after-image) only; `Before` (pre-image for update/delete) is not relayed, so sinks/transforms that depend on `Before` are not supported across a Kafka relay. A malformed/non-envelope message degrades to `data[value]=<raw>` with `op=INSERT`. |
 | `key_column` | no | | Column name for message key. |
 | `value_column` | no | | Column name for raw message value. |
 | `initial_offset` | no | `newest` | Initial consumer offset when no committed offset exists: `oldest` or `newest`. |
@@ -634,7 +634,8 @@ sink:
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `brokers` | yes | `["localhost:9092"]` | Kafka broker addresses. |
-| `topic` | yes | | Kafka topic to produce to. |
+| `topic` | conditional | | Static Kafka topic to produce to. Required unless `topic_template` is set. |
+| `topic_template` | no | | Per-record topic template with `{db}`/`{table}` placeholders resolved from record metadata (e.g. `cdc-{db}-{table}` routes one topic per source table). When set, OpenETL does **not** validate/auto-create topics during `Open` (there is no single static topic); ensure broker `auto.create.topics.enable=true` or pre-create all routed topics, otherwise the first send fails with `UNKNOWN_TOPIC_OR_PARTITION`. If the template references `{db}`/`{table}` but the record carries no such metadata, `Write` returns a hard error rather than emitting a malformed topic. |
 | `key_column` | no | | Column for message key. |
 | `compression` | no | `none` | `none`, `gzip`, `snappy`, or `lz4`. |
 

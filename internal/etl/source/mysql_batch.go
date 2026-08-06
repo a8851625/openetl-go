@@ -23,6 +23,7 @@ func init() {
 
 type mysqlBatchReader struct {
 	db           *sql.DB
+	database     string
 	table        string
 	columns      []string
 	pkCol        string
@@ -186,6 +187,7 @@ func (s *MySQLBatchSource) Open(ctx context.Context, cp *core.Checkpoint) (core.
 
 	return &mysqlBatchReader{
 		db:           db,
+		database:     s.database,
 		table:        s.table,
 		columns:      s.columns,
 		pkCol:        s.pkCol,
@@ -299,6 +301,7 @@ func (r *mysqlBatchReader) ReadBatch(ctx context.Context, n int) ([]core.Record,
 			Operation: core.OpInsert,
 			Data:      data,
 			Metadata: core.Metadata{
+				Database:  r.database,
 				Table:     tableName,
 				Timestamp: time.Now(),
 			},

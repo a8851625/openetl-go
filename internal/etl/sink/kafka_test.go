@@ -112,6 +112,77 @@ func TestKafkaSinkWriteReturnsProducerErrorAndRecordsFailureMetric(t *testing.T)
 	}
 }
 
+// TestKafkaSinkTopicTemplateRoutesByMetadata verifies that topic_template
+// resolves {db}/{table} placeholders from record metadata into a per-record
+// topic, enabling one-table-per-topic routing without a static topic.
+func TestKafkaSinkTopicTemplateRoutesByMetadata(t *testing.T) {
+	producer := &captureKafkaProducer{}
+	s := &KafkaSink{
+		name:          "kafka",
+		topic:         "cdc-default",
+		topicTemplate: "cdc-{db}-{table}",
+		producer:      producer,
+	}
+	ts := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
+	recs := []core.Record{
+		{
+			Operation: core.OpInsert,
+			Data:      map[string]any{"id": 1, "v": "a"},
+			Metadata: core.Metadata{Database: "shop", Table: "orders", Timestamp: ts},
+		},
+		{
+			Operation: core.OpUpdate,
+			Data:      map[string]any{"id": 2, "v": "b"},
+			Metadata: core.Metadata{Database: "shop", Table: "users", Timestamp: ts},
+		},
+	}
+
+	if err := s.Write(context.Background(), recs); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(producer.messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(producer.messages))
+	}
+	if got, want := producer.messages[0].Topic, "cdc-shop-orders"; got != want {
+		t.Errorf("msg[0] topic = %q, want %q", got, want)
+	}
+	if got, want := producer.messages[1].Topic, "cdc-shop-users"; got != want {
+		t.Errorf("msg[1] topic = %q, want %q", got, want)
+	}
+}
+
+// TestKafkaSinkTopicTemplateEmptyResolutionErrors verifies that a template
+// which resolves to empty (missing db/table metadata) is a hard error rather
+// than a silent fallback to the static topic — which would mix unrelated
+// tables into one destination.
+func TestKafkaSinkTopicTemplateEmptyResolutionErrors(t *testing.T) {
+	producer := &captureKafkaProducer{}
+	s := &KafkaSink{
+		name:          "kafka",
+		topic:         "cdc-default",
+		topicTemplate: "cdc-{db}-{table}",
+		producer:      producer,
+	}
+	// Record lacks Database/Table, so the template resolves to "cdc-".
+	rec := core.Record{
+		Operation: core.OpInsert,
+		Data:      map[string]any{"id": 1},
+		Metadata: core.Metadata{Timestamp: time.Now()},
+	}
+
+	err := s.Write(context.Background(), []core.Record{rec})
+	if err == nil {
+		t.Fatalf("Write succeeded for empty topic resolution, want error")
+	}
+	if len(producer.messages) != 0 {
+		t.Fatalf("messages = %d, want 0 (nothing should be sent on error)", len(producer.messages))
+	}
+	metrics := s.SinkMetrics()
+	if metrics.Errors != 1 {
+		t.Fatalf("metrics.Errors = %d, want 1", metrics.Errors)
+	}
+}
+
 type captureKafkaProducer struct {
 	messages []*sarama.ProducerMessage
 	err      error
