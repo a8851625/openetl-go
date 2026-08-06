@@ -141,7 +141,7 @@ Roadmap 状态只使用以下值：
 | `PR-1` | 易维护、安全 | secret、migration、backup/restore、upgrade/rollback 可重复 | `PR-0` | `delivered` (1.1/1.2/1.3) |
 | `PR-2` | 数据一致性 | 主推荐链路通过 crash/reset/outage/DLQ replay 对账 | `PR-0`，并复用 `PR-1` storage gate | `delivered` |
 | P3 | 证据治理 | maturity 与当前版本实际认证证据一致 | `PR-2` 定义 path gate | `queued` |
-| P4 | 易上手 | 30 分钟首次任务与 10 分钟故障定位目标可验证 | `PR-0` 安全/profile 约定 | `queued` |
+| P4 | 易上手 | 30 分钟首次任务与 10 分钟故障定位目标可验证 | `PR-0` 安全/profile 约定 | `delivered` |
 | P5 | 易维护、可观测 | 业务健康、资源基线、CI 和 production runbook 成为发布门槛 | `PR-1`、`PR-2` | `delivered` |
 | `PR-D1` | distributed 可靠性 | worker 认证、fencing、重试和真实多进程恢复通过 | standalone 收口后，或显式提前 | `delivered` |
 
@@ -249,7 +249,7 @@ PR-0.3.2 本轮证据（Round 4/5）：
 | forwarded IP 仅受 trusted proxy CIDR 影响 | `TestClientIPOnlyTrustsForwardedHeadersFromConfiguredProxy` | passed | 多级代理链策略仍需在部署 runbook 中按拓扑核验 |
 | 安全响应头、HSTS 与认证 challenge 覆盖拒绝响应 | `TestCORSAllowListAndSecurityHeaders`、`TestAuthFailureHasChallengeAndSecurityHeaders`；middleware 顺序在 `StartHTTP` | passed | GoFrame 静态首页的双端口 TLS 头部整体验证留给 Round 5 |
 | UI token 不进入长期 localStorage | `web/src/lib/api.ts` 内存 token；`rg etl_api_token web/src` 无持久化读写；`npm run typecheck`、`npm run build`；`hack/e2e-ui-token.sh` 验证未认证 401、保存后 authenticated UI request、刷新后 token 清空并恢复 401 | passed | reload 后需重新输入是有意语义 |
-| 可重复安全/profile smoke | `hack/e2e-production-profile.sh`（profile + compose + HTTP security gate）；`hack/e2e-ui-token.sh`（当前构建镜像上的 focused browser token gate） | passed | 完整 `hack/e2e-ui.sh` 当前为 91 passed/17 failed，失败集中在 P4 wizard/filter 选择器与流程 residual，不把它计作 PR-0 token gate |
+| 可重复安全/profile smoke | `hack/e2e-production-profile.sh`（profile + compose + HTTP security gate）；`hack/e2e-ui-token.sh`（当前构建镜像上的 focused browser token gate） | passed | 完整 `hack/e2e-ui.sh` 现为 108 passed/0 failed（P4 residual 已于 2026-08-06 收口）；PR-0 token gate 仍以 `e2e-ui-token.sh` 为准，不与 UI 全量 e2e 混计 |
 
 最后一轮领取记录：
 
@@ -337,7 +337,7 @@ PR-0 最终验收矩阵：
 | UI token 内存化与当前构建上下文 | `npm run typecheck && npm run build`；`./hack/e2e-ui-token.sh`；`.dockerignore` 排除本地缓存/构建产物 | passed | 完整 UI 向导脚本的 17 个 P4 residual 不属于 PR-0 |
 | runtime/release regression | `./hack/e2e-runtime-smoke.sh`；`go test ./... -count=1`；`go test -race ./internal/etl/orchestrator ./internal/etl/server -count=1`；`git diff --check` | passed | 未认证 connector/path 仍按各自 maturity 声明 |
 
-因此 `PR-0.1`、`PR-0.2` 主事务切片、`PR-0.3` 安全/TLS 切片、`PR-0.2a` scheduler compensation 和本轮最终验收均已交付；`PR-0` 现标记为 `delivered`。这不提升项目级或 distributed maturity：P0 MaxCompute 仍为 `blocked_external`，P4 UI residual、PR-1 storage/secret 演进和 PR-D1 distributed transport 保持原顺序。
+因此 `PR-0.1`、`PR-0.2` 主事务切片、`PR-0.3` 安全/TLS 切片、`PR-0.2a` scheduler compensation 和本轮最终验收均已交付；`PR-0` 现标记为 `delivered`。这不提升项目级或 distributed maturity：P0 MaxCompute 仍为 `blocked_external`，PR-1 storage/secret 演进和 PR-D1 distributed transport 保持原顺序。P4 UI e2e residual 已于 2026-08-06 收口（`hack/e2e-ui.sh` 108/0）。
 
 最终交接：
 
@@ -346,7 +346,7 @@ Round: 1/5
 Roadmap item: PR-0
 Profile/path: standalone control plane
 Result: delivered
-Residual/follow-up: 不自动领取 PR-1；下一次显式 continue 重新同步后，按 P0 blocked_external 与既定顺序决定是否领取 PR-1.1。P4 UI e2e 17 个失败项继续留在 P4，不借用 PR-0 证据。
+Residual/follow-up: 不自动领取 PR-1；下一次显式 continue 重新同步后，按 P0 blocked_external 与既定顺序决定是否领取 PR-1.1。P4 UI e2e residual 已清零，不与 PR-0 token smoke 证据混用。
 ```
 
 目标：消除“API 看似成功但重启后丢失”“启用加密后无法恢复”和“生产默认未认证”三类上线阻断，使 API 返回状态、内存运行状态和持久化状态保持一致。
@@ -577,7 +577,7 @@ Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard mu
 
 **2026-07-21 已交付（证据）**：全宽管道列表 + URL 筛选；`#/pipelines/new` 全页三段式向导 + 草稿；DLQ 聚合主视图 + Replay 确认面板；详情写入语义/生命周期；总览时间范围切换；Connections 抽屉；问题中心固定排序；顶栏用户菜单与扩展分组；e2e/文档区分「路由可达」与「原型对齐」。Residual：DAG 空画布模板、小屏信息行、截图刷新、多 run 历史。
 
-**2026-07-25 现状核对**：`hack/e2e-ui.sh` 在当前构建镜像上为 91 passed/17 failed；失败集中在首次任务向导的 schema-driven form、transform/saved-connection 交互和 DLQ filter 选择器，属于本节 P4 residual。PR-0 的独立 token 安全门槛由 `hack/e2e-ui-token.sh` 单独验证并通过，不将 P4 失败误报为 PR-0 通过或失败。
+**2026-08-06 现状核对**：`hack/e2e-ui.sh` 在当前构建镜像上为 108 passed/0 failed；P4 residual（首次任务向导的 schema-driven form、transform stage dry-run/reorder、DLQ filter 稳定 testid、behavior-scope hint）已收口。PR-0 的独立 token 安全门槛由 `hack/e2e-ui-token.sh` 单独验证并通过，不与 UI 全量 e2e 混计。
 
 本项在现有 React UI、connector descriptor/introspection/preflight 和同一份 pipeline spec 上渐进收口，不另建独立 UI 语义、设计器模型或服务端执行模型。内部按以下顺序实施；同一时间只推进一个子阶段：
 

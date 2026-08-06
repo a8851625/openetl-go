@@ -27,7 +27,7 @@
 | `PR-1` | `queued` | Secret envelope、migration、backup/restore、retention |
 | `PR-2` | `delivered` | path contract、主链路故障认证、边界语义 |
 | `P3` | `queued` | maturity/readiness/certification 事实源 |
-| `P4` | `queued` | 首次任务向导、状态语义、deep link、故障自助；当前 UI e2e 为 91 passed/17 failed |
+| `P4` | `delivered` | 首次任务向导、状态语义、deep link、故障自助；`hack/e2e-ui.sh` 108 passed/0 failed（2026-08-06） |
 | `P5` | `delivered` | 业务健康、运维、CI、资源基线、发布门槛 |
 | `PR-D1` | `delivered` | distributed worker 认证、fencing、真实三进程恢复 |
 
@@ -186,7 +186,7 @@ P0 MaxCompute (external credential gate; never replace with a lower-fidelity moc
 
 ### P4：首次任务体验残留收口
 
-当前基线：`hack/e2e-ui.sh` 为 91 passed/17 failed；这些失败集中在 schema-driven wizard、transform/saved-connection 和 DLQ filter，不能通过修改测试选择器伪造通过。
+当前基线：`hack/e2e-ui.sh` 为 108 passed/0 failed（2026-08-06 收口）。修复覆盖：分步 wizard 导航与 transform stage dry-run/reorder、behavior-scope hint、runtime recommendation YAML 同步、DLQ record filter；e2e 不再依赖已移除的 Failure demo / Repair 专用控件。
 
 #### P4.1：状态语义与交互可信度
 
