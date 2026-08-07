@@ -690,6 +690,66 @@ func (dagCheckpointReader) CheckpointForRecord(_ context.Context, rec core.Recor
 	return core.Checkpoint{Source: "dag-checkpoint-reader", Position: pos}, nil
 }
 
+type dagAckCheckpointReader struct {
+	store      *storage.CheckpointStoreAdapter
+	jobName    string
+	ackSawSave bool
+	ackErr     error
+}
+
+func (r *dagAckCheckpointReader) Read(context.Context) (core.Record, error) {
+	return core.Record{}, errors.New("unused")
+}
+func (r *dagAckCheckpointReader) ReadBatch(context.Context, int) ([]core.Record, error) {
+	return nil, errors.New("unused")
+}
+func (r *dagAckCheckpointReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (r *dagAckCheckpointReader) Close() error { return nil }
+func (r *dagAckCheckpointReader) CheckpointForRecord(_ context.Context, rec core.Record) (core.Checkpoint, error) {
+	pos, _ := json.Marshal(map[string]any{"offset": rec.Metadata.Offset})
+	return core.Checkpoint{Source: "dag-ack-reader", Position: pos}, nil
+}
+func (r *dagAckCheckpointReader) AckCheckpoint(ctx context.Context, _ core.Checkpoint) error {
+	cp, err := r.store.Load(ctx, r.jobName)
+	if err != nil {
+		return err
+	}
+	r.ackSawSave = cp != nil
+	if r.ackErr != nil {
+		return r.ackErr
+	}
+	if !r.ackSawSave {
+		return errors.New("external ack ran before durable checkpoint save")
+	}
+	return nil
+}
+
+func TestDAGCheckpointBoundaryOrdersDurableSaveBeforeExternalAck(t *testing.T) {
+	adapter, cleanup := newDAGCheckpointAdapter(t)
+	defer cleanup()
+	am := alert.NewManager()
+	defer am.Close()
+	reader := &dagAckCheckpointReader{store: adapter, jobName: "dag-ack-order-src"}
+	exec := &DAGExecutor{
+		spec:             &PipelineSpec{Name: "dag-ack-order"},
+		sinks:            map[string]core.Sink{"sink": dagNoopSink{}},
+		readers:          map[string]core.RecordReader{"src": reader},
+		cpAdapter:        adapter,
+		alertMgr:         am,
+		retryConfig:      retry.DefaultConfig(),
+		breakers:         map[string]*pipeline.CircuitBreaker{},
+		checkpointBlocks: map[string]string{},
+	}
+	exec.writeToSink(context.Background(), "sink", []core.Record{{Metadata: core.Metadata{Offset: 9}}}, map[string]core.Record{
+		"src": {Metadata: core.Metadata{Offset: 9}},
+	})
+	if !reader.ackSawSave {
+		t.Fatal("external ack did not observe a durable checkpoint")
+	}
+}
+
 type dagStateSnapshotTransform struct {
 	node    string
 	version string

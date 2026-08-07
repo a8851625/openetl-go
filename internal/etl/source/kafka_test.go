@@ -279,10 +279,10 @@ func TestKafkaHandlerEnvelopeMalformedFallsBackToValue(t *testing.T) {
 	}
 }
 
-// TestKafkaCheckpointForRecordMarksOffset verifies that after pipeline commit,
-// calling CheckpointForRecord marks the NEXT offset so a restart resumes after
-// the committed record.
-func TestKafkaCheckpointForRecordMarksOffset(t *testing.T) {
+// TestKafkaCheckpointForRecordHasNoExternalSideEffects verifies that building
+// a checkpoint does not mark or commit the consumer-group offset. The runner
+// must persist the checkpoint before invoking AckCheckpoint.
+func TestKafkaCheckpointForRecordHasNoExternalSideEffects(t *testing.T) {
 	src := &KafkaSource{name: "kafka", topic: "test"}
 	reader := &kafkaReader{
 		source:           src,
@@ -307,12 +307,51 @@ func TestKafkaCheckpointForRecordMarksOffset(t *testing.T) {
 	}
 
 	sess.mu.Lock()
+	if len(sess.marked) != 0 {
+		t.Errorf("marked offsets = %v, want none before AckCheckpoint", sess.marked)
+	}
+	if sess.committed {
+		t.Error("Commit called during CheckpointForRecord")
+	}
+	sess.mu.Unlock()
+
+	if err := reader.AckCheckpoint(context.Background(), cp); err != nil {
+		t.Fatalf("AckCheckpoint: %v", err)
+	}
+	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	if sess.marked[0] != 101 {
 		t.Errorf("marked offset = %d, want 101 (offset+1)", sess.marked[0])
 	}
 	if !sess.committed {
-		t.Error("Commit not called after CheckpointForRecord")
+		t.Error("Commit not called by AckCheckpoint")
+	}
+}
+
+func TestKafkaBuildSaramaConfigDisablesAutoCommit(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "test"}
+	cfg, err := src.buildSaramaConfig()
+	if err != nil {
+		t.Fatalf("buildSaramaConfig: %v", err)
+	}
+	if cfg.Consumer.Offsets.AutoCommit.Enable {
+		t.Fatal("auto-commit enabled; external ack must follow durable checkpoint")
+	}
+}
+
+func TestKafkaAckCheckpointRequiresActiveSession(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "test"}
+	reader := &kafkaReader{
+		source:           src,
+		committedOffsets: map[int32]int64{0: 10},
+		sessions:         map[int32]sarama.ConsumerGroupSession{},
+	}
+	cp, err := reader.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if err := reader.AckCheckpoint(context.Background(), cp); err == nil {
+		t.Fatal("AckCheckpoint succeeded without a consumer session")
 	}
 }
 

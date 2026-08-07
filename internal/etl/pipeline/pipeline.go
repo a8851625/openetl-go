@@ -1527,6 +1527,7 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 
 	if saveErr := r.checkpointStore.Save(ctx, cp); saveErr != nil {
 		errMsg := fmt.Sprintf("checkpoint save failed: %v", saveErr)
+		r.blockCheckpoint(errMsg)
 		r.mu.Lock()
 		r.stats.LastError = errMsg
 		r.mu.Unlock()
@@ -1548,6 +1549,17 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 		return false
 	}
 
+	if err := acknowledgeExternalCheckpoint(ctx, r.reader, cp); err != nil {
+		errMsg := fmt.Sprintf("external checkpoint acknowledgement failed: %v", err)
+		r.blockCheckpoint(errMsg)
+		r.setStatus(StatusFailed)
+		if r.cancel != nil {
+			r.cancel()
+		}
+		r.handleCheckpointBoundaryError(ctx, errMsg)
+		return false
+	}
+
 	r.mu.Lock()
 	r.stats.LastCheckpoint = time.Now()
 	r.lastCheckpointSave = time.Now()
@@ -1561,6 +1573,24 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 		Config:        r.spec.Hooks.getConfig(core.HookOnCheckpoint),
 	})
 	return true
+}
+
+// acknowledgeExternalCheckpoint runs after CheckpointStore.Save. The source
+// receives its raw position rather than the state/sink envelope because the
+// external protocol cannot acknowledge transform state metadata.
+func acknowledgeExternalCheckpoint(ctx context.Context, reader core.RecordReader, cp core.Checkpoint) error {
+	acker, ok := reader.(core.CheckpointAcker)
+	if !ok {
+		return nil
+	}
+	raw, err := checkpoint.UnwrapForSource(&cp)
+	if err != nil {
+		return fmt.Errorf("unwrap persisted checkpoint: %w", err)
+	}
+	if raw == nil {
+		return fmt.Errorf("persisted checkpoint is nil")
+	}
+	return acker.AckCheckpoint(ctx, *raw)
 }
 
 func (r *Runner) handleCheckpointBoundaryError(ctx context.Context, errMsg string) {

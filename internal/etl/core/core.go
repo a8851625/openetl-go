@@ -81,6 +81,15 @@ type RecordCheckpointer interface {
 	CheckpointForRecord(ctx context.Context, rec Record) (Checkpoint, error)
 }
 
+// CheckpointAcker is an optional source hook for acknowledging an external
+// source position (for example a Kafka consumer-group offset or PostgreSQL
+// replication LSN). The runner invokes it only after the corresponding
+// checkpoint has been durably saved. Implementations must not acknowledge
+// external progress from CheckpointForRecord itself.
+type CheckpointAcker interface {
+	AckCheckpoint(ctx context.Context, cp Checkpoint) error
+}
+
 type Sink interface {
 	Open(ctx context.Context) error
 	Write(ctx context.Context, records []Record) error

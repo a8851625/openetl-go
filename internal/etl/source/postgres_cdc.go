@@ -201,6 +201,11 @@ type pgCDCReader struct {
 	snapshotDB   *sql.DB
 	ctx          context.Context
 	isClosed     bool
+	// statusMu serializes protocol writes from the receive-loop keepalive path
+	// and the post-checkpoint external acknowledgement path. pgconn does not
+	// permit concurrent writes on a replication connection.
+	statusMu                sync.Mutex
+	sendStandbyStatusUpdate func(context.Context, pglogrepl.StandbyStatusUpdate) error
 }
 
 // pgCatalog holds relation metadata learned from RELATION messages.
@@ -250,7 +255,7 @@ func (c *pgCatalog) columns(relID uint32) []pgColumnInfo {
 func (r *pgCDCReader) run(ctx context.Context) {
 	defer close(r.records)
 	defer close(r.errors)
-	defer r.replConn.Close(ctx)
+	defer r.closeReplicationConnection(ctx)
 	defer r.closeDone()
 	if r.snapshotDB != nil {
 		defer r.snapshotDB.Close()
@@ -291,12 +296,10 @@ func (r *pgCDCReader) run(ctx context.Context) {
 		return
 	}
 
-	startLSN := "0/0"
-	r.mu.Lock()
-	if r.lsn != "" {
-		startLSN = r.lsn
-	}
-	r.mu.Unlock()
+	// Resume from the last externally acknowledged/durable LSN. `r.lsn` is a
+	// read-ahead cursor and may point past records that have not reached the
+	// sink yet, so it must never be used as a crash/reconnect boundary.
+	startLSN := r.resumeLSN()
 
 	startLSNValue, err := pglogrepl.ParseLSN(startLSN)
 	if err != nil {
@@ -327,8 +330,8 @@ func (r *pgCDCReader) run(ctx context.Context) {
 			case r.errors <- fmt.Errorf("receive: %w", err):
 			default:
 			}
-			// Reconnect: create a new replication connection and resume
-			// from the last known LSN.
+			// Reconnect: create a new replication connection and resume from the
+			// last durable/external LSN, never from the read-ahead cursor.
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
@@ -341,7 +344,7 @@ func (r *pgCDCReader) run(ctx context.Context) {
 				backoff = maxBackoff
 			}
 
-			r.replConn.Close(ctx)
+			_ = r.closeReplicationConnection(ctx)
 			replConn2, connErr := pgconn.Connect(ctx, replConnStr)
 			if connErr != nil {
 				select {
@@ -350,14 +353,11 @@ func (r *pgCDCReader) run(ctx context.Context) {
 				}
 				continue
 			}
-			r.replConn = replConn2
-
 			r.mu.Lock()
-			resumeLSN := r.lsn
+			r.replConn = replConn2
 			r.mu.Unlock()
-			if resumeLSN == "" {
-				resumeLSN = "0/0"
-			}
+
+			resumeLSN := r.resumeLSN()
 			resumeLSNValue, parseErr := pglogrepl.ParseLSN(resumeLSN)
 			if parseErr != nil {
 				select {
@@ -415,6 +415,15 @@ func (r *pgCDCReader) isClosedNow() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.isClosed
+}
+
+func (r *pgCDCReader) resumeLSN() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.committedLsn != "" {
+		return r.committedLsn
+	}
+	return "0/0"
 }
 
 func (r *pgCDCReader) closeDone() {
@@ -1056,25 +1065,57 @@ func (r *pgCDCReader) sendStandbyStatus(data []byte) {
 	// Acknowledge only up to the last durably committed LSN (records that
 	// have been delivered and checkpointed downstream). This prevents PG
 	// from advancing the slot's restart_lsn past WAL we still need.
-	// If we have no committed LSN yet (e.g. before the first commit), fall
-	// back to the server-provided keepalive LSN so idle connections don't
-	// time out, but this is safe because no consumer progress is claimed.
+	// If we have no committed LSN yet, send 0/0 rather than the server-provided
+	// end: that end may include read-ahead WAL which has not reached the sink.
 	r.mu.Lock()
 	committed := r.committedLsn
 	r.mu.Unlock()
 
-	ackLSN := pkm.ServerWALEnd
+	ackLSN := pglogrepl.LSN(0)
 	if committed != "" {
 		if parsed, err := pglogrepl.ParseLSN(committed); err == nil {
 			ackLSN = parsed
 		}
 	}
-	_ = pglogrepl.SendStandbyStatusUpdate(context.Background(), r.replConn, pglogrepl.StandbyStatusUpdate{
+	if err := r.sendStatusUpdate(context.Background(), pglogrepl.StandbyStatusUpdate{
 		WALWritePosition: ackLSN,
 		WALFlushPosition: ackLSN,
 		WALApplyPosition: ackLSN,
 		ReplyRequested:   pkm.ReplyRequested,
-	})
+	}); err != nil {
+		g.Log().Warningf(r.ctx, "postgres_cdc: standby status update failed: %v", err)
+	}
+}
+
+// sendStatusUpdate is the single protocol-write seam used by keepalives and
+// external checkpoint acknowledgements. Tests can inject a function without a
+// live PostgreSQL connection; production uses the current replication
+// connection and serializes writes with statusMu.
+func (r *pgCDCReader) sendStatusUpdate(ctx context.Context, status pglogrepl.StandbyStatusUpdate) error {
+	r.statusMu.Lock()
+	defer r.statusMu.Unlock()
+	if r.sendStandbyStatusUpdate != nil {
+		return r.sendStandbyStatusUpdate(ctx, status)
+	}
+	r.mu.Lock()
+	conn := r.replConn
+	r.mu.Unlock()
+	if conn == nil {
+		return fmt.Errorf("replication connection is unavailable")
+	}
+	return pglogrepl.SendStandbyStatusUpdate(ctx, conn, status)
+}
+
+func (r *pgCDCReader) closeReplicationConnection(ctx context.Context) error {
+	r.statusMu.Lock()
+	defer r.statusMu.Unlock()
+	r.mu.Lock()
+	conn := r.replConn
+	r.mu.Unlock()
+	if conn == nil {
+		return nil
+	}
+	return conn.Close(ctx)
 }
 
 func readNullString(data []byte, off int) (string, int) {
@@ -1131,12 +1172,14 @@ func (r *pgCDCReader) Snapshot(ctx context.Context) (core.Checkpoint, error) {
 }
 
 func (r *pgCDCReader) CheckpointForRecord(ctx context.Context, rec core.Record) (core.Checkpoint, error) {
-	// Prefer the record's own LSN (per-record safe resume point).
+	// Prefer the record's own LSN (per-record safe resume point). This method
+	// only constructs a checkpoint; it must not advance committedLsn or send a
+	// replication acknowledgement. AckCheckpoint performs that side effect
+	// after the checkpoint store has durably saved this position.
 	lsn := rec.Metadata.LSN
 	phase := "cdc"
 	r.mu.Lock()
 	if lsn != "" {
-		r.committedLsn = lsn
 	} else {
 		lsn = r.committedLsn
 		phase = r.phase
@@ -1148,6 +1191,48 @@ func (r *pgCDCReader) CheckpointForRecord(ctx context.Context, rec core.Record) 
 		return core.Checkpoint{}, err
 	}
 	return core.Checkpoint{Source: r.source.name, Position: data, Timestamp: time.Now()}, nil
+}
+
+// AckCheckpoint sends PostgreSQL's flush/apply acknowledgement only after the
+// corresponding internal checkpoint has been durably persisted. Empty LSNs
+// are valid for the initial snapshot phase and require no replication ack.
+func (r *pgCDCReader) AckCheckpoint(ctx context.Context, cp core.Checkpoint) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var pos pgPosition
+	if len(cp.Position) == 0 || !json.Valid(cp.Position) {
+		return fmt.Errorf("postgres checkpoint position is not valid JSON")
+	}
+	if err := json.Unmarshal(cp.Position, &pos); err != nil {
+		return fmt.Errorf("decode postgres checkpoint: %w", err)
+	}
+	if pos.LSN == "" {
+		return nil
+	}
+	ackLSN, err := pglogrepl.ParseLSN(pos.LSN)
+	if err != nil {
+		return fmt.Errorf("parse postgres checkpoint LSN %q: %w", pos.LSN, err)
+	}
+	if err := r.sendStatusUpdate(ctx, pglogrepl.StandbyStatusUpdate{
+		WALWritePosition: ackLSN,
+		WALFlushPosition: ackLSN,
+		WALApplyPosition: ackLSN,
+	}); err != nil {
+		return fmt.Errorf("acknowledge postgres LSN %s: %w", pos.LSN, err)
+	}
+
+	// Only publish the new committed marker after the protocol write succeeds.
+	// Never move it backwards when a late/parallel checkpoint arrives.
+	r.mu.Lock()
+	current := r.committedLsn
+	if current == "" {
+		r.committedLsn = pos.LSN
+	} else if currentLSN, parseErr := pglogrepl.ParseLSN(current); parseErr != nil || ackLSN >= currentLSN {
+		r.committedLsn = pos.LSN
+	}
+	r.mu.Unlock()
+	return nil
 }
 
 // runSnapshot performs an initial full-table read for each configured table.
@@ -1242,7 +1327,7 @@ func (r *pgCDCReader) Close() error {
 		cancel()
 	}
 
-	return r.replConn.Close(context.Background())
+	return r.closeReplicationConnection(context.Background())
 }
 
 type pgPosition struct {

@@ -17,7 +17,7 @@ Read PostgreSQL logical replication changes through pgoutput for CDC pipelines.
 Emits insert/update/delete CDC records with PostgreSQL row fields in `data` and operation metadata. TRUNCATE is **not** mapped to target deletes: default policy is `on_truncate: error` so production paths cannot silently keep stale sink rows.
 
 ## Checkpoint, DLQ, Idempotency
-Checkpoint stores the PostgreSQL LSN after sink commit. Downstream replay must be absorbed by upsert or versioned sinks. Keep `drop_slot_on_close: false` so a restart can resume from the same slot.
+Checkpoint stores the PostgreSQL LSN after sink commit. `CheckpointForRecord` only constructs the candidate LSN; after the durable checkpoint save, `AckCheckpoint` sends the replication flush/apply status and advances the in-memory committed LSN only after that send succeeds. Keepalives with no durable LSN use `0/0` rather than the server read-ahead end, and connection recovery resumes from the durable/acknowledged LSN rather than the latest received frame. An external-ack failure fails closed so restart can replay from the durable checkpoint. Downstream replay must be absorbed by upsert or versioned sinks. Keep `drop_slot_on_close: false` so a restart can resume from the same slot.
 
 ## Fits
 PostgreSQL table CDC into MySQL/PostgreSQL/ClickHouse/Doris-style idempotent sinks.

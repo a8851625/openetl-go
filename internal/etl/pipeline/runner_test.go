@@ -150,6 +150,67 @@ func (r checkpointTestReader) CheckpointForRecord(_ context.Context, rec core.Re
 	return core.Checkpoint{Source: "checkpoint-test", Position: pos}, nil
 }
 
+type checkpointOrderProbe struct {
+	mu     sync.Mutex
+	events []string
+	ackErr error
+}
+
+func (p *checkpointOrderProbe) record(event string) {
+	p.mu.Lock()
+	p.events = append(p.events, event)
+	p.mu.Unlock()
+}
+
+func (p *checkpointOrderProbe) snapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.events...)
+}
+
+type orderedCheckpointReader struct {
+	probe *checkpointOrderProbe
+}
+
+func (r *orderedCheckpointReader) Read(context.Context) (core.Record, error) {
+	return core.Record{}, io.EOF
+}
+func (r *orderedCheckpointReader) ReadBatch(context.Context, int) ([]core.Record, error) {
+	return nil, io.EOF
+}
+func (r *orderedCheckpointReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (r *orderedCheckpointReader) Close() error { return nil }
+func (r *orderedCheckpointReader) CheckpointForRecord(_ context.Context, rec core.Record) (core.Checkpoint, error) {
+	r.probe.record("checkpoint")
+	pos, _ := json.Marshal(map[string]any{"offset": rec.Metadata.Offset})
+	return core.Checkpoint{Source: "ordered-reader", Position: pos}, nil
+}
+func (r *orderedCheckpointReader) AckCheckpoint(_ context.Context, _ core.Checkpoint) error {
+	r.probe.record("ack")
+	return r.probe.ackErr
+}
+
+type orderedCheckpointStore struct {
+	inner *memoryCPStore
+	probe *checkpointOrderProbe
+}
+
+func (s *orderedCheckpointStore) Save(ctx context.Context, cp core.Checkpoint) error {
+	s.probe.record("save")
+	return s.inner.Save(ctx, cp)
+}
+func (s *orderedCheckpointStore) Load(ctx context.Context, job string) (*core.Checkpoint, error) {
+	return s.inner.Load(ctx, job)
+}
+func (s *orderedCheckpointStore) Delete(ctx context.Context, job string) error {
+	return s.inner.Delete(ctx, job)
+}
+func (s *orderedCheckpointStore) List(ctx context.Context) ([]core.Checkpoint, error) {
+	return s.inner.List(ctx)
+}
+
 type batchCountingReader struct {
 	mu         sync.Mutex
 	batches    [][]core.Record
@@ -703,6 +764,71 @@ func TestRunnerCheckpointAfterCommit(t *testing.T) {
 	}
 	if cp.JobName != spec.Name {
 		t.Errorf("checkpoint JobName = %q, want %q", cp.JobName, spec.Name)
+	}
+}
+
+func TestRunnerCheckpointBoundaryOrdersDurableSaveBeforeExternalAck(t *testing.T) {
+	probe := &checkpointOrderProbe{}
+	store := &orderedCheckpointStore{inner: newMemoryCPStore(), probe: probe}
+	am := alert.NewManager()
+	defer am.Close()
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-order"},
+		transforms:      nil,
+		sink:            &recordingSink{},
+		checkpointStore: store,
+		alertManager:    am,
+		reader:          &orderedCheckpointReader{probe: probe},
+		logBuf:          NewLogBuffer(20),
+	}
+
+	if !r.saveCommittedCheckpoint(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 7}}}, nil) {
+		t.Fatal("saveCommittedCheckpoint returned false")
+	}
+	got := probe.snapshot()
+	want := []string{"checkpoint", "save", "ack"}
+	if len(got) != len(want) {
+		t.Fatalf("boundary events = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("boundary events = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestRunnerExternalAckFailureBlocksAndFailsAfterDurableSave(t *testing.T) {
+	probe := &checkpointOrderProbe{ackErr: errors.New("broker unavailable")}
+	store := &orderedCheckpointStore{inner: newMemoryCPStore(), probe: probe}
+	am := alert.NewManager()
+	defer am.Close()
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-ack-failure"},
+		transforms:      nil,
+		sink:            &recordingSink{},
+		checkpointStore: store,
+		alertManager:    am,
+		reader:          &orderedCheckpointReader{probe: probe},
+		logBuf:          NewLogBuffer(20),
+	}
+
+	if r.saveCommittedCheckpoint(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 7}}}, nil) {
+		t.Fatal("saveCommittedCheckpoint succeeded despite external ack failure")
+	}
+	if r.Status() != StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status())
+	}
+	r.mu.RLock()
+	blocked := r.checkpointBlocked
+	r.mu.RUnlock()
+	if !blocked {
+		t.Fatal("checkpoint boundary was not blocked after external ack failure")
+	}
+	if got := probe.snapshot(); len(got) != 3 || got[1] != "save" || got[2] != "ack" {
+		t.Fatalf("boundary events = %v, want checkpoint/save/ack", got)
+	}
+	if cp, err := store.Load(context.Background(), "checkpoint-ack-failure"); err != nil || cp == nil {
+		t.Fatalf("durable checkpoint missing after ack failure: cp=%#v err=%v", cp, err)
 	}
 }
 

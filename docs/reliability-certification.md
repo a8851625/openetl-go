@@ -1,6 +1,6 @@
 # Reliability Certification Matrix
 
-This matrix is the evidence source for OpenETL-Go production-candidate recovery boundaries. The default guarantee is at-least-once: a sink acknowledgement happens before the corresponding source checkpoint is persisted. A crash or checkpoint-store failure in between can replay records; it must not silently skip them.
+This matrix is the evidence source for OpenETL-Go production-candidate recovery boundaries. The default guarantee is at-least-once: a sink acknowledgement happens before the corresponding source checkpoint is persisted. For sources with an external cursor (Kafka consumer offsets or PostgreSQL WAL), that external acknowledgement happens only after the same checkpoint is durably saved. A crash or checkpoint-store failure in between can replay records; it must not silently skip them.
 
 Path-level production contracts (source → transforms → sink write mode + business key + storage/runtime + RPO/RTO) live in [path-contract.md](./path-contract.md) and `GET /api/v2/paths/contracts`. Connector maturity alone does not certify a path.
 
@@ -29,10 +29,11 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 2. The sink acknowledges the batch.
 3. Sink acknowledgement metadata, state versions, and source position are saved together.
 4. If state metadata, sink commit metadata, or checkpoint persistence fails, the source checkpoint does not advance and the range replays.
-5. If a failed record cannot be written to the DLQ, later successful batches cannot advance past it during the same run. Restart reopens the source from the last durable checkpoint.
-6. A checkpoint-throttled sink acknowledgement is retained as a pending boundary. The write-loop timer persists it after `checkpoint_interval_sec` even when the stream becomes idle; Stop/EOF force the same boundary to durable storage.
-7. Kafka offset `0` is stored explicitly. Missing partition state is not conflated with the valid zero offset.
-8. Checkpoint storage/read or envelope validation errors fail the pipeline before its source is opened. They are never treated as an empty/new source position.
+5. For Kafka/PostgreSQL CDC, the source external acknowledgement is sent after step 3. An external-ack failure blocks further checkpoint advancement and fails/stops the pipeline; restart reopens from the durable checkpoint and may replay the range.
+6. If a failed record cannot be written to the DLQ, later successful batches cannot advance past it during the same run. Restart reopens the source from the last durable checkpoint.
+7. A checkpoint-throttled sink acknowledgement is retained as a pending boundary. The write-loop timer persists it after `checkpoint_interval_sec` even when the stream becomes idle; Stop/EOF force the same boundary to durable storage.
+8. Kafka offset `0` is stored explicitly. Missing partition state is not conflated with the valid zero offset.
+9. Checkpoint storage/read or envelope validation errors fail the pipeline before its source is opened. They are never treated as an empty/new source position.
 
 ## Production-Candidate Matrix
 
@@ -57,6 +58,8 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 - Sink write failure never advances the checkpoint.
 - Legacy source checkpoints continue to open; envelope source positions are unwrapped before source startup.
 - Corrupt legacy JSON, corrupt envelopes, unknown envelope versions, and envelopes without a source position fail startup and remain visible as `failed`.
+- Kafka `CheckpointForRecord` does not mark/commit offsets; auto-commit is disabled and `AckCheckpoint` marks/commits only after durable checkpoint save.
+- PostgreSQL CDC `CheckpointForRecord` does not advance `committedLsn`; `AckCheckpoint` sends the WAL status update first and publishes the committed LSN only after a successful send. Keepalives without a durable LSN use 0/0, and reconnects use the durable marker rather than the server/read-ahead end.
 - Kafka offset zero is retained and an idle stream flushes the latest throttled checkpoint boundary after the configured interval.
 - CDC/Kafka to file/S3 remains rejected unless `allow_unsafe: true` explicitly acknowledges the documented duplicate boundary.
 - DAG DLQ records without `dag_node` remain stored and replay returns HTTP 400.
@@ -95,6 +98,37 @@ and DAG source-open failures. A load/validation failure sets the pipeline to
 `failed`, cancels the DAG context where applicable, and does not call source
 `Open`. External source acknowledgement ordering and source-specific cursor
 validation remain bounded follow-ups under `PR-2.4.2` and `PR-2.4.3`.
+
+### PR-2.4.2 external acknowledgement ordering evidence (2026-08-08)
+
+The source cursor lifecycle is now explicitly split into candidate generation,
+durable checkpoint persistence, and external acknowledgement:
+
+```text
+CheckpointForRecord (no external side effect)
+    -> CheckpointStore.Save
+    -> AckCheckpoint (Kafka offset / PostgreSQL WAL status)
+```
+
+Evidence:
+
+```text
+go test ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1  PASS
+go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1  PASS
+go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator  PASS
+CONTAINER_CLI=docker ./hack/e2e-kafka.sh  PASS
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-postgres-cdc.sh  PASS
+```
+
+The tests cover Kafka auto-commit disabled, no mark/commit during
+`CheckpointForRecord`, active-session acknowledgement, PostgreSQL send failure
+without `committedLsn` advancement, keepalive 0/0 and durable reconnect behavior
+before the first acknowledged LSN, and linear/DAG save-before-ack fault ordering.
+`PR-2.4.3` remains the bounded follow-up for `mysql_snapshot_cdc` producer
+read-ahead and cursor commit boundaries. Sarama's
+`ConsumerGroupSession.Commit()` does not return a broker result; synchronous
+session loss is rejected before commit, while broker commit errors remain
+visible through Sarama's consumer-group error channel.
 
 ## RPO / RTO (release declaration)
 

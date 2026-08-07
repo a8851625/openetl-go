@@ -750,7 +750,8 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 				e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("checkpoint for source %s blocked until restart: %s", sourceID, reason))
 				continue
 			}
-			cp, err := e.checkpointForRecord(ctx, sourceID, lastRec)
+			reader := e.readerForSource(sourceID)
+			cp, err := checkpointForReader(ctx, reader, sourceID, lastRec)
 			if err != nil {
 				g.Log().Warningf(ctx, "checkpoint source %s: %v", sourceID, err)
 				continue
@@ -772,15 +773,29 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 				// breaker and alert so the failure is not silent. Mirror the
 				// linear Runner (pipeline.go:925-946).
 				g.Log().Errorf(ctx, "DAG pipeline %s: checkpoint save failed for source %s: %v (already-written records will replay on restart)", e.spec.Name, sourceID, saveErr)
+				e.blockSourceCheckpoint(sourceID, fmt.Sprintf("checkpoint save failed: %v", saveErr))
 				if breaker != nil {
 					breaker.RecordFailure(ctx, saveErr)
 				}
-				e.alertMgr.Send(ctx, alert.Event{
-					Level:   alert.LevelError,
-					Title:   "DAG checkpoint save failure",
-					Message: fmt.Sprintf("pipeline %s source %s: %v", e.spec.Name, sourceID, saveErr),
-					JobName: e.spec.Name,
-				})
+				if e.alertMgr != nil {
+					e.alertMgr.Send(ctx, alert.Event{
+						Level:   alert.LevelError,
+						Title:   "DAG checkpoint save failure",
+						Message: fmt.Sprintf("pipeline %s source %s: %v", e.spec.Name, sourceID, saveErr),
+						JobName: e.spec.Name,
+					})
+				}
+				e.setStatus("failed")
+				e.cancelExecution()
+				return
+			}
+			if err := acknowledgeExternalCheckpoint(ctx, reader, cp); err != nil {
+				reason := fmt.Sprintf("external checkpoint acknowledgement failed: %v", err)
+				e.blockSourceCheckpoint(sourceID, reason)
+				e.setStatus("failed")
+				e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("source %s: %s", sourceID, reason))
+				e.cancelExecution()
+				return
 			}
 		}
 	}
@@ -795,6 +810,30 @@ func (e *DAGExecutor) loadSourceCheckpoint(ctx context.Context, sourceID string)
 		return nil, err
 	}
 	return checkpoint.UnwrapForSource(cp)
+}
+
+func acknowledgeExternalCheckpoint(ctx context.Context, reader core.RecordReader, cp core.Checkpoint) error {
+	acker, ok := reader.(core.CheckpointAcker)
+	if !ok {
+		return nil
+	}
+	raw, err := checkpoint.UnwrapForSource(&cp)
+	if err != nil {
+		return fmt.Errorf("unwrap persisted checkpoint: %w", err)
+	}
+	if raw == nil {
+		return fmt.Errorf("persisted checkpoint is nil")
+	}
+	return acker.AckCheckpoint(ctx, *raw)
+}
+
+func (e *DAGExecutor) cancelExecution() {
+	e.mu.RLock()
+	cancel := e.cancel
+	e.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // failSourceStart makes checkpoint/source startup failures terminal for the
@@ -821,9 +860,17 @@ func (e *DAGExecutor) failSourceStart(ctx context.Context, sourceID string, err 
 
 // checkpointForRecord generates a checkpoint from the source's reader based on the last committed record.
 func (e *DAGExecutor) checkpointForRecord(ctx context.Context, sourceID string, rec core.Record) (core.Checkpoint, error) {
+	reader := e.readerForSource(sourceID)
+	return checkpointForReader(ctx, reader, sourceID, rec)
+}
+
+func (e *DAGExecutor) readerForSource(sourceID string) core.RecordReader {
 	e.mu.RLock()
-	reader := e.readers[sourceID]
-	e.mu.RUnlock()
+	defer e.mu.RUnlock()
+	return e.readers[sourceID]
+}
+
+func checkpointForReader(ctx context.Context, reader core.RecordReader, sourceID string, rec core.Record) (core.Checkpoint, error) {
 	if reader == nil {
 		return core.Checkpoint{}, fmt.Errorf("no reader for source %s", sourceID)
 	}

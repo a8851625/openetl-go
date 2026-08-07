@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pglogrepl"
+
 	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
@@ -409,6 +411,96 @@ func TestPGPositionRoundtrip(t *testing.T) {
 	}
 	if decoded.LSN != "0/16B3748" {
 		t.Errorf("LSN = %q, want 0/16B3748", decoded.LSN)
+	}
+}
+
+func TestPGCheckpointForRecordDoesNotAdvanceExternalLSN(t *testing.T) {
+	r := newTestReader()
+	r.committedLsn = "0/10"
+	cp, err := r.CheckpointForRecord(context.Background(), core.Record{
+		Metadata: core.Metadata{LSN: "0/20"},
+	})
+	if err != nil {
+		t.Fatalf("CheckpointForRecord: %v", err)
+	}
+	var pos pgPosition
+	if err := json.Unmarshal(cp.Position, &pos); err != nil {
+		t.Fatalf("decode checkpoint: %v", err)
+	}
+	if pos.LSN != "0/20" {
+		t.Fatalf("checkpoint LSN = %q, want 0/20", pos.LSN)
+	}
+	if r.committedLsn != "0/10" {
+		t.Fatalf("committed LSN advanced to %q before external ack", r.committedLsn)
+	}
+}
+
+func TestPGResumeLSNUsesDurableMarkerNotReadAhead(t *testing.T) {
+	r := newTestReader()
+	r.lsn = "0/90"
+	if got := r.resumeLSN(); got != "0/0" {
+		t.Fatalf("resume LSN = %q, want 0/0 without durable marker", got)
+	}
+	r.committedLsn = "0/20"
+	if got := r.resumeLSN(); got != "0/20" {
+		t.Fatalf("resume LSN = %q, want durable 0/20", got)
+	}
+}
+
+func TestPGAckCheckpointUpdatesExternalLSNAfterSend(t *testing.T) {
+	r := newTestReader()
+	var got pglogrepl.StandbyStatusUpdate
+	r.sendStandbyStatusUpdate = func(_ context.Context, status pglogrepl.StandbyStatusUpdate) error {
+		got = status
+		return nil
+	}
+	position, err := json.Marshal(pgPosition{LSN: "0/20", Phase: "cdc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AckCheckpoint(context.Background(), core.Checkpoint{Position: position}); err != nil {
+		t.Fatalf("AckCheckpoint: %v", err)
+	}
+	want := pglogrepl.LSN(0x20)
+	if got.WALWritePosition != want || got.WALFlushPosition != want || got.WALApplyPosition != want {
+		t.Fatalf("status positions = %s/%s/%s, want %s", got.WALWritePosition, got.WALFlushPosition, got.WALApplyPosition, want)
+	}
+	if r.committedLsn != "0/20" {
+		t.Fatalf("committed LSN = %q, want 0/20", r.committedLsn)
+	}
+}
+
+func TestPGAckCheckpointSendFailureDoesNotAdvanceExternalLSN(t *testing.T) {
+	r := newTestReader()
+	r.committedLsn = "0/10"
+	r.sendStandbyStatusUpdate = func(context.Context, pglogrepl.StandbyStatusUpdate) error {
+		return context.DeadlineExceeded
+	}
+	position, _ := json.Marshal(pgPosition{LSN: "0/20", Phase: "cdc"})
+	if err := r.AckCheckpoint(context.Background(), core.Checkpoint{Position: position}); err == nil {
+		t.Fatal("AckCheckpoint succeeded despite injected send failure")
+	}
+	if r.committedLsn != "0/10" {
+		t.Fatalf("committed LSN changed to %q after failed external ack", r.committedLsn)
+	}
+}
+
+func TestPGKeepaliveWithoutDurableLSNDoesNotAckServerEnd(t *testing.T) {
+	r := newTestReader()
+	var got pglogrepl.StandbyStatusUpdate
+	r.sendStandbyStatusUpdate = func(_ context.Context, status pglogrepl.StandbyStatusUpdate) error {
+		got = status
+		return nil
+	}
+	keepalive := make([]byte, 17)
+	binary.BigEndian.PutUint64(keepalive[0:8], uint64(0x1234))
+	keepalive[16] = 1
+	r.sendStandbyStatus(keepalive)
+	if got.WALWritePosition != 0 || got.WALFlushPosition != 0 || got.WALApplyPosition != 0 {
+		t.Fatalf("keepalive acknowledged read-ahead server end: %#v", got)
+	}
+	if !got.ReplyRequested {
+		t.Fatal("keepalive reply request was not preserved")
 	}
 }
 

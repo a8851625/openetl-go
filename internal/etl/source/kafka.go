@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -55,12 +56,12 @@ func NewKafkaSource(config map[string]any) (*KafkaSource, error) {
 		format:              "json",
 		groupID:             "etl-consumer",
 		initialOffset:       "newest",
-		fetchMinBytes:       1,          // sarama default
+		fetchMinBytes:       1,           // sarama default
 		fetchMaxBytes:       1024 * 1024, // 1MB, sarama default
-		fetchMaxWaitMs:      500,        // sarama default (ms)
-		channelBufferSize:   256,        // sarama default
-		maxProcessingTimeMs: 100,        // sarama default (ms)
-		maxOpenRequests:     5,          // sarama default
+		fetchMaxWaitMs:      500,         // sarama default (ms)
+		channelBufferSize:   256,         // sarama default
+		maxProcessingTimeMs: 100,         // sarama default (ms)
+		maxOpenRequests:     5,           // sarama default
 	}
 	if v, ok := config["name"].(string); ok {
 		s.name = v
@@ -131,6 +132,10 @@ func (s *KafkaSource) Name() string { return s.name }
 func (s *KafkaSource) buildSaramaConfig() (*sarama.Config, error) {
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
+	// The runner persists its checkpoint before acknowledging the consumer
+	// group. Sarama's periodic auto-commit would advance the broker offset
+	// while records are still in flight, so it must remain disabled.
+	config.Consumer.Offsets.AutoCommit.Enable = false
 	config.Version = sarama.V2_1_0_0
 
 	if s.initialOffset == "oldest" {
@@ -244,7 +249,7 @@ func (s *KafkaSource) Open(ctx context.Context, cp *core.Checkpoint) (core.Recor
 					return
 				}
 				select {
-				case reader.errors <- fmt.Errorf("kafka consume: %w", consumeErr):
+				case reader.errors <- fmt.Errorf("kafka consume: %v", consumeErr):
 				default:
 				}
 				select {
@@ -420,6 +425,7 @@ func (r *kafkaReader) isClosed() bool {
 }
 
 func (r *kafkaReader) Read(ctx context.Context) (core.Record, error) {
+	groupErrors := r.consumerGroupErrors()
 	select {
 	case rec, ok := <-r.records:
 		if !ok {
@@ -428,9 +434,24 @@ func (r *kafkaReader) Read(ctx context.Context) (core.Record, error) {
 		return rec, nil
 	case err := <-r.errors:
 		return core.Record{}, err
+	case err, ok := <-groupErrors:
+		if !ok || err == nil {
+			return core.Record{}, fmt.Errorf("kafka consumer group closed")
+		}
+		// Broker disconnects are often reported as io.EOF. Do not wrap that
+		// sentinel: pipeline.handleReadError treats io.EOF as a finite source
+		// completion, while Kafka must reconnect and continue streaming.
+		return core.Record{}, fmt.Errorf("kafka consumer group: %v", err)
 	case <-ctx.Done():
 		return core.Record{}, ctx.Err()
 	}
+}
+
+func (r *kafkaReader) consumerGroupErrors() <-chan error {
+	if r.group == nil {
+		return nil
+	}
+	return r.group.Errors()
 }
 
 func (r *kafkaReader) ReadBatch(ctx context.Context, n int) ([]core.Record, error) {
@@ -472,19 +493,19 @@ func (r *kafkaReader) Snapshot(ctx context.Context) (core.Checkpoint, error) {
 	}, nil
 }
 
-// CheckpointForRecord merges the record's offset into the committed offset map
+// CheckpointForRecord merges the record's offset into the durable-checkpoint
+// candidate map
 // so multi-partition batches don't lose other partitions' progress. Only the
 // given record's partition advances; other partitions keep their last
 // committed value (NOT the read-ahead offset), preventing checkpoint skips.
+// It deliberately has no Sarama side effects. AckCheckpoint performs the
+// external consumer-group acknowledgement after the checkpoint store returns
+// successfully.
 func (r *kafkaReader) CheckpointForRecord(ctx context.Context, rec core.Record) (core.Checkpoint, error) {
 	partition := rec.Metadata.Partition
 	offset := rec.Metadata.Offset
 
 	r.mu.Lock()
-	if sess, ok := r.sessions[partition]; ok {
-		sess.MarkOffset(r.source.topic, partition, offset+1, "")
-		sess.Commit()
-	}
 	if current, ok := r.committedOffsets[partition]; !ok || offset > current {
 		r.committedOffsets[partition] = offset
 	}
@@ -507,6 +528,108 @@ func (r *kafkaReader) CheckpointForRecord(ctx context.Context, rec core.Record) 
 		Position:  raw,
 		Timestamp: time.Now(),
 	}, nil
+}
+
+// AckCheckpoint acknowledges the Kafka consumer-group offsets represented by
+// a checkpoint. It is called only after the checkpoint store has durably saved
+// the same source position. Missing consumer sessions are treated as an error:
+// silently skipping the external acknowledgement would make the ordering
+// contract unverifiable and could strand the checkpoint at a rebalance.
+func (r *kafkaReader) AckCheckpoint(ctx context.Context, cp core.Checkpoint) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var pos kafkaPosition
+	if len(cp.Position) == 0 || !json.Valid(cp.Position) {
+		return fmt.Errorf("kafka checkpoint position is not valid JSON")
+	}
+	if err := json.Unmarshal(cp.Position, &pos); err != nil {
+		return fmt.Errorf("decode kafka checkpoint: %w", err)
+	}
+	if pos.Topic != "" && pos.Topic != r.source.topic {
+		return fmt.Errorf("kafka checkpoint topic %q does not match source topic %q", pos.Topic, r.source.topic)
+	}
+	if len(pos.Offsets) == 0 {
+		return nil
+	}
+
+	type pendingMark struct {
+		session   sarama.ConsumerGroupSession
+		partition int32
+		offset    int64
+	}
+	r.mu.Lock()
+	marks := make([]pendingMark, 0, len(pos.Offsets))
+	for partition, lastOffset := range pos.Offsets {
+		session, ok := r.sessions[partition]
+		if !ok || session == nil {
+			r.mu.Unlock()
+			return fmt.Errorf("kafka consumer session unavailable for partition %d", partition)
+		}
+		marks = append(marks, pendingMark{
+			session:   session,
+			partition: partition,
+			offset:    lastOffset + 1,
+		})
+	}
+	r.mu.Unlock()
+
+	// A ConsumerGroupSession usually owns all partitions in this reader. Mark
+	// every partition first, then commit once per distinct session. Sarama's
+	// session values are pointers in production; the small identity helper also
+	// keeps tests with value-backed fakes safe.
+	committed := make([]sarama.ConsumerGroupSession, 0, len(marks))
+	for _, mark := range marks {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := mark.session.Context().Err(); err != nil {
+			return fmt.Errorf("kafka consumer session ended before checkpoint ack for partition %d: %w", mark.partition, err)
+		}
+		mark.session.MarkOffset(r.source.topic, mark.partition, mark.offset, "")
+		duplicate := false
+		for _, existing := range committed {
+			if sameConsumerSession(existing, mark.session) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			committed = append(committed, mark.session)
+		}
+	}
+	for _, session := range committed {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := session.Context().Err(); err != nil {
+			return fmt.Errorf("kafka consumer session ended before offset commit: %w", err)
+		}
+		session.Commit()
+		select {
+		case err, ok := <-r.consumerGroupErrors():
+			if ok && err != nil {
+				return fmt.Errorf("commit kafka consumer-group offset: %w", err)
+			}
+		default:
+		}
+	}
+	return nil
+}
+
+func sameConsumerSession(a, b sarama.ConsumerGroupSession) bool {
+	// Sarama's concrete session is a pointer. Non-pointer implementations are
+	// conservatively treated as distinct so this helper never relies on an
+	// interface's dynamic value being comparable.
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if !av.IsValid() || !bv.IsValid() || av.Type() != bv.Type() {
+		return false
+	}
+	if av.Kind() != reflect.Pointer {
+		return false
+	}
+	return av.Pointer() == bv.Pointer()
 }
 
 func (r *kafkaReader) Close() error {
