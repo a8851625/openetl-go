@@ -705,6 +705,7 @@ Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard mu
 | P5 业务健康 / CI / 发布门槛 | [release-checklist.md](./release-checklist.md)、[ops-runbook.md](./ops-runbook.md)、[resource-baseline.md](./resource-baseline.md)、`hack/e2e-production-gate.sh`、`hack/check-release-assets.sh`、`/api/v2/health` 扩展 |
 | UI 首次任务闭环与 AI context pack | `web/src/main.tsx`、`web/src/DagEditorPage.tsx`、`internal/etl/server/ai_context_test.go`、`hack/e2e-ui.sh` |
 | mysql_snapshot_cdc 全库异构主键快照（bounded follow-up） | `internal/etl/source/mysql_snapshot_cdc_pk_test.go`、`hack/e2e-snapshot-cdc-heteropk.sh`、[etl-config-schema.md](./etl-config-schema.md#mysql_snapshot_cdc) |
+| doris sink table_template 多表扇出 + kafka source format=envelope（bounded follow-up） | `internal/etl/sink/doris_table_template_test.go`、`internal/etl/server/schema_test.go`、`hack/e2e-doris-table-template.sh`、`hack/e2e-cdc-kafka-relay.sh` |
 
 ## 跟踪指标
 

@@ -271,12 +271,20 @@ func TestDorisResolveTable(t *testing.T) {
 	s := &DorisSink{table: "default_table"}
 
 	rec := core.Record{Metadata: core.Metadata{Table: "custom_table"}}
-	if got := s.resolveTable(rec); got != "default_table" {
+	got, err := s.resolveTable(rec)
+	if err != nil {
+		t.Fatalf("resolveTable: %v", err)
+	}
+	if got != "default_table" {
 		t.Errorf("resolveTable with configured table = %q, want default_table", got)
 	}
 
 	s.table = ""
-	if got := s.resolveTable(rec); got != "custom_table" {
+	got, err = s.resolveTable(rec)
+	if err != nil {
+		t.Fatalf("resolveTable fallback: %v", err)
+	}
+	if got != "custom_table" {
 		t.Errorf("resolveTable without configured table = %q, want custom_table", got)
 	}
 }
@@ -314,8 +322,9 @@ func TestDorisCreateTableDDL(t *testing.T) {
 	}
 
 	// Verify pkColumns are correctly used in table resolution
-	if s.resolveTable(core.Record{}) != "orders" {
-		t.Errorf("table resolution failed")
+	got, err := s.resolveTable(core.Record{})
+	if err != nil || got != "orders" {
+		t.Errorf("table resolution = (%q,%v), want orders", got, err)
 	}
 }
 
@@ -337,10 +346,13 @@ func TestDorisCreateTableRejectsMissingPKColumn(t *testing.T) {
 
 func TestDorisCollectSchemaInputsUsesRepresentativeValues(t *testing.T) {
 	s := &DorisSink{table: "orders"}
-	cols, values := s.collectSchemaInputs([]core.Record{
+	cols, values, err := s.collectSchemaInputs([]core.Record{
 		{Data: map[string]any{"id": nil, "amount": nil, "name": "first"}},
 		{Data: map[string]any{"id": int64(42), "amount": 19.95, "name": "second"}},
 	})
+	if err != nil {
+		t.Fatalf("collectSchemaInputs: %v", err)
+	}
 	if got := values["orders"]["id"]; got != int64(42) {
 		t.Fatalf("id representative value = %#v, want int64(42)", got)
 	}

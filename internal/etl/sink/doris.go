@@ -67,6 +67,12 @@ type DorisSink struct {
 	password string
 	database string
 	table    string
+	// tableTemplate, when set (e.g. "ods_{table}"), resolves the target table
+	// per record from record metadata instead of using the static table. This
+	// lets a single sink fan out a mixed-topic/multi-table stream (e.g. kafka
+	// source consuming one topic with format=envelope) into multiple Doris
+	// tables. {table} and {db} are substituted from record metadata.
+	tableTemplate string
 
 	writeMode string // "stream_load" | "insert"
 	batchMode string // "insert" | "upsert" (informational; Doris UK model dedupes)
@@ -136,6 +142,11 @@ func NewDorisSink(config map[string]any) (*DorisSink, error) {
 	}
 	if v, ok := config["table"]; ok {
 		s.table = v.(string)
+	}
+	if v, ok := config["table_template"]; ok {
+		if vs, ok := v.(string); ok {
+			s.tableTemplate = vs
+		}
 	}
 	if v, ok := config["write_mode"]; ok {
 		s.writeMode = v.(string)
@@ -399,7 +410,10 @@ func (s *DorisSink) writeViaStreamLoad(ctx context.Context, records []core.Recor
 	// Group by table to send one Stream Load request per table.
 	tableGroups := make(map[string][]core.Record)
 	for _, rec := range records {
-		tableName := s.resolveTable(rec)
+		tableName, err := s.resolveTable(rec)
+		if err != nil {
+			return err
+		}
 		tableGroups[tableName] = append(tableGroups[tableName], rec)
 	}
 
@@ -638,7 +652,10 @@ func (s *DorisSink) writeViaInsert(ctx context.Context, records []core.Record) e
 	var order []groupKey
 
 	for _, rec := range records {
-		tableName := s.resolveTable(rec)
+		tableName, err := s.resolveTable(rec)
+		if err != nil {
+			return err
+		}
 		cols := make([]string, 0, len(rec.Data))
 		for k := range rec.Data {
 			cols = append(cols, k)
@@ -720,7 +737,10 @@ func (s *DorisSink) batchDeleteRecords(ctx context.Context, records []core.Recor
 	// Group by table
 	tableGroups := make(map[string][]core.Record)
 	for _, rec := range records {
-		tableName := s.resolveTable(rec)
+		tableName, err := s.resolveTable(rec)
+		if err != nil {
+			return err
+		}
 		tableGroups[tableName] = append(tableGroups[tableName], rec)
 	}
 
@@ -801,7 +821,10 @@ func (s *DorisSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 	if !s.autoCreate && s.schemaDrift != "add_columns" && s.schemaDrift != "fail" {
 		return nil
 	}
-	tableCols, tableValues := s.collectSchemaInputs(records)
+	tableCols, tableValues, err := s.collectSchemaInputs(records)
+	if err != nil {
+		return err
+	}
 	for tableName, cols := range tableCols {
 		if err := s.EnsureSchema(ctx, tableName, cols, tableValues[tableName]); err != nil {
 			return err
@@ -810,11 +833,14 @@ func (s *DorisSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 	return nil
 }
 
-func (s *DorisSink) collectSchemaInputs(records []core.Record) (map[string][]string, map[string]map[string]any) {
+func (s *DorisSink) collectSchemaInputs(records []core.Record) (map[string][]string, map[string]map[string]any, error) {
 	tableCols := make(map[string][]string)
 	tableValues := make(map[string]map[string]any)
 	for _, rec := range records {
-		tableName := s.resolveTable(rec)
+		tableName, err := s.resolveTable(rec)
+		if err != nil {
+			return nil, nil, err
+		}
 		if tableName == "" {
 			continue
 		}
@@ -837,7 +863,7 @@ func (s *DorisSink) collectSchemaInputs(records []core.Record) (map[string][]str
 			}
 		}
 	}
-	return tableCols, tableValues
+	return tableCols, tableValues, nil
 }
 
 func (s *DorisSink) tableExists(ctx context.Context, table string) (bool, error) {
@@ -1162,11 +1188,32 @@ func inferDorisKeyType(colName string, v any) string {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-func (s *DorisSink) resolveTable(rec core.Record) string {
-	if s.table != "" {
-		return s.table
+// resolveTable resolves the destination Doris table for a record. With
+// table_template set (e.g. "ods_{table}"), {table}/{db} are substituted from
+// record metadata; otherwise the static configured table (or record metadata
+// table when static is empty) is used. A template that references {table}/
+// {db} but the record carries no such metadata is a configuration error
+// rather than silently emitting a malformed name (e.g. "ods_") which would
+// mix unrelated tables into one destination or write to a wrong table.
+func (s *DorisSink) resolveTable(rec core.Record) (string, error) {
+	if s.tableTemplate == "" {
+		if s.table != "" {
+			return s.table, nil
+		}
+		return rec.Metadata.Table, nil
 	}
-	return rec.Metadata.Table
+	if strings.Contains(s.tableTemplate, "{db}") && rec.Metadata.Database == "" {
+		return "", fmt.Errorf("doris sink: table_template %q references {db} but record has no database metadata", s.tableTemplate)
+	}
+	if strings.Contains(s.tableTemplate, "{table}") && rec.Metadata.Table == "" {
+		return "", fmt.Errorf("doris sink: table_template %q references {table} but record has no table metadata", s.tableTemplate)
+	}
+	table := strings.ReplaceAll(s.tableTemplate, "{db}", rec.Metadata.Database)
+	table = strings.ReplaceAll(table, "{table}", rec.Metadata.Table)
+	if table == "" {
+		return "", fmt.Errorf("doris sink: table_template %q resolved to empty", s.tableTemplate)
+	}
+	return table, nil
 }
 
 func (s *DorisSink) Close() error {

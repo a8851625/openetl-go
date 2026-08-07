@@ -663,7 +663,8 @@ sink:
 | `user` | 否 | `root` | Doris 用户。 |
 | `password` | 否 | | Doris 密码（**密钥**）。 |
 | `database` | 是 | | 目标数据库。 |
-| `table` | 是 | | 目标表。只有 CDC 动态表路由且每条记录都有 `metadata.table` 时才可留空。 |
+| `table` | 否 | | 目标表名。与 `table_template` 配合时可留空，按记录 metadata 路由。 |
+| `table_template` | 否 | | 按记录路由目标表的模板（如 `ods_{table}`）。`{table}`/`{db}` 从记录 metadata 替换；可将一个混合多表的流（如 kafka source 用 `format: envelope`）从一个 sink 扇出到多张 Doris 表。该模式跳过单表 schema preflight；需预建所有路由目标表或设 `auto_create: true`。 |
 | `write_mode` | 否 | `stream_load` | `stream_load` 或 MySQL 协议 `insert` fallback。 |
 | `batch_mode` | 否 | `insert` | `insert` 或 `upsert`。生产 CDC/upsert 需要 Doris Unique Key 表和稳定 `pk_columns`。 |
 | `pk_columns` | 否 | | DELETE、自动创建 Unique Key 表和 replay-safe upsert 校验使用的业务主键列。 |

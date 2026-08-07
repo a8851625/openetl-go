@@ -1,0 +1,48 @@
+name: "kafka-to-doris-table-template"
+source:
+  type: kafka
+  config:
+    brokers:
+      - "host.docker.internal:19092"
+    topic: "cdc-doris-tmpl"
+    group_id: "openetl-doris-table-template"
+    # format=envelope restores INSERT/UPDATE/DELETE and Table metadata from
+    # the OpenETL CDC envelope, so the doris sink can route per-record.
+    format: envelope
+    initial_offset: oldest
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: doris
+  config:
+    host: "host.docker.internal"
+    port: 9030
+    http_port: 8030
+    user: "root"
+    password: ""
+    database: "ods_tmpl"
+    # table_template fans out a mixed multi-table stream into multiple Doris
+    # tables: each record's destination derives from envelope table metadata.
+    # {table} substitutes from rec.Metadata.Table (restored by format=envelope).
+    table_template: "{table}"
+    write_mode: stream_load
+    stream_load_format: json
+    batch_mode: insert
+    # Tables are pre-created (heterogeneous PKs: orders.order_id BIGINT,
+    # users.user_no VARCHAR); a single sink pk_columns cannot describe both, so
+    # the sink only routes writes by metadata and relies on Doris UNIQUE KEY
+    # tables already existing.
+    auto_create: false
+    schema_drift: ignore
+
+batch_size: 100
+checkpoint_interval_sec: 2
+backpressure_buffer: 50
+
+retry:
+  max_attempts: 5
+  initial_interval_ms: 500
+  max_interval_ms: 5000

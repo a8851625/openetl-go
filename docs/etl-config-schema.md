@@ -739,7 +739,8 @@ sink:
 | `user` | no | `root` | Doris user. |
 | `password` | no | | Doris password (**secret**). |
 | `database` | yes | | Target database name. |
-| `table` | yes | | Target table name. Leave empty only for dynamic CDC table routing where `record.metadata.table` is always present. |
+| `table` | no | | Target table name. Leave empty with `table_template` to route per-record by metadata. |
+| `table_template` | no | | Per-record target table template (e.g. `ods_{table}`). `{table}`/`{db}` substitute from record metadata; fans out a mixed multi-table stream (e.g. kafka source with `format: envelope`) into multiple Doris tables from one sink. Single-table schema preflight is skipped in this mode; pre-create all routed Unique Key tables or set `auto_create: true`. |
 | `write_mode` | no | `stream_load` | `stream_load` or MySQL-protocol `insert` fallback. |
 | `batch_mode` | no | `insert` | `insert` or `upsert`. Production CDC/upsert requires a Doris Unique Key table and stable `pk_columns`. |
 | `pk_columns` | no | | Key columns for DELETE, auto-created Unique Key tables, and replay-safe upsert validation. |
