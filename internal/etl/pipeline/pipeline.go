@@ -566,8 +566,24 @@ func (r *Runner) Start(ctx context.Context) error {
 	var cp *core.Checkpoint
 	if r.checkpointStore != nil {
 		loaded, err := r.checkpointStore.Load(ctx, r.spec.Name)
-		if err == nil && loaded != nil {
-			cp = unwrapCheckpointForSource(loaded)
+		if err != nil {
+			r.setStatus(StatusFailed)
+			r.setLastError(fmt.Sprintf("load checkpoint: %v", err))
+			r.logError(fmt.Sprintf("Failed to load checkpoint: %v", err))
+			_ = r.sink.Close()
+			markStartFailed()
+			return fmt.Errorf("load checkpoint: %w", err)
+		}
+		if loaded != nil {
+			cp, err = checkpoint.UnwrapForSource(loaded)
+			if err != nil {
+				r.setStatus(StatusFailed)
+				r.setLastError(fmt.Sprintf("validate checkpoint: %v", err))
+				r.logError(fmt.Sprintf("Invalid checkpoint: %v", err))
+				_ = r.sink.Close()
+				markStartFailed()
+				return fmt.Errorf("validate checkpoint: %w", err)
+			}
 			r.logInfo("Resuming from checkpoint")
 		}
 	}
@@ -1563,17 +1579,4 @@ func (r *Runner) handleCheckpointBoundaryError(ctx context.Context, errMsg strin
 		})
 	}
 	r.logError(errMsg + " — checkpoint not saved")
-}
-
-func unwrapCheckpointForSource(cp *core.Checkpoint) *core.Checkpoint {
-	if cp == nil {
-		return nil
-	}
-	env, ok, err := checkpoint.ParseEnvelope(cp.Position)
-	if err != nil || !ok {
-		return cp
-	}
-	unwrapped := *cp
-	unwrapped.Position = append([]byte(nil), env.Source...)
-	return &unwrapped
 }

@@ -1,8 +1,11 @@
 package checkpoint
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 const envelopeVersion = 1
@@ -75,6 +78,53 @@ func ParseEnvelope(raw json.RawMessage) (*Envelope, bool, error) {
 		env.SinkCommit = map[string]any{}
 	}
 	return &env, true, nil
+}
+
+// UnwrapForSource validates and unwraps a persisted checkpoint before it is
+// handed to a source.  Checkpoint recovery is a safety boundary: a malformed
+// envelope must not be treated as a legacy position and silently replaced with
+// a fresh source start.  Legacy positions remain supported when they are valid
+// JSON payloads.
+func UnwrapForSource(cp *core.Checkpoint) (*core.Checkpoint, error) {
+	if cp == nil {
+		return nil, nil
+	}
+	trimmedPosition := bytes.TrimSpace(cp.Position)
+	if len(trimmedPosition) == 0 {
+		return nil, fmt.Errorf("checkpoint %q has an empty source position", cp.JobName)
+	}
+	if bytes.Equal(trimmedPosition, []byte("null")) {
+		return nil, fmt.Errorf("checkpoint %q has a null source position", cp.JobName)
+	}
+	if !json.Valid(cp.Position) {
+		return nil, fmt.Errorf("checkpoint %q source position is not valid JSON", cp.JobName)
+	}
+	var probe struct {
+		Version int             `json:"version"`
+		Source  json.RawMessage `json:"source"`
+	}
+	if err := json.Unmarshal(cp.Position, &probe); err != nil {
+		return nil, fmt.Errorf("checkpoint %q cannot be decoded: %w", cp.JobName, err)
+	}
+	if probe.Version == envelopeVersion && (len(bytes.TrimSpace(probe.Source)) == 0 || bytes.Equal(bytes.TrimSpace(probe.Source), []byte("null"))) {
+		return nil, fmt.Errorf("checkpoint %q envelope has no source position", cp.JobName)
+	}
+	env, ok, err := ParseEnvelope(cp.Position)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint %q envelope is invalid: %w", cp.JobName, err)
+	}
+	if !ok {
+		return cp, nil
+	}
+	if len(bytes.TrimSpace(env.Source)) == 0 || bytes.Equal(bytes.TrimSpace(env.Source), []byte("null")) {
+		return nil, fmt.Errorf("checkpoint %q envelope has no source position", cp.JobName)
+	}
+	if !json.Valid(env.Source) {
+		return nil, fmt.Errorf("checkpoint %q envelope source position is not valid JSON", cp.JobName)
+	}
+	unwrapped := *cp
+	unwrapped.Position = append(json.RawMessage(nil), env.Source...)
+	return &unwrapped, nil
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

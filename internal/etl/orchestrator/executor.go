@@ -338,16 +338,14 @@ func (e *DAGExecutor) runDAG(ctx context.Context) {
 
 // readSource continuously reads from a source and sends records to the channel.
 func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID string, records chan<- recordMsg) {
-	cp := e.loadSourceCheckpoint(ctx, sourceID)
+	cp, err := e.loadSourceCheckpoint(ctx, sourceID)
+	if err != nil {
+		e.failSourceStart(ctx, sourceID, fmt.Errorf("load checkpoint: %w", err))
+		return
+	}
 	reader, err := src.Open(ctx, cp)
 	if err != nil {
-		g.Log().Errorf(ctx, "open source %s: %v", sourceID, err)
-		e.alertMgr.Send(ctx, alert.Event{
-			Level:   alert.LevelError,
-			Title:   "Source open failed",
-			Message: err.Error(),
-			JobName: e.spec.Name,
-		})
+		e.failSourceStart(ctx, sourceID, fmt.Errorf("open source: %w", err))
 		return
 	}
 	defer reader.Close()
@@ -788,16 +786,37 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 	}
 }
 
-func (e *DAGExecutor) loadSourceCheckpoint(ctx context.Context, sourceID string) *core.Checkpoint {
+func (e *DAGExecutor) loadSourceCheckpoint(ctx context.Context, sourceID string) (*core.Checkpoint, error) {
 	if e.cpAdapter == nil {
-		return nil
+		return nil, nil
 	}
 	cp, err := e.cpAdapter.Load(ctx, e.spec.Name+"-"+sourceID)
 	if err != nil {
-		g.Log().Warningf(ctx, "load checkpoint source %s: %v", sourceID, err)
-		return nil
+		return nil, err
 	}
-	return unwrapCheckpointForSource(cp)
+	return checkpoint.UnwrapForSource(cp)
+}
+
+// failSourceStart makes checkpoint/source startup failures terminal for the
+// whole DAG. Continuing other source nodes would create a partial pipeline that
+// looks healthy while one source range was never safely opened.
+func (e *DAGExecutor) failSourceStart(ctx context.Context, sourceID string, err error) {
+	e.setStatus("failed")
+	g.Log().Errorf(ctx, "source %s startup failed: %v", sourceID, err)
+	if e.alertMgr != nil {
+		e.alertMgr.Send(ctx, alert.Event{
+			Level:   alert.LevelError,
+			Title:   "DAG source startup failed",
+			Message: fmt.Sprintf("source %s: %v", sourceID, err),
+			JobName: e.spec.Name,
+		})
+	}
+	e.mu.RLock()
+	cancel := e.cancel
+	e.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // checkpointForRecord generates a checkpoint from the source's reader based on the last committed record.
@@ -890,19 +909,6 @@ func (e *DAGExecutor) handleCheckpointBoundaryError(ctx context.Context, sinkID 
 			JobName: e.spec.Name,
 		})
 	}
-}
-
-func unwrapCheckpointForSource(cp *core.Checkpoint) *core.Checkpoint {
-	if cp == nil {
-		return nil
-	}
-	env, ok, err := checkpoint.ParseEnvelope(cp.Position)
-	if err != nil || !ok {
-		return cp
-	}
-	unwrapped := *cp
-	unwrapped.Position = append([]byte(nil), env.Source...)
-	return &unwrapped
 }
 
 // handleFailed routes a failed record to the DLQ. dagNodeID is the node where

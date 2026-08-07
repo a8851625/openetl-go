@@ -503,6 +503,37 @@ PR-1.3 证据（合入 agent/fullstack-dev/f856487d，并保留既有逻辑导�
 
 目标证据：[reliability-certification.md](./reliability-certification.md)、[etl-idempotency.md](./etl-idempotency.md)、connector certification suite 和各 production-candidate e2e。
 
+### PR-2.4：checkpoint 恢复 fail-closed（用户明确授权的有界后续）
+
+状态：`active`
+
+本项不改变已交付 PR-2 的主链路声明，也不把当前 blocked_external 的 MaxCompute P0 静默改为已完成；它只修复审计确认的恢复边界：checkpoint storage/envelope 读取失败时，linear 与 DAG 不得以空位点继续打开 source。
+
+当前领取记录：
+
+```text
+Round: 1/5
+Roadmap item: PR-2.4.1
+Profile/path: standalone linear + DAG checkpoint restore
+Objective: checkpoint store 读取错误、损坏/未知版本 envelope 和 DAG source checkpoint 读取错误均 fail-closed，pipeline 进入 failed 并保留可诊断错误。
+Scope: internal/etl/checkpoint envelope unwrap、internal/etl/pipeline Runner.Start、internal/etl/orchestrator DAG source startup、targeted fault-injection tests、reliability evidence。
+Non-goals: PR-2.4.2 的 Kafka/PostgreSQL external ack 顺序；PR-2.4.3 的 mysql_snapshot_cdc producer read-ahead/string cursor；connector schema/UI 和多表 preflight。
+Acceptance: 1) linear checkpoint Load error 返回启动错误且不打开 source；2) DAG checkpoint Load/error 或 source Open error 将 executor 置为 failed 并停止其他 source；3) 损坏 JSON、未知 envelope version、缺失 envelope source 明确失败；4) legacy source position 仍兼容；5) 单测覆盖 fault injection，更新可靠性文档和证据索引。
+Evidence: internal/etl/checkpoint/*_test.go、internal/etl/pipeline/*checkpoint*_test.go、internal/etl/orchestrator/*checkpoint*_test.go、docs/reliability-certification.md。
+Result: delivered
+Residual/follow-up: PR-2.4.2 external ack ordering; PR-2.4.3 snapshot cursor commit boundary。
+```
+
+PR-2.4.1 本轮证据（Round 1/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| linear checkpoint store Load error fail-closed | `internal/etl/pipeline/runner_test.go` `TestRunnerFailsStartupWhenCheckpointLoadFails`；`go test ./internal/etl/pipeline -count=1` | passed | source-specific legacy position shape validation留给后续增量 |
+| linear corrupt/unknown envelope 不打开 source | `TestRunnerFailsStartupWhenCheckpointEnvelopeIsCorrupt`；`internal/etl/checkpoint/envelope_test.go` | passed | external source ack ordering未处理 |
+| DAG checkpoint validation/load/source Open failure 可见且停止 | `internal/etl/orchestrator/orchestrator_test.go` `TestDAGExecutorCheckpointRestoreFailsClosed`、`TestDAGExecutorSourceStartupFailureStopsPipeline` | passed | 多 source 运行时错误聚合与 health API 对账留给后续 |
+| legacy valid position 兼容 | `TestUnwrapForSourceKeepsLegacyPosition` | passed | legacy 语义校验仍由各 source codec负责 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator -count=1`；`go vet ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator`；`git diff --check` | passed | 未执行外部 connector e2e（本增量不要求） |
+
 ### PR-D1：Distributed 安全与任务所有权
 
 状态：`delivered`（2026-07-25 · PR-D1.1/.2/.3）

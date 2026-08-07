@@ -32,6 +32,7 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 5. If a failed record cannot be written to the DLQ, later successful batches cannot advance past it during the same run. Restart reopens the source from the last durable checkpoint.
 6. A checkpoint-throttled sink acknowledgement is retained as a pending boundary. The write-loop timer persists it after `checkpoint_interval_sec` even when the stream becomes idle; Stop/EOF force the same boundary to durable storage.
 7. Kafka offset `0` is stored explicitly. Missing partition state is not conflated with the valid zero offset.
+8. Checkpoint storage/read or envelope validation errors fail the pipeline before its source is opened. They are never treated as an empty/new source position.
 
 ## Production-Candidate Matrix
 
@@ -55,6 +56,7 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 - DLQ persistence failure blocks later checkpoint advancement past the unsafe record.
 - Sink write failure never advances the checkpoint.
 - Legacy source checkpoints continue to open; envelope source positions are unwrapped before source startup.
+- Corrupt legacy JSON, corrupt envelopes, unknown envelope versions, and envelopes without a source position fail startup and remain visible as `failed`.
 - Kafka offset zero is retained and an idle stream flushes the latest throttled checkpoint boundary after the configured interval.
 - CDC/Kafka to file/S3 remains rejected unless `allow_unsafe: true` explicitly acknowledges the documented duplicate boundary.
 - DAG DLQ records without `dag_node` remain stored and replay returns HTTP 400.
@@ -75,6 +77,24 @@ go test ./internal/etl/... -count=1
 E2E_SKIP_BUILD=1 ./hack/e2e-wide-table.sh
 E2E_SKIP_BUILD=1 ./hack/e2e-lookup-state.sh
 ```
+
+### PR-2.4.1 checkpoint restore fail-closed evidence (2026-08-08)
+
+The recovery boundary now has explicit fault-injection coverage for the
+standalone linear runner and DAG executor:
+
+```text
+go test ./internal/etl/... -count=1                 PASS
+go test -race ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator -count=1  PASS
+go vet ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator  PASS
+```
+
+Covered cases include checkpoint-store load errors, malformed JSON, unknown
+envelope versions, missing envelope source payloads, valid legacy positions,
+and DAG source-open failures. A load/validation failure sets the pipeline to
+`failed`, cancels the DAG context where applicable, and does not call source
+`Open`. External source acknowledgement ordering and source-specific cursor
+validation remain bounded follow-ups under `PR-2.4.2` and `PR-2.4.3`.
 
 ## RPO / RTO (release declaration)
 
