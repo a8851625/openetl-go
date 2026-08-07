@@ -136,7 +136,7 @@ func sourceConfigSchemas() map[string][]ConfigField {
 			{Name: "topic", Type: FieldString, Required: true, Description: "Kafka topic to consume"},
 			{Name: "group_id", Type: FieldString, Required: false, Default: "etl-consumer", Description: "Consumer group ID. All parallelism shards share this group ID; Kafka's consumer-group protocol assigns topic partitions to shards, so set parallelism.sharding.logical_shards ≤ topic partition count."},
 			{Name: "topic_partitions", Type: FieldInt, Required: false, Description: "Optional static partition-count hint for validate when broker metadata is unavailable. When logical_shards > topic_partitions, validate warns that excess shards idle. Prefer preflight (live metadata) in production; recommended logical_shards = topic partition count."},
-			{Name: "format", Type: FieldString, Required: false, Default: "json", Description: "Message format", Enum: []string{"json", "text"}},
+			{Name: "format", Type: FieldString, Required: false, Default: "json", Description: "Message format. json=text JSON object/value per message; text=raw string into value_column; envelope=parse OpenETL CDC envelope ({event_id,op,table,key,data,timestamp}) to restore INSERT/UPDATE/DELETE semantics for relay/land pipelines (e.g. kafka->kafka, kafka->doris/mysql upsert).", Enum: []string{"json", "text", "envelope"}},
 			{Name: "key_column", Type: FieldString, Required: false, Description: "Column name for message key"},
 			{Name: "value_column", Type: FieldString, Required: false, Description: "Column name for raw message value"},
 			{Name: "initial_offset", Type: FieldString, Required: false, Default: "newest", Description: "Initial consumer offset", Enum: []string{"oldest", "newest"}},

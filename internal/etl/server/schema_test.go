@@ -726,3 +726,29 @@ func assertFields(t *testing.T, schemas map[string][]ConfigField, plugin string,
 		}
 	}
 }
+
+// TestKafkaSourceFormatExposesEnvelope verifies that the kafka source
+// config schema advertises format=envelope in its enum. The envelope format
+// restores INSERT/UPDATE/DELETE semantics for relay/land pipelines
+// (kafka->kafka, kafka->doris/mysql upsert); without it in the enum the UI
+// cannot offer the option and users have no schema-driven hint that the
+// relay-capable format exists.
+func TestKafkaSourceFormatExposesEnvelope(t *testing.T) {
+	schemas := sourceConfigSchemas()
+	fields, ok := schemas["kafka"]
+	if !ok {
+		t.Fatalf("schema for kafka source is missing")
+	}
+	for _, f := range fields {
+		if f.Name != "format" {
+			continue
+		}
+		for _, e := range f.Enum {
+			if e == "envelope" {
+				return
+			}
+		}
+		t.Fatalf("kafka source format enum = %v, want envelope included", f.Enum)
+	}
+	t.Fatalf("kafka source schema has no format field")
+}
