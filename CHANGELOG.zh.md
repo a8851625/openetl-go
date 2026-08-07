@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.2] — 2026-08-08 — mysql_snapshot_cdc 全库异构主键快照 + Doris sink interpolateParams（beta）
+
+### 新增
+
+- **`mysql_snapshot_cdc` 全库异构主键快照**（已交付基线「MySQL snapshot+CDC」的有界增强）
+  - `tables: ["*"]` 全库快照时，每张表从 `information_schema` 自动探测各自的单列主键，不再要求全局单一 `pk_column`（默认 `id`）。整型主键走数字游标（可配合 `shard_*` 哈希分片），可排序非整型主键（`VARCHAR`/`DATETIME`）走字典序字符串游标。
+  - 新增 `pk_columns`（按表覆盖主键，如 `{orders: order_id, users: user_no}`）和 `skip_no_pk_tables`（显式列出的无单列主键表跳过而非报错）两个配置项。全库快照 (`tables:["*"]`）对无单列主键的表（复合主键或无主键）始终以 warning 跳过历史快照，CDC 阶段仍采集。
+  - 向后兼容：旧的单表 `pk_column` 配置和旧 checkpoint（单表 `last_id`）照常工作；新增 `last_strs` 字段用 `omitempty`，不影响旧版本读取。
+
+### 修复
+
+- **`doris` sink DSN 加 `interpolateParams=true`**：绕开 Doris FE 2.1.11 在 MySQL 二进制 prepared 协议下 `information_schema` 查询（`tableExists`/`getExistingColumns`）触发 `Error 1105 NullPointerException`（`PlaceHolderExpr.toThrift`）的已知缺陷；改为客户端内插占位符，不再走服务端 prepared statement。
+
+### 残留边界
+
+- **快照分页过程中源表 DDL**：快照事务的 MVCC 保护数据一致性但不保护表结构（MySQL DDL 隐式提交）。快照读到一半时源表 DROP/RENAME 当前游标列会导致分页查询报错（此时 pipeline 进入 backoff 重试，不会静默产出脏数据）；这是 snapshot 类快照器（含 Debezium initial snapshot）的共性局限，后续作为独立的有界增强处理。
+- 复合主键表仍只能跳过历史快照（单一 `WHERE col > ?` 游标无法表达复合键），CDC 阶段正常采集。
+- 字符串游标路径（非整型主键）不支持 `MOD` 哈希分片。
+
+### 验证（本机收口）
+
+- `go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...` —— passed
+- `go test -race -count=1 ./internal/etl/... ./internal/logic/...` —— passed
+- 单测：`internal/etl/source/mysql_snapshot_cdc_pk_test.go` 覆盖自动探测/全局兜底降级/按表覆盖/复合主键跳过/全库跳过/类型分类 —— passed
+- `hack/e2e-snapshot-cdc-heteropk.sh`：全库快照（`tables:["*"]`，无 `pk_column`），orders 表(`order_id BIGINT` PK) + users 表(`user_no VARCHAR` PK) 历史快照 + CDC 增量 INSERT，目标表行数与源一致，`records_read=7 records_written=7 failed=0 dlq=0` —— passed（MySQL 8.0 容器，实跑）
+
 ## [v0.2.12-beta.1] — 2026-08-06 — 轻量数仓场景 + Kafka CDC 中转链路（beta）
 
 首个面向「轻量数仓」场景的 beta。新增 MySQL 业务库 → OpenETL-Go → Doris 的最简拓扑编排与批量建表工具，并补齐 Kafka 作为 CDC 中转链路所需的三项引擎能力。本轮工作为场景化交付，未绑定 `docs/ROADMAP.zh.md` 的 `PR-*` 门槛项；Kafka 中转链路已有单测与端到端 e2e 证据，但尚未完成认证级别的 crash/replay 对账，故标记 beta。
