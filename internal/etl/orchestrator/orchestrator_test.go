@@ -423,7 +423,10 @@ func TestDAGExecutorLoadSourceCheckpointUnwrapsEnvelope(t *testing.T) {
 	}
 
 	exec := &DAGExecutor{spec: &PipelineSpec{Name: "dag-load"}, cpAdapter: adapter}
-	got := exec.loadSourceCheckpoint(context.Background(), "src")
+	got, err := exec.loadSourceCheckpoint(context.Background(), "src")
+	if err != nil {
+		t.Fatalf("loadSourceCheckpoint: %v", err)
+	}
 
 	if got == nil {
 		t.Fatal("checkpoint not loaded")
@@ -501,6 +504,55 @@ type dagNoopSource struct{}
 func (dagNoopSource) Name() string { return "dag-noop-source" }
 func (dagNoopSource) Open(context.Context, *core.Checkpoint) (core.RecordReader, error) {
 	return nil, nil
+}
+
+type dagFailOpenSource struct{}
+
+func (dagFailOpenSource) Name() string { return "dag-fail-open-source" }
+func (dagFailOpenSource) Open(context.Context, *core.Checkpoint) (core.RecordReader, error) {
+	return nil, errors.New("source credentials rejected")
+}
+
+func TestDAGExecutorCheckpointRestoreFailsClosed(t *testing.T) {
+	adapter, cleanup := newDAGCheckpointAdapter(t)
+	defer cleanup()
+	if err := adapter.Save(context.Background(), core.Checkpoint{
+		JobName:  "dag-fail-src",
+		Source:   "src",
+		Position: json.RawMessage(`{"version":99,"source":{"offset":1}}`),
+	}); err != nil {
+		t.Fatalf("Save checkpoint: %v", err)
+	}
+
+	exec := &DAGExecutor{spec: &PipelineSpec{Name: "dag-fail"}, cpAdapter: adapter}
+	got, err := exec.loadSourceCheckpoint(context.Background(), "src")
+	if err == nil || !strings.Contains(err.Error(), "unsupported checkpoint envelope version") {
+		t.Fatalf("loadSourceCheckpoint() = %#v, %v; want invalid envelope error", got, err)
+	}
+	if got != nil {
+		t.Fatalf("checkpoint = %#v, want nil on validation failure", got)
+	}
+}
+
+func TestDAGExecutorSourceStartupFailureStopsPipeline(t *testing.T) {
+	am := alert.NewManager()
+	defer am.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exec := &DAGExecutor{
+		spec:     &PipelineSpec{Name: "dag-source-startup-failure"},
+		status:   "running",
+		alertMgr: am,
+		cancel:   cancel,
+	}
+	records := make(chan recordMsg, 1)
+	exec.readSource(ctx, dagFailOpenSource{}, "src", records)
+	if got := exec.Status(); got != "failed" {
+		t.Fatalf("status = %q, want failed", got)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("source startup failure did not cancel the DAG context")
+	}
 }
 
 type dagNoopSink struct{}

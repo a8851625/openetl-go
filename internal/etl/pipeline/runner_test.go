@@ -298,6 +298,17 @@ func (s *commitMetadataFailSink) SinkCommitMetadata(context.Context) (map[string
 	return nil, errors.New("commit metadata unavailable")
 }
 
+type checkpointLoadErrorStore struct{ err error }
+
+func (s checkpointLoadErrorStore) Save(context.Context, core.Checkpoint) error { return nil }
+func (s checkpointLoadErrorStore) Load(context.Context, string) (*core.Checkpoint, error) {
+	return nil, s.err
+}
+func (s checkpointLoadErrorStore) Delete(context.Context, string) error { return nil }
+func (s checkpointLoadErrorStore) List(context.Context) ([]core.Checkpoint, error) {
+	return nil, nil
+}
+
 func makeRunnerSpec(t *testing.T, batchSize int) (*Spec, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -367,6 +378,59 @@ func TestRunnerFailsStartupOnSchemaValidationError(t *testing.T) {
 	}
 	if r.Status() != StatusFailed {
 		t.Fatalf("status = %s, want failed", r.Status())
+	}
+}
+
+func TestRunnerFailsStartupWhenCheckpointLoadFails(t *testing.T) {
+	src := &schemaSource{}
+	snk := &schemaValidatingSink{}
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-load-failure"},
+		source:          src,
+		sink:            snk,
+		checkpointStore: checkpointLoadErrorStore{err: errors.New("checkpoint backend unavailable")},
+	}
+
+	err := r.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "load checkpoint") {
+		t.Fatalf("Start() error = %v, want checkpoint load failure", err)
+	}
+	if r.Status() != StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status())
+	}
+	if atomic.LoadInt32(&src.openCalls) != 0 {
+		t.Fatalf("source Open calls = %d, want 0", atomic.LoadInt32(&src.openCalls))
+	}
+	if atomic.LoadInt32(&snk.closeCalls) != 1 {
+		t.Fatalf("sink Close calls = %d, want 1", atomic.LoadInt32(&snk.closeCalls))
+	}
+}
+
+func TestRunnerFailsStartupWhenCheckpointEnvelopeIsCorrupt(t *testing.T) {
+	store := newMemoryCPStore()
+	store.cps["checkpoint-envelope-failure"] = core.Checkpoint{
+		JobName:  "checkpoint-envelope-failure",
+		Source:   "schema-source",
+		Position: []byte(`{"version":99,"source":{"offset":1}}`),
+	}
+	src := &schemaSource{}
+	snk := &schemaValidatingSink{}
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-envelope-failure"},
+		source:          src,
+		sink:            snk,
+		checkpointStore: store,
+	}
+
+	err := r.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "validate checkpoint") {
+		t.Fatalf("Start() error = %v, want checkpoint validation failure", err)
+	}
+	if r.Status() != StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status())
+	}
+	if atomic.LoadInt32(&src.openCalls) != 0 {
+		t.Fatalf("source Open calls = %d, want 0", atomic.LoadInt32(&src.openCalls))
 	}
 }
 
@@ -800,7 +864,10 @@ func TestUnwrapCheckpointForSourceExtractsEnvelopeSource(t *testing.T) {
 	}
 	cp := &core.Checkpoint{JobName: "p", Position: raw}
 
-	got := unwrapCheckpointForSource(cp)
+	got, err := checkpoint.UnwrapForSource(cp)
+	if err != nil {
+		t.Fatalf("UnwrapForSource: %v", err)
+	}
 
 	if string(got.Position) != `{"offset":42}` {
 		t.Fatalf("unwrapped position = %s", got.Position)
