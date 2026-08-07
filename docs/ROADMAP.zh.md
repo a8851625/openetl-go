@@ -704,6 +704,7 @@ Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard mu
 | 运行模式与生产 runbook | [runtime-modes.md](./runtime-modes.md)、`hack/e2e-runtime-smoke.sh` |
 | P5 业务健康 / CI / 发布门槛 | [release-checklist.md](./release-checklist.md)、[ops-runbook.md](./ops-runbook.md)、[resource-baseline.md](./resource-baseline.md)、`hack/e2e-production-gate.sh`、`hack/check-release-assets.sh`、`/api/v2/health` 扩展 |
 | UI 首次任务闭环与 AI context pack | `web/src/main.tsx`、`web/src/DagEditorPage.tsx`、`internal/etl/server/ai_context_test.go`、`hack/e2e-ui.sh` |
+| mysql_snapshot_cdc 全库异构主键快照（bounded follow-up） | `internal/etl/source/mysql_snapshot_cdc_pk_test.go`、`hack/e2e-snapshot-cdc-heteropk.sh`、[etl-config-schema.md](./etl-config-schema.md#mysql_snapshot_cdc) |
 
 ## 跟踪指标
 

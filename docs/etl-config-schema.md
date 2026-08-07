@@ -359,8 +359,10 @@ source:
 | `password` | no | | MySQL password (**secret**). |
 | `database` | yes | | Source database. |
 | `table` | no | | Source table (singular). Required when `tables` is not set. |
-| `tables` | no | | Source tables for multi-table snapshot+CDC. Required when `table` is not set. |
-| `pk_column` | no | `id` | Primary key column for snapshot pagination. |
+| `tables` | no | | Source tables for multi-table/whole-database snapshot+CDC. Use `["*"]` to snapshot every base table in `database`. Required when `table` is not set. |
+| `pk_column` | no | `id` | Fallback primary key column for snapshot pagination, applied to every table that does not override it via `pk_columns` and does not expose a single-column PRIMARY KEY. If a table lacks this column, it is auto-detected instead of failing. |
+| `pk_columns` | no | | Per-table primary key overrides, e.g. `{orders: order_id, users: user_no}`. Takes precedence over `pk_column` and auto-detection. |
+| `skip_no_pk_tables` | no | `false` | Skip snapshot for explicitly-listed tables that have no single-column primary key (composite-PK or keyless tables) instead of failing. Whole-database snapshots (`tables: ["*"]`) always skip such tables with a warning; those tables are still streamed via CDC. |
 | `limit` | no | `1000` | Rows per snapshot query page. |
 | `server_id` | no | `1101` | Unique replication server ID. |
 | `server_id_base` | no | | Base replication server ID used with sharding. |
@@ -369,6 +371,8 @@ source:
 | `shard_total` | no | | Total shard count for snapshot partitioning. |
 
 Snapshots by primary-key chunks, records binlog position, then switches to CDC. Checkpoints survive crash during both phases.
+
+For whole-database snapshots, set `tables: ["*"]` and omit `pk_column`: each table's snapshot cursor is derived from its own single-column PRIMARY KEY (auto-detected from `information_schema`), so heterogeneous-PK databases no longer require a single global key. Integer keys page with a numeric cursor (and optional `shard_*` hashing); non-integer orderable keys (e.g. `VARCHAR`, `DATETIME`) page with a lexicographic string cursor. Tables without a usable single-column key (composite PK or no PK) are skipped during the historical snapshot but still captured by the CDC phase.
 
 ### `kafka`
 

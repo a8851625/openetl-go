@@ -264,8 +264,10 @@ source:
 | `password` | 否 | | MySQL 密码（**密钥**）。 |
 | `database` | 是 | | 源数据库。 |
 | `table` | 否 | | 源表（单数）；未配置 `tables` 时必填。 |
-| `tables` | 否 | | 多表 snapshot+CDC 源表；未配置 `table` 时必填。 |
-| `pk_column` | 否 | `id` | 快照分页的主键列。 |
+| `tables` | 否 | | 多表/全库 snapshot+CDC 源表。设为 `["*"]` 表示快照 `database` 下所有基表；未配置 `table` 时必填。 |
+| `pk_column` | 否 | `id` | 快照分页的兜底主键列，应用于所有未在 `pk_columns` 中覆盖、且没有单列主键的表。如果某表没有该列，则改为自动探测，不会直接报错。 |
+| `pk_columns` | 否 | | 按表指定主键覆盖，如 `{orders: order_id, users: user_no}`。优先级高于 `pk_column` 和自动探测。 |
+| `skip_no_pk_tables` | 否 | `false` | 跳过显式列出但没有单列主键（复合主键或无主键）的表，而不是报错。全库快照（`tables: ["*"]`）始终以 warning 跳过这类表；这些表仍会通过 CDC 阶段采集变更。 |
 | `limit` | 否 | `1000` | 每次快照查询的行数。 |
 | `server_id` | 否 | `1101` | 唯一复制 server ID。 |
 | `server_id_base` | 否 | | 分片时使用的复制 server ID 基准值。 |
@@ -274,6 +276,8 @@ source:
 | `shard_total` | 否 | | 快照分片总数。 |
 
 按主键分块快照，记录 binlog 位置，然后切换到 CDC。两个阶段的 checkpoint 都可以在崩溃后恢复。
+
+全库快照设 `tables: ["*"]` 并省略 `pk_column`：每张表的快照游标从其自身的单列主键推导（从 `information_schema` 自动探测），因此异构主键库不再需要单一全局主键。整型主键用数字游标分页（可配合 `shard_*` 哈希分片）；可排序的非整型主键（如 `VARCHAR`、`DATETIME`）用字典序字符串游标分页。没有可用单列主键的表（复合主键或无主键）在历史快照阶段跳过，但仍会在 CDC 阶段采集。
 
 ### `postgres_cdc`
 

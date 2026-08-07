@@ -1,0 +1,41 @@
+name: "heteropk-snapshot-cdc"
+source:
+  type: mysql_snapshot_cdc
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "heteropk_src"
+    # Whole-database snapshot: no pk_column configured. Each table auto-detects
+    # its single-column PRIMARY KEY (orders.order_id BIGINT, users.user_no
+    # VARCHAR) so the snapshot cursor is per-table rather than global.
+    tables: ["*"]
+    limit: 2
+    server_id: 1451
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: mysql
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "heteropk_tgt"
+    # No static table/pk_columns: writes follow rec.Metadata.Table (orders/users),
+    # matching the like-named target tables. batch_mode=insert is sufficient for
+    # the snapshot + CDC insert verification in hack/e2e-snapshot-cdc-heteropk.sh.
+    batch_mode: "insert"
+
+batch_size: 2
+checkpoint_interval_sec: 1
+backpressure_buffer: 20
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000

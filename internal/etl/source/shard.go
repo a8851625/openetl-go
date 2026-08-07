@@ -80,3 +80,50 @@ func readStringSlice(config map[string]any, key string) []string {
 	}
 	return nil
 }
+
+// readStringMap reads a map[string]string config value from the shapes
+// produced by YAML/JSON decoding. YAML maps decode as map[string]any or
+// map[interface{}]interface{}; values may be strings or numbers.
+func readStringMap(config map[string]any, key string) map[string]string {
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	out := map[string]string{}
+	switch m := raw.(type) {
+	case map[string]string:
+		for k, v := range m {
+			if v != "" {
+				out[k] = v
+			}
+		}
+	case map[string]any:
+		for k, v := range m {
+			if s := mapStringValue(v); s != "" {
+				out[k] = s
+			}
+		}
+	case map[any]any:
+		for k, v := range m {
+			ks := fmt.Sprint(k)
+			if s := mapStringValue(v); s != "" {
+				out[ks] = s
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mapStringValue(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(v)
+	}
+}
