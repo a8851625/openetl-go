@@ -261,7 +261,7 @@ func (s *DorisSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) 
 
 func (s *DorisSink) Open(ctx context.Context) error {
 	// MySQL protocol connection (for DDL + DELETE + fallback INSERT)
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&loc=Local",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&loc=Local&interpolateParams=true",
 		s.user, s.password, s.host, s.port, s.database)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
