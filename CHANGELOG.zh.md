@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.3] — 2026-08-08 — Doris sink table_template 多表扇出 + kafka source format=envelope（beta）
+
+### 新增
+
+- **`doris` sink `table_template` 多表扇出**（已交付基线「Doris sink」的有界增强）
+  - 单个 doris sink 现在可按记录 metadata 将一个混合多表的流路由到多张 Doris 表：新增 `table_template` 配置（如 `{table}` 或 `ods_{table}`），`{table}`/`{db}` 从 `record.metadata.table`/`record.metadata.database` 替换。这闭合了「kafka source（envelope，多表单 topic）→ doris（多表）」链路，此前需要为每张表单独建 sink。
+  - `resolveTable` 改为返回 `(string, error)`：模板引用 `{table}`/`{db}` 但记录缺少对应 metadata 时硬报错（进 DLQ），绝不静默写到畸形表名。全部 4 个调用点（stream load / insert / delete / schema inputs）统一处理该 error。
+  - `ValidateSchema` 在 `table_template` 模式下（`s.table==""`）跳过单表存在性预检（多表无法预检），依赖预建表或 `auto_create: true`。
+
+- **`kafka` source `format: envelope` 在 plugin schema descriptor 中暴露**：kafka source 代码早已支持 `format: envelope` 解析 OpenETL CDC envelope 还原 INSERT/UPDATE/DELETE 语义与 Table metadata，但 schema descriptor 此前只暴露 `json`/`text`，导致 WebUI 无法配置。现已补齐 `envelope` 枚举项，WebUI（schema 驱动渲染）自动出现该选项。
+
+### 残留边界
+
+- **Doris Stream Load `LABEL_ALREADY_EXISTS`**：doris sink 的 stream load label = `hash(db.table|body)`，设计上用于幂等去重。当不同次写入的 body 字节完全相同时（如 e2e 重复跑同一条消息），Doris 会以 `LABEL_ALREADY_EXISTS` 拒绝该 load。当前 sink 对该响应的失败判定可能存在既有 bug（误报 written 成功），已登记为独立的有界增强后续处理。生产侧建议确保写入内容带版本/时间戳使 label 天然唯一。
+- **`table_template` + `auto_create` + 异构主键**：单 sink 只有一个 `pk_columns` 配置，无法同时为不同主键的多张表 auto-create 正确的 Unique Key 表。异构主键多表场景需预建 Doris 表（本版 e2e 即采用此模式），或每张表一个 sink。
+
+### 验证（本机收口）
+
+- `go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...` —— passed
+- `go test -race -count=1 ./internal/etl/... ./internal/logic/...`（30 个包）—— passed
+- 单测：`internal/etl/sink/doris_table_template_test.go` 覆盖 `{table}`/`{db}`/字面量替换、模板优先于静态 table、模板引用缺失 metadata 硬报错、config 解析 —— passed
+- 单测：`internal/etl/server/schema_test.go` 验证 kafka source format 枚举含 `envelope`、doris sink schema 含 `table_template` —— passed
+- `hack/e2e-doris-table-template.sh`：kafka source（`format: envelope`，orders+users 两表混在一个 topic）→ doris sink（`table_template: "{table}"`），orders 表(`order_id BIGINT` PK) + users 表(`user_no VARCHAR` PK) 各 2 条正确路由，`records_read=4 records_written=4 failed=0 dlq=0` —— passed（Doris FE+BE 2.1.11 + Redpanda，实跑）
+
 ## [v0.2.12-beta.2] — 2026-08-08 — mysql_snapshot_cdc 全库异构主键快照 + Doris sink interpolateParams（beta）
 
 ### 新增
