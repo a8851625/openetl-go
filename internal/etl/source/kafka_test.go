@@ -155,10 +155,10 @@ func TestKafkaHandlerEnvelopeRestoresCDCSemantics(t *testing.T) {
 	// primary-key row (matches mysql_cdc / mysql_snapshot_cdc delete events).
 	envBytes, err := json.Marshal(map[string]any{
 		"event_id":  "evt-42",
-		"op":       string(core.OpDelete),
-		"table":    "orders",
-		"key":      "42",
-		"data":     map[string]any{"order_id": float64(42)},
+		"op":        string(core.OpDelete),
+		"table":     "orders",
+		"key":       "42",
+		"data":      map[string]any{"order_id": float64(42)},
 		"timestamp": "2026-08-06T10:00:00Z",
 	})
 	if err != nil {
@@ -240,10 +240,10 @@ func TestKafkaHandlerEnvelopeMalformedFallsBackToValue(t *testing.T) {
 	}
 }
 
-// TestKafkaCheckpointForRecordMarksOffset verifies that after pipeline commit,
-// calling CheckpointForRecord marks the NEXT offset so a restart resumes after
-// the committed record.
-func TestKafkaCheckpointForRecordMarksOffset(t *testing.T) {
+// TestKafkaCheckpointForRecordHasNoExternalSideEffects verifies that building
+// a checkpoint does not mark or commit the consumer-group offset. The runner
+// must persist the checkpoint before invoking AckCheckpoint.
+func TestKafkaCheckpointForRecordHasNoExternalSideEffects(t *testing.T) {
 	src := &KafkaSource{name: "kafka", topic: "test"}
 	reader := &kafkaReader{
 		source:           src,
@@ -268,12 +268,51 @@ func TestKafkaCheckpointForRecordMarksOffset(t *testing.T) {
 	}
 
 	sess.mu.Lock()
+	if len(sess.marked) != 0 {
+		t.Errorf("marked offsets = %v, want none before AckCheckpoint", sess.marked)
+	}
+	if sess.committed {
+		t.Error("Commit called during CheckpointForRecord")
+	}
+	sess.mu.Unlock()
+
+	if err := reader.AckCheckpoint(context.Background(), cp); err != nil {
+		t.Fatalf("AckCheckpoint: %v", err)
+	}
+	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	if sess.marked[0] != 101 {
 		t.Errorf("marked offset = %d, want 101 (offset+1)", sess.marked[0])
 	}
 	if !sess.committed {
-		t.Error("Commit not called after CheckpointForRecord")
+		t.Error("Commit not called by AckCheckpoint")
+	}
+}
+
+func TestKafkaBuildSaramaConfigDisablesAutoCommit(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "test"}
+	cfg, err := src.buildSaramaConfig()
+	if err != nil {
+		t.Fatalf("buildSaramaConfig: %v", err)
+	}
+	if cfg.Consumer.Offsets.AutoCommit.Enable {
+		t.Fatal("auto-commit enabled; external ack must follow durable checkpoint")
+	}
+}
+
+func TestKafkaAckCheckpointRequiresActiveSession(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "test"}
+	reader := &kafkaReader{
+		source:           src,
+		committedOffsets: map[int32]int64{0: 10},
+		sessions:         map[int32]sarama.ConsumerGroupSession{},
+	}
+	cp, err := reader.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if err := reader.AckCheckpoint(context.Background(), cp); err == nil {
+		t.Fatal("AckCheckpoint succeeded without a consumer session")
 	}
 }
 
@@ -434,14 +473,14 @@ func TestKafkaFetchConfigDefaults(t *testing.T) {
 // applied to the underlying sarama.Config before Validate().
 func TestKafkaFetchConfigAppliedToSarama(t *testing.T) {
 	s, err := NewKafkaSource(map[string]any{
-		"brokers":                 []any{"b1:9092"},
-		"topic":                   "cdc-events",
-		"fetch_min_bytes":         2048,
-		"fetch_max_bytes":         4 * 1024 * 1024,
-		"fetch_max_wait_ms":        250,
-		"channel_buffer_size":     512,
-		"max_processing_time_ms":  1000,
-		"max_open_requests":       3,
+		"brokers":                []any{"b1:9092"},
+		"topic":                  "cdc-events",
+		"fetch_min_bytes":        2048,
+		"fetch_max_bytes":        4 * 1024 * 1024,
+		"fetch_max_wait_ms":      250,
+		"channel_buffer_size":    512,
+		"max_processing_time_ms": 1000,
+		"max_open_requests":      3,
 	})
 	if err != nil {
 		t.Fatalf("NewKafkaSource: %v", err)
@@ -489,7 +528,7 @@ func TestKafkaFetchConfigYAMLParsing(t *testing.T) {
 		"topic":                  "events",
 		"fetch_min_bytes":        float64(4096),
 		"fetch_max_bytes":        float64(2 * 1024 * 1024),
-		"fetch_max_wait_ms":       float64(100),
+		"fetch_max_wait_ms":      float64(100),
 		"channel_buffer_size":    float64(128),
 		"max_processing_time_ms": float64(200),
 		"max_open_requests":      float64(10),

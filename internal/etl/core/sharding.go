@@ -157,6 +157,14 @@ func (r *ShardedReader) CheckpointForRecord(ctx context.Context, rec Record) (Ch
 	return r.inner.Snapshot(ctx)
 }
 
+func (r *ShardedReader) AckCheckpoint(ctx context.Context, cp Checkpoint) error {
+	acker, ok := r.inner.(CheckpointAcker)
+	if !ok {
+		return nil
+	}
+	return acker.AckCheckpoint(ctx, cp)
+}
+
 func (r *ShardedReader) Close() error {
 	return r.inner.Close()
 }

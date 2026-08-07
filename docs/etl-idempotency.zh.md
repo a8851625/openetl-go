@@ -1,6 +1,6 @@
 # ETL 幂等性规约
 
-运行时提供 at-least-once 投递语义。Checkpoint 仅在批次成功写入 Sink 之后提交，因此崩溃时可能重放最后一个未提交的批次。生产管道必须选择能够容忍重复或重放 CDC 事件的 Sink 模式。
+运行时提供 at-least-once 投递语义。Checkpoint 仅在批次成功写入 Sink 并 durable 保存之后提交，因此崩溃时可能重放最后一个未提交的批次。Kafka 与 PostgreSQL CDC 仅在 durable checkpoint 成功后确认外部 source cursor；external ack 失败会停止管道，并从已保存边界安全重放。生产管道必须选择能够容忍重复或重放 CDC 事件的 Sink 模式。
 
 ## 通用规则
 

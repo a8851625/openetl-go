@@ -534,6 +534,31 @@ PR-2.4.1 本轮证据（Round 1/5）：
 | legacy valid position 兼容 | `TestUnwrapForSourceKeepsLegacyPosition` | passed | legacy 语义校验仍由各 source codec负责 |
 | package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator -count=1`；`go vet ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator`；`git diff --check` | passed | 未执行外部 connector e2e（本增量不要求） |
 
+当前领取记录（Round 2）：
+
+```text
+Round: 2/5
+Roadmap item: PR-2.4.2
+Profile/path: standalone linear + DAG；Kafka source / PostgreSQL CDC source
+Objective: 将 source checkpoint 生成、durable checkpoint Save 与 Kafka/PG external ack 拆成明确顺序，消除 external ack 早于内部 checkpoint 的丢失窗口。
+Scope: core CheckpointAcker contract、linear Runner/DAGExecutor boundary、Kafka consumer offset lifecycle、PostgreSQL WAL status lifecycle、fault-injection tests、reliability/component evidence。
+Non-goals: PR-2.4.3 的 mysql_snapshot_cdc producer read-ahead/string cursor；connector schema/UI、多表 preflight、跨 sink exactly-once。
+Acceptance: 1) CheckpointForRecord 不产生 Kafka MarkOffset/Commit 或 PG committedLsn/standby ack 副作用；2) durable Save 成功后才调用 AckCheckpoint；3) external ack 失败阻断后续 checkpoint、pipeline failed/停止并允许安全 replay；4) Kafka auto-commit 关闭；5) PG 无 durable LSN 的 keepalive 不使用 server read-ahead end；6) linear/DAG/source 单测、race、vet 及文档证据通过。
+Evidence: internal/etl/core/core.go、internal/etl/pipeline/runner_test.go、internal/etl/orchestrator/orchestrator_test.go、internal/etl/source/kafka_test.go、internal/etl/source/postgres_cdc_test.go、docs/reliability-certification.md、source component docs。
+Result: delivered
+Residual/follow-up: PR-2.4.3 mysql_snapshot_cdc producer read-ahead/string cursor 与 snapshot commit boundary。
+```
+
+PR-2.4.2 本轮验收矩阵（Round 2/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| linear/DAG durable Save -> external Ack 顺序 | `TestRunnerCheckpointBoundaryOrdersDurableSaveBeforeExternalAck`、`TestRunnerExternalAckFailureBlocksAndFailsAfterDurableSave`、`TestDAGCheckpointBoundaryOrdersDurableSaveBeforeExternalAck` | passed | 进程级 crash 注入仍属于后续 path e2e |
+| Kafka external offset 生命周期 | `TestKafkaCheckpointForRecordHasNoExternalSideEffects`、`TestKafkaBuildSaramaConfigDisablesAutoCommit`、`TestKafkaAckCheckpointRequiresActiveSession`；`CONTAINER_CLI=docker ./hack/e2e-kafka.sh` | passed | Sarama `Commit()` 不返回 broker error；异步 group error 仍按 source error 可见性处理 |
+| PostgreSQL WAL ack 生命周期 | `TestPGCheckpointForRecordDoesNotAdvanceExternalLSN`、`TestPGResumeLSNUsesDurableMarkerNotReadAhead`、`TestPGAckCheckpointUpdatesExternalLSNAfterSend`、`TestPGAckCheckpointSendFailureDoesNotAdvanceExternalLSN`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-postgres-cdc.sh` | passed | 无 |
+| keepalive 不误报 read-ahead 进度 | `TestPGKeepaliveWithoutDurableLSNDoesNotAckServerEnd` | passed | 无 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1`；`go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator`；`git diff --check` | passed | 无 |
+
 ### PR-D1：Distributed 安全与任务所有权
 
 状态：`delivered`（2026-07-25 · PR-D1.1/.2/.3）

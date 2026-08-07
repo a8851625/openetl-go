@@ -1,6 +1,6 @@
 # ETL Idempotency Contract
 
-The runtime provides at-least-once delivery. A checkpoint is committed only after a batch is successfully written to the sink, so a crash can replay the last uncommitted records. Production pipelines must therefore choose a sink mode that can tolerate duplicates or replayed CDC events.
+The runtime provides at-least-once delivery. A checkpoint is committed only after a batch is successfully written to the sink, so a crash can replay the last uncommitted records. For Kafka and PostgreSQL CDC, the external source cursor is acknowledged only after that durable checkpoint save; an acknowledgement failure stops the pipeline and replays from the saved boundary. Production pipelines must therefore choose a sink mode that can tolerate duplicates or replayed CDC events.
 
 Path-level write mode, business key, evidence scripts, and RPO/RTO declarations are catalogued in [path-contract.md](./path-contract.md) (`GET /api/v2/paths/contracts`).
 
