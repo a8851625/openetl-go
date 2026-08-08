@@ -380,7 +380,7 @@ Residual/follow-up: 不自动领取 PR-1；下一次显式 continue 重新同步
 
 ### PR-1：Secret 管理、Storage 演进与可恢复升级
 
-状态：`active`
+状态：`delivered`
 
 目标：让一个小团队能够安全保存连接信息，并在没有人工改表或猜测回滚步骤的情况下完成升级、备份和恢复。
 
@@ -631,7 +631,34 @@ Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard mu
 
 ### P3：成熟度事实源与认证覆盖扩展
 
-状态：`queued`
+状态：`active`（2026-08-08 · P3.1）
+
+当前领取记录：
+
+```text
+Round: 4/5
+Roadmap item: P3.1 descriptor/schema 单一事实源
+Profile/path: standalone connector discovery + certification gate
+Objective: schema 成为 required/default/secret/scope 的唯一事实源，且任一 production source/sink 自动进入注册、schema、文档与 e2e evidence 门禁。
+Scope: internal/etl/server/schema.go、connector_descriptor.go、server.go plugin metadata、connector/schema certification tests、ClickHouse 构造默认值、PostgreSQL 16 generated-column introspection 认证失败恢复、docs/connector-certification.md 与本 roadmap 证据。
+Non-goals: P3.2 多表 schema/preflight 契约；新增 connector、maturity 提升、专用 UI 流程、MaxCompute 外部认证。
+Dependencies: PR-2 delivered；P0 仍 blocked_external；本 goal 已显式授权在独立 worktree 推进审计发现的 connector 契约问题。
+Acceptance: 1) metadata required 不再手写，且与 schema required 完全一致；2) descriptor required/secret/field scope/default 与 schema 完全一致；3) production source/sink 集合与 certification target 完全一致，未知 production 项自动失败；4) JDBC DSN 标记 secret，ClickHouse async_insert_wait 的 runtime 默认与 schema=true 一致；5) targeted/package/race/vet 与 git diff --check 通过并更新认证文档。
+Evidence: internal/etl/server/schema_test.go、connector_certification_test.go、internal/etl/sink/clickhouse_test.go、docs/connector-certification.md、Go targeted/package/race/vet checks。
+Result: delivered
+Residual/follow-up: P3.2 多表 source preflight 必须显式返回 per-table/partial/blocking 契约，不得用单表 DDL preview 代表异构表集合。
+```
+
+P3.1 本轮验收矩阵（Round 4/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| metadata required 只由 schema 派生 | `pluginCapabilityMetadata` 不再携带 required；`pluginMetadataFromSchema`；`TestPluginMetadataRequiredFieldsAreDerivedFromSchema` | passed | 条件必填（如 table/query 二选一）继续由 validate/preflight 表达，不伪装成静态 required |
+| descriptor required/secret/scope/default 与 schema 一致 | `TestConnectorDescriptorConfigContractMatchesSchemaExactly`；JDBC `dsn` secret；ClickHouse `async_insert_wait` schema/runtime default=true | passed | 其他 connector 构造默认值的全量自动对账可另列后续，不扩大本轮 |
+| 任一 production source/sink 自动进入 certification target | `TestConnectorCertificationKitProductionSet` 对 production 集合做双向完全匹配；新增 HTTP、PostgreSQL/PostgreSQL alias、Doris target 与组件文档/e2e 引用 | passed | maturity 未提升；MaxCompute/ODPS 仍 experimental + blocked_external |
+| 新增 production target 的实际路径证据 | `CONTAINER_CLI=docker ./hack/e2e-http-source.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-mysql-postgres.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh` | passed | 复用既有 MySQL 容器时 compose 输出 name-in-use 环境 warning，但脚本最终退出 0 |
+| PostgreSQL 16 generated-column schema introspection | 首次 e2e 暴露 `attgenerated` binary char -> string 扫描失败；改为 DB 端 `is_generated` bool 后同一 e2e 正常写入、schema rejection 与 checkpoint reset/upsert replay 均通过 | passed | 无 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/server ./internal/etl/sink -count=1`；`go vet ./internal/etl/server ./internal/etl/sink`；`git diff --check` | passed | 无 |
 
 目标：减少手写 maturity 字符串与测试证据之间的漂移。
 

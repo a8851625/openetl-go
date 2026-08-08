@@ -67,6 +67,24 @@ func TestClickHouseSchemaDriftBoolCompatibility(t *testing.T) {
 	}
 }
 
+func TestClickHouseAsyncInsertWaitDefaultsToTrue(t *testing.T) {
+	sink, err := NewClickHouseSink(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewClickHouseSink(defaults): %v", err)
+	}
+	if !sink.asyncInsertWait {
+		t.Fatal("asyncInsertWait = false, want schema default true")
+	}
+
+	disabled, err := NewClickHouseSink(map[string]any{"async_insert_wait": false})
+	if err != nil {
+		t.Fatalf("NewClickHouseSink(async_insert_wait=false): %v", err)
+	}
+	if disabled.asyncInsertWait {
+		t.Fatal("asyncInsertWait = true, want explicit false override")
+	}
+}
+
 func TestConvertClickHouseHTTPValueFormatsTemporalTypes(t *testing.T) {
 	ts := time.Date(2026, 6, 29, 14, 13, 15, 123456789, time.UTC)
 

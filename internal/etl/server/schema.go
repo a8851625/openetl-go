@@ -401,7 +401,7 @@ func sinkConfigSchemas() map[string][]ConfigField {
 			{Name: "allow_mixed_cdc_non_atomic", Type: FieldBool, Required: false, Default: false, Description: "Allow mixed CDC batches when DELETE handling cannot be atomic"},
 		},
 		"jdbc": {
-			{Name: "dsn", Type: FieldString, Required: true, Description: "JDBC connection string (e.g. mysql://user:pass@tcp(host:3306)/db)", Example: "mysql://user:pass@tcp(localhost:3306)/mydb"},
+			{Name: "dsn", Type: FieldString, Required: true, Description: "JDBC connection string (e.g. mysql://user:pass@tcp(host:3306)/db)", Example: "mysql://user:pass@tcp(localhost:3306)/mydb", Secret: true},
 			{Name: "driver", Type: FieldString, Required: false, Description: "Database driver name (auto-detected from DSN if empty)"},
 			{Name: "table", Type: FieldString, Required: true, Description: "Target table name"},
 			{Name: "schema", Type: FieldString, Required: false, Description: "Target schema name"},

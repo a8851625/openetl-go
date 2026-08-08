@@ -97,11 +97,6 @@ func descriptorsForKind(kind string, registered []string, schemas map[string][]C
 			if caps, ok := info["capabilities"].([]string); ok {
 				capabilities = append(capabilities, caps...)
 			}
-			if len(required) == 0 {
-				if req, ok := info["required"].([]string); ok {
-					required = append(required, req...)
-				}
-			}
 		}
 		sort.Strings(required)
 		sort.Strings(secretFields)
