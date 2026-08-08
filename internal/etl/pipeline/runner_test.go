@@ -150,6 +150,132 @@ func (r checkpointTestReader) CheckpointForRecord(_ context.Context, rec core.Re
 	return core.Checkpoint{Source: "checkpoint-test", Position: pos}, nil
 }
 
+type batchCheckpointReader struct {
+	batchCalls int
+	seen       []core.Record
+	err        error
+}
+
+func (r *batchCheckpointReader) Read(_ context.Context) (core.Record, error) {
+	return core.Record{}, io.EOF
+}
+func (r *batchCheckpointReader) ReadBatch(_ context.Context, _ int) ([]core.Record, error) {
+	return nil, io.EOF
+}
+func (r *batchCheckpointReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (r *batchCheckpointReader) Close() error { return nil }
+func (r *batchCheckpointReader) CheckpointForRecord(context.Context, core.Record) (core.Checkpoint, error) {
+	return core.Checkpoint{}, errors.New("single-record checkpoint path was used")
+}
+func (r *batchCheckpointReader) CheckpointForRecords(_ context.Context, records []core.Record) (core.Checkpoint, error) {
+	r.batchCalls++
+	r.seen = append([]core.Record(nil), records...)
+	if r.err != nil {
+		return core.Checkpoint{}, r.err
+	}
+	offsets := make([]int64, 0, len(records))
+	for _, rec := range records {
+		offsets = append(offsets, rec.Metadata.Offset)
+	}
+	pos, err := json.Marshal(map[string]any{"offsets": offsets})
+	if err != nil {
+		return core.Checkpoint{}, err
+	}
+	return core.Checkpoint{Source: "batch-checkpoint-test", Position: pos}, nil
+}
+
+func TestRunnerCheckpointUsesCompleteBatchCheckpointer(t *testing.T) {
+	store := newMemoryCPStore()
+	am := alert.NewManager()
+	defer am.Close()
+	reader := &batchCheckpointReader{}
+	r := &Runner{
+		spec:            &Spec{Name: "batch-checkpoint"},
+		transforms:      nil,
+		sink:            &recordingSink{},
+		checkpointStore: store,
+		alertManager:    am,
+		reader:          reader,
+		logBuf:          NewLogBuffer(20),
+	}
+	records := []core.Record{
+		{Metadata: core.Metadata{Offset: 11}},
+		{Metadata: core.Metadata{Offset: 22}},
+	}
+	if !r.saveCommittedCheckpoint(context.Background(), records, nil) {
+		t.Fatal("saveCommittedCheckpoint returned false")
+	}
+	if reader.batchCalls != 1 || len(reader.seen) != 2 {
+		t.Fatalf("batch checkpointer calls=%d records=%d, want 1/2", reader.batchCalls, len(reader.seen))
+	}
+	cp, err := store.Load(context.Background(), "batch-checkpoint")
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	if cp == nil || !strings.Contains(string(cp.Position), "11") || !strings.Contains(string(cp.Position), "22") {
+		t.Fatalf("checkpoint position = %s, want both offsets", cp.Position)
+	}
+}
+
+func TestRunnerCheckpointThrottleRetainsAllPendingBatches(t *testing.T) {
+	store := newMemoryCPStore()
+	am := alert.NewManager()
+	defer am.Close()
+	reader := &batchCheckpointReader{}
+	r := &Runner{
+		spec:               &Spec{Name: "batch-checkpoint-throttle"},
+		transforms:         nil,
+		sink:               &recordingSink{},
+		checkpointStore:    store,
+		alertManager:       am,
+		reader:             reader,
+		logBuf:             NewLogBuffer(20),
+		checkpointInterval: time.Hour,
+		lastCheckpointSave: time.Now(),
+	}
+	r.writeBatch(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 11}}})
+	r.writeBatch(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 22}}})
+	if !r.flushPendingCheckpoint(context.Background(), true) {
+		t.Fatal("flushPendingCheckpoint returned false")
+	}
+	if reader.batchCalls != 1 || len(reader.seen) != 2 {
+		t.Fatalf("pending batch checkpoint calls=%d records=%d, want 1/2", reader.batchCalls, len(reader.seen))
+	}
+}
+
+func TestRunnerCheckpointGenerationErrorFailsClosed(t *testing.T) {
+	store := newMemoryCPStore()
+	am := alert.NewManager()
+	defer am.Close()
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-generation-failure"},
+		transforms:      nil,
+		sink:            &recordingSink{},
+		checkpointStore: store,
+		alertManager:    am,
+		reader:          &batchCheckpointReader{err: errors.New("cursor encoding failed")},
+		logBuf:          NewLogBuffer(20),
+	}
+	if r.saveCommittedCheckpoint(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 11}}}, nil) {
+		t.Fatal("checkpoint generation error reported success")
+	}
+	if r.Status() != StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status())
+	}
+	r.mu.RLock()
+	blocked := r.checkpointBlocked
+	reason := r.checkpointBlockReason
+	r.mu.RUnlock()
+	if !blocked || !strings.Contains(reason, "cursor encoding failed") {
+		t.Fatalf("checkpoint block = %v %q, want cursor error", blocked, reason)
+	}
+	if cp, err := store.Load(context.Background(), "checkpoint-generation-failure"); err != nil || cp != nil {
+		t.Fatalf("checkpoint persisted after generation failure: cp=%#v err=%v", cp, err)
+	}
+}
+
 type checkpointOrderProbe struct {
 	mu     sync.Mutex
 	events []string

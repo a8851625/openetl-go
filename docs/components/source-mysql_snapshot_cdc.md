@@ -14,13 +14,44 @@ Run an initial MySQL snapshot and continue from binlog CDC without a separate pi
 Snapshot rows and later CDC rows share the standard record shape with operation metadata.
 
 ## Checkpoint, DLQ, Idempotency
-Checkpoint records snapshot phase and CDC position. Downstream replay must be absorbed by upsert/versioned sinks.
+Snapshot pagination has a producer read-ahead cursor and a separate durable
+cursor. The producer may fill the in-memory record channel ahead of the sink,
+but only records represented by a successful sink boundary are included in
+`CheckpointForRecords`; the durable cursor is applied after the checkpoint row
+is saved. Linear and DAG execution preserve the complete source batch
+represented by that boundary, which is important when one snapshot covers
+multiple tables.
+
+Numeric primary keys use a strict integer cursor. Ordered non-numeric keys such
+as `VARCHAR` and `DATETIME` use a string cursor; `time.Time` values retain the
+local MySQL wall-clock representation used by the connection. A snapshot
+checkpoint also stores the binlog file/position captured at the snapshot
+handoff. Restoring a snapshot checkpoint reuses that handoff rather than
+capturing a newer master position, and CDC reconnects start from the last
+acknowledged binlog position instead of handler read-ahead.
+
+Finishing the producer-side snapshot does not by itself persist `phase: cdc`:
+snapshot rows may still be buffered before the sink. The durable phase changes
+to CDC only when an actual CDC record has crossed the sink/checkpoint boundary;
+until then, restart safely reopens the snapshot cursor, consumes any empty tail
+pages, and continues from the saved handoff.
+
+Malformed JSON, unsupported phases, missing cursor values, invalid numeric
+encodings, and missing snapshot/CDC handoff positions fail closed. A failed
+checkpoint generation or acknowledgement blocks later advancement; restart
+replays from the last durable boundary. Downstream replay must be absorbed by
+upsert/versioned sinks.
 
 ## Fits
 First-time MySQL table migration followed by continuous sync.
 
 ## Does Not Fit
 Workloads where source locks are unacceptable and no consistent snapshot strategy is available.
+
+The default delivery contract remains at-least-once. Snapshot crash/restart,
+CDC restart, checkpoint reset, and heterogeneous numeric/string-PK paths are
+covered by the snapshot E2E scripts listed below; exact cross-source/sink
+transactions are not claimed.
 
 ## Example
 ```yaml
@@ -36,4 +67,12 @@ source:
 ```
 
 ## Evidence
-Covered by `hack/e2e-snapshot-cdc.sh`, `hack/e2e-snapshot-cdc-clickhouse.sh` (PR-2 path matrix: happy/crash/reset/outage/DLQ/schema drift), and `hack/e2e-snapshot-cdc-crash.sh`. Path contract: `mysql_snap_cdc__ch_rmt`.
+Unit evidence: `internal/etl/source/mysql_snapshot_cdc_checkpoint_test.go`,
+linear/DAG batch checkpoint tests, and source package race/static checks.
+Path evidence: `hack/e2e-snapshot-cdc.sh`,
+`hack/e2e-snapshot-cdc-crash.sh`, and
+`hack/e2e-snapshot-cdc-heteropk.sh`. The broader ClickHouse path matrix is
+covered by `hack/e2e-snapshot-cdc-clickhouse.sh`, including safe post-reset
+phase transition, schema drift, checkpoint reset, outage, and DLQ replay. All
+four scripts passed on 2026-08-08. Path contract:
+`mysql_snap_cdc__ch_rmt`.
