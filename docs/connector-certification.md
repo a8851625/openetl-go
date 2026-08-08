@@ -59,9 +59,11 @@ does not treat the mere existence of an e2e script as a successful run.
 Pull requests run the structural check so malformed or incomplete records are
 reported without pretending that external connector services are available.
 Pushes to `main` and both release workflows run the strict check against the
-source revision recorded in the manifest; a release therefore stops until
-every record is verified for that revision. Image binding is checked when the
-release environment supplies a certified image digest.
+current source revision. A certified revision may have descendants only when
+they change the evidence manifest or these certification documents; runtime,
+connector, script, and workflow changes require a fresh certification run.
+Image binding is checked when the release environment supplies a certified
+image digest.
 
 The certified production connector set is:
 
