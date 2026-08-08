@@ -3,21 +3,21 @@
   "policy": {
     "max_age_hours": 720
   },
-  "certified_commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-  "certified_image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+  "certified_commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+  "certified_image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
   "records": [
     {
       "kind": "source",
       "type": "file",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
       },
-      "started_at": "2026-08-08T09:09:00Z",
-      "finished_at": "2026-08-08T09:09:04Z",
-      "expires_at": "2026-09-07T09:09:04Z",
+      "started_at": "2026-08-08T13:30:50Z",
+      "finished_at": "2026-08-08T13:30:54Z",
+      "expires_at": "2026-09-07T13:30:54Z",
       "scripts": [
         "hack/e2e.sh"
       ],
@@ -31,16 +31,16 @@
     {
       "kind": "source",
       "type": "http",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "http_fixture": "python 3.12-alpine"
       },
-      "started_at": "2026-08-08T09:09:04Z",
-      "finished_at": "2026-08-08T09:09:06Z",
-      "expires_at": "2026-09-07T09:09:06Z",
+      "started_at": "2026-08-08T13:30:54Z",
+      "finished_at": "2026-08-08T13:31:07Z",
+      "expires_at": "2026-09-07T13:31:07Z",
       "scripts": [
         "hack/e2e-http-source.sh"
       ],
@@ -54,17 +54,17 @@
     {
       "kind": "source",
       "type": "kafka",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "redpanda": "24.1.1",
         "mysql": "8.0.46"
       },
-      "started_at": "2026-08-08T09:20:51Z",
-      "finished_at": "2026-08-08T09:21:33Z",
-      "expires_at": "2026-09-07T09:21:33Z",
+      "started_at": "2026-08-08T13:33:04Z",
+      "finished_at": "2026-08-08T13:33:58Z",
+      "expires_at": "2026-09-07T13:33:58Z",
       "scripts": [
         "hack/e2e-kafka.sh",
         "hack/e2e-kafka-raw-ods.sh"
@@ -81,17 +81,17 @@
     {
       "kind": "source",
       "type": "mysql_batch",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-08-08T09:09:00Z",
-      "finished_at": "2026-08-08T09:09:13Z",
-      "expires_at": "2026-09-07T09:09:13Z",
+      "started_at": "2026-08-08T13:30:50Z",
+      "finished_at": "2026-08-08T13:31:16Z",
+      "expires_at": "2026-09-07T13:31:16Z",
       "scripts": [
         "hack/e2e.sh",
         "hack/e2e-mysql-postgres.sh"
@@ -107,17 +107,17 @@
     {
       "kind": "source",
       "type": "mysql_cdc",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-08-08T09:09:13Z",
-      "finished_at": "2026-08-08T09:10:16Z",
-      "expires_at": "2026-09-07T09:10:16Z",
+      "started_at": "2026-08-08T13:31:16Z",
+      "finished_at": "2026-08-08T13:31:32Z",
+      "expires_at": "2026-09-07T13:31:32Z",
       "scripts": [
         "hack/e2e-cdc-mysql.sh",
         "hack/e2e-cdc-postgres.sh"
@@ -133,17 +133,17 @@
     {
       "kind": "source",
       "type": "mysql_snapshot_cdc",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "clickhouse": "24.3.18.7"
       },
-      "started_at": "2026-08-08T09:10:16Z",
-      "finished_at": "2026-08-08T09:20:13Z",
-      "expires_at": "2026-09-07T09:20:13Z",
+      "started_at": "2026-08-08T13:31:32Z",
+      "finished_at": "2026-08-08T13:32:55Z",
+      "expires_at": "2026-09-07T13:32:55Z",
       "scripts": [
         "hack/e2e-snapshot-cdc.sh",
         "hack/e2e-snapshot-cdc-clickhouse.sh"
@@ -160,15 +160,15 @@
     {
       "kind": "sink",
       "type": "file_sink",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
       },
-      "started_at": "2026-08-08T09:09:00Z",
-      "finished_at": "2026-08-08T09:09:04Z",
-      "expires_at": "2026-09-07T09:09:04Z",
+      "started_at": "2026-08-08T13:30:50Z",
+      "finished_at": "2026-08-08T13:30:54Z",
+      "expires_at": "2026-09-07T13:30:54Z",
       "scripts": [
         "hack/e2e.sh"
       ],
@@ -182,16 +182,16 @@
     {
       "kind": "sink",
       "type": "s3",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "minio": "RELEASE.2024-07-16T23-46-41Z"
       },
-      "started_at": "2026-08-08T09:22:01Z",
-      "finished_at": "2026-08-08T09:22:43Z",
-      "expires_at": "2026-09-07T09:22:43Z",
+      "started_at": "2026-08-08T13:34:28Z",
+      "finished_at": "2026-08-08T13:35:10Z",
+      "expires_at": "2026-09-07T13:35:10Z",
       "scripts": [
         "hack/e2e-s3-minio.sh"
       ],
@@ -206,17 +206,17 @@
     {
       "kind": "sink",
       "type": "kafka",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "redpanda": "24.1.1",
         "mysql": "8.0.46"
       },
-      "started_at": "2026-08-08T09:20:51Z",
-      "finished_at": "2026-08-08T09:21:33Z",
-      "expires_at": "2026-09-07T09:21:33Z",
+      "started_at": "2026-08-08T13:33:04Z",
+      "finished_at": "2026-08-08T13:33:58Z",
+      "expires_at": "2026-09-07T13:33:58Z",
       "scripts": [
         "hack/e2e-kafka.sh",
         "hack/e2e-kafka-raw-ods.sh"
@@ -232,17 +232,17 @@
     {
       "kind": "sink",
       "type": "mysql",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "redpanda": "24.1.1"
       },
-      "started_at": "2026-08-08T09:09:13Z",
-      "finished_at": "2026-08-08T09:22:01Z",
-      "expires_at": "2026-09-07T09:22:01Z",
+      "started_at": "2026-08-08T13:31:16Z",
+      "finished_at": "2026-08-08T13:34:28Z",
+      "expires_at": "2026-09-07T13:34:28Z",
       "scripts": [
         "hack/e2e-cdc-mysql.sh",
         "hack/e2e-debezium-mysql.sh"
@@ -258,17 +258,17 @@
     {
       "kind": "sink",
       "type": "postgres",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-08-08T09:09:06Z",
-      "finished_at": "2026-08-08T09:10:16Z",
-      "expires_at": "2026-09-07T09:10:16Z",
+      "started_at": "2026-08-08T13:31:07Z",
+      "finished_at": "2026-08-08T13:31:32Z",
+      "expires_at": "2026-09-07T13:31:32Z",
       "scripts": [
         "hack/e2e-mysql-postgres.sh",
         "hack/e2e-cdc-postgres.sh"
@@ -284,17 +284,17 @@
     {
       "kind": "sink",
       "type": "postgresql",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-08-08T09:09:06Z",
-      "finished_at": "2026-08-08T09:10:16Z",
-      "expires_at": "2026-09-07T09:10:16Z",
+      "started_at": "2026-08-08T13:31:07Z",
+      "finished_at": "2026-08-08T13:31:32Z",
+      "expires_at": "2026-09-07T13:31:32Z",
       "scripts": [
         "hack/e2e-mysql-postgres.sh",
         "hack/e2e-cdc-postgres.sh"
@@ -310,17 +310,17 @@
     {
       "kind": "sink",
       "type": "clickhouse",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "clickhouse": "24.3.18.7"
       },
-      "started_at": "2026-08-08T09:10:21Z",
-      "finished_at": "2026-08-08T09:20:13Z",
-      "expires_at": "2026-09-07T09:20:13Z",
+      "started_at": "2026-08-08T13:31:38Z",
+      "finished_at": "2026-08-08T13:32:55Z",
+      "expires_at": "2026-09-07T13:32:55Z",
       "scripts": [
         "hack/e2e-clickhouse.sh",
         "hack/e2e-snapshot-cdc-clickhouse.sh"
@@ -336,17 +336,17 @@
     {
       "kind": "sink",
       "type": "doris",
-      "commit": "36fd0275842e82219116f5a2a5c2f8bf24253b27",
-      "image": "sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4",
+      "commit": "43d7aa2b10e7ed8d83f851eb7375aebc19a99882",
+      "image": "sha256:c742767ef8017e104aaf52f75787c0c2cb13d96f7e19cd1b752e8dba9fff7431",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "doris": "2.1.11"
       },
-      "started_at": "2026-08-08T09:22:43Z",
-      "finished_at": "2026-08-08T09:24:37Z",
-      "expires_at": "2026-09-07T09:24:37Z",
+      "started_at": "2026-08-08T13:35:10Z",
+      "finished_at": "2026-08-08T13:37:14Z",
+      "expires_at": "2026-09-07T13:37:14Z",
       "scripts": [
         "hack/e2e-doris.sh"
       ],
