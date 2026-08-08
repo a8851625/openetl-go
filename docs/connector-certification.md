@@ -65,29 +65,29 @@ connector, script, and workflow changes require a fresh certification run.
 Image binding is checked when the release environment supplies a certified
 image digest.
 
-Latest checked-in certification (2026-08-08 UTC):
+Latest checked-in certification (2026-08-08 UTC, v0.2.12-beta.4 release cut):
 
-- source commit: `4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80`
-- image: `sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2`
+- source commit: `36fd0275842e82219116f5a2a5c2f8bf24253b27`
+- image: `sha256:93796beda0424a15a9aa65f2c0ddddb189c5a35f1734b301cbc76f7d690e28b4`
 - environment: Linux/arm64 image, Podman `5.8.2`, Go `1.24.13`
 - dependency set: MySQL `8.0.46`, PostgreSQL `16.14`, ClickHouse `24.3.18.7`, Redpanda `24.1.1`, Doris `2.1.11`, MinIO `RELEASE.2024-07-16T23-46-41Z`
 - result: 13 unique scripts passed; all 14 production source/sink records are verified through their per-record `expires_at`
 
 | Script | UTC window | Result |
 | --- | --- | --- |
-| `hack/e2e.sh` | 07:15:45-07:15:49 | passed |
-| `hack/e2e-http-source.sh` | 07:15:50-07:15:53 | passed |
-| `hack/e2e-mysql-postgres.sh` | 07:16:04-07:16:12 | passed |
-| `hack/e2e-cdc-mysql.sh` | 07:16:12-07:16:16 | passed |
-| `hack/e2e-cdc-postgres.sh` | 07:16:17-07:16:29 | passed |
-| `hack/e2e-snapshot-cdc.sh` | 07:16:30-07:16:36 | passed |
-| `hack/e2e-clickhouse.sh` | 07:16:37-07:16:42 | passed |
-| `hack/e2e-snapshot-cdc-clickhouse.sh` | 07:16:43-07:17:57 | passed |
-| `hack/e2e-kafka.sh` | 07:17:57-07:18:34 | passed |
-| `hack/e2e-kafka-raw-ods.sh` | 07:18:36-07:18:47 | passed |
-| `hack/e2e-debezium-mysql.sh` | 07:18:48-07:19:16 | passed |
-| `hack/e2e-s3-minio.sh` | 07:19:17-07:20:00 | passed |
-| `hack/e2e-doris.sh` | 07:20:01-07:21:59 | passed |
+| `hack/e2e.sh` | 09:09:00-09:09:04 | passed |
+| `hack/e2e-http-source.sh` | 09:09:04-09:09:06 | passed |
+| `hack/e2e-mysql-postgres.sh` | 09:09:06-09:09:13 | passed |
+| `hack/e2e-cdc-mysql.sh` | 09:09:13-09:09:16 | passed |
+| `hack/e2e-cdc-postgres.sh` | 09:10:06-09:10:16 | passed |
+| `hack/e2e-snapshot-cdc.sh` | 09:10:16-09:10:21 | passed |
+| `hack/e2e-clickhouse.sh` | 09:10:21-09:10:25 | passed |
+| `hack/e2e-snapshot-cdc-clickhouse.sh` | 09:19:50-09:20:13 | passed |
+| `hack/e2e-kafka.sh` | 09:20:51-09:21:22 | passed |
+| `hack/e2e-kafka-raw-ods.sh` | 09:21:22-09:21:33 | passed |
+| `hack/e2e-debezium-mysql.sh` | 09:21:33-09:22:01 | passed |
+| `hack/e2e-s3-minio.sh` | 09:22:01-09:22:43 | passed |
+| `hack/e2e-doris.sh` | 09:22:43-09:24:37 | passed |
 
 The certified production connector set is:
 
