@@ -32,7 +32,7 @@ jobs:
         run: bash ./hack/check-connector-evidence.sh
       - name: Strict evidence gate on main
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: bash ./hack/check-connector-evidence.sh -strict -commit "$(git rev-parse --short=7 HEAD)"
+        run: bash ./hack/check-connector-evidence.sh -strict -commit "$(git rev-parse HEAD)"
 
   unit-test:
     name: Unit Tests (-race)

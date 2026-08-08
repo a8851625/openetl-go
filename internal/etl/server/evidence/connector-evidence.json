@@ -16,7 +16,7 @@
       "finished_at": "2026-08-08T01:17:00Z",
       "expires_at": "2026-09-07T01:17:00Z",
       "scripts": ["hack/e2e.sh"],
-      "cases": ["file_to_file", "source_sample"],
+      "cases": ["file_to_file", "checkpoint_persisted"],
       "verified": false,
       "note": "Baseline imported from documented evidence; refresh with a certification run before release."
     },
@@ -72,7 +72,7 @@
       "finished_at": "2026-08-08T01:17:00Z",
       "expires_at": "2026-09-07T01:17:00Z",
       "scripts": ["hack/e2e-cdc-mysql.sh", "hack/e2e-cdc-postgres.sh"],
-      "cases": ["insert_update_delete", "restart", "sink_replay"],
+      "cases": ["insert_update_delete", "checkpoint_restart", "postgres_upsert"],
       "verified": false,
       "note": "Baseline imported from documented evidence; refresh with a certification run before release."
     },
@@ -86,7 +86,7 @@
       "finished_at": "2026-08-08T01:17:00Z",
       "expires_at": "2026-09-07T01:17:00Z",
       "scripts": ["hack/e2e-snapshot-cdc.sh", "hack/e2e-snapshot-cdc-clickhouse.sh"],
-      "cases": ["snapshot", "cdc_handoff", "crash_restart", "checkpoint_reset"],
+      "cases": ["snapshot", "cdc_handoff", "checkpoint_restart", "checkpoint_reset"],
       "verified": false,
       "note": "Baseline imported from documented evidence; refresh with a certification run before release."
     },
@@ -100,7 +100,7 @@
       "finished_at": "2026-08-08T01:17:00Z",
       "expires_at": "2026-09-07T01:17:00Z",
       "scripts": ["hack/e2e.sh"],
-      "cases": ["file_output", "replay_boundary"],
+      "cases": ["file_output", "checkpoint_persisted"],
       "verified": false,
       "note": "Baseline imported from documented evidence; refresh with a certification run before release."
     },
@@ -128,7 +128,7 @@
       "finished_at": "2026-08-08T01:17:00Z",
       "expires_at": "2026-09-07T01:17:00Z",
       "scripts": ["hack/e2e-kafka.sh", "hack/e2e-kafka-raw-ods.sh"],
-      "cases": ["producer_write", "offset_replay", "broker_restart"],
+      "cases": ["producer_write", "offset_replay", "append_duplicate_boundary"],
       "verified": false,
       "note": "Baseline imported from documented evidence; refresh with a certification run before release."
     },

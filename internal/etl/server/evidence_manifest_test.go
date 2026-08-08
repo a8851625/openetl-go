@@ -21,15 +21,20 @@ func TestConnectorEvidenceManifestLoadsAndCoversProductionConnectors(t *testing.
 		if descriptor.Maturity != "production" || (descriptor.Kind != "source" && descriptor.Kind != "sink") {
 			continue
 		}
-		if descriptor.Readiness.Status != "production_with_review" {
-			t.Fatalf("production descriptor %s/%s readiness = %q, want production_with_review for unverified baseline", descriptor.Kind, descriptor.Type, descriptor.Readiness.Status)
-		}
 		record, ok := manifest.Record(descriptor.Kind, descriptor.Type)
 		if !ok {
 			t.Fatalf("production descriptor %s/%s has no evidence record", descriptor.Kind, descriptor.Type)
 		}
 		if len(record.Scripts) == 0 || len(record.Cases) == 0 || len(record.Dependencies) == 0 {
 			t.Fatalf("incomplete evidence record for %s/%s: %#v", descriptor.Kind, descriptor.Type, record)
+		}
+		gate, ok := readinessGate(descriptor, "e2e_evidence")
+		if !ok || gate.EvidenceMetadata == nil {
+			t.Fatalf("production descriptor %s/%s has no evidence gate metadata: %#v", descriptor.Kind, descriptor.Type, gate)
+		}
+		wantStatus := record.Freshness(time.Now()).Status
+		if gate.Status != wantStatus {
+			t.Fatalf("production descriptor %s/%s evidence status = %q, want %q from manifest", descriptor.Kind, descriptor.Type, gate.Status, wantStatus)
 		}
 	}
 }
