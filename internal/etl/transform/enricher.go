@@ -977,17 +977,26 @@ func (t *LookupTransform) Apply(ctx context.Context, rec core.Record) (core.Reco
 // independent per-record SQL lookups concurrently while still reporting
 // record-level failures for DLQ routing.
 func (t *LookupTransform) ApplyBatch(ctx context.Context, recs []core.Record) ([]core.Record, error) {
-	out := make([]core.Record, len(recs))
+	// Keep per-input results so concurrent query lookups can complete out of
+	// order without reordering successful records. Failed records are routed
+	// through PartialTransformError and must not continue to later transforms
+	// or the sink.
+	results := make([]core.Record, len(recs))
+	succeeded := make([]bool, len(recs))
 	var failures []core.TransformRecordFailure
 	var failedMu sync.Mutex
 
 	collect := func(i int, rec core.Record, err error) {
 		if err != nil {
-			failedMu.Lock()
-			failures = append(failures, core.TransformRecordFailure{Record: rec, Err: err})
-			failedMu.Unlock()
+			if !errors.Is(err, core.ErrRecordFiltered) {
+				failedMu.Lock()
+				failures = append(failures, core.TransformRecordFailure{Record: rec, Err: err})
+				failedMu.Unlock()
+			}
+			return
 		}
-		out[i] = rec
+		results[i] = rec
+		succeeded[i] = true
 	}
 
 	if t.mode != "query" || t.sem == nil || len(recs) <= 1 {
@@ -995,7 +1004,7 @@ func (t *LookupTransform) ApplyBatch(ctx context.Context, recs []core.Record) ([
 			r, err := t.Apply(ctx, rec)
 			collect(i, r, err)
 		}
-		return out, core.NewPartialTransformError("lookup: batch had failures", failures)
+		return compactSuccessfulLookupResults(results, succeeded), core.NewPartialTransformError("lookup: batch had failures", failures)
 	}
 
 	var wg sync.WaitGroup
@@ -1027,7 +1036,17 @@ func (t *LookupTransform) ApplyBatch(ctx context.Context, recs []core.Record) ([
 	nextLoop:
 	}
 	wg.Wait()
-	return out, core.NewPartialTransformError("lookup: batch had failures", failures)
+	return compactSuccessfulLookupResults(results, succeeded), core.NewPartialTransformError("lookup: batch had failures", failures)
+}
+
+func compactSuccessfulLookupResults(results []core.Record, succeeded []bool) []core.Record {
+	out := make([]core.Record, 0, len(results))
+	for i, rec := range results {
+		if succeeded[i] {
+			out = append(out, rec)
+		}
+	}
+	return out
 }
 
 func (t *LookupTransform) applyQuery(ctx context.Context, rec core.Record) (core.Record, error) {

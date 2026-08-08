@@ -200,6 +200,38 @@ func TestLookupOnMissDLQReturnsError(t *testing.T) {
 	assertLookupCounter(t, metrics, "miss_dlq", 1)
 }
 
+func TestLookupApplyBatchExcludesDLQRecordsFromOutput(t *testing.T) {
+	tr := &LookupTransform{
+		joinKey: "user_id",
+		fields:  []string{"tier"},
+		onMiss:  "dlq",
+		cache: map[string]map[string]any{
+			normalizeLookupKey("known"): {"tier": "vip"},
+		},
+	}
+
+	out, err := tr.ApplyBatch(context.Background(), []core.Record{
+		{Data: map[string]any{"user_id": "known"}},
+		{Data: map[string]any{"user_id": "missing"}},
+	})
+	if err == nil {
+		t.Fatal("ApplyBatch succeeded, want partial lookup error")
+	}
+	var partial core.PartialTransformError
+	if !errors.As(err, &partial) {
+		t.Fatalf("ApplyBatch error = %T %v, want PartialTransformError", err, err)
+	}
+	if got := len(partial.FailedRecords()); got != 1 {
+		t.Fatalf("failed records = %d, want 1", got)
+	}
+	if len(out) != 1 {
+		t.Fatalf("output records = %d, want only successful record", len(out))
+	}
+	if out[0].Data["user_id"] != "known" || out[0].Data["tier"] != "vip" {
+		t.Fatalf("successful lookup output = %#v", out[0].Data)
+	}
+}
+
 func TestLookupOnRefreshErrorCanRouteToDLQ(t *testing.T) {
 	tr := &LookupTransform{
 		joinKey:   "user_id",

@@ -183,6 +183,23 @@ while [ "$i" -lt 90 ]; do
 done
 "$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk cluster health >/dev/null
 
+# An in-flight durable checkpoint may fail its external Kafka offset commit
+# while the broker is down. That boundary intentionally fails/stops the
+# pipeline; restart it after the broker is healthy so it reopens from the
+# durable checkpoint and safely replays through the idempotent MySQL sink.
+body="$(curl -fsS http://127.0.0.1:8017/api/v2/pipelines)"
+if echo "$body" | grep '"name":"debezium-kafka-to-mysql"' | grep -E '"status":"(failed|stopped)"' >/dev/null 2>&1; then
+  echo "==> Restart fail-closed Debezium pipeline from durable checkpoint"
+  curl -fsS -X POST http://127.0.0.1:8017/api/v2/pipelines/debezium-kafka-to-mysql/start >/dev/null
+fi
+i=0
+while [ "$i" -lt 60 ]; do
+  body="$(curl -fsS http://127.0.0.1:8017/api/v2/pipelines)"
+  echo "$body" | grep '"name":"debezium-kafka-to-mysql"' | grep '"status":"running"' >/dev/null 2>&1 && break
+  i=$((i + 1)); sleep 1
+done
+echo "$body" | grep '"name":"debezium-kafka-to-mysql"' | grep '"status":"running"' >/dev/null
+
 cat <<'JSON' | "$CONTAINER_CLI" exec -i "$REDPANDA_CONTAINER" rpk topic produce "$TOPIC" --brokers localhost:9092 >/dev/null
 {"payload":{"op":"c","ts_ms":1710000009123,"source":{"db":"dl_vls_dev","table":"vehicle_charge"},"after":{"id":9005,"vin":"VIN-BROKER-RESTART","soc":45}}}
 JSON
