@@ -4,14 +4,35 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.4] — 2026-08-08 — checkpoint 恢复 fail-closed + connector 认证证据门禁（beta）
+
+### 新增
+
+- **Connector 认证证据门禁**（`docs/connector-certification.md` 证据新鲜度清单）：新增 `internal/etl/server/evidence/connector-evidence.json` 证据清单，每个 production source/sink 记录绑定 certified commit/image、依赖版本、执行窗口、过期时间与 named cases；descriptor readiness 暴露 `e2e_evidence` 元数据。`hack/check-connector-evidence.sh` 支持 `-strict` 严格模式：未验证/过期记录或证据清单之后的 runtime/connector/script/workflow 变更均 fail。该门禁已接入 `main` push 与两个 release workflow，release 标签必须绑定到已认证 commit（或其仅更新证据清单/认证文档的后代）。
+- **认证套件可重复性收口**：connector e2e 从共享 fixture 隔离为每脚本独立数据目录、重跑结果确定性修复、证据按 source ancestry 绑定，`docs(certification)` 记录 14 条 production 证据。
+- **生产就绪审计文档**：`docs/PRODUCTION-READINESS-AUDIT-2026-07-26.zh.md` 记录 checkpoint/DLQ/UI/认证审计结论。
+
 ### 修复
 
+- **checkpoint 恢复 fail-closed（PR-2.4.1）**：checkpoint storage 读取错误、损坏 JSON、未知 envelope version、缺失 envelope source 均使 linear/DAG pipeline 启动失败并保持可见 `failed`，绝不打开 source 或退化为空位点；legacy source position 继续兼容。
+- **checkpoint 提交顺序（PR-2.4.2）**：`CheckpointForRecord` 不再产生 Kafka MarkOffset/Commit 或 PostgreSQL committedLsn/standby ack 副作用；durable Save 成功后才调用 external Ack；external ack 失败阻断后续 checkpoint 并 fail pipeline（允许安全 replay）；Kafka auto-commit 关闭；PG keepalive 不再误报 read-ahead 进度。
+- **snapshot cursor 绑定 durable batch（PR-2.4.3）**：mysql_snapshot_cdc producer 不得在 checkpoint durable 前推进可丢失的 source cursor；linear/DAG 以完整 source batch 生成 checkpoint，numeric/string cursor 与 snapshot→CDC handoff 在 Save 后一致；缺失/非法 cursor、缺失 handoff 与 channel 结束 fail-closed。
+- **source position 启动前校验（PR-2.4.4）**：合法 JSON 但语义损坏的 source position（缺字段、负 offset/page/cursor、topic/source mismatch、非法 LSN/phase）在 `Source.Open` 前 fail-closed；API/health 暴露稳定 `last_error_code`/`last_error_remediation`；WebUI pipeline detail/issues 面板展示 checkpoint remediation 并提供安全 retry 入口（不把 reset 当默认修复）。
 - **Doris/Kafka 配置 preflight 与运行时契约收口**：Doris `table_template` 不再被误报为缺少静态 `sink.config.table`；`pk_columns_from_metadata: true` 现在从 Kafka envelope 的 JSON object key 推导复合主键，覆盖 batch compact、upsert、DELETE 和 auto-create DDL，标量 key 会给出明确 remediation；仅有 `debezium_cdc` transform 不再隐式绕过主键检查。
 - **Kafka brokers 字符串数组兼容**：source/sink runtime、connection context 与 preflight 统一解析 `"[\"broker:9092\"]"` 形式的 JSON 字符串数组，同时保留真实 YAML 数组、普通单字符串和 IPv6 broker 兼容。
+- **lookup 排除 DLQ 记录**：lookup/enricher 批量输出不再把已进 DLQ 的记录重新混入 batch（避免重放重复）。
+- **UI 错误契约对账**：pipeline 创建/配置错误统一为结构化 error code + remediation，`dag_validation` 输出一致错误路径，WebUI 展示可操作修复建议。
+- **preflight 多表 schema 边界显式化**：多表映射/宽表场景的 schema 校验边界更明确（`pipelines_preflight_test.go` 覆盖）。
+- **connector descriptor 从 schema 派生**：descriptor 与 schema 单一来源，避免手工维护漂移（`ConnectorDescriptorConfigContractMatchesSchemaExactly`）。
 
 ### 验证边界
 
-- `go test ./... -count=1`、`go test -race ./internal/etl/server ./internal/etl/sink ./internal/etl/source -count=1`、前端 typecheck/build/lint 均通过；`CONTAINER_CLI=podman sh hack/e2e-doris-table-template.sh` 实跑通过（`auto_create: true` 实际生成 orders.order_id/users.user_no Unique Key DDL；6 条 envelope，`records_read=6 records_written=6 failed=0 dlq=0`，metadata-key update 最终值和 DELETE 后 users 表行数校验均通过）。
+- `go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...` —— passed
+- `go test -race -count=1 ./internal/etl/... ./internal/logic/...`（24 个包）—— passed
+- `go test ./internal/etl/telemetry ./internal/etl/alert -count=1` —— passed
+- `bash ./hack/check-release-assets.sh` —— passed
+- `bash ./hack/check-connector-evidence.sh -strict -commit <release commit>` —— passed（release 重跑认证证据见 `docs/connector-certification.md`）
+- 认证套件在 release commit 重跑：13 个脚本 / 14 条 production 记录全部通过（窗口见 `docs/connector-certification.md`）
 
 ## [v0.2.12-beta.3] — 2026-08-08 — Doris sink table_template 多表扇出 + kafka source format=envelope（beta）
 

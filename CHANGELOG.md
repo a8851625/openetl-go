@@ -4,14 +4,78 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.4] — 2026-08-08 — Checkpoint restore fail-closed + connector certification evidence gate (beta)
+
+### Added
+
+- **Connector certification evidence gate**: a new evidence freshness manifest
+  (`internal/etl/server/evidence/connector-evidence.json`) binds every
+  production source/sink record to a certified commit/image, dependency set,
+  execution window, expiry, and named cases; the descriptor readiness gate
+  exposes the same metadata. `hack/check-connector-evidence.sh -strict` fails
+  on unverified/expired records and on any runtime, connector, script, or
+  workflow change after the certified revision. The gate is wired into `main`
+  pushes and both release workflows, so release tags must be bound to a
+  certified revision (or a descendant updating only the evidence manifest and
+  certification docs).
+- **Certification reproducibility hardening**: connector e2e fixtures are
+  isolated per script, reruns are deterministic, evidence is bound to source
+  ancestry, and 14 production records are recorded with verified evidence.
+- **Production readiness audit doc**: `docs/PRODUCTION-READINESS-AUDIT-2026-07-26.zh.md`
+  captures the checkpoint/DLQ/UI/certification audit findings.
+
 ### Fixed
 
-- **Doris/Kafka preflight and runtime contract**: Doris `table_template` no longer triggers a false missing-static-table error. With `pk_columns_from_metadata: true`, Doris derives composite keys from JSON-object Kafka envelope keys for compaction, upsert, DELETE, and auto-create DDL; scalar keys fail with actionable remediation. A `debezium_cdc` transform alone no longer bypasses the stable-key check.
-- **Kafka broker array compatibility**: source/sink runtime, connection context, and preflight now parse JSON-string arrays such as `"[\"broker:9092\"]"`, while preserving YAML arrays, ordinary single-string values, and IPv6 brokers.
+- **Checkpoint restore fail-closed (PR-2.4.1)**: checkpoint-store load errors,
+  malformed JSON, unknown envelope versions, and envelopes without a source
+  position fail linear/DAG startup as a visible `failed` pipeline; the source
+  is never opened with an empty position. Valid legacy positions keep working.
+- **Checkpoint commit ordering (PR-2.4.2)**: `CheckpointForRecord` no longer
+  triggers Kafka MarkOffset/Commit or PostgreSQL committedLsn/standby ack
+  side effects; external acknowledgements happen only after the durable Save;
+  an external-ack failure blocks later checkpoints and fails the pipeline
+  (safe replay); Kafka auto-commit is off; PG keepalives no longer report
+  read-ahead progress as durable.
+- **Snapshot cursors bound to durable batches (PR-2.4.3)**: mysql_snapshot_cdc
+  no longer advances a lossy source cursor before the checkpoint is durable;
+  linear/DAG pipelines checkpoint complete source batches, numeric/string
+  cursors and the snapshot→CDC handoff agree after Save; missing/invalid
+  cursors, missing handoff, and closed channels fail closed.
+- **Source position validation before startup (PR-2.4.4)**: semantically
+  corrupt positions (missing fields, negative offset/page/cursor, topic/source
+  mismatch, invalid LSN/phase) fail closed before `Source.Open`; API/health
+  expose stable `last_error_code`/`last_error_remediation`; the WebUI pipeline
+  detail/issues panel shows checkpoint remediation with a safe retry entry
+  (reset is not the default fix).
+- **Doris/Kafka preflight and runtime contract**: Doris `table_template` no
+  longer triggers a false missing-static-table error. With
+  `pk_columns_from_metadata: true`, Doris derives composite keys from
+  JSON-object Kafka envelope keys for compaction, upsert, DELETE, and
+  auto-create DDL; scalar keys fail with actionable remediation. A
+  `debezium_cdc` transform alone no longer bypasses the stable-key check.
+- **Kafka broker array compatibility**: source/sink runtime, connection
+  context, and preflight now parse JSON-string arrays such as
+  `"[\"broker:9092\"]"`, while preserving YAML arrays, ordinary single-string
+  values, and IPv6 brokers.
+- **Lookup excludes DLQ records**: lookup/enricher batch output no longer
+  re-mixes already-DLQed records into later batches (avoids replay
+  duplicates).
+- **UI error contract reconciliation**: pipeline create/config failures use
+  structured error codes + remediation, `dag_validation` emits consistent
+  error paths, and the WebUI shows actionable fix suggestions.
+- **Preflight multi-table schema boundaries**: schema checks for multi-table
+  mapping/wide-table scenarios are explicit (`pipelines_preflight_test.go`).
+- **Connector descriptors derived from schema**: descriptor and schema share
+  one source of truth to avoid drift
+  (`ConnectorDescriptorConfigContractMatchesSchemaExactly`).
 
 ### Verification Boundary
 
-- `go test ./... -count=1`, targeted `-race` tests, and frontend typecheck/build/lint pass. `CONTAINER_CLI=podman sh hack/e2e-doris-table-template.sh` also passed live with `auto_create: true` generating orders.order_id/users.user_no Unique Key DDL, six envelope records, `records_read=6 records_written=6 failed=0 dlq=0`, the final metadata-key update assertion, and metadata-key DELETE verification.
+- `go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...` — passed
+- `go test -race -count=1 ./internal/etl/... ./internal/logic/...` (24 packages) — passed
+- `bash ./hack/check-release-assets.sh` — passed
+- `bash ./hack/check-connector-evidence.sh -strict -commit <release commit>` — passed (fresh certification window in `docs/connector-certification.md`)
+- Certification suite re-run at the release commit: 13 scripts / 14 production records passed
 
 ## [v0.2.12-beta.1] — 2026-08-06 — Lightweight DWH scenario + Kafka CDC relay link (beta)
 
