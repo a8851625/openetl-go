@@ -166,7 +166,7 @@ wait_source_written 1
 grep -R 'Kafka Crash Recovery' data-kafka-source/output/kafka
 
 echo "==> Restart broker and verify ordinary Kafka source reconnects"
-compose -f docker-compose.dev.yml restart redpanda >/dev/null
+"$CONTAINER_CLI" restart "$REDPANDA_CONTAINER" >/dev/null
 wait_redpanda
 wait_consumer_group
 printf '%s\n' '{"id":104,"name":"Kafka Broker Recovery"}' | "$CONTAINER_CLI" exec -i "$REDPANDA_CONTAINER" rpk topic produce etl-source-topic --brokers localhost:9092 >/dev/null

@@ -145,6 +145,7 @@ DROP TABLE IF EXISTS dzh3136_go.$TABLE;
 "
 
 echo "==> Reset ETL data"
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
 rm -rf data-snapshot-cdc-clickhouse
 mkdir -p data-snapshot-cdc-clickhouse/output data-snapshot-cdc-clickhouse/checkpoint data-snapshot-cdc-clickhouse/dlq logs
 chmod -R a+rwX data-snapshot-cdc-clickhouse

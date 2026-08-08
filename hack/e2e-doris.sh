@@ -287,7 +287,7 @@ fi
 if ! "$CONTAINER_CLI" image inspect "$DORIS_BE_IMAGE" >/dev/null 2>&1; then
   "$CONTAINER_CLI" pull "$DORIS_BE_IMAGE"
 fi
-"$CONTAINER_CLI" rm -f "$DORIS_FE_CONTAINER" "$DORIS_BE_CONTAINER" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" "$DORIS_FE_CONTAINER" "$DORIS_BE_CONTAINER" >/dev/null 2>&1 || true
 "$CONTAINER_CLI" network rm "$DORIS_NETWORK" >/dev/null 2>&1 || true
 "$CONTAINER_CLI" network create --subnet=172.31.90.0/24 "$DORIS_NETWORK" >/dev/null
 "$CONTAINER_CLI" run -d \
