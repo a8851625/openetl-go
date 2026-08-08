@@ -22,6 +22,13 @@ export type PluginSchemaField = {
 
 export type FieldScopeFilter = 'all' | 'connection' | 'behavior';
 
+export type ConfigFieldIssue = {
+  level?: string;
+  check?: string;
+  message: string;
+  remediation?: string;
+};
+
 export function filterFieldsByScope(fields: PluginSchemaField[] = [], scope: FieldScopeFilter = 'all') {
   if (scope === 'all') return fields;
   return fields.filter((field) => {
@@ -133,12 +140,16 @@ export function ConfigForm({
   onChange,
   t,
   emptyText,
+  fieldIssues,
+  fieldPathPrefix,
 }: {
   fields: PluginSchemaField[];
   config: Record<string, unknown>;
   onChange: (cfg: Record<string, unknown>) => void;
   t: TFunc;
   emptyText?: string;
+  fieldIssues?: Record<string, ConfigFieldIssue[]>;
+  fieldPathPrefix?: string;
 }) {
   if (!fields || fields.length === 0) {
     return <div className="text-xs text-muted-foreground">{emptyText || t('conn.noConfigFields')}</div>;
@@ -159,11 +170,14 @@ export function ConfigForm({
       {fields.map((field) => {
         const value = config[field.name] ?? field.default ?? '';
         const placeholder = exampleText(field.example) || field.description || '';
+        const issues = fieldIssues?.[field.name] || fieldIssues?.[`${fieldPathPrefix || ''}.${field.name}`] || [];
+        const invalidClass = issues.length > 0 ? 'border-rose-400 ring-1 ring-rose-200' : '';
         let input: React.ReactNode;
         if (field.enum && field.enum.length > 0) {
           input = (
             <select
-              className={selectClass}
+              className={cn(selectClass, invalidClass)}
+              aria-invalid={issues.length > 0}
               value={String(value)}
               onChange={(e) => update(field.name, e.target.value)}
             >
@@ -177,8 +191,12 @@ export function ConfigForm({
           );
         } else if (field.type === 'bool') {
           input = (
-            <div className="flex h-9 items-center gap-2">
-              <Switch checked={!!value} onCheckedChange={(checked) => update(field.name, checked)} />
+            <div className={cn('flex h-9 items-center gap-2 rounded-md border border-transparent px-2', invalidClass)}>
+              <Switch
+                aria-invalid={issues.length > 0}
+                checked={!!value}
+                onCheckedChange={(checked) => update(field.name, checked)}
+              />
               <span className="text-xs text-muted-foreground">
                 {value ? t('common.enabled') : t('common.disabled')}
               </span>
@@ -187,6 +205,8 @@ export function ConfigForm({
         } else if (field.type === 'int' || field.type === 'float') {
           input = (
             <Input
+              className={invalidClass}
+              aria-invalid={issues.length > 0}
               type="number"
               step={field.type === 'float' ? '0.01' : '1'}
               value={value === undefined ? '' : String(value)}
@@ -197,6 +217,8 @@ export function ConfigForm({
         } else if (field.type === 'string_array') {
           input = (
             <Input
+              className={invalidClass}
+              aria-invalid={issues.length > 0}
               value={Array.isArray(value) ? value.join(', ') : String(value || '')}
               onChange={(e) =>
                 update(
@@ -213,7 +235,8 @@ export function ConfigForm({
         } else if (field.type === 'map') {
           input = (
             <Textarea
-              className="min-h-24 font-mono text-xs leading-relaxed"
+              className={cn('min-h-24 font-mono text-xs leading-relaxed', invalidClass)}
+              aria-invalid={issues.length > 0}
               value={mapText(value)}
               onChange={(e) => update(field.name, parseMapInput(e.target.value))}
               placeholder={placeholder || '{"key": "value"}'}
@@ -223,13 +246,16 @@ export function ConfigForm({
           const multiline = ['query', 'script', 'code', 'rules', 'body'].includes(field.name);
           input = multiline ? (
             <Textarea
-              className="min-h-20 font-mono text-xs leading-relaxed"
+              className={cn('min-h-20 font-mono text-xs leading-relaxed', invalidClass)}
+              aria-invalid={issues.length > 0}
               value={String(value || '')}
               onChange={(e) => update(field.name, e.target.value)}
               placeholder={placeholder}
             />
           ) : (
             <Input
+              className={invalidClass}
+              aria-invalid={issues.length > 0}
               type={field.secret ? 'password' : 'text'}
               value={String(value || '')}
               onChange={(e) => update(field.name, e.target.value)}
@@ -239,7 +265,7 @@ export function ConfigForm({
         }
 
         return (
-          <div key={field.name}>
+          <div key={field.name} data-testid={`config-field-${field.name}`}>
             <Label className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
               <span>{field.name}</span>
               {field.required && <span className="text-rose-500">*</span>}
@@ -268,6 +294,13 @@ export function ConfigForm({
             {field.description && (
               <div className={cn('mt-1 text-xs text-muted-foreground')}>{field.description}</div>
             )}
+            {issues.map((issue, index) => (
+              <div key={`${issue.check || 'issue'}-${index}`} className="mt-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700" data-testid={`config-field-${field.name}-error`}>
+                <div className="font-medium">{issue.check || issue.level || 'Invalid value'}</div>
+                <div className="break-words whitespace-pre-wrap">{issue.message}</div>
+                {issue.remediation && <div className="mt-0.5 break-words whitespace-pre-wrap text-rose-600">Fix: {issue.remediation}</div>}
+              </div>
+            ))}
           </div>
         );
       })}

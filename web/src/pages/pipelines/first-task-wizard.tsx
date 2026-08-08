@@ -4,17 +4,18 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ToneBadge } from '@/components/shared/status-badge';
+import { ErrorDetails } from '@/components/shared/error-details';
 import { cn } from '@/lib/utils';
-import { ErrorBox } from '@/components/shared/empty-state';
 import {
   ConfigForm,
   buildDefaultConfig,
   essentialFields,
   filterFieldsByScope,
   missingRequiredFields,
+  type ConfigFieldIssue,
   type PluginSchemaField,
 } from '@/configFields';
-import { api, getToken, normalizeConnectionEntry } from '@/lib/api';
+import { api, apiErrorPayload, normalizeConnectionEntry, toApiErrorDetails, type ApiErrorDetails } from '@/lib/api';
 import { parseJSONObject, parseJSONText, prettyJSON } from '@/lib/format';
 import { navigate } from '@/lib/routing';
 import type {
@@ -71,6 +72,10 @@ type WizardTemplate = {
 type ValidateResult = {
   valid?: boolean;
   warnings?: string[];
+  errors?: string[];
+  field_issues?: { level?: string; field: string; node?: string; check?: string; message: string; remediation?: string }[];
+  preflight_warnings?: string[];
+  preflight_valid?: boolean;
   preflight?: {
     passed?: boolean;
     summary?: string;
@@ -88,7 +93,6 @@ type ValidateResult = {
     }[];
     recommendations?: { path: string; value: unknown; reason: string; safety?: string }[];
   };
-  errors?: string[];
 };
 
 const WIZARD_TEMPLATES: WizardTemplate[] = [
@@ -254,6 +258,7 @@ export function FirstTaskWizard({
     error?: string;
   } | null>(null);
   const [error, setError] = useState('');
+  const [errorDetails, setErrorDetails] = useState<ApiErrorDetails | null>(null);
   const [busy, setBusy] = useState('');
   const [connections, setConnections] = useState<ConnectionEntry[]>([]);
   const [sourceConnection, setSourceConnection] = useState(restored?.sourceConnection || '');
@@ -266,6 +271,18 @@ export function FirstTaskWizard({
   );
   const [dlqEnabled, setDlqEnabled] = useState(restored?.dlqEnabled ?? true);
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+
+  const reportError = (value: unknown, fallback = 'Operation failed') => {
+    const details = toApiErrorDetails(value, 0, fallback);
+    setErrorDetails(details);
+    setError(details.summary);
+    return details;
+  };
+
+  const clearError = () => {
+    setError('');
+    setErrorDetails(null);
+  };
 
   const allSourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
   const allSinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
@@ -285,6 +302,25 @@ export function FirstTaskWizard({
   const sinkMissing = sinkConnection
     ? missingRequiredFields(sinkFields, sinkConfig)
     : missingRequiredFields(allSinkFields, sinkConfig);
+  const validationFieldIssues = result?.preflight?.field_issues || result?.field_issues || [];
+  const fieldIssuesFor = (prefix: string): Record<string, ConfigFieldIssue[]> => {
+    const map: Record<string, ConfigFieldIssue[]> = {};
+    validationFieldIssues.forEach((issue) => {
+      const marker = `${prefix}.`;
+      if (!issue.field.startsWith(marker)) return;
+      const name = issue.field.slice(marker.length);
+      if (!name) return;
+      (map[name] ||= []).push({
+        level: issue.level,
+        check: issue.check,
+        message: issue.message,
+        remediation: issue.remediation,
+      });
+    });
+    return map;
+  };
+  const sourceFieldIssues = fieldIssuesFor('source.config');
+  const sinkFieldIssues = fieldIssuesFor('sink.config');
   const transformTypes = Object.keys(schema?.data?.transforms || {}).sort();
   const sourceConnections = connections.filter((conn) => conn.kind === 'source');
   const sinkConnections = connections.filter((conn) => conn.kind === 'sink');
@@ -500,7 +536,7 @@ export function FirstTaskWizard({
   const selectSourceConnection = async (connName: string) => {
     setSourceConnection(connName);
     setResult(null);
-    setError('');
+    clearError();
     try {
       await loadConnectionContext(connName, 'source');
     } catch (e) {
@@ -511,7 +547,7 @@ export function FirstTaskWizard({
   const selectSinkConnection = async (connName: string) => {
     setSinkConnection(connName);
     setResult(null);
-    setError('');
+    clearError();
     try {
       await loadConnectionContext(connName, 'sink');
     } catch (e) {
@@ -520,25 +556,23 @@ export function FirstTaskWizard({
   };
 
   const validate = async (throwOnInvalid = false) => {
-    setBusy('validate'); setError(''); setResult(null);
+    setBusy('validate'); clearError(); setResult(null);
     try {
       const spec = YAML.parse(yamlText);
-      const res = await fetch('/api/v2/specs/validate', {
+      const data = await api<ValidateResult>('/api/v2/specs/validate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(getToken() ? { 'X-API-Token': getToken() } : {}) },
         body: JSON.stringify({ spec }),
       });
-      const data = await res.json();
       setResult(data);
-      if (!res.ok) throw new Error((data.errors || data.warnings || ['validation failed']).join('\n'));
       if (data.valid === false) {
-        const message = (data.errors || data.warnings || ['preflight failed']).join('\n');
-        setError(message);
-        if (throwOnInvalid) throw new Error(message);
+        const details = reportError(data, 'Preflight failed');
+        if (throwOnInvalid) throw details;
       }
       return data as ValidateResult;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const payload = apiErrorPayload(e);
+      if (payload && typeof payload === 'object') setResult(payload as ValidateResult);
+      reportError(e, 'Validation failed');
       throw e;
     } finally {
       setBusy('');
@@ -546,7 +580,7 @@ export function FirstTaskWizard({
   };
 
   const dryRun = async () => {
-    setBusy('dry-run'); setError(''); setDryRunResult(null); setStageDryRunResult(null);
+    setBusy('dry-run'); clearError(); setDryRunResult(null); setStageDryRunResult(null);
     try {
       const data = await api('/api/v2/transforms/dry-run', {
         method: 'POST',
@@ -554,14 +588,14 @@ export function FirstTaskWizard({
       });
       setDryRunResult(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      reportError(e, 'Transform dry-run failed');
     } finally {
       setBusy('');
     }
   };
 
   const createAndStart = async () => {
-    setBusy('create'); setError('');
+    setBusy('create'); clearError();
     try {
       const checked = await validate(true);
       if (checked.valid === false) throw new Error((checked.errors || checked.warnings || ['preflight failed']).join('\n'));
@@ -571,7 +605,7 @@ export function FirstTaskWizard({
       clearDraft();
       onCreated(created.name || spec.name);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      reportError(e, 'Pipeline creation failed');
     } finally {
       setBusy('');
     }
@@ -583,19 +617,23 @@ export function FirstTaskWizard({
       setName(spec.name || name);
       if (spec.source?.type) {
         setSourceType(spec.source.type);
+        setSourceConnection(spec.source.connection || '');
+        if (!spec.source.connection) setSourceContext(null);
         setSourceConfigText(prettyJSON(spec.source.config || {}));
       }
       if (spec.sink?.type) {
         setSinkType(spec.sink.type);
+        setSinkConnection(spec.sink.connection || '');
+        if (!spec.sink.connection) setSinkContext(null);
         setSinkConfigText(prettyJSON(spec.sink.config || {}));
       }
       if (typeof spec.batch_size === 'number') setBatchSize(spec.batch_size);
       if (typeof spec.checkpoint_interval_sec === 'number') setCheckpointIntervalSec(spec.checkpoint_interval_sec);
       if (typeof spec.dlq?.enable === 'boolean') setDlqEnabled(spec.dlq.enable);
       setTransformsText(prettyJSON(spec.transforms || []));
-      setError('');
+      clearError();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      reportError(e, 'YAML sync failed');
     }
   };
 
@@ -641,9 +679,9 @@ export function FirstTaskWizard({
       }
       setYamlText(YAML.stringify(spec));
       setResult(null);
-      setError('');
+      clearError();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      reportError(e, 'Recommendation could not be applied');
     }
   };
 
@@ -670,12 +708,12 @@ export function FirstTaskWizard({
       if (scope === 'source' && rec.field === 'batch_size' && typeof rec.value === 'number') {
         setBatchSize(rec.value);
         setResult(null);
-        setError('');
+        clearError();
       }
       if (scope === 'source' && rec.field === 'checkpoint_interval_sec' && typeof rec.value === 'number') {
         setCheckpointIntervalSec(rec.value);
         setResult(null);
-        setError('');
+        clearError();
       }
       return;
     }
@@ -698,7 +736,7 @@ export function FirstTaskWizard({
       setSourceConfigText(prettyJSON(next));
     }
     setResult(null);
-    setError('');
+    clearError();
   };
 
   const renderConfigEditor = (
@@ -716,11 +754,14 @@ export function FirstTaskWizard({
       hiddenCount?: number;
       essential?: PluginSchemaField[];
       connectionSelected?: boolean;
+      fieldIssues?: Record<string, ConfigFieldIssue[]>;
     },
   ) => {
     const showAll = !!opts?.moreOpen || !opts?.essential;
-    const visibleFields = showAll ? fields : (opts?.essential || fields);
-    const hidden = opts?.hiddenCount || 0;
+    const issueFields = fields.filter((field) => (opts?.fieldIssues?.[field.name] || []).length > 0);
+    const compactFields = Array.from(new Map([...(opts?.essential || fields), ...issueFields].map((field) => [field.name, field])).values());
+    const visibleFields = showAll ? fields : compactFields;
+    const hidden = Math.max(0, fields.length - visibleFields.length);
     return (
       <div className="rounded-lg border border-border bg-card p-3" data-testid={testId}>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -756,6 +797,7 @@ export function FirstTaskWizard({
           config={config}
           onChange={(next) => setConfigText(prettyJSON(next))}
           t={t}
+          fieldIssues={opts?.fieldIssues}
           emptyText={opts?.connectionSelected ? t('wizard.connectionFirst') : undefined}
         />
         {jsonOpen && (
@@ -846,7 +888,7 @@ export function FirstTaskWizard({
   };
 
   const dryRunThroughStage = async (index: number) => {
-    setBusy(`stage-${index}`); setError(''); setStageDryRunResult(null);
+    setBusy(`stage-${index}`); clearError(); setStageDryRunResult(null);
     try {
       const data = await api('/api/v2/transforms/dry-run', {
         method: 'POST',
@@ -855,14 +897,13 @@ export function FirstTaskWizard({
       if ((data as any)?.partial_error) {
         const message = prettyJSON((data as any).errors || data);
         setStageDryRunResult({ index, error: message });
-        setError(`Stage ${index + 1} failed: ${message}`);
+        reportError({ errors: [message] }, `Stage ${index + 1} failed`);
         return;
       }
       setStageDryRunResult({ index, result: data });
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setStageDryRunResult({ index, error: message });
-      setError(`Stage ${index + 1} failed: ${message}`);
+      const details = reportError(e, `Stage ${index + 1} failed`);
+      setStageDryRunResult({ index, error: details.summary });
     } finally {
       setBusy('');
     }
@@ -925,6 +966,13 @@ export function FirstTaskWizard({
 
           {/* Center form: only the active step is rendered to reduce visual clutter. */}
           <div className="space-y-4 p-5 md:p-6" data-testid="wizard-step-body">
+            {error && (
+              <ErrorDetails
+                error={errorDetails || error}
+                title="Pipeline configuration failed"
+                testId="wizard-error-details"
+              />
+            )}
             {/* Scenario */}
             {step === 'scenario' && (
             <div id="wizard-section-scenario" className="ring-1 ring-primary/20 rounded-lg p-1">
@@ -1030,6 +1078,7 @@ export function FirstTaskWizard({
                     hiddenCount: sourceHiddenCount,
                     essential: sourceEssentialFields,
                     connectionSelected: Boolean(sourceConnection),
+                    fieldIssues: sourceFieldIssues,
                   },
                 )}
               </div>
@@ -1133,6 +1182,7 @@ export function FirstTaskWizard({
                     hiddenCount: sinkHiddenCount,
                     essential: sinkEssentialFields,
                     connectionSelected: Boolean(sinkConnection),
+                    fieldIssues: sinkFieldIssues,
                   },
                 )}
               </div>
@@ -1389,12 +1439,11 @@ export function FirstTaskWizard({
                   {safetyMoreOpen ? t('wizard.hideOptions') : t('wizard.advancedChecks')}
                 </Button>
               </div>
-              {error && <div className="mt-3"><ErrorBox message={error} /></div>}
               {result && (
                 <div
                   data-testid="wizard-preflight-result"
                   className={cn(
-                    'mt-3 rounded-lg border p-3',
+                    'mt-3 max-h-[min(58vh,620px)] overflow-y-auto rounded-lg border p-3',
                     result.valid === false
                       ? 'border-rose-200 bg-rose-50 dark:border-rose-900 dark:bg-rose-950/30'
                       : 'border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30',
@@ -1404,25 +1453,49 @@ export function FirstTaskWizard({
                     <div className="text-sm font-semibold">
                       {result.valid === false ? 'Preflight failed' : 'Preflight passed'} ·{' '}
                       {result.preflight?.summary || 'validation complete'}
+                      <span className="ml-2 text-[11px] font-normal opacity-75">
+                        {(result.errors?.length || 0) + (result.warnings?.length || 0) + (result.preflight?.issues?.length || 0) + validationFieldIssues.length} issue(s)
+                      </span>
                     </div>
                     <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => setResult(null)}>✕</Button>
                   </div>
-                  {(result.warnings || result.errors || []).slice(0, 5).map((msg, i) => (
-                    <div key={i} className="text-xs">{msg}</div>
+                  {(result.errors || []).map((msg, i) => (
+                    <div key={`error-${i}`} className="break-words whitespace-pre-wrap text-xs text-rose-700">{msg}</div>
                   ))}
-                  {(result.preflight?.issues || []).slice(0, 5).map((issue, i) => (
+                  {(result.warnings || []).map((msg, i) => (
+                    <div key={`warning-${i}`} className="break-words whitespace-pre-wrap text-xs">{msg}</div>
+                  ))}
+                  {(result.preflight?.issues || []).map((issue, i) => (
                     <div key={`issue-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
                       <div className="font-semibold">{issue.level} · {issue.check}</div>
-                      <div>{issue.message}</div>
-                      {issue.remediation && <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>}
+                      <div className="break-words whitespace-pre-wrap">{issue.message}</div>
+                      {issue.remediation && <div className="mt-1 break-words whitespace-pre-wrap text-muted-foreground">Fix: {issue.remediation}</div>}
                     </div>
                   ))}
-                  {(result.preflight?.recommendations || []).slice(0, 5).map((rec, i) => (
+                  {validationFieldIssues.map((issue, i) => (
+                    <div key={`field-${i}`} className="mt-2 rounded border border-rose-200 bg-card/70 p-2 text-xs">
+                      <div className="font-semibold">{issue.field} · {issue.check || 'field validation'}</div>
+                      <div className="break-words whitespace-pre-wrap">{issue.message}</div>
+                      {issue.remediation && <div className="mt-1 break-words whitespace-pre-wrap text-muted-foreground">Fix: {issue.remediation}</div>}
+                      {(issue.field.startsWith('source.') || issue.field.startsWith('sink.')) && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          className="mt-2 h-7 text-[11px]"
+                          onClick={() => setStep((issue.field.startsWith('source.') ? 'source' : 'sink') as WizardStepId)}
+                        >
+                          Open {issue.field.startsWith('source.') ? 'Source' : 'Sink'}
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  {(result.preflight?.recommendations || []).map((rec, i) => (
                     <div key={`recommendation-${rec.path}-${i}`} className="mt-2 rounded border border-border bg-card/70 p-2 text-xs">
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <div className="font-semibold">{rec.safety || 'review'} · {rec.path}</div>
-                          <div>{rec.reason}</div>
+                          <div className="break-words whitespace-pre-wrap">{rec.reason}</div>
                         </div>
                         <Button variant="secondary" size="sm" className="shrink-0 text-[11px]" onClick={() => applyPreflightRecommendation(rec)}>
                           Apply
@@ -1446,12 +1519,6 @@ export function FirstTaskWizard({
                     value={yamlText}
                     onChange={(e) => setYamlText(e.target.value)}
                   />
-                  {(result?.preflight?.field_issues || []).map((issue, i) => (
-                    <div key={`field-${i}`} className="rounded border border-border bg-card/70 p-2 text-xs">
-                      <div className="font-semibold">{issue.field} · {issue.check}</div>
-                      <div>{issue.message}</div>
-                    </div>
-                  ))}
                   {(result?.preflight?.guidance || []).map((item, i) => (
                     <div key={`guidance-${i}`} className="rounded border border-border bg-card/70 p-2 text-xs">
                       <div className="font-semibold">{item.level} · {item.category} · {item.code}</div>
@@ -1515,7 +1582,6 @@ export function FirstTaskWizard({
                   <GitBranch className="h-4 w-4" /> {t('wizard.openAdvancedDag')}
                 </Button>
               </div>
-              {error && <div className="mt-3"><ErrorBox message={error} /></div>}
             </div>
             )}
 

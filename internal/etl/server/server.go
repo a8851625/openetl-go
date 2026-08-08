@@ -1238,6 +1238,16 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": problems})
 			return
 		}
+		if issues := validateDAGNodeConfigs(&dagSpec); len(issues) > 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{
+				"valid":        false,
+				"error":        "DAG node validation failed",
+				"errors":       dagValidationErrorStrings(issues),
+				"field_issues": issues,
+			})
+			return
+		}
 		s.mu.RLock()
 		exists := len(s.pipelineNameRefs[dagSpec.Name]) > 0
 		s.mu.RUnlock()
@@ -1662,10 +1672,21 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
 				return
 			}
+			if issues := validateDAGNodeConfigs(&dagSpec); len(issues) > 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{
+					"valid":        false,
+					"error":        "DAG node validation failed",
+					"errors":       dagValidationErrorStrings(issues),
+					"field_issues": issues,
+				})
+				return
+			}
 			createWarnings := tapUnimplementedConfigWarningsForDAG(&dagSpec)
 			runtime := runtimeDAGSpec(&dagSpec, id)
 			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
@@ -1874,6 +1895,16 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			if problems := validateDAGRuntimeStateRequirements(&dagSpec); len(problems) > 0 {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
+				return
+			}
+			if issues := validateDAGNodeConfigs(&dagSpec); len(issues) > 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{
+					"valid":        false,
+					"error":        "DAG node validation failed",
+					"errors":       dagValidationErrorStrings(issues),
+					"field_issues": issues,
+				})
 				return
 			}
 			updateWarnings := tapUnimplementedConfigWarningsForDAG(&dagSpec)
@@ -4614,7 +4645,7 @@ func (s *Server) getHealthStatus() map[string]string {
 		}
 	}
 
-// Retention / janitor observability (PR-1.3) — surface on health extra map.
+	// Retention / janitor observability (PR-1.3) — surface on health extra map.
 	js := s.JanitorStatusSnapshot()
 	extra["janitor"] = js.ConfigSummary
 	if js.Enabled {

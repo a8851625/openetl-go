@@ -6,6 +6,229 @@ import type {
   PipelineStats,
 } from './types';
 
+export type ApiIssue = {
+  level?: string;
+  field?: string;
+  node?: string;
+  check?: string;
+  category?: string;
+  code?: string;
+  message: string;
+  remediation?: string;
+  action?: string;
+};
+
+export type ApiErrorDetails = {
+  status?: number;
+  summary: string;
+  issues: ApiIssue[];
+  raw?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isApiErrorDetails(value: unknown): value is ApiErrorDetails {
+  return isRecord(value) && typeof value.summary === 'string' && Array.isArray(value.issues);
+}
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parseResponseBody(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return text;
+  }
+}
+
+function issueKey(issue: ApiIssue): string {
+  return [issue.level, issue.field, issue.node, issue.check, issue.code, issue.message].join('|');
+}
+
+function appendIssue(issues: ApiIssue[], issue: ApiIssue | null | undefined) {
+  if (!issue || !issue.message.trim()) return;
+  if (!issues.some((item) => issueKey(item) === issueKey(issue))) issues.push(issue);
+}
+
+function appendStringIssues(issues: ApiIssue[], value: unknown, level: string) {
+  if (!Array.isArray(value)) return;
+  value.forEach((message) => {
+    if (typeof message === 'string' && message.trim()) appendIssue(issues, { level, message: message.trim() });
+  });
+}
+
+function appendStructuredIssues(issues: ApiIssue[], value: unknown, fallbackLevel: string) {
+  if (!Array.isArray(value)) return;
+  value.forEach((raw) => {
+    if (typeof raw === 'string') {
+      appendIssue(issues, { level: fallbackLevel, message: raw });
+      return;
+    }
+    if (!isRecord(raw)) return;
+    const message = asText(raw.message) || asText(raw.reason) || asText(raw.label);
+    if (!message) return;
+    appendIssue(issues, {
+      level: asText(raw.level) || fallbackLevel,
+      field: asText(raw.field) || undefined,
+      node: asText(raw.node) || undefined,
+      check: asText(raw.check) || undefined,
+      category: asText(raw.category) || undefined,
+      code: asText(raw.code) || undefined,
+      message,
+      remediation: asText(raw.remediation) || undefined,
+      action: asText(raw.action) || undefined,
+    });
+  });
+}
+
+function isSensitiveKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return /(password|passwd|secret|token|apikey|accesskey|privatekey|credential|authorization|cookie|dsn)/.test(normalized);
+}
+
+function redactText(value: string): string {
+  return value
+    .replace(/\b(authorization\s*[:=]\s*bearer\s+)[^\s,;}]+/gi, '$1[REDACTED]')
+    .replace(
+      /\b(password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|authorization|cookie|dsn)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;}]+)/gi,
+      '$1=[REDACTED]',
+    )
+    .trim();
+}
+
+function safeRaw(value: unknown): string | undefined {
+  if (typeof value === 'string') return redactText(value) || undefined;
+  if (!value || typeof value !== 'object') return undefined;
+  try {
+    return JSON.stringify(
+      value,
+      (key, item) => (key && isSensitiveKey(key) ? '[REDACTED]' : item),
+      2,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+export function toApiErrorDetails(value: unknown, status = 0, fallback = 'Request failed'): ApiErrorDetails {
+  if (value instanceof ApiError) return value.details;
+  if (isApiErrorDetails(value)) {
+    return { ...value, status: value.status || status || undefined };
+  }
+  if (value instanceof Error) {
+    return { status: status || undefined, summary: value.message || fallback, issues: [] };
+  }
+
+  let payload = value;
+  let raw: string | undefined;
+  if (typeof payload === 'string') {
+    const parsed = parseResponseBody(payload);
+    if (parsed === payload) raw = safeRaw(payload);
+    else payload = parsed;
+  }
+
+  const issues: ApiIssue[] = [];
+  let summary = '';
+  if (isRecord(payload)) {
+    summary = asText(payload.error) || asText(payload.message) || asText(payload.title);
+    if (payload.valid === false && !summary) summary = 'Validation failed';
+    if (payload.preflight_valid === false && !summary) summary = 'Preflight failed';
+    appendStringIssues(issues, payload.errors, 'error');
+    appendStringIssues(issues, payload.warnings, 'warning');
+    appendStringIssues(issues, payload.preflight_warnings, 'warning');
+    appendStructuredIssues(issues, payload.issues, 'error');
+    appendStructuredIssues(issues, payload.field_issues, 'error');
+
+    const preflight = isRecord(payload.preflight) ? payload.preflight : undefined;
+    if (preflight) {
+      appendStructuredIssues(issues, preflight.issues, 'error');
+      appendStructuredIssues(issues, preflight.field_issues, 'error');
+      appendStructuredIssues(issues, preflight.guidance, 'warning');
+      if (Array.isArray(preflight.recommendations)) {
+        preflight.recommendations.forEach((rawRecommendation) => {
+          if (!isRecord(rawRecommendation)) return;
+          const path = asText(rawRecommendation.path);
+          const reason = asText(rawRecommendation.reason);
+          if (!reason) return;
+          appendIssue(issues, {
+            level: asText(rawRecommendation.safety) || 'warning',
+            field: path || undefined,
+            code: 'recommendation',
+            message: reason,
+            action: path ? `Apply recommendation for ${path}` : undefined,
+          });
+        });
+      }
+      if (Array.isArray(preflight.readiness)) {
+        preflight.readiness.forEach((rawConnector) => {
+          if (!isRecord(rawConnector)) return;
+          const connector = `${asText(rawConnector.kind)}/${asText(rawConnector.type)}`.replace(/^\//, '');
+          const summaryText = asText(rawConnector.summary);
+          if (summaryText) {
+            appendIssue(issues, { level: 'info', code: 'readiness', message: `${connector}: ${summaryText}` });
+          }
+          if (!Array.isArray(rawConnector.gates)) return;
+          rawConnector.gates.forEach((rawGate) => {
+            if (!isRecord(rawGate) || !['missing', 'partial'].includes(asText(rawGate.status))) return;
+            const label = asText(rawGate.label) || asText(rawGate.code) || 'readiness gate';
+            appendIssue(issues, {
+              level: 'warning',
+              code: asText(rawGate.code) || 'readiness',
+              message: `${connector}: ${asText(rawGate.status)} · ${label}`,
+              remediation: asText(rawGate.remediation) || undefined,
+            });
+          });
+        });
+      }
+      if (!summary) summary = asText(preflight.summary);
+    }
+  } else if (typeof payload === 'string') {
+    summary = payload.trim();
+  }
+
+  if (!summary && issues.length > 0) summary = issues[0].message;
+  if (!summary) summary = fallback;
+  if (!raw && isRecord(payload)) raw = safeRaw(payload);
+  return { status: status || undefined, summary, issues, raw };
+}
+
+export function apiErrorSummary(value: unknown, fallback = 'Request failed'): string {
+  return toApiErrorDetails(value, 0, fallback).summary;
+}
+
+export function apiErrorPayload(value: unknown): unknown {
+  return value instanceof ApiError ? value.payload : undefined;
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly payload: unknown;
+  readonly details: ApiErrorDetails;
+
+  constructor(status: number, payload: unknown, rawText = '', fallback = 'Request failed') {
+    const details = toApiErrorDetails(payload ?? rawText, status, fallback);
+    super(details.summary);
+    this.name = 'ApiError';
+    this.status = status;
+    this.payload = payload;
+    this.details = details;
+  }
+}
+
+function isErrorEnvelope(payload: unknown): boolean {
+  if (!isRecord(payload)) return false;
+  if (payload.valid === false || payload.preflight_valid === false) return true;
+  if (typeof payload.error === 'string' && payload.error.trim()) return true;
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) return true;
+  return false;
+}
+
 // API credentials intentionally live only for the lifetime of this page.  A
 // persistent localStorage token is readable by every script running in the UI
 // origin and survives browser restarts, so it is not an acceptable default for
@@ -31,8 +254,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   headers.set('Content-Type', headers.get('Content-Type') || 'application/json');
   if (token) headers.set('X-API-Token', token);
   const res = await fetch(path, { ...init, headers });
-  if (!res.ok) throw new Error((await res.text()) || `${res.status} ${res.statusText}`);
-  return res.json();
+  const text = await res.text();
+  const payload = parseResponseBody(text);
+  if (!res.ok || isErrorEnvelope(payload)) {
+    throw new ApiError(res.status, payload, text, `${res.status} ${res.statusText}`);
+  }
+  return (payload === undefined ? undefined : payload) as T;
 }
 
 export function useApi<T>(path: string, refreshKey: number): ApiState<T> {

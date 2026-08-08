@@ -16,6 +16,7 @@ import {
   normalizePipelines,
   pipelineKey,
   setToken as setApiToken,
+  toApiErrorDetails,
   useApi,
 } from '@/lib/api';
 import { showToast, type ToastFn } from '@/lib/toast';
@@ -137,7 +138,11 @@ function App() {
   }, []);
 
   const runAction = useCallback(
-    async (label: string, fn: () => Promise<unknown>) => {
+    async (
+      label: string,
+      fn: () => Promise<unknown>,
+      onError?: (details: ReturnType<typeof toApiErrorDetails>) => void,
+    ) => {
       try {
         const result = await fn();
         const toastMessage =
@@ -150,7 +155,9 @@ function App() {
         toast('success', toastMessage);
         setRefreshKey((n) => n + 1);
       } catch (e) {
-        toast('error', `${label}: ${e instanceof Error ? e.message : String(e)}`);
+        const details = toApiErrorDetails(e);
+        toast('error', `${label}: ${details.summary}`);
+        onError?.(details);
       }
     },
     [toast],

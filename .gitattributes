@@ -1,1 +1,2 @@
 * linguist-language=GO
+resource/public/assets/*.js whitespace=-trailing-space

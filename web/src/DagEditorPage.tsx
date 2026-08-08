@@ -12,9 +12,10 @@ import type { TFunc, Lang } from './types';
 import { ConfigForm, filterFieldsByScope, type PluginSchemaField } from './configFields';
 import { Button } from '@/components/ui/button';
 import { ToneBadge } from '@/components/shared/status-badge';
+import { ErrorDetails } from '@/components/shared/error-details';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/components/theme-provider';
-import { getToken } from '@/lib/api';
+import { api, apiErrorPayload, toApiErrorDetails, type ApiErrorDetails } from '@/lib/api';
 
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -100,6 +101,9 @@ type ValidateResult = {
   valid?: boolean;
   warnings?: string[];
   errors?: string[];
+  field_issues?: { level?: string; field: string; node?: string; check?: string; message: string; remediation?: string }[];
+  preflight_warnings?: string[];
+  preflight_valid?: boolean;
   preflight?: {
     passed?: boolean;
     summary?: string;
@@ -361,20 +365,26 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   lang: Lang;
   plugins: any;
   schema: any;
-  onAction: any;
+  onAction: (
+    label: string,
+    fn: () => Promise<unknown>,
+    onError?: (details: ApiErrorDetails) => void,
+  ) => void;
   editTarget?: string;
 }) {
   const { resolvedTheme } = useTheme();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<DAGNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [dagFormat, setDagFormat] = useState(false);
   const [pipelineName, setPipelineName] = useState('my-pipeline');
   const [tags, setTags] = useState('');
   const [workerLabels, setWorkerLabels] = useState('');
   const [schedule, setSchedule] = useState<ScheduleConfig>({ type: 'streaming' });
   const [yamlOutput, setYamlOutput] = useState('');
   const [validateResult, setValidateResult] = useState<ValidateResult | null>(null);
-  const [validateError, setValidateError] = useState('');
+  const [validateError, setValidateError] = useState<ApiErrorDetails | null>(null);
+  const [operationError, setOperationError] = useState<ApiErrorDetails | null>(null);
   // Drawer: 'schedule' | 'hooks' | 'advanced' | 'ai' | 'yaml' | null
   const [drawerTab, setDrawerTab] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -471,6 +481,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setBackpressureBuffer(Number.isFinite(nextBuffer) && nextBuffer > 0 ? nextBuffer : 100);
 
     if (spec.dag?.nodes) {
+      setDagFormat(true);
       const nextNodes: Node<DAGNodeData>[] = (spec.dag.nodes || []).map((n: any, i: number) => ({
         id: n.id || `${n.kind || 'node'}-${i + 1}`,
         type: 'pipelineNode',
@@ -494,10 +505,11 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       setEdges(nextEdges);
       setSelectedNodeId(nextNodes[0]?.id || null);
       setValidateResult(null);
-      setValidateError('');
+      setValidateError(null);
       return;
     }
 
+    setDagFormat(false);
     const nextNodes: Node<DAGNodeData>[] = [];
     const nextEdges: Edge[] = [];
     if (spec.source?.type) {
@@ -518,7 +530,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setEdges(nextEdges);
     setSelectedNodeId(nextNodes[0]?.id || null);
     setValidateResult(null);
-    setValidateError('');
+    setValidateError(null);
   }, [setEdges, setNodes]);
 
   // Load pipeline only when the target pipeline id changes.
@@ -544,6 +556,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   }, [setEdges]);
 
   const addNode = (kind: string, defaultPlugin: string) => {
+    if (ADVANCED_NODE_KINDS.includes(kind)) setDagFormat(true);
     // Compute id against the live node list so concurrent adds and loaded
     // specs never reuse an existing transform/source/sink id.
     setNodes((nds) => {
@@ -678,7 +691,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     const hasMultipleSources = nodes.filter((n) => n.data.kind === 'source').length > 1;
     const hasMultipleSinks = nodes.filter((n) => n.data.kind === 'sink').length > 1;
 
-    if (hasComplexTopology || hasMultipleSources || hasMultipleSinks) {
+    if (dagFormat || hasComplexTopology || hasMultipleSources || hasMultipleSinks) {
       // ── DAG format ───────────────────────────────────
       return {
         name: pipelineName,
@@ -751,25 +764,32 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     try {
       const parsed = YAML.parse(yamlOutput);
       loadSpecIntoCanvas(parsed);
-      setValidateError('');
+      setValidateError(null);
     } catch (e) {
-      setValidateError(`YAML parse error: ${e instanceof Error ? e.message : String(e)}`);
+      setValidateError(toApiErrorDetails(e, 0, 'YAML parse error'));
     }
   };
 
   const validateCurrentSpec = async (spec = { ...buildSpec(), name: pipelineName.trim() || pipelineName }) => {
-    setValidateError('');
+    setValidateError(null);
+    setOperationError(null);
     setValidateResult(null);
     try {
-      const res = await apiPost('/api/v2/specs/validate', { spec });
+      const res = await apiPost<ValidateResult>('/api/v2/specs/validate', { spec });
       setValidateResult(res as ValidateResult);
       if ((res as ValidateResult).valid === false) {
-        throw new Error(((res as ValidateResult).errors || (res as ValidateResult).warnings || ['validation failed']).join('\n'));
+        throw toApiErrorDetails(res, 422, 'Validation failed');
       }
       return res as ValidateResult;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setValidateError(message);
+      const payload = apiErrorPayload(e);
+      if (payload && typeof payload === 'object') {
+        const candidate = payload as ValidateResult;
+        if (candidate.valid === false || candidate.errors || candidate.field_issues || candidate.preflight) {
+          setValidateResult(candidate);
+        }
+      }
+      setValidateError(toApiErrorDetails(e, 0, 'Validation failed'));
       throw e;
     }
   };
@@ -834,7 +854,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       loadSpecIntoCanvas(parsed);
       setYamlOutput(aiResult.yaml);
       setValidateResult(aiResult.validation || null);
-      setValidateError('');
+      setValidateError(null);
       setDrawerTab(null);
     } catch (e) {
       setAiError(`YAML parse error: ${e instanceof Error ? e.message : String(e)}`);
@@ -842,12 +862,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   };
 
   const validateAndCreate = () => {
+    setOperationError(null);
     // Guard: pipeline name must be non-empty (otherwise the backend creates
     // a pipeline with name="" which corrupts subsequent pipeline listing and
     // renders the Pipelines page blank).
     const trimmedName = pipelineName.trim();
     if (!trimmedName) {
-      onAction(t('dag.validate'), () => Promise.reject(new Error(t('dag.errNameRequired'))));
+      onAction(t('dag.validate'), () => Promise.reject(new Error(t('dag.errNameRequired'))), setOperationError);
       return;
     }
     setPipelineName(trimmedName);
@@ -856,29 +877,30 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     const hasSource = spec.source?.type || spec.dag?.nodes?.some((n: any) => n.kind === 'source');
     const hasSink = spec.sink?.type || spec.dag?.nodes?.some((n: any) => n.kind === 'sink');
     if (!hasSource || !hasSink) {
-      onAction(t('dag.validate'), () => Promise.reject(new Error(t('dag.errEmptyDag'))));
+      onAction(t('dag.validate'), () => Promise.reject(new Error(t('dag.errEmptyDag'))), setOperationError);
       return;
     }
     if (editTarget) {
       // Update mode: PUT + checkpoint warning
       const doUpdate = () => apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: false }, 'PUT');
-      onAction(`${t('dag.updatePipeline')}: ${pipelineName}`, doUpdate);
+      onAction(`${t('dag.updatePipeline')}: ${pipelineName}`, doUpdate, setOperationError);
     } else {
       // Create mode: POST
       onAction(`${t('dag.createPipeline')}: ${pipelineName}`, () =>
         validateCurrentSpec(spec).then(() =>
           apiPost('/api/v2/pipelines', { spec }, 'POST')
         )
-      );
+      , setOperationError);
     }
   };
 
   const resetCheckpointAndUpdate = () => {
     if (!editTarget) return;
+    setOperationError(null);
     const spec = buildSpec();
     onAction(`${t('dag.updatePipeline')}: ${pipelineName}`, () =>
       apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: true }, 'PUT')
-    );
+    , setOperationError);
   };
 
   // ── Schema for selected node ──────────────────────────────────────
@@ -985,10 +1007,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         </div>
       </div>
 
-      {(validateResult || validateError) && (
-        <div data-testid="dag-validate-result" className={`rounded-lg border px-3 py-2 text-xs ${validateError || validateResult?.valid === false ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+      {validateError && (
+        <ErrorDetails error={validateError} title="Validation failed" testId="dag-validation-error" />
+      )}
+
+      {!validateError && validateResult && (
+        <div data-testid="dag-validate-result" className={`rounded-lg border px-3 py-2 text-xs ${validateResult.valid === false ? 'border-rose-200 bg-rose-50 text-rose-800' : validateResult.warnings?.length ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
           <div className="flex items-start justify-between gap-3">
-            <div className="font-semibold">{validateError || validateResult?.valid === false ? 'Validation failed' : 'Validation passed'} · {validateResult?.preflight?.summary || 'spec checked'}</div>
+            <div className="font-semibold">{validateResult.valid === false ? 'Validation failed' : 'Validation passed'} · {validateResult.preflight?.summary || 'spec checked'}</div>
             <button
               type="button"
               className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium opacity-70 hover:bg-black/5 hover:opacity-100"
@@ -996,53 +1022,62 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
               aria-label="Dismiss validation result"
               onClick={() => {
                 setValidateResult(null);
-                setValidateError('');
+                setValidateError(null);
               }}
             >
               ✕
             </button>
           </div>
-          {validateError && <div className="mt-1 whitespace-pre-wrap">{validateError}</div>}
-          {(validateResult?.warnings || validateResult?.errors || []).map((msg, i) => <div key={i} className="mt-1">{msg}</div>)}
-          {(validateResult?.preflight?.issues || []).map((issue, i) => (
-            <div key={`issue-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
-              <div className="font-semibold">{issue.level} · {issue.check}</div>
-              <div>{issue.message}</div>
-              {issue.remediation && <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>}
-            </div>
-          ))}
-          {(validateResult?.preflight?.field_issues || []).map((issue, i) => (
-            <div key={`field-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
-              <div className="font-semibold">{issue.field} · {issue.check}</div>
-              <div>{issue.message}</div>
-              {issue.remediation && <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>}
-            </div>
-          ))}
-          {(validateResult?.preflight?.guidance || []).map((item, i) => (
-            <div key={`guidance-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
-              <div className="font-semibold">{item.level} · {item.category} · {item.code}</div>
-              <div>{item.message}</div>
-              {item.action && <div className="mt-1 text-muted-foreground">Action: {item.action}</div>}
-            </div>
-          ))}
-          {(validateResult?.preflight?.recommendations || []).map((rec, i) => (
-            <div key={`recommendation-${rec.path}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
-              <div className="font-semibold">{rec.safety || 'review'} · {rec.path}</div>
-              <div>{rec.reason}</div>
-            </div>
-          ))}
-          {(validateResult?.preflight?.readiness || []).map((connector, i) => (
-            <div key={`readiness-${connector.kind}-${connector.type}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
-              <div className="font-semibold">{connector.kind} · {connector.type} · {connector.maturity} · {connector.status}</div>
-              {connector.summary && <div>{connector.summary}</div>}
-              {(connector.gates || []).filter((gate) => gate.status === 'missing' || gate.status === 'partial').slice(0, 3).map((gate) => (
-                <div key={gate.code} className="mt-1 text-muted-foreground">
-                  {gate.status} · {gate.label}{gate.remediation ? ` · ${gate.remediation}` : ''}
+          <div className="max-h-[min(46vh,480px)] overflow-y-auto pr-1">
+              {(validateResult.warnings || validateResult.errors || []).map((msg, i) => <div key={`message-${i}`} className="mt-1 break-words whitespace-pre-wrap">{msg}</div>)}
+              {(validateResult.field_issues || validateResult.preflight?.field_issues || []).map((issue, i) => (
+                <div key={`field-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+                  <div className="font-semibold">{issue.field} · {issue.check}</div>
+                  <div className="break-words whitespace-pre-wrap">{issue.message}</div>
+                  {issue.remediation && <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>}
                 </div>
               ))}
-            </div>
-          ))}
+              {(validateResult.preflight?.issues || []).map((issue, i) => (
+                <div key={`issue-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+                  <div className="font-semibold">{issue.level} · {issue.check}</div>
+                  <div className="break-words whitespace-pre-wrap">{issue.message}</div>
+                  {issue.remediation && <div className="mt-1 text-muted-foreground">Fix: {issue.remediation}</div>}
+                </div>
+              ))}
+              {(validateResult.preflight?.guidance || []).map((item, i) => (
+                <div key={`guidance-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+                  <div className="font-semibold">{item.level} · {item.category} · {item.code}</div>
+                  <div className="break-words whitespace-pre-wrap">{item.message}</div>
+                  {item.action && <div className="mt-1 text-muted-foreground">Action: {item.action}</div>}
+                </div>
+              ))}
+              {(validateResult.preflight?.recommendations || []).map((rec, i) => (
+                <div key={`recommendation-${rec.path}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+                  <div className="font-semibold">{rec.safety || 'review'} · {rec.path}</div>
+                  <div className="break-words whitespace-pre-wrap">{rec.reason}</div>
+                </div>
+              ))}
+              {(validateResult.preflight?.readiness || []).map((connector, i) => (
+                <div key={`readiness-${connector.kind}-${connector.type}-${i}`} className="mt-2 rounded border border-white/70 bg-white/70 p-2">
+                  <div className="font-semibold">{connector.kind} · {connector.type} · {connector.maturity} · {connector.status}</div>
+                  {connector.summary && <div className="break-words whitespace-pre-wrap">{connector.summary}</div>}
+                  {(connector.gates || []).filter((gate) => gate.status === 'missing' || gate.status === 'partial').map((gate) => (
+                    <div key={gate.code} className="mt-1 break-words text-muted-foreground">
+                      {gate.status} · {gate.label}{gate.remediation ? ` · ${gate.remediation}` : ''}
+                    </div>
+                  ))}
+                </div>
+              ))}
+          </div>
         </div>
+      )}
+
+      {operationError && (
+        <ErrorDetails
+          error={operationError}
+          title="Pipeline operation failed"
+          testId="dag-operation-error"
+        />
       )}
 
       {/* ── Main Area: Canvas + Drawer ──────────────────────────────── */}
@@ -1559,22 +1594,10 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
 
 // ── Helper ────────────────────────────────────────────────────────────
 
-async function apiPost(path: string, body: unknown, method: string = 'POST') {
-  const token = getToken();
-  const res = await fetch(path, {
-    method,
-    headers: { 'Content-Type': 'application/json', ...(token ? { 'X-API-Token': token } : {}) },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+async function apiPost<T = any>(path: string, body: unknown, method: string = 'POST'): Promise<T> {
+  return api<T>(path, { method, body: JSON.stringify(body) });
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const token = getToken();
-  const res = await fetch(path, {
-    headers: { ...(token ? { 'X-API-Token': token } : {}) },
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return api<T>(path);
 }

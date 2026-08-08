@@ -324,11 +324,96 @@ done
 check "D2.1g: Runtime safety controls update generated YAML" "$runtime_synced"
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-dlq-enabled\"]')?.click(); return true; })()" >/dev/null
 sleep 0.5
-# Failure demo / Repair e2e-only controls were removed (P4.2). Keep API-level preflight evidence.
-preflight_failed="$(curl -fsS -X POST "${BASE_URL}/api/v2/specs/validate" \
-  -H 'Content-Type: application/json' \
-  -d '{"spec":{"name":"ui-wizard-file","source":{"type":"file","config":{"path":"/app/testdata/files/customers.jsonl","format":"json"}},"transforms":[{"type":"identity","config":{}}],"sink":{"type":"maxcompute","config":{"endpoint":"http://127.0.0.1:1/api","project":"demo_project","table":"wizard_output","access_key_id":"replace-me","access_key_secret":"replace-me","columns":{"id":"BIGINT","name":"STRING","dt":"STRING"},"partition_fields":["dt"]}},"batch_size":100,"checkpoint_interval_sec":1,"backpressure_buffer":100,"retry":{"max_attempts":3,"initial_interval_ms":100,"max_interval_ms":1000},"dlq":{"enable":true}}}' | grep -q 'maxcompute-preflight' && echo true || echo false)"
-check "D2.2: Preflight failure visible" "$preflight_failed"
+# Exercise the actual wizard failure surface. The API intentionally returns a
+# 2xx validation envelope for preflight failures, so a raw curl check would
+# not prove that the UI preserves the error details.
+set_yaml_editor() {
+  local selector="$1"
+  local value="$2"
+  local encoded
+  encoded="$(printf '%s' "$value" | base64 | tr -d '\n')"
+  evaljs "(() => {
+    const textarea=document.querySelector('$selector');
+    if (!textarea) return false;
+    const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
+    setter.call(textarea, atob('$encoded'));
+    textarea.dispatchEvent(new Event('input',{bubbles:true}));
+    textarea.dispatchEvent(new Event('change',{bubbles:true}));
+    textarea.blur();
+    return true;
+  })()" >/dev/null
+}
+wizard_goto_step "safety"
+evaljs "(() => { if (!document.querySelector('[data-testid=wizard-yaml]')) document.querySelector('[data-testid=wizard-advanced-checks]')?.click(); return true; })()" >/dev/null
+sleep 0.4
+invalid_wizard_yaml="$(cat <<'YAML'
+name: ui-wizard-invalid
+source:
+  type: file
+  config:
+    path: /app/testdata/files/customers.jsonl
+    format: json
+transforms:
+  - type: identity
+    config: {}
+sink:
+  type: maxcompute
+  config:
+    endpoint: ftp://127.0.0.1:1/api
+    project: demo_project
+    table: wizard_output
+    access_key_id: replace-me
+    access_key_secret: replace-me
+    columns:
+      id: BIGINT
+      name: STRING
+      dt: STRING
+    partition_fields:
+      - dt
+batch_size: 100
+checkpoint_interval_sec: 1
+backpressure_buffer: 100
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+dlq:
+  enable: true
+YAML
+)"
+set_yaml_editor '[data-testid=wizard-yaml]' "$invalid_wizard_yaml"
+for _ in $(seq 1 10); do
+  invalid_yaml_loaded="$(evaljs "(document.querySelector('[data-testid=wizard-yaml]')?.value || '').includes('type: maxcompute')")"
+  if [[ "$invalid_yaml_loaded" == "true" ]]; then break; fi
+  sleep 0.3
+done
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Sync YAML to form'))?.click(); return true; })()" >/dev/null
+for _ in $(seq 1 10); do
+  synced_invalid_sink="$(evaljs "document.querySelector('[data-testid=wizard-sink-type]')?.value === 'maxcompute'")"
+  if [[ "$synced_invalid_sink" == "true" ]]; then break; fi
+  sleep 0.3
+done
+evaljs "(() => { document.querySelector('[data-testid=wizard-validate]')?.click(); return true; })()" >/dev/null
+wizard_preflight_error="false"
+for _ in $(seq 1 12); do
+  wizard_preflight_error="$(evaljs "(() => { const text=[document.querySelector('[data-testid=wizard-error-details]')?.innerText || '', document.querySelector('[data-testid=wizard-preflight-result]')?.innerText || ''].join('\\n'); return text.includes('maxcompute-preflight') && text.includes('Fix:'); })()")"
+  if [[ "$wizard_preflight_error" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "D2.2: Wizard preflight failure details visible" "$wizard_preflight_error"
+wizard_goto_step "sink"
+wizard_field_error="false"
+for _ in $(seq 1 12); do
+  wizard_field_error="$(evaljs "Array.from(document.querySelectorAll('[data-testid]')).some(e=>(e.getAttribute('data-testid')||'').startsWith('config-field-') && (e.getAttribute('data-testid')||'').endsWith('-error'))")"
+  if [[ "$wizard_field_error" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "D2.2a: Wizard maps preflight issue to sink field" "$wizard_field_error"
+if [[ "${E2E_FOCUS_ERRORS:-0}" == "1" ]]; then
+  echo "Focused UI error checks: $PASS passed, $FAIL failed"
+  if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
+  exit 0
+fi
 # Repair path: ensure sink is file_sink (via type + saved connection), then validate YAML.
 wizard_ensure_advanced_yaml() {
   wizard_goto_step "safety"
@@ -366,22 +451,28 @@ done
 if [[ "$repaired_selected" != "true" && "$sink_type_ok" == "true" ]]; then
   repaired_selected="true"
 fi
-# Dry-run lives under transform advanced options; API remains the authoritative dry-run evidence.
+# Dry-run lives under transform advanced options; assert the rendered output.
 wizard_goto_step "transform"
 evaljs "(() => { const more=document.querySelector('[data-testid=\"wizard-transform-more\"]'); if (more && !document.querySelector('[data-testid=\"wizard-dry-run\"]')) more.click(); return true; })()" >/dev/null
 sleep 0.3
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-dry-run\"]')?.click(); return true; })()" >/dev/null
-dry_run_visible="$(curl -fsS -X POST "${BASE_URL}/api/v2/transforms/dry-run" \
-  -H 'Content-Type: application/json' \
-  -d '{"transforms":[{"type":"identity","config":{}}],"record":{"operation":"INSERT","data":{"id":1,"name":"UI Wizard","dt":"20260627"},"metadata":{"source":"wizard","table":"landing"}}}' | grep -q 'output_count' && echo true || echo false)"
+dry_run_visible="false"
+for _ in $(seq 1 10); do
+  dry_run_visible="$(evaljs "(() => { const heading=Array.from(document.querySelectorAll('div')).find(e=>(e.textContent||'').trim()==='Dry-run output'); return Boolean(heading?.parentElement?.innerText.includes('output_count')); })()")"
+  if [[ "$dry_run_visible" == "true" ]]; then break; fi
+  sleep 0.5
+done
 check "D2.3: Dry-run output visible" "$dry_run_visible"
 wizard_ensure_advanced_yaml
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-validate\"]')?.click(); return true; })()" >/dev/null
-# D2.4: repaired path is file_sink (no maxcompute) and passes validate API.
-repaired_preflight="$(curl -fsS -X POST "${BASE_URL}/api/v2/specs/validate" \
-  -H 'Content-Type: application/json' \
-  -d '{"spec":{"name":"ui-wizard-file","source":{"type":"file","connection":"ui-file-source","config":{}},"transforms":[{"type":"identity","config":{}}],"sink":{"type":"file_sink","connection":"ui-file-sink","config":{}},"batch_size":77,"checkpoint_interval_sec":5,"backpressure_buffer":100,"dlq":{"enable":true}}}' | (grep -q '"valid":true' || grep -q '"valid": true') && echo true || echo false)"
-check "D2.4: Repaired preflight passes" "$([ "$repaired_selected" = "true" ] && [ "$repaired_preflight" = "true" ] && echo true || echo false)"
+# D2.4: repaired path is file_sink (no maxcompute) and passes in the UI.
+repaired_preflight="false"
+for _ in $(seq 1 12); do
+  repaired_preflight="$(evaljs "(() => { const panel=document.querySelector('[data-testid=wizard-preflight-result]'); const text=panel?.innerText || ''; return Boolean(panel && text.includes('Preflight passed') && !text.includes('maxcompute-preflight')); })()")"
+  if [[ "$repaired_preflight" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "D2.4: Repaired preflight passes in UI" "$([ "$repaired_selected" = "true" ] && [ "$repaired_preflight" = "true" ] && echo true || echo false)"
 check "D2.5: YAML roundtrip surface" "$(evaljs "(document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || '').includes('source:') && document.body.innerText.includes('Sync YAML to form')")"
 evaljs "(() => { const t=document.querySelector('[data-testid=\"wizard-yaml\"]'); if (!t) return false; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; const next=t.value.replace(/name:\s*[^\n]+/, 'name: ui-wizard-roundtrip'); setter.call(t,next); t.dispatchEvent(new Event('input',{bubbles:true})); t.dispatchEvent(new Event('change',{bubbles:true})); Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Sync YAML to form'))?.click(); return true; })()" >/dev/null
 sleep 0.5
@@ -405,12 +496,6 @@ wizard_goto_step "confirm"
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-create-start\"]')?.click(); return true; })()" >/dev/null
 sleep 5
 created="$(evaljs "fetch('/api/v2/pipelines').then(r=>r.json()).then(d=>(d.pipelines||[]).some(p=>p.name==='ui-wizard-file'||p.name==='ui-wizard-roundtrip')).catch(()=>false)")"
-if [[ "$created" != "true" ]]; then
-  # UI create may fail on residual preflight state after roundtrip; seed expected fixture via API
-  curl -fsS -X POST "${BASE_URL}/api/v2/pipelines"     -H 'Content-Type: application/json'     -d '{"spec":{"name":"ui-wizard-file","source":{"type":"file","connection":"ui-file-source","config":{}},"transforms":[{"type":"identity","config":{}}],"sink":{"type":"file_sink","connection":"ui-file-sink","config":{}},"batch_size":77,"checkpoint_interval_sec":5,"backpressure_buffer":100,"dlq":{"enable":true}}}' >/dev/null 2>&1 || true
-  sleep 1
-  created="$(evaljs "fetch('/api/v2/pipelines').then(r=>r.json()).then(d=>(d.pipelines||[]).some(p=>p.name==='ui-wizard-file')).catch(()=>false)")"
-fi
 check "D2.6: Wizard pipeline created" "$created"
 
 echo "==> Seed DLQ replay fixture"
@@ -501,16 +586,101 @@ check "E13: YAML has pipeline name" "$(evaljs "Array.from(document.querySelector
 evaljs "(() => { const t=document.querySelector('[data-testid=\"dag-yaml\"]'); if (!t) return false; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(t,t.value.replace('name: my-pipeline','name: dag-roundtrip')); t.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[data-testid=\"dag-sync-yaml\"]')?.click(); return true; })()" >/dev/null
 sleep 1
 check "E14: DAG YAML sync updates form" "$(evaljs "Array.from(document.querySelectorAll('input')).some(i=>i.value==='dag-roundtrip')")"
-evaljs "(() => { const t=document.querySelector('[data-testid=\"dag-yaml\"]'); if (!t) return false; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(t,'name: dag-invalid\\nsource:\\n  type: file\\n  config: {}\\n'); t.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[data-testid=\"dag-sync-yaml\"]')?.click(); return true; })()" >/dev/null
+invalid_dag_yaml="$(cat <<'YAML'
+name: dag-invalid-connector
+dag:
+  nodes:
+    - id: src
+      kind: source
+      plugin: does_not_exist
+      config: {}
+    - id: sink
+      kind: sink
+      plugin: file_sink
+      config:
+        output_dir: /app/data/output/ui-dag-invalid
+        format: jsonl
+  edges:
+    - from: src
+      to: sink
+execution:
+  batch_size: 10
+  checkpoint_interval_sec: 1
+  backpressure_buffer: 10
+dlq:
+  enable: true
+YAML
+)"
+set_yaml_editor '[data-testid=dag-yaml]' "$invalid_dag_yaml"
+for _ in $(seq 1 10); do
+  invalid_dag_yaml_loaded="$(evaljs "(document.querySelector('[data-testid=dag-yaml]')?.value || '').includes('does_not_exist')")"
+  if [[ "$invalid_dag_yaml_loaded" == "true" ]]; then break; fi
+  sleep 0.3
+done
+evaljs "(() => { document.querySelector('[data-testid=dag-sync-yaml]')?.click(); return true; })()" >/dev/null
 sleep 1
 evaljs "(() => { document.querySelector('[data-testid=\"dag-validate-preflight\"]')?.click(); return true; })()" >/dev/null
-dag_validation_failed="false"
+dag_validation_details="false"
 for _ in $(seq 1 10); do
-  dag_validation_failed="$(evaljs "document.querySelector('[data-testid=\"dag-validate-result\"]')?.innerText.includes('Validation failed') || false")"
-  if [[ "$dag_validation_failed" == "true" ]]; then break; fi
-  sleep 1
+  dag_validation_details="$(evaljs "(() => { const panel=document.querySelector('[data-testid=dag-validation-error]'); const text=panel?.innerText || ''; return Boolean(panel && text.includes('DAG node validation failed') && text.includes('dag.nodes[src].plugin') && text.includes('does_not_exist') && text.includes('registered connector')); })()")"
+  if [[ "$dag_validation_details" == "true" ]]; then break; fi
+  sleep 0.5
 done
-check "E15: DAG validation error positioned" "$dag_validation_failed"
+check "E15: DAG validation shows node, field and remediation" "$dag_validation_details"
+
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Create Pipeline'))?.click(); return true; })()" >/dev/null
+dag_create_failed="false"
+for _ in $(seq 1 10); do
+  dag_create_failed="$(evaljs "(() => { const panel=document.querySelector('[data-testid=dag-operation-error]'); return Boolean(panel && panel.innerText.includes('does_not_exist') && panel.innerText.includes('Fix:')); })()")"
+  if [[ "$dag_create_failed" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "E15a: DAG create failure remains visible" "$dag_create_failed"
+check "E15b: Failed DAG is not persisted" "$(evaljs "fetch('/api/v2/pipelines').then(r=>r.json()).then(d=>!(d.pipelines||[]).some(p=>p.name==='dag-invalid-connector')).catch(()=>false)")"
+
+valid_dag_yaml="$(cat <<'YAML'
+name: dag-repaired
+dag:
+  nodes:
+    - id: src
+      kind: source
+      plugin: file
+      config:
+        path: /app/testdata/files/customers.jsonl
+        format: json
+    - id: sink
+      kind: sink
+      plugin: file_sink
+      config:
+        output_dir: /app/data/output/ui-dag-repaired
+        format: jsonl
+  edges:
+    - from: src
+      to: sink
+execution:
+  batch_size: 10
+  checkpoint_interval_sec: 1
+  backpressure_buffer: 10
+dlq:
+  enable: true
+YAML
+)"
+set_yaml_editor '[data-testid=dag-yaml]' "$valid_dag_yaml"
+for _ in $(seq 1 10); do
+  valid_dag_yaml_loaded="$(evaljs "(document.querySelector('[data-testid=dag-yaml]')?.value || '').includes('name: dag-repaired')")"
+  if [[ "$valid_dag_yaml_loaded" == "true" ]]; then break; fi
+  sleep 0.3
+done
+evaljs "(() => { document.querySelector('[data-testid=dag-sync-yaml]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { document.querySelector('[data-testid=dag-validate-preflight]')?.click(); return true; })()" >/dev/null
+dag_repaired="false"
+for _ in $(seq 1 10); do
+  dag_repaired="$(evaljs "document.querySelector('[data-testid=dag-validate-result]')?.innerText.includes('Validation passed') || false")"
+  if [[ "$dag_repaired" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "E15c: Repaired DAG validates in UI" "$dag_repaired"
 
 # ════════════════════════════════════════════════
 echo "=== F: DLQ Page ==="
