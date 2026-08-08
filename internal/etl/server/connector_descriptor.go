@@ -2,8 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
@@ -31,11 +33,12 @@ type ConnectorReadiness struct {
 }
 
 type ConnectorReadinessGate struct {
-	Code        string `json:"code"`
-	Label       string `json:"label"`
-	Status      string `json:"status"` // pass, partial, missing, not_applicable
-	Evidence    string `json:"evidence,omitempty"`
-	Remediation string `json:"remediation,omitempty"`
+	Code             string                     `json:"code"`
+	Label            string                     `json:"label"`
+	Status           string                     `json:"status"` // pass, partial, missing, not_applicable
+	Evidence         string                     `json:"evidence,omitempty"`
+	Remediation      string                     `json:"remediation,omitempty"`
+	EvidenceMetadata *ConnectorEvidenceMetadata `json:"evidence_metadata,omitempty"`
 }
 
 var connectorMaturityLevels = []string{"production", "beta", "experimental", "dev-only"}
@@ -179,7 +182,7 @@ func connectorReadiness(kind, typ, maturity string, capabilities []string, regis
 	if kind == "transform" {
 		gates = append(gates, transformDryRunGate(typ))
 	}
-	gates = append(gates, evidenceGate(kind, typ))
+	gates = append(gates, evidenceGate(kind, typ, maturity))
 
 	status := readinessStatus(maturity, gates)
 	return ConnectorReadiness{
@@ -300,8 +303,56 @@ func transformDryRunGate(typ string) ConnectorReadinessGate {
 	}
 }
 
-func evidenceGate(kind, typ string) ConnectorReadinessGate {
-	if evidence := connectorEvidence(kind, typ); evidence != "" {
+func evidenceGate(kind, typ, maturity string) ConnectorReadinessGate {
+	manifest, err := LoadConnectorEvidenceManifest()
+	return evidenceGateAt(kind, typ, maturity, time.Now(), manifest, err)
+}
+
+func evidenceGateAt(kind, typ, maturity string, now time.Time, manifest ConnectorEvidenceManifest, manifestErr error) ConnectorReadinessGate {
+	if manifestErr == nil {
+		if record, ok := manifest.Record(kind, typ); ok {
+			freshness := record.Freshness(now)
+			metadata := record.Metadata()
+			switch freshness.Status {
+			case "pass":
+				gate := passGate("e2e_evidence", "E2E evidence", record.EvidenceSummary())
+				gate.EvidenceMetadata = &metadata
+				return gate
+			case "partial":
+				return ConnectorReadinessGate{
+					Code:             "e2e_evidence",
+					Label:            "E2E evidence",
+					Status:           "partial",
+					Evidence:         fmt.Sprintf("%s; %s", record.EvidenceSummary(), freshness.Explanation),
+					Remediation:      "run the listed certification scripts for the current build/image, update the manifest, and rerun the evidence checker",
+					EvidenceMetadata: &metadata,
+				}
+			default:
+				return ConnectorReadinessGate{
+					Code:             "e2e_evidence",
+					Label:            "E2E evidence",
+					Status:           "missing",
+					Evidence:         freshness.Explanation,
+					Remediation:      "repair the manifest and rerun hack/check-connector-evidence.sh before treating this connector as production-ready",
+					EvidenceMetadata: &metadata,
+				}
+			}
+		}
+	}
+	if maturity == "production" {
+		message := "connector evidence manifest has no record for this production connector"
+		if manifestErr != nil {
+			message = fmt.Sprintf("connector evidence manifest unavailable: %v", manifestErr)
+		}
+		return ConnectorReadinessGate{
+			Code:        "e2e_evidence",
+			Label:       "E2E evidence",
+			Status:      "missing",
+			Evidence:    message,
+			Remediation: "add a complete production connector record to internal/etl/server/evidence/connector-evidence.json and run hack/check-connector-evidence.sh",
+		}
+	}
+	if evidence := legacyConnectorEvidence(kind, typ); evidence != "" {
 		return passGate("e2e_evidence", "E2E evidence", evidence)
 	}
 	return ConnectorReadinessGate{
@@ -313,27 +364,15 @@ func evidenceGate(kind, typ string) ConnectorReadinessGate {
 	}
 }
 
-func connectorEvidence(kind, typ string) string {
+// legacyConnectorEvidence keeps non-production connector descriptions stable
+// while the manifest is rolled out to the production certification set.
+func legacyConnectorEvidence(kind, typ string) string {
 	evidence := map[string]string{
-		"source:file":               "hack/e2e.sh and hack/e2e-ui.sh cover file source paths",
-		"source:http":               "hack/e2e-http-source.sh covers HTTP source pagination/auth headers",
-		"source:mysql_batch":        "hack/e2e.sh and hack/e2e-mysql-postgres.sh cover MySQL batch reads",
-		"source:mysql_cdc":          "hack/e2e-path-mysql-cdc-mysql.sh (path mysql_cdc__mysql_upsert), hack/e2e-cdc-mysql.sh, hack/e2e-cdc-postgres.sh, and hack/e2e-cdc-crash-recovery.sh cover MySQL CDC",
-		"source:mysql_snapshot_cdc": "hack/e2e-snapshot-cdc-clickhouse.sh (path mysql_snap_cdc__ch_rmt), hack/e2e-snapshot-cdc.sh, and hack/e2e-snapshot-cdc-crash.sh cover integrated snapshot+CDC",
-		"source:postgres_cdc":       "hack/e2e-postgres-cdc.sh covers PostgreSQL CDC source insert/update/delete and checkpoint restart into MySQL; on_truncate defaults to error (PR-2.3)",
-		"source:kafka":              "hack/e2e-kafka.sh, hack/e2e-kafka-raw-ods.sh, hack/e2e-wide-table.sh, and hack/e2e-debezium-mysql.sh cover Kafka source paths",
-		"sink:file_sink":            "hack/e2e.sh covers file sink output",
-		"sink:s3":                   "hack/e2e-s3-minio.sh covers MinIO-compatible S3 sink deterministic replay, target outage DLQ, and DLQ replay",
-		"sink:mysql":                "hack/e2e-path-mysql-cdc-mysql.sh, hack/e2e-cdc-mysql.sh, and hack/e2e-debezium-mysql.sh cover MySQL sink upsert/replay",
-		"sink:postgres":             "hack/e2e-mysql-postgres.sh and hack/e2e-cdc-postgres.sh cover PostgreSQL sink",
-		"sink:postgresql":           "hack/e2e-mysql-postgres.sh and hack/e2e-cdc-postgres.sh cover PostgreSQL sink",
-		"sink:clickhouse":           "hack/e2e-clickhouse.sh, hack/e2e-clickhouse-autocreate.sh, and hack/e2e-snapshot-cdc-clickhouse.sh cover ClickHouse sink (path mysql_snap_cdc__ch_rmt)",
-		"sink:kafka":                "hack/e2e-kafka.sh and hack/e2e-kafka-raw-ods.sh cover Kafka sink",
-		"sink:doris":                "hack/e2e-doris.sh covers Doris Stream Load/upsert paths, BE outage DLQ, and DLQ replay after recovery",
-		"sink:elasticsearch":        "hack/e2e-elasticsearch.sh covers OpenSearch bulk indexing and mapping-conflict DLQ/replay",
-		"sink:es":                   "hack/e2e-elasticsearch.sh covers OpenSearch bulk indexing and mapping-conflict DLQ/replay",
-		"sink:maxcompute":           "hack/e2e-maxcompute.sh is env-gated; real MaxCompute evidence is still required",
-		"sink:odps":                 "hack/e2e-maxcompute.sh is env-gated; real MaxCompute evidence is still required",
+		"source:postgres_cdc": "hack/e2e-postgres-cdc.sh covers PostgreSQL CDC source insert/update/delete and checkpoint restart into MySQL; on_truncate defaults to error (PR-2.3)",
+		"sink:elasticsearch":  "hack/e2e-elasticsearch.sh covers OpenSearch bulk indexing and mapping-conflict DLQ/replay",
+		"sink:es":             "hack/e2e-elasticsearch.sh covers OpenSearch bulk indexing and mapping-conflict DLQ/replay",
+		"sink:maxcompute":     "hack/e2e-maxcompute.sh is env-gated; real MaxCompute evidence is still required",
+		"sink:odps":           "hack/e2e-maxcompute.sh is env-gated; real MaxCompute evidence is still required",
 	}
 	return evidence[kind+":"+typ]
 }

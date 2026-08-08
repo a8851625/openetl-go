@@ -105,6 +105,10 @@ func TestConnectorCertificationKitProductionSet(t *testing.T) {
 	}
 
 	descriptors := connectorDescriptorMap(connectorDescriptors())
+	manifest, err := LoadConnectorEvidenceManifest()
+	if err != nil {
+		t.Fatalf("LoadConnectorEvidenceManifest: %v", err)
+	}
 	repoRoot := filepath.Clean("../../..")
 	targetSet := make(map[string]bool, len(targets))
 	for _, target := range targets {
@@ -135,6 +139,13 @@ func TestConnectorCertificationKitProductionSet(t *testing.T) {
 			desc, ok := descriptors[target.Kind+":"+target.Type]
 			if !ok {
 				t.Fatalf("descriptor missing")
+			}
+			record, ok := manifest.Record(target.Kind, target.Type)
+			if !ok {
+				t.Fatalf("evidence manifest record missing")
+			}
+			if record.Commit == "" || record.Image == "" || len(record.Dependencies) == 0 || record.FinishedAt == "" || record.ExpiresAt == "" {
+				t.Fatalf("evidence record lacks freshness metadata: %#v", record)
 			}
 			certifyConnectorTarget(t, repoRoot, target, desc)
 		})
@@ -322,7 +333,7 @@ func productionSourceGates(schemaStatus, remoteStatus string) map[string][]strin
 		"schema_introspection": {schemaStatus},
 		"checkpoint":           {"pass"},
 		"remote_preflight":     {remoteStatus},
-		"e2e_evidence":         {"pass"},
+		"e2e_evidence":         {"pass", "partial"},
 	}
 }
 
@@ -333,7 +344,7 @@ func productionSinkGates(schemaStatus, replayStatus, remoteStatus string) map[st
 		"schema_preflight":  {schemaStatus},
 		"replay_absorption": {replayStatus},
 		"remote_preflight":  {remoteStatus},
-		"e2e_evidence":      {"pass"},
+		"e2e_evidence":      {"pass", "partial"},
 	}
 }
 
@@ -363,6 +374,9 @@ func certifyConnectorTarget(t *testing.T, repoRoot string, target connectorCerti
 		}
 		if gate.Status == "partial" && (gate.Evidence == "" || gate.Remediation == "") {
 			t.Fatalf("partial gate %s must include evidence and remediation: %#v", code, gate)
+		}
+		if code == "e2e_evidence" && gate.EvidenceMetadata == nil {
+			t.Fatalf("e2e_evidence gate missing evidence metadata: %#v", gate)
 		}
 	}
 

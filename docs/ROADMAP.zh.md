@@ -140,7 +140,7 @@ Roadmap 状态只使用以下值：
 | `PR-0` | 可靠、安全、持久化一致 | API/内存/DB 一致；加密恢复和生产安全默认值通过 | 当前 P0 完成或显式切换 | `delivered` |
 | `PR-1` | 易维护、安全 | secret、migration、backup/restore、upgrade/rollback 可重复 | `PR-0` | `delivered` (1.1/1.2/1.3) |
 | `PR-2` | 数据一致性 | 主推荐链路通过 crash/reset/outage/DLQ replay 对账 | `PR-0`，并复用 `PR-1` storage gate | `delivered` |
-| P3 | 证据治理 | maturity 与当前版本实际认证证据一致 | `PR-2` 定义 path gate | `queued` |
+| P3 | 证据治理 | maturity 与当前版本实际认证证据一致 | `PR-2` 定义 path gate | `active` |
 | P4 | 易上手 | 30 分钟首次任务与 10 分钟故障定位目标可验证 | `PR-0` 安全/profile 约定 | `delivered` |
 | P5 | 易维护、可观测 | 业务健康、资源基线、CI 和 production runbook 成为发布门槛 | `PR-1`、`PR-2` | `delivered` |
 | `PR-D1` | distributed 可靠性 | worker 认证、fencing、重试和真实多进程恢复通过 | standalone 收口后，或显式提前 | `delivered` |
@@ -707,6 +707,33 @@ Round 5/5 后续交接：P3.1/P3.2 已交付，但 P3 总项仍保持 `active`�
 - descriptor、schema required 字段、secret/scope、组件文档和实现注册之间有一致性测试。
 - 不再仅靠人工修改 metadata 字符串提升成熟度；未执行或证据过期的 connector 自动降级为 `production_with_review`、`beta` 或 `experimental`。
 - 认证矩阵能够从一条公开 production path 追溯到 source/sink write mode、幂等策略、checkpoint/DLQ/replay e2e 和最后一次通过的发布版本。
+
+当前领取记录（Round 1/5）：
+
+```text
+Round: 1/5
+Roadmap item: P3.3.1 evidence manifest + freshness gate
+Profile/path: standalone connector descriptors/readiness + certification kit
+Objective: 将 connector 认证的 commit、image、依赖版本、执行时间、过期策略和验证脚本收敛为机器可读 manifest；manifest 缺失、损坏或过期时 readiness 自动降级，但不偷偷提升或修改 maturity。
+Scope: internal/etl/server evidence manifest loader/validator、descriptor e2e_evidence gate、manifest fixture、certification tests、hack checker 和 connector certification 文档。
+Non-goals: PR-2.4.4 checkpoint position 校验、Runner/DAG/UI 错误展示；MaxCompute 外部认证；自动运行所有外部 e2e；修改 connector runtime 语义。
+Dependencies: P3.1/P3.2 delivered；当前 `sync-canal-go-hardening-20260808` 正在处理 PR-2.4.4，本切片避开其修改路径。
+Acceptance: 1) 每个 production source/sink 有唯一 evidence record，字段包含 commit/image/dependencies/started_at/finished_at/expires_at/scripts；2) manifest schema、重复记录、时间窗口、过期和缺失均有 deterministic checks；3) descriptor gate 暴露 evidence metadata，fresh/verified 为 pass，过期为 partial，缺失/损坏为 missing；4) checker 支持对当前 commit/image 做可选严格校验；5) targeted/package/race/vet 与 git diff --check 通过。
+Evidence: internal/etl/server/evidence_manifest.go、evidence_manifest_test.go、connector_descriptor.go、connector_certification_test.go、internal/etl/server/evidence/connector-evidence.json、hack/check-connector-evidence.sh、docs/connector-certification.md。
+Result: active
+Residual/follow-up: CI 中接入真实外部 e2e 产出的 manifest 更新和过期自动阻断另列 P3.3.2；本切片不伪造未执行的外部认证。
+```
+
+P3.3.1 当前验收矩阵：
+
+| Criterion | Evidence | Result | Residual/blocker |
+| --- | --- | --- | --- |
+| 14 个 production source/sink 有唯一 manifest record 与 commit/image/dependency/time/scripts/cases | `internal/etl/server/evidence/connector-evidence.json`；`TestConnectorEvidenceManifestLoadsAndCoversProductionConnectors`；`go test ./internal/etl/server -run 'TestConnectorEvidence' -count=1` | passed | baseline records 保持 `verified:false`，等待真实认证 run 写回结果 |
+| manifest 重复键、时间窗口、脚本路径和 JSON 结构 deterministic 校验 | `ValidateConnectorEvidenceManifest`；`TestValidateConnectorEvidenceManifestRejectsStructuralDrift`；`sh -n hack/check-connector-evidence.sh` | passed | 无 |
+| readiness 自动区分 fresh/verified、unverified、expired、missing/corrupt | `TestConnectorEvidenceFreshnessControlsReadinessGate`；production descriptors 当前为 `production_with_review` | passed | strict release gate 仍按预期失败，避免把未执行 e2e 当作通过 |
+| descriptor/API 暴露 evidence metadata，认证 kit 不再要求 e2e gate 永远 pass | `ConnectorReadinessGate.evidence_metadata`；`TestConnectorCertificationKitProductionSet`；`go test ./internal/etl/server -count=1` | passed | 无 |
+| checker 可绑定 commit/image 并在 strict/expiry 模式失败 | `./hack/check-connector-evidence.sh`；`-strict` 与 `-now 2026-10-01T00:00:00Z` 负向验证 | passed | 当前 `verified:false` baseline 是明确残余，不标记 P3.3 delivered |
+| package/race/static checks | `go test ./...`；`go test -race ./internal/etl/server -count=1`；`go vet ./...`；`git diff --check` | passed | Web `npm run typecheck/build` 在新 worktree 缺少 `web/node_modules`，未执行；本切片不改 Web 源码 |
 
 ### P4：首次任务体验残留收口
 

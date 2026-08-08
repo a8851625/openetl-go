@@ -21,6 +21,41 @@ The current kit checks:
 - referenced `hack/e2e-*.sh` scripts exist
 - Plugin ABI v1 constants, manifest requirements, compatibility matrix, and TypeScript SDK helpers are documented
 
+## Evidence Freshness Manifest
+
+Production source/sink evidence is recorded in
+`internal/etl/server/evidence/connector-evidence.json`. Each record carries the
+certified commit and image, dependency versions, execution window, expiry,
+scripts, and named cases. The descriptor API exposes the same metadata in the
+`evidence_metadata` object on the `e2e_evidence` readiness gate.
+
+The checked-in baseline is intentionally `verified: false` until the listed
+certification run has actually been executed for that build and environment.
+That state is reported as `partial` / `production_with_review`; it does not
+change connector maturity. Missing or malformed records are `missing`, and an
+expired verified record is `partial`.
+
+Run the structural checker from the repository root:
+
+```sh
+./hack/check-connector-evidence.sh
+```
+
+For a release gate, require every record to be verified and bind the manifest
+to the exact build/image. The command exits non-zero for unverified or expired
+records in strict mode:
+
+```sh
+./hack/check-connector-evidence.sh \
+  -strict \
+  -commit "$(git rev-parse HEAD)" \
+  -image "$OPENETL_IMAGE_DIGEST"
+```
+
+Use `-now <RFC3339>` in tests or incident review to reproduce an expiry
+decision deterministically. The manifest checker validates script paths and
+does not treat the mere existence of an e2e script as a successful run.
+
 The certified production connector set is:
 
 | Area | Connectors | Evidence |
