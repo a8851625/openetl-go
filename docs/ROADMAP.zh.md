@@ -505,7 +505,7 @@ PR-1.3 证据（合入 agent/fullstack-dev/f856487d，并保留既有逻辑导�
 
 ### PR-2.4：checkpoint 恢复 fail-closed（用户明确授权的有界后续）
 
-状态：`active`
+状态：`delivered`（2026-08-08 · PR-2.4.1/.2/.3）
 
 本项不改变已交付 PR-2 的主链路声明，也不把当前 blocked_external 的 MaxCompute P0 静默改为已完成；它只修复审计确认的恢复边界：checkpoint storage/envelope 读取失败时，linear 与 DAG 不得以空位点继续打开 source。
 
@@ -521,7 +521,7 @@ Non-goals: PR-2.4.2 的 Kafka/PostgreSQL external ack 顺序；PR-2.4.3 的 mysq
 Acceptance: 1) linear checkpoint Load error 返回启动错误且不打开 source；2) DAG checkpoint Load/error 或 source Open error 将 executor 置为 failed 并停止其他 source；3) 损坏 JSON、未知 envelope version、缺失 envelope source 明确失败；4) legacy source position 仍兼容；5) 单测覆盖 fault injection，更新可靠性文档和证据索引。
 Evidence: internal/etl/checkpoint/*_test.go、internal/etl/pipeline/*checkpoint*_test.go、internal/etl/orchestrator/*checkpoint*_test.go、docs/reliability-certification.md。
 Result: delivered
-Residual/follow-up: PR-2.4.2 external ack ordering; PR-2.4.3 snapshot cursor commit boundary。
+Residual/follow-up: PR-2.4.2 external ack ordering 与 PR-2.4.3 snapshot cursor commit boundary 已分别在 Round 2/3 交付；后续只按新 claim 处理残余语义。
 ```
 
 PR-2.4.1 本轮证据（Round 1/5）：
@@ -546,7 +546,7 @@ Non-goals: PR-2.4.3 的 mysql_snapshot_cdc producer read-ahead/string cursor；c
 Acceptance: 1) CheckpointForRecord 不产生 Kafka MarkOffset/Commit 或 PG committedLsn/standby ack 副作用；2) durable Save 成功后才调用 AckCheckpoint；3) external ack 失败阻断后续 checkpoint、pipeline failed/停止并允许安全 replay；4) Kafka auto-commit 关闭；5) PG 无 durable LSN 的 keepalive 不使用 server read-ahead end；6) linear/DAG/source 单测、race、vet 及文档证据通过。
 Evidence: internal/etl/core/core.go、internal/etl/pipeline/runner_test.go、internal/etl/orchestrator/orchestrator_test.go、internal/etl/source/kafka_test.go、internal/etl/source/postgres_cdc_test.go、docs/reliability-certification.md、source component docs。
 Result: delivered
-Residual/follow-up: PR-2.4.3 mysql_snapshot_cdc producer read-ahead/string cursor 与 snapshot commit boundary。
+Residual/follow-up: PR-2.4.3 mysql_snapshot_cdc producer read-ahead/string cursor 与 snapshot commit boundary 已在 Round 3 交付；其余 path 仍按各自 roadmap item 管理。
 ```
 
 PR-2.4.2 本轮验收矩阵（Round 2/5）：
@@ -558,6 +558,32 @@ PR-2.4.2 本轮验收矩阵（Round 2/5）：
 | PostgreSQL WAL ack 生命周期 | `TestPGCheckpointForRecordDoesNotAdvanceExternalLSN`、`TestPGResumeLSNUsesDurableMarkerNotReadAhead`、`TestPGAckCheckpointUpdatesExternalLSNAfterSend`、`TestPGAckCheckpointSendFailureDoesNotAdvanceExternalLSN`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-postgres-cdc.sh` | passed | 无 |
 | keepalive 不误报 read-ahead 进度 | `TestPGKeepaliveWithoutDurableLSNDoesNotAckServerEnd` | passed | 无 |
 | package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1`；`go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator`；`git diff --check` | passed | 无 |
+
+当前领取记录（Round 3）：
+
+```text
+Round: 3/5
+Roadmap item: PR-2.4.3
+Profile/path: standalone mysql_snapshot_cdc -> idempotent sink；snapshot phase + CDC handoff
+Objective: 消除 snapshot producer read-ahead 与 checkpoint cursor 不一致导致的跳过窗口，统一字符串游标的可恢复提交边界，并让 snapshot/CDC restart 从最后 durable cursor 安全重放。
+Scope: core batch-checkpointer contract、linear/DAG checkpoint boundary、internal/etl/source/mysql_snapshot_cdc.go、snapshot cursor/checkpoint tests、相关可靠性/component evidence；仅触及 snapshot source 的读取与提交边界。
+Non-goals: connector schema/UI、多表 preflight、全库异构主键新能力、跨 sink exactly-once、其他 source 的 cursor 重构。
+Acceptance: 1) producer 不得在 checkpoint durable 前推进可丢失的 source cursor；2) linear/DAG 以完整 source batch 生成 checkpoint，numeric/string cursor 与 snapshot phase 在 Save -> external/source boundary 后一致；3) crash/restart、checkpoint reset、空页/末页和 cursor 编码错误均 fail-closed 或安全重放；4) checkpoint 生成错误阻断后续推进并使 pipeline failed；5) targeted/race/vet 与可用 snapshot e2e 通过；6) 更新 source 文档、reliability evidence。
+Evidence: internal/etl/source/mysql_snapshot_cdc*_test.go、相关 hack/e2e-snapshot-cdc*.sh（含安全 phase 断言更新）、docs/reliability-certification.md、docs/components/source-mysql_snapshot_cdc.md。
+Result: delivered
+Residual/follow-up: DAG 过滤后无 sink 输出的 checkpoint 进度与多 sink 跨批次单调合并仍沿用既有 at-least-once 边界；若需改变语义，另列有界后续，不扩大本轮。
+```
+
+PR-2.4.3 本轮验收矩阵（Round 3/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| producer read-ahead 不污染 durable cursor | `TestSnapshotCheckpointDoesNotUseProducerReadAhead`、`TestSnapshotCheckpointPersistsStringCursorAfterDurableAck`、`TestSnapshotCheckpointCoversAllRecordsInMultiTableBatch` | passed | producer 仍可在内存 channel 窗口内 read-ahead；重连只使用 durable binlog position |
+| numeric/string cursor、legacy LastID 与 snapshot→CDC handoff | `TestSnapshotAckKeepsLegacyLastIDCompatibility`、`TestSnapshotCheckpointTransitionsToCDCFromRecordBoundary`、`TestSnapshotStartPositionReusesRestoredHandoff`、`TestSnapshotCursorStringKeepsLocalWallClock` | passed | binlog 与 sink 不是分布式事务 |
+| 缺失/非法 cursor、缺失 handoff、channel 结束 fail-closed | `TestSnapshotCheckpointRejectsInvalidNumericCursor`、`TestSnapshotCheckpointRejectsMissingCursorColumn`、`TestSnapshotCheckpointRejectsMissingHandoff`、`TestSnapshotCDCReaderClosedChannelsReturnEOF`；linear/DAG checkpoint-generation fault tests | passed | 无 |
+| CDC 重连、snapshot crash/restart、reset/DLQ 与异构 numeric/string path | `TestSnapshotCDCReconnectPositionUsesDurableCheckpoint`；`CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc.sh`；`CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc-crash.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-snapshot-cdc-clickhouse.sh`；`CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc-heteropk.sh` | passed | 共享 MySQL/ClickHouse 容器已存在时 compose 输出环境 warning，但脚本退出码为 0 |
+| linear/DAG 完整 batch checkpoint 与生成错误 fail-closed | `TestRunnerCheckpointUsesCompleteBatchCheckpointer`、`TestRunnerCheckpointThrottleRetainsAllPendingBatches`、`TestRunnerCheckpointGenerationErrorFailsClosed`、`TestDAGCheckpointUsesCompleteSourceBatch`、`TestDAGCheckpointGenerationErrorFailsClosed` | passed | DAG reader 在 writer drain 后统一关闭；多 sink 语义残余见上 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1`；`go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator`；`git diff --check` | passed | 未执行全量 connector certification；本轮只要求 snapshot 路径 |
 
 ### PR-D1：Distributed 安全与任务所有权
 

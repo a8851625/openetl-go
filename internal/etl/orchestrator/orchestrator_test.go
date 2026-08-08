@@ -265,8 +265,8 @@ func TestDAGExecutorCheckpointIncludesStateSnapshotVersions(t *testing.T) {
 
 	exec.writeToSink(context.Background(), "sink", []core.Record{
 		{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
-	}, map[string]core.Record{
-		"src": {Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
+	}, map[string][]core.Record{
+		"src": {{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}}},
 	})
 
 	cp, err := adapter.Load(context.Background(), "dag-checkpoint-src")
@@ -319,8 +319,8 @@ func TestDAGExecutorDoesNotCheckpointWhenStateSnapshotFails(t *testing.T) {
 
 	exec.writeToSink(context.Background(), "sink", []core.Record{
 		{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
-	}, map[string]core.Record{
-		"src": {Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
+	}, map[string][]core.Record{
+		"src": {{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}}},
 	})
 
 	cp, err := adapter.Load(context.Background(), "dag-checkpoint-fail-src")
@@ -356,8 +356,8 @@ func TestDAGExecutorDoesNotCheckpointWhenSinkCommitMetadataFails(t *testing.T) {
 
 	exec.writeToSink(context.Background(), "sink", []core.Record{
 		{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
-	}, map[string]core.Record{
-		"src": {Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}},
+	}, map[string][]core.Record{
+		"src": {{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 42}}},
 	})
 
 	cp, err := adapter.Load(context.Background(), "dag-commit-metadata-fail-src")
@@ -394,8 +394,8 @@ func TestDAGExecutorDoesNotCheckpointPastFailedDLQPersistence(t *testing.T) {
 	exec.blockSourceCheckpoint("src", "record failure could not be persisted to DLQ")
 	exec.writeToSink(context.Background(), "sink", []core.Record{
 		{Data: map[string]any{"id": 2}, Metadata: core.Metadata{Offset: 2}},
-	}, map[string]core.Record{
-		"src": {Data: map[string]any{"id": 2}, Metadata: core.Metadata{Offset: 2}},
+	}, map[string][]core.Record{
+		"src": {{Data: map[string]any{"id": 2}, Metadata: core.Metadata{Offset: 2}}},
 	})
 
 	cp, err := adapter.Load(context.Background(), "dag-dlq-boundary-src")
@@ -697,6 +697,108 @@ type dagAckCheckpointReader struct {
 	ackErr     error
 }
 
+type dagBatchCheckpointReader struct {
+	batchCalls int
+	seen       []core.Record
+	err        error
+}
+
+func (r *dagBatchCheckpointReader) Read(context.Context) (core.Record, error) {
+	return core.Record{}, errors.New("unused")
+}
+func (r *dagBatchCheckpointReader) ReadBatch(context.Context, int) ([]core.Record, error) {
+	return nil, errors.New("unused")
+}
+func (r *dagBatchCheckpointReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (r *dagBatchCheckpointReader) Close() error { return nil }
+func (r *dagBatchCheckpointReader) CheckpointForRecord(context.Context, core.Record) (core.Checkpoint, error) {
+	return core.Checkpoint{}, errors.New("single-record checkpoint path was used")
+}
+func (r *dagBatchCheckpointReader) CheckpointForRecords(_ context.Context, records []core.Record) (core.Checkpoint, error) {
+	r.batchCalls++
+	r.seen = append([]core.Record(nil), records...)
+	if r.err != nil {
+		return core.Checkpoint{}, r.err
+	}
+	offsets := make([]int64, 0, len(records))
+	for _, rec := range records {
+		offsets = append(offsets, rec.Metadata.Offset)
+	}
+	pos, err := json.Marshal(map[string]any{"offsets": offsets})
+	if err != nil {
+		return core.Checkpoint{}, err
+	}
+	return core.Checkpoint{Source: "dag-batch-checkpoint-reader", Position: pos}, nil
+}
+
+func TestDAGCheckpointUsesCompleteSourceBatch(t *testing.T) {
+	adapter, cleanup := newDAGCheckpointAdapter(t)
+	defer cleanup()
+	am := alert.NewManager()
+	defer am.Close()
+	reader := &dagBatchCheckpointReader{}
+	exec := &DAGExecutor{
+		spec:             &PipelineSpec{Name: "dag-batch-checkpoint"},
+		sinks:            map[string]core.Sink{"sink": dagNoopSink{}},
+		readers:          map[string]core.RecordReader{"src": reader},
+		cpAdapter:        adapter,
+		alertMgr:         am,
+		retryConfig:      retry.DefaultConfig(),
+		breakers:         map[string]*pipeline.CircuitBreaker{},
+		checkpointBlocks: map[string]string{},
+	}
+	exec.writeToSink(context.Background(), "sink", []core.Record{
+		{Metadata: core.Metadata{Offset: 11}},
+		{Metadata: core.Metadata{Offset: 22}},
+	}, map[string][]core.Record{
+		"src": {
+			{Metadata: core.Metadata{Offset: 11}},
+			{Metadata: core.Metadata{Offset: 22}},
+		},
+	})
+	if reader.batchCalls != 1 || len(reader.seen) != 2 {
+		t.Fatalf("batch checkpointer calls=%d records=%d, want 1/2", reader.batchCalls, len(reader.seen))
+	}
+	cp, err := adapter.Load(context.Background(), "dag-batch-checkpoint-src")
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	if cp == nil || !strings.Contains(string(cp.Position), "11") || !strings.Contains(string(cp.Position), "22") {
+		t.Fatalf("checkpoint position = %s, want both offsets", cp.Position)
+	}
+}
+
+func TestDAGCheckpointGenerationErrorFailsClosed(t *testing.T) {
+	adapter, cleanup := newDAGCheckpointAdapter(t)
+	defer cleanup()
+	am := alert.NewManager()
+	defer am.Close()
+	exec := &DAGExecutor{
+		spec:             &PipelineSpec{Name: "dag-checkpoint-generation-failure"},
+		sinks:            map[string]core.Sink{"sink": dagNoopSink{}},
+		readers:          map[string]core.RecordReader{"src": &dagBatchCheckpointReader{err: errors.New("cursor encoding failed")}},
+		cpAdapter:        adapter,
+		alertMgr:         am,
+		retryConfig:      retry.DefaultConfig(),
+		breakers:         map[string]*pipeline.CircuitBreaker{},
+		checkpointBlocks: map[string]string{},
+	}
+	exec.writeToSink(context.Background(), "sink", []core.Record{{Metadata: core.Metadata{Offset: 11}}}, map[string][]core.Record{
+		"src": {{Metadata: core.Metadata{Offset: 11}}},
+	})
+	if exec.Status() != "failed" {
+		t.Fatalf("status = %s, want failed", exec.Status())
+	}
+	if reason, blocked := exec.sourceCheckpointBlocked("src"); !blocked || !strings.Contains(reason, "cursor encoding failed") {
+		t.Fatalf("checkpoint block = %v %q, want cursor error", blocked, reason)
+	}
+	if cp, err := adapter.Load(context.Background(), "dag-checkpoint-generation-failure-src"); err != nil || cp != nil {
+		t.Fatalf("checkpoint persisted after generation failure: cp=%#v err=%v", cp, err)
+	}
+}
+
 func (r *dagAckCheckpointReader) Read(context.Context) (core.Record, error) {
 	return core.Record{}, errors.New("unused")
 }
@@ -742,8 +844,8 @@ func TestDAGCheckpointBoundaryOrdersDurableSaveBeforeExternalAck(t *testing.T) {
 		breakers:         map[string]*pipeline.CircuitBreaker{},
 		checkpointBlocks: map[string]string{},
 	}
-	exec.writeToSink(context.Background(), "sink", []core.Record{{Metadata: core.Metadata{Offset: 9}}}, map[string]core.Record{
-		"src": {Metadata: core.Metadata{Offset: 9}},
+	exec.writeToSink(context.Background(), "sink", []core.Record{{Metadata: core.Metadata{Offset: 9}}}, map[string][]core.Record{
+		"src": {{Metadata: core.Metadata{Offset: 9}}},
 	})
 	if !reader.ackSawSave {
 		t.Fatal("external ack did not observe a durable checkpoint")

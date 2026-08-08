@@ -155,7 +155,10 @@ run_app
 
 echo "==> Verify initial snapshot copied"
 wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL" "5"
-wait_checkpoint_cdc
+# Do not require phase=cdc merely because the producer finished snapshotting.
+# The durable checkpoint stays in snapshot phase until an actual CDC record is
+# sink-acknowledged; advancing earlier could skip snapshot rows still buffered
+# between the producer and sink.
 
 echo "==> Verify CDC update/insert/delete"
 "$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
@@ -214,6 +217,12 @@ done
 if [ "${raw_id_1:-0}" -lt 2 ] && [ "${raw_total:-0}" -le "${before_raw_total:-0}" ]; then
   echo "note: raw duplicate parts not observed (likely merged); FINAL absorption still required" >&2
 fi
+
+echo "==> Advance the reset run to durable CDC with an acknowledged event"
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
+UPDATE $TABLE SET amount = 111.11 WHERE id = 1;
+"
+wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL WHERE id = 1 AND amount = 111.11" "1"
 wait_checkpoint_cdc
 
 echo "==> Verify ClickHouse outage routes to DLQ and replay succeeds"

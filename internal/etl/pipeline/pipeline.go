@@ -1191,8 +1191,11 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	// successful batch indefinitely.
 	r.mu.Lock()
 	r.uncheckpointedBatches++
-	r.pendingCheckpointProcessed = append(r.pendingCheckpointProcessed[:0], processed...)
-	r.pendingCheckpointCommitted = append(r.pendingCheckpointCommitted[:0], transformed...)
+	// Retain every successful source record since the last durable save. A
+	// snapshot batch may span tables; keeping only the newest batch would omit
+	// an earlier table's cursor when checkpoint throttling is enabled.
+	r.pendingCheckpointProcessed = append(r.pendingCheckpointProcessed, processed...)
+	r.pendingCheckpointCommitted = append(r.pendingCheckpointCommitted, transformed...)
 	shouldSave := time.Since(r.lastCheckpointSave) >= r.checkpointInterval || r.uncheckpointedBatches >= 10
 	r.mu.Unlock()
 	if shouldSave {
@@ -1485,10 +1488,6 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 	if r.reader == nil || r.checkpointStore == nil || len(processed) == 0 {
 		return false
 	}
-	checkpointer, ok := r.reader.(core.RecordCheckpointer)
-	if !ok {
-		return false
-	}
 	r.mu.RLock()
 	blocked := r.checkpointBlocked
 	blockReason := r.checkpointBlockReason
@@ -1497,8 +1496,23 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 		r.handleCheckpointBoundaryError(ctx, "checkpoint blocked until restart: "+blockReason)
 		return false
 	}
-	cp, err := checkpointer.CheckpointForRecord(ctx, processed[len(processed)-1])
+	var cp core.Checkpoint
+	var err error
+	if batchCheckpointer, ok := r.reader.(core.BatchRecordCheckpointer); ok {
+		cp, err = batchCheckpointer.CheckpointForRecords(ctx, processed)
+	} else if checkpointer, ok := r.reader.(core.RecordCheckpointer); ok {
+		cp, err = checkpointer.CheckpointForRecord(ctx, processed[len(processed)-1])
+	} else {
+		return false
+	}
 	if err != nil {
+		errMsg := fmt.Sprintf("source checkpoint generation failed: %v", err)
+		r.blockCheckpoint(errMsg)
+		r.setStatus(StatusFailed)
+		if r.cancel != nil {
+			r.cancel()
+		}
+		r.handleCheckpointBoundaryError(ctx, errMsg)
 		return false
 	}
 	cp.JobName = r.spec.Name
