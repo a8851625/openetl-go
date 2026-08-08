@@ -8,14 +8,38 @@ import type {
 
 export type ApiIssue = {
   level?: string;
+  scope?: string;
   field?: string;
   node?: string;
+  node_id?: string;
+  node_kind?: string;
+  plugin?: string;
   check?: string;
   category?: string;
   code?: string;
   message: string;
   remediation?: string;
   action?: string;
+};
+
+export type ApiErrorPayload = {
+  error?: string;
+  message?: string;
+  code?: string;
+  operation?: string;
+  valid?: boolean;
+  preflight_valid?: boolean;
+  errors?: unknown[];
+  warnings?: unknown[];
+  issues?: unknown[];
+  field_issues?: unknown[];
+  preflight?: {
+    issues?: unknown[];
+    field_issues?: unknown[];
+    summary?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
 };
 
 export type ApiErrorDetails = {
@@ -48,12 +72,33 @@ function parseResponseBody(text: string): unknown {
 }
 
 function issueKey(issue: ApiIssue): string {
-  return [issue.level, issue.field, issue.node, issue.check, issue.code, issue.message].join('|');
+  return [
+    issue.level,
+    canonicalIssueField(issue.field),
+    issue.node_id || issue.node,
+    issue.check || issue.code,
+    issue.message,
+  ].join('|');
+}
+
+function canonicalIssueField(field?: string): string {
+  if (!field) return '';
+  const bracketed = field.match(/^dag\.nodes\[([^\]]+)\](.*)$/);
+  if (bracketed) return `dag.nodes.${bracketed[1]}${bracketed[2]}`;
+  return field;
 }
 
 function appendIssue(issues: ApiIssue[], issue: ApiIssue | null | undefined) {
   if (!issue || !issue.message.trim()) return;
-  if (!issues.some((item) => issueKey(item) === issueKey(issue))) issues.push(issue);
+  const duplicate = issues.findIndex((item) => issueKey(item) === issueKey(issue) || item.message === issue.message);
+  if (duplicate < 0) {
+    issues.push(issue);
+    return;
+  }
+  // Keep the structured variant when a legacy errors[] string and an issue
+  // envelope carry the same message.
+  const score = (item: ApiIssue) => [item.field, item.node_id || item.node, item.code, item.check, item.remediation, item.action].filter(Boolean).length;
+  if (score(issue) > score(issues[duplicate])) issues[duplicate] = issue;
 }
 
 function appendStringIssues(issues: ApiIssue[], value: unknown, level: string) {
@@ -73,10 +118,15 @@ function appendStructuredIssues(issues: ApiIssue[], value: unknown, fallbackLeve
     if (!isRecord(raw)) return;
     const message = asText(raw.message) || asText(raw.reason) || asText(raw.label);
     if (!message) return;
+    const nodeID = asText(raw.node_id) || asText(raw.node);
     appendIssue(issues, {
       level: asText(raw.level) || fallbackLevel,
+      scope: asText(raw.scope) || undefined,
       field: asText(raw.field) || undefined,
-      node: asText(raw.node) || undefined,
+      node: asText(raw.node) || nodeID || undefined,
+      node_id: nodeID || undefined,
+      node_kind: asText(raw.node_kind) || undefined,
+      plugin: asText(raw.plugin) || undefined,
       check: asText(raw.check) || undefined,
       category: asText(raw.category) || undefined,
       code: asText(raw.code) || undefined,
@@ -122,6 +172,10 @@ export function toApiErrorDetails(value: unknown, status = 0, fallback = 'Reques
     return { ...value, status: value.status || status || undefined };
   }
   if (value instanceof Error) {
+    const attached = (value as Error & { payload?: unknown }).payload;
+    if (attached !== undefined) {
+      return toApiErrorDetails(attached, status, value.message || fallback);
+    }
     return { status: status || undefined, summary: value.message || fallback, issues: [] };
   }
 
@@ -202,8 +256,30 @@ export function apiErrorSummary(value: unknown, fallback = 'Request failed'): st
   return toApiErrorDetails(value, 0, fallback).summary;
 }
 
-export function apiErrorPayload(value: unknown): unknown {
-  return value instanceof ApiError ? value.payload : undefined;
+export function apiErrorPayload(value: unknown): ApiErrorPayload | null {
+  if (value instanceof ApiError) {
+    return isRecord(value.payload) ? value.payload as ApiErrorPayload : null;
+  }
+  if (value instanceof Error) {
+    const attached = (value as Error & { payload?: unknown }).payload;
+    if (isRecord(attached)) return attached as ApiErrorPayload;
+    const parsed = parseResponseBody(value.message);
+    return isRecord(parsed) ? parsed as ApiErrorPayload : (value.message.trim() ? { error: value.message.trim() } : null);
+  }
+  if (isRecord(value)) {
+    const attached = value.payload;
+    if (isRecord(attached)) return attached as ApiErrorPayload;
+    return value as ApiErrorPayload;
+  }
+  if (typeof value === 'string') {
+    const parsed = parseResponseBody(value);
+    return isRecord(parsed) ? parsed as ApiErrorPayload : (value.trim() ? { error: value.trim() } : null);
+  }
+  return null;
+}
+
+export function apiErrorIssues(value: unknown): ApiIssue[] {
+  return toApiErrorDetails(value).issues;
 }
 
 export class ApiError extends Error {
@@ -228,7 +304,6 @@ function isErrorEnvelope(payload: unknown): boolean {
   if (Array.isArray(payload.errors) && payload.errors.length > 0) return true;
   return false;
 }
-
 // API credentials intentionally live only for the lifetime of this page.  A
 // persistent localStorage token is readable by every script running in the UI
 // origin and survives browser restarts, so it is not an acceptable default for
@@ -281,7 +356,7 @@ export function useApi<T>(path: string, refreshKey: number): ApiState<T> {
       .catch((e) => {
         if (!cancelled) {
           firstRender.current = false;
-          setState((p) => ({ ...p, error: e.message, loading: false }));
+          setState((p) => ({ ...p, error: apiErrorSummary(e), loading: false }));
         }
       });
     return () => {

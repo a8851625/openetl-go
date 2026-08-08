@@ -31,6 +31,12 @@ func validateDAGNodeConfigs(spec *orchestrator.PipelineSpec) []dagNodeValidation
 		if node == nil {
 			continue
 		}
+		// Registry existence is reported by dagPipelineIssues with a stable
+		// unknown_connector code. Avoid emitting a second builder error for the
+		// same missing plugin here.
+		if !registryBuilderExists(node) {
+			continue
+		}
 		var err error
 		config := node.Config
 		switch node.Kind {

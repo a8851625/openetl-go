@@ -583,7 +583,7 @@ Objective: 线性和 DAG 管道配置失败不再被显示为成功、原始 JSO
 Scope: DAG/linear validate-create-update 错误契约、Web API error adapter、向导/Designer 错误面板与字段映射、对应服务端测试和浏览器 e2e。
 Non-goals: 新 connector、connector runtime 语义变更、P4 其他信息架构/状态口径重构、distributed 执行语义。
 Acceptance: 1) DAG 未知/无效 connector 在 validate 和 create/update 中明确失败，任何 error payload 不得使用 2xx；2) 前端解析结构化错误，Toast 只显示摘要，完整详情持久可查看；3) preflight issue 靠近对应步骤/字段并保留 remediation，不以折叠高级区或前 5 条截断代替；4) create/update/dry-run 失败在当前操作上下文可见；5) Playwright 验证错误详情、字段定位、修复后重验和失败不创建 pipeline。
-Evidence: `go test ./internal/etl/server -run 'TestDAG(ValidationRejectsConnectorBuilderErrors|CreateAndUpdateRejectConnectorBuilderErrorsWithNon2xx)' -count=1`；`npm run typecheck`；`npm run build`；`hack/e2e-ui.sh`（嵌入式生产镜像，112 passed/0 failed，含向导/DAG 错误详情、字段 remediation、失败不落库和修复后重验）；`git diff --check`。
+Evidence: `internal/etl/server/pipeline_validation_contract_test.go`；`go test ./internal/etl/server -run 'Test(DAG|LinearValidationContract|ValidateContract)' -count=1`；`go test ./... -count=1`；`go test -race ./internal/etl/server ./internal/etl/sink ./internal/etl/source -count=1`；`go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...`；`npm run typecheck`；`npm run build`；`npm run lint`；`hack/e2e-ui.sh`（嵌入式生产镜像，112 passed/0 failed，含向导/DAG 错误详情、字段 remediation、失败不落库和修复后重验）；`git diff --check`。
 Result: delivered
 Residual/follow-up: Doris/Kafka table_template、Debezium envelope key、brokers JSON 字符串作为独立 follow-up 核验；不回写本项验收标准。
 ```

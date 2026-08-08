@@ -9,13 +9,21 @@ import '@xyflow/react/dist/style.css';
 import YAML from 'yaml';
 import cronstrue from 'cronstrue';
 import type { TFunc, Lang } from './types';
-import { ConfigForm, filterFieldsByScope, type PluginSchemaField } from './configFields';
+import { ConfigForm, filterFieldsByScope, type ConfigFieldIssue, type PluginSchemaField } from './configFields';
 import { Button } from '@/components/ui/button';
+import { ApiErrorPanel } from '@/components/shared/api-error-panel';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { ErrorDetails } from '@/components/shared/error-details';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/components/theme-provider';
-import { api, apiErrorPayload, toApiErrorDetails, type ApiErrorDetails } from '@/lib/api';
+import {
+  api,
+  apiErrorIssues,
+  apiErrorPayload,
+  toApiErrorDetails,
+  type ApiErrorDetails,
+  type ApiIssue,
+} from '@/lib/api';
 
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -101,6 +109,7 @@ type ValidateResult = {
   valid?: boolean;
   warnings?: string[];
   errors?: string[];
+  issues?: ApiIssue[];
   field_issues?: { level?: string; field: string; node?: string; check?: string; message: string; remediation?: string }[];
   preflight_warnings?: string[];
   preflight_valid?: boolean;
@@ -409,6 +418,42 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [selectedConnectionContext, setSelectedConnectionContext] = useState<ConnectionContext | null>(null);
   const redisStateConfigured = Boolean(schema?.data?.runtime?.redis_state_configured);
 
+  const runEditorAction = useCallback((label: string, action: () => Promise<unknown>) => {
+    onAction(label, async () => {
+      try {
+        const result = await action();
+        setOperationError(null);
+        return result;
+      } catch (error) {
+        setOperationError(toApiErrorDetails(error));
+        throw error;
+      }
+    });
+  }, [onAction]);
+
+  const navigateToIssue = useCallback((issue: ApiIssue) => {
+    if (issue.field === 'name') {
+      window.setTimeout(() => document.querySelector<HTMLElement>('[data-field-path="name"]')?.focus(), 0);
+      return;
+    }
+    let nodeID = issue.node_id || issue.node || '';
+    if (!nodeID && issue.field?.startsWith('dag.nodes.')) {
+      nodeID = issue.field.slice('dag.nodes.'.length).split('.')[0] || '';
+    }
+    if (!nodeID && issue.field) {
+      nodeID = issue.field.match(/^dag\.nodes\[([^\]]+)\]/)?.[1] || '';
+    }
+    if (nodeID && nodes.some((node) => node.id === nodeID)) {
+      setSelectedNodeId(nodeID);
+      setShowNodeProps(true);
+      setDrawerTab(null);
+      const fieldPath = issue.field?.replace(/^dag\.nodes\[([^\]]+)\]/, 'dag.nodes.$1') || '';
+      window.setTimeout(() => {
+        document.querySelector<HTMLElement>(`[data-field-path="${CSS.escape(fieldPath)}"]`)?.focus();
+      }, 0);
+    }
+  }, [nodes]);
+
   const testNodeConnection = async () => {
     if (!selectedNode) {
       setTestResult('⚠ ' + t('dag.testSelectNode'));
@@ -506,6 +551,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       setSelectedNodeId(nextNodes[0]?.id || null);
       setValidateResult(null);
       setValidateError(null);
+      setOperationError(null);
       return;
     }
 
@@ -531,6 +577,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setSelectedNodeId(nextNodes[0]?.id || null);
     setValidateResult(null);
     setValidateError(null);
+    setOperationError(null);
   }, [setEdges, setNodes]);
 
   // Load pipeline only when the target pipeline id changes.
@@ -778,12 +825,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       const res = await apiPost<ValidateResult>('/api/v2/specs/validate', { spec });
       setValidateResult(res as ValidateResult);
       if ((res as ValidateResult).valid === false) {
-        throw toApiErrorDetails(res, 422, 'Validation failed');
+        throw Object.assign(new Error('Validation failed'), { payload: res });
       }
+      setOperationError(null);
       return res as ValidateResult;
     } catch (e) {
       const payload = apiErrorPayload(e);
-      if (payload && typeof payload === 'object') {
+      if (payload) {
         const candidate = payload as ValidateResult;
         if (candidate.valid === false || candidate.errors || candidate.field_issues || candidate.preflight) {
           setValidateResult(candidate);
@@ -868,7 +916,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     // renders the Pipelines page blank).
     const trimmedName = pipelineName.trim();
     if (!trimmedName) {
-      onAction(t('dag.validate'), () => Promise.reject(new Error(t('dag.errNameRequired'))), setOperationError);
+      const failure = {
+        error: t('dag.errNameRequired'),
+        valid: false,
+        issues: [{ code: 'required', scope: 'pipeline', field: 'name', message: t('dag.errNameRequired'), remediation: 'Enter a pipeline name.' }],
+      };
+      const details = toApiErrorDetails(failure);
+      setOperationError(details);
+      onAction(t('dag.validate'), () => Promise.reject(Object.assign(new Error(details.summary), { payload: failure })));
       return;
     }
     setPipelineName(trimmedName);
@@ -877,20 +932,30 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     const hasSource = spec.source?.type || spec.dag?.nodes?.some((n: any) => n.kind === 'source');
     const hasSink = spec.sink?.type || spec.dag?.nodes?.some((n: any) => n.kind === 'sink');
     if (!hasSource || !hasSink) {
-      onAction(t('dag.validate'), () => Promise.reject(new Error(t('dag.errEmptyDag'))), setOperationError);
+      const failure = {
+        error: t('dag.errEmptyDag'),
+        valid: false,
+        issues: [{ code: 'invalid_dag', scope: 'dag', field: 'dag.nodes', message: t('dag.errEmptyDag'), remediation: 'Add at least one source node and one sink node.' }],
+      };
+      const details = toApiErrorDetails(failure);
+      setOperationError(details);
+      onAction(t('dag.validate'), () => Promise.reject(Object.assign(new Error(details.summary), { payload: failure })));
       return;
     }
     if (editTarget) {
-      // Update mode: PUT + checkpoint warning
-      const doUpdate = () => apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: false }, 'PUT');
-      onAction(`${t('dag.updatePipeline')}: ${pipelineName}`, doUpdate, setOperationError);
+      // Update follows the same validation contract as create; a failed
+      // validation never reaches persistence or replaces the active runner.
+      runEditorAction(`${t('dag.updatePipeline')}: ${pipelineName}`, async () => {
+        await validateCurrentSpec(spec);
+        return apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: false }, 'PUT');
+      });
     } else {
       // Create mode: POST
-      onAction(`${t('dag.createPipeline')}: ${pipelineName}`, () =>
+      runEditorAction(`${t('dag.createPipeline')}: ${pipelineName}`, () =>
         validateCurrentSpec(spec).then(() =>
           apiPost('/api/v2/pipelines', { spec }, 'POST')
         )
-      , setOperationError);
+      );
     }
   };
 
@@ -898,14 +963,51 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     if (!editTarget) return;
     setOperationError(null);
     const spec = buildSpec();
-    onAction(`${t('dag.updatePipeline')}: ${pipelineName}`, () =>
-      apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: true }, 'PUT')
-    , setOperationError);
+    runEditorAction(`${t('dag.updatePipeline')}: ${pipelineName}`, async () => {
+      await validateCurrentSpec(spec);
+      return apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: true }, 'PUT');
+    });
   };
 
   // ── Schema for selected node ──────────────────────────────────────
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
+  const selectedNodeIssues = useMemo(() => {
+    return [...apiErrorIssues(validateError), ...apiErrorIssues(operationError)].filter((issue) => {
+      if (!selectedNode) return false;
+      return issue.node_id === selectedNode.id || issue.node === selectedNode.id ||
+        issue.field?.startsWith(`dag.nodes.${selectedNode.id}.`) ||
+        issue.field?.startsWith(`dag.nodes[${selectedNode.id}].`);
+    });
+  }, [validateError, operationError, selectedNode]);
+  const selectedNodeFieldIssues = useMemo(() => {
+    const result: Record<string, ConfigFieldIssue[]> = {};
+    if (!selectedNode) return result;
+    const dotPrefix = `dag.nodes.${selectedNode.id}.config.`;
+    const bracketPrefix = `dag.nodes[${selectedNode.id}].config.`;
+    selectedNodeIssues.forEach((issue) => {
+      const field = issue.field || '';
+      const name = field.startsWith(dotPrefix)
+        ? field.slice(dotPrefix.length)
+        : field.startsWith(bracketPrefix)
+          ? field.slice(bracketPrefix.length)
+          : '';
+      if (!name) return;
+      (result[name] ||= []).push({
+        level: issue.level,
+        check: issue.check || issue.code,
+        message: issue.message,
+        remediation: issue.remediation,
+      });
+    });
+    return result;
+  }, [selectedNode, selectedNodeIssues]);
+  const selectedPluginIssues = selectedNode
+    ? selectedNodeIssues.filter((issue) => {
+        const field = issue.field || '';
+        return field === `dag.nodes.${selectedNode.id}.plugin` || field === `dag.nodes[${selectedNode.id}].plugin`;
+      })
+    : [];
   const selKind = selectedNode?.data.kind;
   const selPlugin = selectedNode?.data.plugin;
   const pluginList: string[] = selKind === 'source' ? (plugins?.data?.sources || [])
@@ -956,7 +1058,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       {/* ── Compact Toolbar ─────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3 shadow-sm">
         <div className="flex items-center gap-2">
-          <input className={cn(fieldClass, "w-48")} value={pipelineName} onChange={(e) => setPipelineName(e.target.value)} placeholder={t('design.name')} />
+          <input data-field-path="name" className={cn(fieldClass, "w-48")} value={pipelineName} onChange={(e) => setPipelineName(e.target.value)} placeholder={t('design.name')} />
           {editTarget && <ToneBadge tone="amber" className="text-xs">{t('dag.editing').replace('{name}', editTarget)}</ToneBadge>}
         </div>
         <div className="h-5 w-px bg-border" />
@@ -1007,11 +1109,18 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         </div>
       </div>
 
-      {validateError && (
-        <ErrorDetails error={validateError} title="Validation failed" testId="dag-validation-error" />
+      {validateError && !operationError && (
+        <ErrorDetails
+          error={validateError}
+          title="Validation failed"
+          testId="dag-validation-error"
+          onDismiss={() => setValidateError(null)}
+          onNavigate={navigateToIssue}
+          navigateLabel="Open node"
+        />
       )}
 
-      {!validateError && validateResult && (
+      {!validateError && !operationError && validateResult && (
         <div data-testid="dag-validate-result" className={`rounded-lg border px-3 py-2 text-xs ${validateResult.valid === false ? 'border-rose-200 bg-rose-50 text-rose-800' : validateResult.warnings?.length ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
           <div className="flex items-start justify-between gap-3">
             <div className="font-semibold">{validateResult.valid === false ? 'Validation failed' : 'Validation passed'} · {validateResult.preflight?.summary || 'spec checked'}</div>
@@ -1073,10 +1182,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       )}
 
       {operationError && (
-        <ErrorDetails
+        <ApiErrorPanel
           error={operationError}
           title="Pipeline operation failed"
           testId="dag-operation-error"
+          onDismiss={() => setOperationError(null)}
+          onNavigate={navigateToIssue}
+          navigateLabel="Open node"
         />
       )}
 
@@ -1125,15 +1237,21 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('dag.nodeId')}</label>
                   <input className={fieldClass} value={selectedNode.data.label || ''} onChange={(e) => updateNodeLabel(e.target.value)} />
                 </div>
-                <div>
+                <div data-field-path={`dag.nodes.${selectedNode.id}.plugin`} tabIndex={-1}>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('dag.plugin')}</label>
                   {ADVANCED_NODE_KINDS.includes(selKind || '') ? (
                     <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground/80">{selPlugin}</div>
                   ) : (
-                    <select className={fieldClass} value={selPlugin} onChange={(e) => updateNodePlugin(e.target.value)}>
+                    <select className={cn(fieldClass, selectedPluginIssues.length > 0 && 'border-rose-400 ring-1 ring-rose-200')} value={selPlugin} onChange={(e) => updateNodePlugin(e.target.value)}>
                       {pluginList.length > 0 ? pluginList.map((p) => <option key={p} value={p}>{p}</option>) : <option value={selPlugin}>{selPlugin}</option>}
                     </select>
                   )}
+                  {selectedPluginIssues.map((issue, index) => (
+                    <div key={`${issue.code || issue.check || 'plugin'}-${index}`} className="mt-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
+                      <div className="break-words whitespace-pre-wrap">{issue.message}</div>
+                      {issue.remediation && <div className="mt-0.5 break-words whitespace-pre-wrap opacity-80">Fix: {issue.remediation}</div>}
+                    </div>
+                  ))}
                 </div>
                 {nodeSupportsConnection && (
                   <div>
@@ -1234,7 +1352,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                   {selectedNode.data.connection && (
                     <div className="mb-2 text-[11px] text-muted-foreground">{t('dag.behaviorOnly')}</div>
                   )}
-                  <ConfigForm fields={schemaFields} config={selectedNode.data.config} onChange={updateNodeConfig} t={t} />
+                  <ConfigForm
+                    fields={schemaFields}
+                    config={selectedNode.data.config}
+                    onChange={updateNodeConfig}
+                    t={t}
+                    fieldPathPrefix={`dag.nodes.${selectedNode.id}.config`}
+                    fieldIssues={selectedNodeFieldIssues}
+                  />
                 </div>
               </div>
             </div>

@@ -140,7 +140,7 @@ export function ConfigForm({
   onChange,
   t,
   emptyText,
-  fieldIssues,
+  fieldIssues = {},
   fieldPathPrefix,
 }: {
   fields: PluginSchemaField[];
@@ -171,7 +171,9 @@ export function ConfigForm({
         const value = config[field.name] ?? field.default ?? '';
         const placeholder = exampleText(field.example) || field.description || '';
         const issues = fieldIssues?.[field.name] || fieldIssues?.[`${fieldPathPrefix || ''}.${field.name}`] || [];
-        const invalidClass = issues.length > 0 ? 'border-rose-400 ring-1 ring-rose-200' : '';
+        const fieldPath = fieldPathPrefix ? `${fieldPathPrefix}.${field.name}` : field.name;
+        const hasError = issues.some((issue) => issue.level !== 'warning' && issue.level !== 'info');
+        const invalidClass = hasError ? 'border-rose-400 ring-1 ring-rose-200' : '';
         let input: React.ReactNode;
         if (field.enum && field.enum.length > 0) {
           input = (
@@ -265,7 +267,17 @@ export function ConfigForm({
         }
 
         return (
-          <div key={field.name} data-testid={`config-field-${field.name}`}>
+          <div
+            key={field.name}
+            data-testid={`config-field-${field.name}`}
+            data-field-path={fieldPath}
+            tabIndex={-1}
+            className={cn(
+              'rounded-md p-1 -m-1',
+              hasError && 'border border-rose-300 bg-rose-50/60 dark:border-rose-800 dark:bg-rose-950/20',
+              issues.length > 0 && !hasError && 'border border-amber-300 bg-amber-50/60 dark:border-amber-800 dark:bg-amber-950/20',
+            )}
+          >
             <Label className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
               <span>{field.name}</span>
               {field.required && <span className="text-rose-500">*</span>}
@@ -290,15 +302,24 @@ export function ConfigForm({
                 </span>
               )}
             </Label>
-            {input}
+            <div aria-invalid={hasError || undefined}>{input}</div>
             {field.description && (
               <div className={cn('mt-1 text-xs text-muted-foreground')}>{field.description}</div>
             )}
             {issues.map((issue, index) => (
-              <div key={`${issue.check || 'issue'}-${index}`} className="mt-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700" data-testid={`config-field-${field.name}-error`}>
+              <div
+                key={`${issue.check || 'issue'}-${index}`}
+                className={cn(
+                  'mt-1 rounded border px-2 py-1 text-[11px]',
+                  issue.level === 'warning' || issue.level === 'info'
+                    ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300'
+                    : 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/20 dark:text-rose-300',
+                )}
+                data-testid={`config-field-${field.name}-error`}
+              >
                 <div className="font-medium">{issue.check || issue.level || 'Invalid value'}</div>
                 <div className="break-words whitespace-pre-wrap">{issue.message}</div>
-                {issue.remediation && <div className="mt-0.5 break-words whitespace-pre-wrap text-rose-600">Fix: {issue.remediation}</div>}
+                {issue.remediation && <div className="mt-0.5 break-words whitespace-pre-wrap opacity-80">Fix: {issue.remediation}</div>}
               </div>
             ))}
           </div>

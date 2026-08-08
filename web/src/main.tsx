@@ -381,6 +381,7 @@ function App() {
               setRefreshKey((n) => n + 1);
               openPipelineDetail(name, 'overview');
             }}
+            onShowToast={toast}
             onOpenDesigner={editPipeline}
           />
         )}

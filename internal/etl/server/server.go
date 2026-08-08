@@ -1201,8 +1201,10 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 		Spec json.RawMessage `json:"spec"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{"invalid body"}})
+		writePipelineIssues(w, http.StatusBadRequest, "validation", "invalid request body", []PipelineIssue{{
+			Code: "invalid_body", Scope: "request", Message: "invalid request body",
+			Remediation: "send JSON with a spec object",
+		}}, nil)
 		return
 	}
 
@@ -1213,39 +1215,22 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(raw.Spec, &dagDetect); err == nil && dagDetect.DAG != nil {
 		var dagSpec orchestrator.PipelineSpec
 		if err := json.Unmarshal(raw.Spec, &dagSpec); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{"invalid DAG spec: " + err.Error()}})
-			return
-		}
-		if dagSpec.Name == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{"name is required"}})
+			writePipelineIssues(w, http.StatusBadRequest, "validation", "invalid DAG spec", []PipelineIssue{{
+				Code: "invalid_dag", Scope: "dag", Message: "invalid DAG spec: " + err.Error(),
+				Remediation: "correct the DAG JSON/YAML shape and validate again",
+			}}, nil)
 			return
 		}
 		if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
+			writePipelineIssues(w, http.StatusBadRequest, "validation", "DAG connection resolution failed", []PipelineIssue{{
+				Code: "connection_resolution", Scope: "dag", Message: err.Error(),
+				Remediation: "select an existing connection of the matching kind, or provide inline config",
+			}}, nil)
 			return
 		}
-		// Validate DAG nodes/edges + production multi-sink fanout gate (PR-2.3).
-		if err := dagSpec.DAG.ValidateProduction(dagSpec.AllowUnsafe); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
-			return
-		}
-		if problems := validateDAGRuntimeStateRequirements(&dagSpec); len(problems) > 0 {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": problems})
-			return
-		}
-		if issues := validateDAGNodeConfigs(&dagSpec); len(issues) > 0 {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{
-				"valid":        false,
-				"error":        "DAG node validation failed",
-				"errors":       dagValidationErrorStrings(issues),
-				"field_issues": issues,
-			})
+		issues := dagPipelineIssues(&dagSpec)
+		if hasBlockingPipelineIssues(issues) {
+			writePipelineIssues(w, http.StatusBadRequest, "validation", dagValidationSummary(issues), issues, map[string]any{"spec": dagSpec})
 			return
 		}
 		s.mu.RLock()
@@ -1257,26 +1242,30 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 		}
 		warnings = append(warnings, tapUnimplementedConfigWarningsForDAG(&dagSpec)...)
 
-		json.NewEncoder(w).Encode(map[string]any{"valid": true, "warnings": warnings, "spec": dagSpec})
+		json.NewEncoder(w).Encode(map[string]any{"valid": true, "warnings": warnings, "issues": issues, "spec": dagSpec})
 		return
 	}
 
 	// Linear format validation
 	var spec pipeline.Spec
 	if err := json.Unmarshal(raw.Spec, &spec); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{"invalid spec: " + err.Error()}})
+		writePipelineIssues(w, http.StatusBadRequest, "validation", "invalid pipeline spec", []PipelineIssue{{
+			Code: "invalid_spec", Scope: "pipeline", Message: "invalid spec: " + err.Error(),
+			Remediation: "correct the pipeline JSON/YAML shape and validate again",
+		}}, nil)
 		return
 	}
 	pipeline.ApplyDefaults(&spec)
 	if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
+		writePipelineIssues(w, http.StatusBadRequest, "validation", "connection resolution failed", []PipelineIssue{{
+			Code: "connection_resolution", Scope: "pipeline", Message: err.Error(),
+			Remediation: "select an existing connection of the matching kind, or provide inline config",
+		}}, nil)
 		return
 	}
-	if err := pipeline.ValidateSpec(&spec); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"valid": false, "errors": []string{err.Error()}})
+	issues := linearPipelineIssues(&spec)
+	if hasBlockingPipelineIssues(issues) {
+		writePipelineIssues(w, http.StatusBadRequest, "validation", "pipeline validation failed", issues, map[string]any{"spec": spec})
 		return
 	}
 	s.mu.RLock()
@@ -1310,19 +1299,24 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 	// Run preflight checks (P4-11, SV-2+SV-3). Error-level issues
 	// indicate a hard misconfiguration (e.g., MySQL binlog format) and
 	// should prevent pipeline creation. Reachability warnings don't.
-	preflightValid := true
 	preflightResult := s.RunPreflight(r.Context(), &spec)
-	if preflightResult != nil {
-		for _, issue := range preflightResult.Issues {
-			if issue.Level == "error" {
-				warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
-				preflightValid = false
-			} else {
-				warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
-			}
+	preflightIssues := preflightPipelineIssues(preflightResult)
+	for _, issue := range preflightIssues {
+		if issue.Level == "warning" || issue.Level == "info" {
+			warnings = append(warnings, fmt.Sprintf("[%s] %s — %s", issue.Check, issue.Message, issue.Remediation))
 		}
 	}
-	json.NewEncoder(w).Encode(map[string]any{"valid": preflightValid, "warnings": warnings, "spec": spec, "preflight": preflightResult})
+	if hasBlockingPipelineIssues(preflightIssues) {
+		writePipelineIssues(w, http.StatusBadRequest, "validation", "preflight failed", preflightIssues, map[string]any{
+			"preflight_valid":    false,
+			"warnings":           warnings,
+			"preflight_warnings": warnings,
+			"spec":               spec,
+			"preflight":          preflightResult,
+		})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"valid": true, "warnings": warnings, "issues": preflightIssues, "spec": spec, "preflight": preflightResult})
 }
 
 func validateDAGRuntimeStateRequirements(spec *orchestrator.PipelineSpec) []string {
@@ -1639,8 +1633,8 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if strings.TrimSpace(dagSpec.Name) == "" {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"error": "name is required"})
+				issues := dagPipelineIssues(&dagSpec)
+				writePipelineIssues(w, http.StatusBadRequest, "create", dagValidationSummary(issues), issues, nil)
 				return
 			}
 
@@ -1663,31 +1657,24 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 
 			id := newPipelineInstanceID()
 			if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				writePipelineIssues(w, http.StatusBadRequest, "create", "DAG connection resolution failed", []PipelineIssue{{
+					Code: "connection_resolution", Scope: "dag", Message: err.Error(),
+					Remediation: "select an existing connection of the matching kind, or provide inline config",
+				}}, nil)
 				return
 			}
-			if problems := validateDAGRuntimeStateRequirements(&dagSpec); len(problems) > 0 {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
-				return
-			}
-			if issues := validateDAGNodeConfigs(&dagSpec); len(issues) > 0 {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{
-					"valid":        false,
-					"error":        "DAG node validation failed",
-					"errors":       dagValidationErrorStrings(issues),
-					"field_issues": issues,
-				})
+			if issues := dagPipelineIssues(&dagSpec); hasBlockingPipelineIssues(issues) {
+				writePipelineIssues(w, http.StatusBadRequest, "create", dagValidationSummary(issues), issues, nil)
 				return
 			}
 			createWarnings := tapUnimplementedConfigWarningsForDAG(&dagSpec)
 			runtime := runtimeDAGSpec(&dagSpec, id)
 			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				writePipelineIssues(w, http.StatusBadRequest, "create", "DAG executor construction failed", []PipelineIssue{{
+					Code: "executor_build", Scope: "dag", Message: err.Error(),
+					Remediation: "choose registered connectors and correct their configuration before retrying",
+				}}, nil)
 				return
 			}
 			runner := orchestrator.NewDAGRunnerWrapper(exec)
@@ -1738,14 +1725,15 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		pipeline.ApplyDefaults(&spec)
 		id := newPipelineInstanceID()
 		if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			writePipelineIssues(w, http.StatusBadRequest, "create", "connection resolution failed", []PipelineIssue{{
+				Code: "connection_resolution", Scope: "pipeline", Message: err.Error(),
+				Remediation: "select an existing connection of the matching kind, or provide inline config",
+			}}, nil)
 			return
 		}
 		runtime := runtimeSpec(&spec, id)
-		if err := pipeline.ValidateSpec(runtime); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		if issues := linearPipelineIssues(runtime); hasBlockingPipelineIssues(issues) {
+			writePipelineIssues(w, http.StatusBadRequest, "create", "pipeline validation failed", issues, nil)
 			return
 		}
 
@@ -1757,10 +1745,9 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		createWarnings, hasPreflightError := formatPreflightIssues(createPreflight)
 		createWarnings = append(createWarnings, tapUnimplementedConfigWarningsForPipeline(&spec)...)
 		if hasPreflightError {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{
-				"error":              "preflight failed",
+			writePipelineIssues(w, http.StatusBadRequest, "create", "preflight failed", preflightPipelineIssues(createPreflight), map[string]any{
 				"preflight_valid":    false,
+				"warnings":           createWarnings,
 				"preflight_warnings": createWarnings,
 				"preflight":          createPreflight,
 			})
@@ -1841,8 +1828,8 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if strings.TrimSpace(dagSpec.Name) == "" {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"error": "name is required"})
+				issues := dagPipelineIssues(&dagSpec)
+				writePipelineIssues(w, http.StatusBadRequest, "update", dagValidationSummary(issues), issues, nil)
 				return
 			}
 			id := strings.TrimSpace(req.ID)
@@ -1888,31 +1875,24 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if err := s.resolveDAGConnections(r.Context(), &dagSpec); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				writePipelineIssues(w, http.StatusBadRequest, "update", "DAG connection resolution failed", []PipelineIssue{{
+					Code: "connection_resolution", Scope: "dag", Message: err.Error(),
+					Remediation: "select an existing connection of the matching kind, or provide inline config",
+				}}, nil)
 				return
 			}
-			if problems := validateDAGRuntimeStateRequirements(&dagSpec); len(problems) > 0 {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"error": strings.Join(problems, "; "), "errors": problems})
-				return
-			}
-			if issues := validateDAGNodeConfigs(&dagSpec); len(issues) > 0 {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{
-					"valid":        false,
-					"error":        "DAG node validation failed",
-					"errors":       dagValidationErrorStrings(issues),
-					"field_issues": issues,
-				})
+			if issues := dagPipelineIssues(&dagSpec); hasBlockingPipelineIssues(issues) {
+				writePipelineIssues(w, http.StatusBadRequest, "update", dagValidationSummary(issues), issues, nil)
 				return
 			}
 			updateWarnings := tapUnimplementedConfigWarningsForDAG(&dagSpec)
 			runtime := runtimeDAGSpec(&dagSpec, id)
 			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				writePipelineIssues(w, http.StatusBadRequest, "update", "DAG executor construction failed", []PipelineIssue{{
+					Code: "executor_build", Scope: "dag", Message: err.Error(),
+					Remediation: "choose registered connectors and correct their configuration before retrying",
+				}}, nil)
 				return
 			}
 			runner := orchestrator.NewDAGRunnerWrapper(exec)
@@ -1995,14 +1975,15 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := s.resolvePipelineConnections(r.Context(), &spec); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			writePipelineIssues(w, http.StatusBadRequest, "update", "connection resolution failed", []PipelineIssue{{
+				Code: "connection_resolution", Scope: "pipeline", Message: err.Error(),
+				Remediation: "select an existing connection of the matching kind, or provide inline config",
+			}}, nil)
 			return
 		}
 		runtime := runtimeSpec(&spec, id)
-		if err := pipeline.ValidateSpec(runtime); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		if issues := linearPipelineIssues(runtime); hasBlockingPipelineIssues(issues) {
+			writePipelineIssues(w, http.StatusBadRequest, "update", "pipeline validation failed", issues, nil)
 			return
 		}
 
@@ -2021,10 +2002,9 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		updateWarnings, hasPreflightError := formatPreflightIssues(updatePreflight)
 		updateWarnings = append(updateWarnings, tapUnimplementedConfigWarningsForPipeline(&spec)...)
 		if hasPreflightError {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{
-				"error":              "preflight failed",
+			writePipelineIssues(w, http.StatusBadRequest, "update", "preflight failed", preflightPipelineIssues(updatePreflight), map[string]any{
 				"preflight_valid":    false,
+				"warnings":           updateWarnings,
 				"preflight_warnings": updateWarnings,
 				"preflight":          updatePreflight,
 				"spec_changed":       specChanged,

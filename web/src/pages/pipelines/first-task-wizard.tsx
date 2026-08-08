@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ToneBadge } from '@/components/shared/status-badge';
-import { ErrorDetails } from '@/components/shared/error-details';
 import { cn } from '@/lib/utils';
+import { ApiErrorPanel } from '@/components/shared/api-error-panel';
 import {
   ConfigForm,
   buildDefaultConfig,
@@ -15,7 +15,15 @@ import {
   type ConfigFieldIssue,
   type PluginSchemaField,
 } from '@/configFields';
-import { api, apiErrorPayload, normalizeConnectionEntry, toApiErrorDetails, type ApiErrorDetails } from '@/lib/api';
+import {
+  api,
+  apiErrorPayload,
+  normalizeConnectionEntry,
+  toApiErrorDetails,
+  type ApiErrorDetails,
+  type ApiIssue,
+} from '@/lib/api';
+import type { ToastFn } from '@/lib/toast';
 import { parseJSONObject, parseJSONText, prettyJSON } from '@/lib/format';
 import { navigate } from '@/lib/routing';
 import type {
@@ -73,14 +81,15 @@ type ValidateResult = {
   valid?: boolean;
   warnings?: string[];
   errors?: string[];
-  field_issues?: { level?: string; field: string; node?: string; check?: string; message: string; remediation?: string }[];
+  issues?: ApiIssue[];
+  field_issues?: ApiIssue[];
   preflight_warnings?: string[];
   preflight_valid?: boolean;
   preflight?: {
     passed?: boolean;
     summary?: string;
-    issues?: { level: string; check: string; message: string; remediation?: string }[];
-    field_issues?: { level: string; field: string; check: string; message: string; remediation?: string }[];
+    issues?: ApiIssue[];
+    field_issues?: ApiIssue[];
     ddl_preview?: { dialect: string; table: string; statements?: string[]; warnings?: string[] };
     guidance?: { level: string; category: string; code: string; message: string; action?: string }[];
     readiness?: {
@@ -191,6 +200,7 @@ export function FirstTaskWizard({
   onCreated,
   initialStep,
   onOpenDesigner,
+  onShowToast,
 }: {
   t: TFunc;
   plugins: any;
@@ -199,6 +209,7 @@ export function FirstTaskWizard({
   onCreated: (name: string) => void;
   initialStep?: string;
   onOpenDesigner?: (ref: string) => void;
+  onShowToast?: ToastFn;
 }) {
   const restored = useMemo(() => {
     try {
@@ -276,6 +287,7 @@ export function FirstTaskWizard({
     const details = toApiErrorDetails(value, 0, fallback);
     setErrorDetails(details);
     setError(details.summary);
+    onShowToast?.('error', `${fallback}: ${details.summary}`);
     return details;
   };
 
@@ -283,6 +295,53 @@ export function FirstTaskWizard({
     setError('');
     setErrorDetails(null);
   };
+
+  const visibleIssues = useMemo(() => {
+    const resultIssues: ApiIssue[] = [
+      ...(result?.issues || []),
+      ...(result?.field_issues || []),
+      ...(result?.preflight?.issues || []),
+      ...(result?.preflight?.field_issues || []),
+    ];
+    const merged = [...(errorDetails?.issues || []), ...resultIssues];
+    const seen = new Set<string>();
+    return merged.filter((issue) => {
+      const key = [issue.code || issue.check, issue.field, issue.node_id || issue.node, issue.message].join('|');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [errorDetails, result]);
+
+  const issuesForField = useCallback(
+    (field: string) => visibleIssues.filter((issue) => issue.field === field),
+    [visibleIssues],
+  );
+
+  const navigateToIssue = useCallback((issue: ApiIssue) => {
+    const field = issue.field || '';
+    let next: WizardStepId = 'safety';
+    if (field === 'name' || field.startsWith('schedule') || field.startsWith('retry') || field.startsWith('batch_') || field.startsWith('checkpoint_')) {
+      next = 'scenario';
+    } else if (field.startsWith('source.')) {
+      next = 'source';
+      setSourceMoreOpen(true);
+    } else if (field.startsWith('sink.')) {
+      next = 'sink';
+      setSinkMoreOpen(true);
+    } else if (field.startsWith('transforms.')) {
+      next = 'transform';
+      setTransformMoreOpen(true);
+    }
+    setStep(next);
+    writeStepToHash(next);
+    window.setTimeout(() => {
+      if (field) {
+        const canonical = field.replace(/^dag\.nodes\[([^\]]+)\]/, 'dag.nodes.$1');
+        document.querySelector<HTMLElement>(`[data-field-path="${CSS.escape(canonical)}"]`)?.focus();
+      }
+    }, 0);
+  }, []);
 
   const allSourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
   const allSinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
@@ -305,7 +364,8 @@ export function FirstTaskWizard({
   const validationFieldIssues = result?.preflight?.field_issues || result?.field_issues || [];
   const fieldIssuesFor = (prefix: string): Record<string, ConfigFieldIssue[]> => {
     const map: Record<string, ConfigFieldIssue[]> = {};
-    validationFieldIssues.forEach((issue) => {
+    visibleIssues.forEach((issue) => {
+      if (!issue.field) return;
       const marker = `${prefix}.`;
       if (!issue.field.startsWith(marker)) return;
       const name = issue.field.slice(marker.length);
@@ -557,6 +617,7 @@ export function FirstTaskWizard({
 
   const validate = async (throwOnInvalid = false) => {
     setBusy('validate'); clearError(); setResult(null);
+    let reported = false;
     try {
       const spec = YAML.parse(yamlText);
       const data = await api<ValidateResult>('/api/v2/specs/validate', {
@@ -566,13 +627,14 @@ export function FirstTaskWizard({
       setResult(data);
       if (data.valid === false) {
         const details = reportError(data, 'Preflight failed');
-        if (throwOnInvalid) throw details;
+        reported = true;
+        if (throwOnInvalid) throw Object.assign(new Error(details.summary), { payload: data });
       }
-      return data as ValidateResult;
+      return data;
     } catch (e) {
       const payload = apiErrorPayload(e);
-      if (payload && typeof payload === 'object') setResult(payload as ValidateResult);
-      reportError(e, 'Validation failed');
+      if (payload) setResult(payload as ValidateResult);
+      if (!reported) reportError(e, 'Validation failed');
       throw e;
     } finally {
       setBusy('');
@@ -598,7 +660,7 @@ export function FirstTaskWizard({
     setBusy('create'); clearError();
     try {
       const checked = await validate(true);
-      if (checked.valid === false) throw new Error((checked.errors || checked.warnings || ['preflight failed']).join('\n'));
+      if (checked.valid === false) return;
       const spec = YAML.parse(yamlText);
       const created = await api<{ id?: string; name: string }>('/api/v2/pipelines', { method: 'POST', body: JSON.stringify({ spec }) });
       await api(`/api/v2/pipelines/${encodeURIComponent(created.id || created.name || spec.name)}/start`, { method: 'POST' });
@@ -755,6 +817,7 @@ export function FirstTaskWizard({
       essential?: PluginSchemaField[];
       connectionSelected?: boolean;
       fieldIssues?: Record<string, ConfigFieldIssue[]>;
+      fieldPathPrefix?: string;
     },
   ) => {
     const showAll = !!opts?.moreOpen || !opts?.essential;
@@ -799,6 +862,7 @@ export function FirstTaskWizard({
           t={t}
           fieldIssues={opts?.fieldIssues}
           emptyText={opts?.connectionSelected ? t('wizard.connectionFirst') : undefined}
+          fieldPathPrefix={opts?.fieldPathPrefix}
         />
         {jsonOpen && (
           <Textarea className="mt-3 min-h-28 font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
@@ -897,7 +961,19 @@ export function FirstTaskWizard({
       if ((data as any)?.partial_error) {
         const message = prettyJSON((data as any).errors || data);
         setStageDryRunResult({ index, error: message });
-        reportError({ errors: [message] }, `Stage ${index + 1} failed`);
+        const failure = {
+          error: `Stage ${index + 1} dry-run failed`,
+          valid: false,
+          code: 'transform_dry_run_partial',
+          issues: [{
+            code: 'transform_dry_run_partial',
+            scope: 'transform',
+            field: `transforms.${index}.config`,
+            message,
+            remediation: 'correct this transform configuration or sample input, then run the stage again',
+          }],
+        };
+        reportError(failure, `Stage ${index + 1} failed`);
         return;
       }
       setStageDryRunResult({ index, result: data });
@@ -966,21 +1042,28 @@ export function FirstTaskWizard({
 
           {/* Center form: only the active step is rendered to reduce visual clutter. */}
           <div className="space-y-4 p-5 md:p-6" data-testid="wizard-step-body">
-            {error && (
-              <ErrorDetails
-                error={errorDetails || error}
-                title="Pipeline configuration failed"
-                testId="wizard-error-details"
-              />
-            )}
+            <ApiErrorPanel
+              error={errorDetails || (error ? { error } : null)}
+              title="Pipeline configuration failed"
+              testId="wizard-error-details"
+              onDismiss={clearError}
+              onNavigate={navigateToIssue}
+              navigateLabel="Open field"
+              className="mb-2"
+            />
             {/* Scenario */}
             {step === 'scenario' && (
             <div id="wizard-section-scenario" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepScenario')}</h3>
               <p className="mb-4 text-sm text-muted-foreground">{t('wizard.emptyStart')}</p>
-              <div className="mb-4">
+              <div className="mb-4" data-field-path="name" tabIndex={-1}>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Pipeline name</label>
                 <Input data-testid="wizard-pipeline-name" value={name} onChange={(e) => setName(e.target.value)} />
+                {issuesForField('name').map((issue, i) => (
+                  <div key={i} className="mt-1 text-xs text-rose-700">
+                    {issue.message}{issue.remediation ? ` · Fix: ${issue.remediation}` : ''}
+                  </div>
+                ))}
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 {WIZARD_TEMPLATES.map((tpl) => (
@@ -1018,7 +1101,7 @@ export function FirstTaskWizard({
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSource')}</h3>
               <p className="mb-3 text-sm text-muted-foreground">{t('wizard.sourceHint')}</p>
               <div className="mb-3 grid gap-3 sm:grid-cols-2">
-                <div>
+                <div data-field-path="source.type" tabIndex={-1}>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
                   <select
                     data-testid="wizard-source-type"
@@ -1036,6 +1119,11 @@ export function FirstTaskWizard({
                       <option key={tp} value={tp}>{tp}</option>
                     ))}
                   </select>
+                  {issuesForField('source.type').map((issue, i) => (
+                    <div key={i} className="mt-1 text-xs text-rose-700">
+                      {issue.message}{issue.remediation ? ` · Fix: ${issue.remediation}` : ''}
+                    </div>
+                  ))}
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">Connection</label>
@@ -1079,6 +1167,7 @@ export function FirstTaskWizard({
                     essential: sourceEssentialFields,
                     connectionSelected: Boolean(sourceConnection),
                     fieldIssues: sourceFieldIssues,
+                    fieldPathPrefix: 'source.config',
                   },
                 )}
               </div>
@@ -1091,7 +1180,7 @@ export function FirstTaskWizard({
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSink')}</h3>
               <p className="mb-3 text-sm text-muted-foreground">{t('wizard.sinkHint')}</p>
               <div className="mb-3 grid gap-3 sm:grid-cols-2">
-                <div>
+                <div data-field-path="sink.type" tabIndex={-1}>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
                   <select
                     data-testid="wizard-sink-type"
@@ -1109,6 +1198,11 @@ export function FirstTaskWizard({
                       <option key={tp} value={tp}>{tp}</option>
                     ))}
                   </select>
+                  {issuesForField('sink.type').map((issue, i) => (
+                    <div key={i} className="mt-1 text-xs text-rose-700">
+                      {issue.message}{issue.remediation ? ` · Fix: ${issue.remediation}` : ''}
+                    </div>
+                  ))}
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">Connection</label>
@@ -1183,6 +1277,7 @@ export function FirstTaskWizard({
                     essential: sinkEssentialFields,
                     connectionSelected: Boolean(sinkConnection),
                     fieldIssues: sinkFieldIssues,
+                    fieldPathPrefix: 'sink.config',
                   },
                 )}
               </div>
@@ -1230,7 +1325,8 @@ export function FirstTaskWizard({
                           data-testid={`wizard-transform-stage-${index}`}
                         >
                           <div className="mb-2 flex items-center justify-between gap-2">
-                            <div className="flex min-w-0 flex-1 items-center gap-2">
+                            <div className="min-w-0 flex-1" data-field-path={`transforms.${index}.type`} tabIndex={-1}>
+                              <div className="flex items-center gap-2">
                               <span className="shrink-0 text-xs font-semibold text-muted-foreground">
                                 {index + 1}.
                               </span>
@@ -1244,6 +1340,12 @@ export function FirstTaskWizard({
                                   <option key={type} value={type}>{type}</option>
                                 ))}
                               </select>
+                              </div>
+                              {issuesForField(`transforms.${index}.type`).map((issue, i) => (
+                                <div key={i} className="mt-1 text-xs text-rose-700">
+                                  {issue.message}{issue.remediation ? ` · Fix: ${issue.remediation}` : ''}
+                                </div>
+                              ))}
                             </div>
                             <div className="flex shrink-0 gap-1">
                               <Button
@@ -1304,6 +1406,8 @@ export function FirstTaskWizard({
                             onChange={(next) => updateTransformConfig(index, next)}
                             t={t}
                             emptyText="No config fields for this transform."
+                            fieldPathPrefix={`transforms.${index}.config`}
+                            fieldIssues={fieldIssuesFor(`transforms.${index}.config`)}
                           />
                         </div>
                       );
@@ -1477,15 +1581,9 @@ export function FirstTaskWizard({
                       <div className="font-semibold">{issue.field} · {issue.check || 'field validation'}</div>
                       <div className="break-words whitespace-pre-wrap">{issue.message}</div>
                       {issue.remediation && <div className="mt-1 break-words whitespace-pre-wrap text-muted-foreground">Fix: {issue.remediation}</div>}
-                      {(issue.field.startsWith('source.') || issue.field.startsWith('sink.')) && (
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          className="mt-2 h-7 text-[11px]"
-                          onClick={() => setStep((issue.field.startsWith('source.') ? 'source' : 'sink') as WizardStepId)}
-                        >
-                          Open {issue.field.startsWith('source.') ? 'Source' : 'Sink'}
+                      {issue.field && (
+                        <Button variant="link" size="sm" className="h-auto px-0 py-0 text-xs" onClick={() => navigateToIssue(issue)}>
+                          Open field
                         </Button>
                       )}
                     </div>
