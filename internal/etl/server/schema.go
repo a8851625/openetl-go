@@ -124,6 +124,8 @@ func sourceConfigSchemas() map[string][]ConfigField {
 			{Name: "table", Type: FieldString, Required: false, Description: "Source table name"},
 			{Name: "tables", Type: FieldStringArray, Required: false, Description: "Source tables for multi-table snapshot+CDC"},
 			{Name: "pk_column", Type: FieldString, Required: false, Default: "id", Description: "Primary key column for snapshot pagination"},
+			{Name: "pk_columns", Type: FieldMap, Required: false, Description: "Per-table primary key overrides, e.g. {orders: order_id, users: user_no}"},
+			{Name: "skip_no_pk_tables", Type: FieldBool, Required: false, Default: false, Description: "Skip snapshot for explicitly listed tables without a usable single-column key; CDC still captures later changes"},
 			{Name: "limit", Type: FieldInt, Required: false, Default: 1000, Description: "Rows per snapshot query page"},
 			{Name: "server_id", Type: FieldInt, Required: false, Default: 1101, Description: "Unique replication server ID"},
 			{Name: "server_id_base", Type: FieldInt, Required: false, Description: "Base replication server ID used with sharding"},

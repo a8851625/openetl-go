@@ -13,6 +13,11 @@ Run an initial MySQL snapshot and continue from binlog CDC without a separate pi
 ## Record Shape
 Snapshot rows and later CDC rows share the standard record shape with operation metadata.
 
+## Schema Preflight
+For multiple configured tables and `tables: ["*"]`, preflight expands and describes every base table rather than returning an empty schema or treating one table as representative. Missing/unreadable tables and explicitly listed snapshot tables without a usable single-column cursor key fail closed. Whole-database tables without such a key, or explicitly listed tables accepted with `skip_no_pk_tables: true`, produce `schema-multi-table-snapshot-skip` warnings and are declared CDC-only for historical data.
+
+Multi-table preflight intentionally omits a single DDL preview. Dynamic per-record targets return `schema-multi-table-partial`; fixed single targets require explicit filtering/table mapping/schema normalization and still return `schema-multi-table-normalized-partial` because post-transform schemas are not inferred by this bounded contract.
+
 ## Checkpoint, DLQ, Idempotency
 Snapshot pagination has a producer read-ahead cursor and a separate durable
 cursor. The producer may fill the in-memory record channel ahead of the sink,
@@ -68,7 +73,9 @@ source:
 
 ## Evidence
 Unit evidence: `internal/etl/source/mysql_snapshot_cdc_checkpoint_test.go`,
-linear/DAG batch checkpoint tests, and source package race/static checks.
+linear/DAG batch checkpoint tests, multi-table preflight tests in
+`internal/etl/server/pipelines_preflight_test.go`, and source package
+race/static checks.
 Path evidence: `hack/e2e-snapshot-cdc.sh`,
 `hack/e2e-snapshot-cdc-crash.sh`, and
 `hack/e2e-snapshot-cdc-heteropk.sh`. The broader ClickHouse path matrix is

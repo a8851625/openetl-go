@@ -51,8 +51,12 @@ wait_count() {
   return 1
 }
 
-echo "==> Build image"
-"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
+if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
+  echo "==> Skip image build (E2E_SKIP_BUILD=1)"
+else
+  echo "==> Build image"
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
+fi
 
 echo "==> Start MySQL source"
 compose -f docker-compose.dev.yml up -d mysql-source

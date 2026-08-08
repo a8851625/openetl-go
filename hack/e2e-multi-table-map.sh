@@ -53,6 +53,8 @@ echo "==> Prepare multi-table source/target"
 CREATE DATABASE IF NOT EXISTS dzh3136_target;
 DROP TABLE IF EXISTS dzh3136_target.ods_customers;
 DROP TABLE IF EXISTS dzh3136_target.ods_products;
+DROP TABLE IF EXISTS dzh3136_target.customers;
+DROP TABLE IF EXISTS dzh3136_target.products;
 DELETE FROM dzh3136_go.customers WHERE id >= 9300;
 DELETE FROM dzh3136_go.products WHERE id >= 9300;
 GRANT ALL PRIVILEGES ON dzh3136_target.* TO 'sync_user'@'%';

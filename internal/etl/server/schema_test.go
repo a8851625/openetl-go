@@ -29,7 +29,7 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 
 	assertFields(t, sources, "mysql_batch", "query", "cursor_column", "shard_index", "shard_total")
 	assertFields(t, sources, "mysql_cdc", "server_id_base", "shard_index", "shard_total", "start_from")
-	assertFields(t, sources, "mysql_snapshot_cdc", "tables", "consistent_snapshot_lock", "server_id_base")
+	assertFields(t, sources, "mysql_snapshot_cdc", "tables", "pk_columns", "skip_no_pk_tables", "consistent_snapshot_lock", "server_id_base")
 	assertFields(t, sources, "http", "body", "auth_type", "auth_user", "auth_pass", "max_retries", "retry_base_ms")
 	assertFields(t, sources, "rest_source", "url", "auth", "pagination", "api_key_header", "cursor_field", "token_param", "variables", "max_retries", "retry_base_ms")
 	assertFields(t, sources, "salesforce", "object", "api_version", "instance_url", "client_id", "client_secret")

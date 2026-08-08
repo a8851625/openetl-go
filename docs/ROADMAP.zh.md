@@ -631,7 +631,7 @@ Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard mu
 
 ### P3：成熟度事实源与认证覆盖扩展
 
-状态：`active`（2026-08-08 · P3.1）
+状态：`active`（2026-08-08 · P3.1/P3.2 delivered；剩余 evidence freshness gate）
 
 当前领取记录：
 
@@ -659,6 +659,36 @@ P3.1 本轮验收矩阵（Round 4/5）：
 | 新增 production target 的实际路径证据 | `CONTAINER_CLI=docker ./hack/e2e-http-source.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-mysql-postgres.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh` | passed | 复用既有 MySQL 容器时 compose 输出 name-in-use 环境 warning，但脚本最终退出 0 |
 | PostgreSQL 16 generated-column schema introspection | 首次 e2e 暴露 `attgenerated` binary char -> string 扫描失败；改为 DB 端 `is_generated` bool 后同一 e2e 正常写入、schema rejection 与 checkpoint reset/upsert replay 均通过 | passed | 无 |
 | package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/server ./internal/etl/sink -count=1`；`go vet ./internal/etl/server ./internal/etl/sink`；`git diff --check` | passed | 无 |
+
+当前领取记录（Round 5）：
+
+```text
+Round: 5/5
+Roadmap item: P3.2 多表 source preflight 契约
+Profile/path: standalone mysql_cdc/mysql_snapshot_cdc -> schema-aware sink preflight
+Objective: 多表与 tables=["*"] source 不再以空 schema 静默跳过，也不以任一单表 schema/DDL preview 代表整个异构表集合。
+Scope: internal/etl/server/preflight.go、pipelines_preflight_test.go、schema.go 的已实现 snapshot 字段、MySQL information_schema 定向检查、source component/config docs 与本 roadmap 证据。
+Non-goals: 改造 runtime SchemaInfo/runner 为多表 schema 传播；改变现有多表读取/路由/写入语义；新增 connector、maturity 提升、专用 UI 或全库 schema registry。
+Acceptance: 1) 固定多表列表与 `*` 展开检查全部 base tables，缺表/无列/显式 snapshot 无可用单列主键 fail-closed；2) whole-database 无单列主键表以结构化 warning 声明 snapshot skip/CDC-only；3) 动态 per-record sink 返回 `schema-multi-table-partial` warning + field issue 且无单表 DDL preview；4) 固定单目标 sink 未显式过滤/映射/归一化时阻断，显式归一化时降为 partial warning；5) 单表 schema/preflight 行为保持不变；6) targeted/package/race/vet、相关多表 e2e 与 git diff --check 通过。
+Data semantics/rollback: 本切片只改变 preflight 诊断与阻断，不改变 checkpoint、DLQ、replay 或 sink write；回滚即移除多表契约检查，运行时数据路径不迁移。
+Evidence: internal/etl/server/pipelines_preflight_test.go；docs/components/source-mysql_cdc.md、source-mysql_snapshot_cdc.md、docs/etl-config-schema.md；hack/e2e-multi-table-map.sh、hack/e2e-mysql-cdc-wide.sh、hack/e2e-snapshot-cdc-heteropk.sh。
+Result: delivered
+Residual/follow-up: runtime 级 per-table schema propagation/target-specific DDL preview 若未来需要，必须另列有界 item；本轮不把 preflight 扩展成 schema registry。
+```
+
+P3.2 本轮验收矩阵（Round 5/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| 固定多表与 `*` 检查全部表，不取第一表代表集合 | `TestReadMySQLMultiTableSchemasInspectsEveryHeterogeneousTable`、`...FailsWhenAnyConfiguredTableIsMissing`、`...ExpandsWildcardAndReportsCDCOnlyTable` | passed | runtime `SchemaInfo` 仍为单表 flat contract；本轮只治理 preflight |
+| snapshot 无可用单列 key 的显式/whole-DB 边界 | 显式复合/无 key：`TestReadMySQLMultiTableSchemasFailsExplicitSnapshotWithoutUsableKey`；whole-DB：真实 API 返回 `schema-multi-table-snapshot-skip` + `source.config.tables` field issue | passed | `skip_no_pk_tables=true` 仍是显式接受 CDC-only 历史边界 |
+| 动态 sink partial、固定 sink block、显式归一化 partial | 定向 tests：`TestMultiTableSchemaContractReturnsPartialWarningForDynamicSink`、`...BlocksUnnormalizedFixedSink`、`...AllowsExplicitNormalizationWithWarning`；真实 `/api/v2/specs/validate` 分别返回 `valid=true/false/true` | passed | post-transform schema 不自动推导，需逐表 dry-run/目标验证 |
+| 不生成误导性单表 DDL preview | 上述定向 tests 与四次真实 API 复验均断言 `ddl_preview` 缺失；missing-table error 绑定 `source.config.tables` | passed | target-specific per-table DDL preview 留给独立后续 |
+| 单表行为与多表运行时路径保持 | `TestMySQLSingleTableSourceKeepsFlatSchemaContract`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-multi-table-map.sh`、`.../e2e-mysql-cdc-wide.sh`、`.../e2e-snapshot-cdc-heteropk.sh` | passed | multi-table-map 首次因共享 E2E 库残留原名目标表失败；脚本补隔离清理后同一镜像通过 |
+| 当前镜像/拓扑与故障证据 | image `3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f`；MySQL `8.0.46`；ClickHouse `24.3.18.7`；2026-08-08 09:17 CST；真实 API 覆盖 dynamic/fixed/normalized/wildcard-no-PK | passed | compose 复用共享 MySQL/ClickHouse 时输出 name-in-use 环境 warning，脚本退出码为 0 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/server ./internal/etl/source -count=1`；`go vet ./internal/etl/server ./internal/etl/source`；`sh -n` 三个相关 e2e；`git diff --check` | passed | 无 |
+
+Round 5/5 后续交接：P3.1/P3.2 已交付，但 P3 总项仍保持 `active`。下一有界增量建议为 `P3.3 evidence freshness gate`：把 certification evidence 的 commit/image、依赖版本、实际执行时间和过期策略做成机器可检查输入，并在缺失/过期时把 readiness 自动降为 `production_with_review` 或更低。该工作不在本 goal 的 descriptor/schema 与多表 preflight 授权范围内，且默认五轮上限已到，不自动领取。
 
 目标：减少手写 maturity 字符串与测试证据之间的漂移。
 
