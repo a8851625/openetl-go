@@ -72,6 +72,9 @@ func NewFileSource(config map[string]any) (*FileSource, error) {
 func (s *FileSource) Name() string { return s.name }
 
 func (s *FileSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	switch s.format {
 	case "csv":
 		return s.openCSV(ctx, cp)

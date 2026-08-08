@@ -19,7 +19,7 @@ import {
 import type { DetailTab } from '@/lib/routing';
 import type { Checkpoint, MetricsPipeline, Pipeline, TFunc } from '@/lib/types';
 import type { Lang } from '@/i18n';
-import { ArrowLeft, CalendarClock, Play, ScrollText, Square } from 'lucide-react';
+import { ArrowLeft, CalendarClock, Play, RotateCcw, ScrollText, Square } from 'lucide-react';
 import { PipelineRowMeta } from '@/lib/uptime';
 import { cn } from '@/lib/utils';
 import { PipelineLogDrawer } from './pipeline-logs';
@@ -132,6 +132,13 @@ export function PipelineDetailPage({
   const health = derivePipelineHealth(pipeline, metric);
   const ref = pipelineRef(pipeline);
   const key = pipelineKey(pipeline);
+  const checkpointFailure = Boolean(
+    pipeline.stats.last_error_code && pipeline.stats.last_error_code.startsWith('checkpoint'),
+  );
+  const retryCheckpoint = () =>
+    onAction(`Retry ${pipeline.name}`, () =>
+      api(`/api/v2/pipelines/${ref}/start`, { method: 'POST' }),
+    );
   // Runtime checkpoints are keyed by pipeline instance id (runtimeSpec rewrites
   // spec.Name to the id). DAG multi-source keys are "{id}-{sourceNodeID}".
   // Matching only display name hides all modern API-created pipelines.
@@ -351,6 +358,44 @@ export function PipelineDetailPage({
                       <CardTitle className="text-sm">{t('pipe.recentIssues')}</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-2 text-sm">
+                      {checkpointFailure && (
+                        <div
+                          className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-rose-900 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-100"
+                          data-testid="checkpoint-recovery-panel"
+                        >
+                          <div className="flex items-start gap-2">
+                            <RotateCcw className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                            <div className="min-w-0 flex-1">
+                              <div className="font-semibold">{t('pipe.checkpointRecovery')}</div>
+                              <div className="mt-1 text-xs leading-5">
+                                {pipeline.stats.last_error_remediation || t('pipe.checkpointRecoveryHint')}
+                              </div>
+                              <div className="mt-1 font-mono text-[11px] opacity-80">
+                                {t('pipe.checkpointCode')}: {pipeline.stats.last_error_code}
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  data-testid="pipeline-retry-start"
+                                  disabled={pipeline.status === 'running'}
+                                  onClick={retryCheckpoint}
+                                >
+                                  <Play className="h-3.5 w-3.5" /> {t('pipe.checkpointRetry')}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  data-testid="pipeline-inspect-checkpoint-logs"
+                                  onClick={() => onTabChange('logs')}
+                                >
+                                  <ScrollText className="h-3.5 w-3.5" /> {t('pipe.checkpointInspect')}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       {pipeline.stats.last_error ? (
                         <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
                           {pipeline.stats.last_error}
@@ -428,6 +473,39 @@ export function PipelineDetailPage({
               (pipeline.stats.records_dlq || 0) > 0 ||
               pipeline.stats.last_error ? (
                 <>
+                  {checkpointFailure && (
+                    <div
+                      className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-rose-300 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-950/40"
+                      data-testid="checkpoint-recovery-issues"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-rose-900 dark:text-rose-100">
+                          <RotateCcw className="h-4 w-4" aria-hidden />
+                          {t('pipe.checkpointRecovery')}
+                        </div>
+                        <div className="mt-1 text-xs leading-5 text-rose-800/90 dark:text-rose-200/90">
+                          {pipeline.stats.last_error_remediation || t('pipe.checkpointRecoveryHint')}
+                        </div>
+                        <div className="mt-1 font-mono text-[11px] text-rose-800/70 dark:text-rose-200/70">
+                          {t('pipe.checkpointCode')}: {pipeline.stats.last_error_code}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          data-testid="pipeline-retry-start-issues"
+                          disabled={pipeline.status === 'running'}
+                          onClick={retryCheckpoint}
+                        >
+                          <Play className="h-3.5 w-3.5" /> {t('pipe.checkpointRetry')}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => onTabChange('logs')}>
+                          {t('pipe.checkpointInspect')}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   {pipeline.stats.last_error && (
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-900 dark:bg-rose-950/40">
                       <div>

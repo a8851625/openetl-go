@@ -69,6 +69,8 @@ type PipelineMetrics struct {
 	DLQReplayCount       int64      `json:"dlq_replay_count"`
 	DLQDeleteCount       int64      `json:"dlq_delete_count"`
 	LastError            string     `json:"last_error,omitempty"`
+	LastErrorCode        string     `json:"last_error_code,omitempty"`
+	LastErrorRemediation string     `json:"last_error_remediation,omitempty"`
 	LastCheckpoint       time.Time  `json:"last_checkpoint"`
 	CheckpointAgeSeconds int64      `json:"checkpoint_age_seconds"`
 	SourceReadLatencyMs  float64    `json:"source_read_latency_ms"`

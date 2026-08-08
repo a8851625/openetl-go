@@ -125,6 +125,9 @@ func NewPostgresCDCSource(config map[string]any) (*PostgresCDCSource, error) {
 func (s *PostgresCDCSource) Name() string { return s.name }
 
 func (s *PostgresCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	replConnStr := s.connString(true)
 
 	replConn, err := pgconn.Connect(ctx, replConnStr)

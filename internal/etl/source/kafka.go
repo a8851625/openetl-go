@@ -198,6 +198,9 @@ func (s *KafkaSource) buildSaramaConfig() (*sarama.Config, error) {
 }
 
 func (s *KafkaSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	config, err := s.buildSaramaConfig()
 	if err != nil {
 		return nil, err

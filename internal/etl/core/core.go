@@ -98,6 +98,19 @@ type CheckpointAcker interface {
 	AckCheckpoint(ctx context.Context, cp Checkpoint) error
 }
 
+// CheckpointValidator is an optional source contract for validating the
+// source-specific shape and semantics of a persisted checkpoint before the
+// runner opens the source.  JSON syntax alone is not sufficient: a payload
+// such as `{}` or a negative page/offset can otherwise be interpreted as a
+// fresh start and silently skip the durable source position.
+//
+// A nil checkpoint means first start and must be accepted.  Implementations
+// should preserve valid legacy positions while rejecting malformed or
+// semantically unsafe positions with an actionable error.
+type CheckpointValidator interface {
+	ValidateCheckpoint(ctx context.Context, cp *Checkpoint) error
+}
+
 type Sink interface {
 	Open(ctx context.Context) error
 	Write(ctx context.Context, records []Record) error

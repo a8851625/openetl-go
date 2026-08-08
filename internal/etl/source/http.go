@@ -268,6 +268,9 @@ func (s *HTTPSource) ensureOAuth2Token(ctx context.Context) (string, error) {
 }
 
 func (s *HTTPSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	reader := &httpReader{
 		source: s,
 		page:   0,

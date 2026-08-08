@@ -200,6 +200,9 @@ func (s *FeishuSheetSource) fetchSheet(ctx context.Context) ([][]any, error) {
 }
 
 func (s *FeishuSheetSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	rows, err := s.fetchSheet(ctx)
 	if err != nil {
 		return nil, err

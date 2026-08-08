@@ -3139,7 +3139,19 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	case "start":
 		if r.Method == http.MethodPost {
 			if err := runner.Start(s.ctx); err != nil {
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				// A failed source/checkpoint startup is an API failure, not a
+				// successful request carrying an error-shaped JSON body.  Preserve
+				// the runner's stable code/remediation so clients can show a safe
+				// recovery action without parsing log text.
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				stats := runner.Stats()
+				json.NewEncoder(w).Encode(map[string]any{
+					"error":       err.Error(),
+					"code":        stats.LastErrorCode,
+					"remediation": stats.LastErrorRemediation,
+					"status":      runner.Status(),
+					"stats":       stats,
+				})
 				return
 			}
 			s.audit(r, "pipeline.start", id)
@@ -4532,6 +4544,8 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 			DLQReplayCount:       stats.DLQReplayCount,
 			DLQDeleteCount:       stats.DLQDeleteCount,
 			LastError:            stats.LastError,
+			LastErrorCode:        stats.LastErrorCode,
+			LastErrorRemediation: stats.LastErrorRemediation,
 			LastCheckpoint:       stats.LastCheckpoint,
 			CheckpointAgeSeconds: checkpointAgeSeconds,
 			SourceReadLatencyMs:  pipelineMetrics.SourceReadLatencyMs,
@@ -4602,6 +4616,7 @@ func (s *Server) getHealthStatus() map[string]string {
 	components := make([]telemetry.ComponentHealth, 0, 8)
 	pipelineHealth := map[string]telemetry.PipelineHealth{}
 	extra := map[string]string{}
+	pipelineIssues := map[string]map[string]string{}
 
 	// Storage backend connectivity — hard dependency for control plane.
 	if s.store != nil {
@@ -4709,6 +4724,26 @@ func (s *Server) getHealthStatus() map[string]string {
 			SinkWriteLatencyMs:   pm.SinkWriteLatencyMs,
 			CircuitBreakerState:  runner.CircuitBreakerState(),
 		}, th)
+		if stats.LastErrorCode != "" || stats.LastErrorRemediation != "" {
+			code := stats.LastErrorCode
+			if code == "" {
+				code = "pipeline_failed"
+			}
+			remediation := stats.LastErrorRemediation
+			if remediation == "" {
+				remediation = "Inspect the pipeline API details and logs before retrying or resetting a checkpoint."
+			}
+			pipelineIssues[display] = map[string]string{
+				"status":      string(runner.Status()),
+				"error_code":  code,
+				"remediation": remediation,
+			}
+		}
+	}
+	if len(pipelineIssues) > 0 {
+		if raw, err := json.Marshal(pipelineIssues); err == nil {
+			extra["pipeline_issues"] = string(raw)
+		}
 	}
 
 	if s.distributed {

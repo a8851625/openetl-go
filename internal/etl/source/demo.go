@@ -85,9 +85,12 @@ func NewDemoSource(config map[string]any) (*DemoSource, error) {
 func (s *DemoSource) Name() string { return s.name }
 
 func (s *DemoSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	var startIdx int64
 	if cp != nil && len(cp.Position) > 0 {
-		fmt.Sscanf(string(cp.Position), "%d", &startIdx)
+		startIdx, _ = parseRedisCheckpointPosition(cp.Position)
 	}
 	return &demoReader{
 		source:  s,
