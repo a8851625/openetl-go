@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"runtime/debug"
@@ -103,11 +104,14 @@ type DAGExecutor struct {
 
 // ExecutorStats tracks per-pipeline execution metrics.
 type ExecutorStats struct {
-	RecordsRead    int64      `json:"records_read"`
-	RecordsWritten int64      `json:"records_written"`
-	RecordsFailed  int64      `json:"records_failed"`
-	RecordsDLQ     int64      `json:"records_dlq"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
+	RecordsRead          int64      `json:"records_read"`
+	RecordsWritten       int64      `json:"records_written"`
+	RecordsFailed        int64      `json:"records_failed"`
+	RecordsDLQ           int64      `json:"records_dlq"`
+	LastError            string     `json:"last_error,omitempty"`
+	LastErrorCode        string     `json:"last_error_code,omitempty"`
+	LastErrorRemediation string     `json:"last_error_remediation,omitempty"`
+	StartedAt            *time.Time `json:"started_at,omitempty"`
 }
 
 // NewDAGExecutor builds all plugins from the spec and returns an executor.
@@ -200,13 +204,19 @@ func (e *DAGExecutor) Duration() time.Duration {
 func (e *DAGExecutor) Stats() ExecutorStats {
 	e.mu.RLock()
 	started := e.stats.StartedAt
+	lastError := e.stats.LastError
+	lastErrorCode := e.stats.LastErrorCode
+	lastErrorRemediation := e.stats.LastErrorRemediation
 	e.mu.RUnlock()
 	return ExecutorStats{
-		RecordsRead:    atomic.LoadInt64(&e.stats.RecordsRead),
-		RecordsWritten: atomic.LoadInt64(&e.stats.RecordsWritten),
-		RecordsFailed:  atomic.LoadInt64(&e.stats.RecordsFailed),
-		RecordsDLQ:     atomic.LoadInt64(&e.stats.RecordsDLQ),
-		StartedAt:      started,
+		RecordsRead:          atomic.LoadInt64(&e.stats.RecordsRead),
+		RecordsWritten:       atomic.LoadInt64(&e.stats.RecordsWritten),
+		RecordsFailed:        atomic.LoadInt64(&e.stats.RecordsFailed),
+		RecordsDLQ:           atomic.LoadInt64(&e.stats.RecordsDLQ),
+		LastError:            lastError,
+		LastErrorCode:        lastErrorCode,
+		LastErrorRemediation: lastErrorRemediation,
+		StartedAt:            started,
 	}
 }
 
@@ -343,6 +353,12 @@ func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID 
 	if err != nil {
 		e.failSourceStart(ctx, sourceID, fmt.Errorf("load checkpoint: %w", err))
 		return
+	}
+	if validator, ok := src.(core.CheckpointValidator); ok {
+		if err := validator.ValidateCheckpoint(ctx, cp); err != nil {
+			e.failSourceStart(ctx, sourceID, fmt.Errorf("validate source checkpoint: %w", err))
+			return
+		}
 	}
 	reader, err := src.Open(ctx, cp)
 	if err != nil {
@@ -880,6 +896,18 @@ func (e *DAGExecutor) cancelExecution() {
 // looks healthy while one source range was never safely opened.
 func (e *DAGExecutor) failSourceStart(ctx context.Context, sourceID string, err error) {
 	e.setStatus("failed")
+	code := "checkpoint_invalid"
+	remediation := "Keep the pipeline stopped, verify or repair the persisted source position, then retry; reset only after confirming the sink can absorb replay."
+	var actionable *core.CheckpointValidationError
+	if errors.As(err, &actionable) {
+		code = actionable.ErrorCode()
+		remediation = actionable.ErrorRemediation()
+	}
+	e.mu.Lock()
+	e.stats.LastError = fmt.Sprintf("source %s startup failed: %v", sourceID, err)
+	e.stats.LastErrorCode = code
+	e.stats.LastErrorRemediation = remediation
+	e.mu.Unlock()
 	g.Log().Errorf(ctx, "source %s startup failed: %v", sourceID, err)
 	if e.alertMgr != nil {
 		e.alertMgr.Send(ctx, alert.Event{

@@ -117,6 +117,9 @@ type redisReader struct {
 }
 
 func (s *RedisSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	s.client = redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%d", s.host, s.port),
 		Password: s.password,
@@ -133,11 +136,14 @@ func (s *RedisSource) Open(ctx context.Context, cp *core.Checkpoint) (core.Recor
 	// Resume from checkpoint: record the offset of keys to skip.
 	// Key ordering from SCAN is not guaranteed stable across restarts;
 	// this provides at-least-once semantics.
-	if cp != nil && len(cp.Position) > 0 {
-		if v, err := strconv.Atoi(string(cp.Position)); err == nil && v > 0 {
-			rd.skipRemaining = v
-			rd.processedCount = v
-			rd.committedCount = v
+	if cp != nil {
+		if v, err := parseRedisCheckpointPosition(cp.Position); err == nil && v > 0 {
+			if v > int64(int(^uint(0)>>1)) {
+				return nil, fmt.Errorf("redis checkpoint offset %d exceeds local integer range", v)
+			}
+			rd.skipRemaining = int(v)
+			rd.processedCount = int(v)
+			rd.committedCount = int(v)
 		}
 	}
 

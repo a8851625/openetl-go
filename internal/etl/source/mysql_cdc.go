@@ -201,6 +201,9 @@ func (s *MySQLCDCSource) Describe(ctx context.Context) (core.SchemaInfo, error) 
 }
 
 func (s *MySQLCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	reader := &mysqlCDCRecordReader{
 		source:  s,
 		records: make(chan core.Record, 1024),
@@ -210,8 +213,11 @@ func (s *MySQLCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core.Re
 
 	reader.lastPosName = "master"
 	if cp != nil {
-		var pos mysqlCDCPosition
-		if err := json.Unmarshal(cp.Position, &pos); err == nil && pos.File != "" {
+		pos, err := decodeMySQLCDCCheckpointPosition(cp.Position)
+		if err != nil {
+			return nil, fmt.Errorf("decode mysql_cdc checkpoint: %w", err)
+		}
+		if pos.File != "" {
 			g.Log().Infof(ctx, "Resuming from checkpoint: %s:%d", pos.File, pos.Pos)
 			reader.lastPosName = pos.File
 			reader.lastPos = pos.Pos

@@ -12,6 +12,19 @@
 
 本文记录的是上述提交的 production readiness 审计快照。后续提交可能已经修复、替换或重构本文提到的实现；在将任一结论用于当前版本的发布认证前，必须重新执行对应代码核对、故障测试和外部环境认证。
 
+## 2026-08-08 当前版本复核
+
+本节只更新已经在当前 hardening 分支重新实现并实际执行过证据的条目；未列出的原审计结论继续有效，不能据此把项目整体提升为 production ready。
+
+| 原发现 | 当前状态 | 当前证据 | 剩余边界 |
+| --- | --- | --- | --- |
+| Checkpoint load/corruption fail-open | 核心数据丢失窗口已关闭；验收为 `partial pass` | `PR-2.4.1` load/envelope fail-closed；`PR-2.4.4` source semantic validators；linear/DAG 在 `Source.Open` 前失败；start HTTP 422；API/health/WebUI 可见；`go test ./internal/etl/...`、race/vet、`hack/e2e-ui.sh` 117/0 | durable run-history row 仍未持久化结构化 error/code/remediation；该残余不得被“API 当前可见”掩盖 |
+| PostgreSQL WAL/Kafka external ack 早于 durable checkpoint | `pass` | `PR-2.4.2` 将 candidate -> durable Save -> external Ack 拆分；Kafka auto-commit 关闭；PG/Kafka source、linear/DAG fault tests 与对应 e2e 通过 | 仍为 at-least-once；external ack 失败可重放，不宣称三方 exactly-once |
+| MySQL snapshot+CDC producer read-ahead cursor | `pass`（有 at-least-once 边界） | `PR-2.4.3` complete-batch checkpoint、numeric/string cursor、handoff/reconnect 和 snapshot/CDC crash e2e | binlog、sink、checkpoint 不是分布式事务，依赖 upsert/版本吸收重放 |
+| UI first-run / failure visibility | `pass`（当前脚本范围） | `npm run typecheck && npm run build`；`hack/e2e-ui.sh` 117 passed / 0 failed，含 malformed checkpoint remediation 面板 | UI 通过不替代 connector/path、升级、backup/restore 或 release gate 认证 |
+
+结论不变：RestoreFromDB malformed spec 可见性、portable backup secret/atomicity、ClickHouse 乱序 replay、lifecycle/reset fencing、release production gate 和外部 connector certification 等仍未因本轮 checkpoint 修复而自动关闭。
+
 ## 结论
 
 该审计基线不能移除 beta，也不能做项目级 “production ready” 声明。主要差距不是 connector 数量，而是仍存在可能导致静默丢数据、错误恢复、凭据泄露和发布误认证的边界。
@@ -296,15 +309,15 @@ ClickHouse native batch、HTTP protocol、auto-create、schema drift、Replacing
 
 | Criterion | Evidence | Result | Residual / blocker |
 | --- | --- | --- | --- |
-| checkpoint load/corrupt fail-closed | linear/DAG load 代码与缺失 fault test | fail | 实现阻断启动、结构校验和 fault injection |
-| external ack 晚于 durable checkpoint | PG/Kafka checkpointer 与 Runner Save 顺序 | fail | 重构 ack 生命周期并增加精确 crash test |
+| checkpoint load/corrupt fail-closed | `PR-2.4.1/.4` load/envelope/source semantic fault tests；API/health/WebUI；UI E2E 117/0 | partial pass | 数据丢失窗口已关闭；durable run history 尚未保存结构化错误详情 |
+| external ack 晚于 durable checkpoint | `PR-2.4.2` PG/Kafka candidate -> Save -> Ack tests/e2e | pass | at-least-once replay 边界保留，不是三方 exactly-once |
 | MySQL transaction/upsert | MySQL sink transaction/upsert 实现及现有测试 | partial pass | 无 source/sink/checkpoint 三方原子性 |
 | ClickHouse replay ordering | `_version=nextVersion()` 与现有顺序 replay e2e | fail | source ordering/version 与乱序 update/delete 测试 |
 | portable backup secret safety | wrapped store decrypt + backup interface export | fail | raw encrypted export 或重新加密，补 security test |
 | backup/restore integrity | backup package、restore 与 reconcile 实现 | partial | 100k 截断、非原子、ID/version/history/artifact/state |
 | lifecycle/reset/recovery | start/stop/StartAll/reset 代码 | fail | desired state、generation fencing、source-specific reset |
 | release production gate | tag release workflow | fail | tag 必须依赖 mandatory production gate，skip 不得算 pass |
-| UI first-run | 审计时记录 `91 passed / 17 failed` | fail | 修复失败并同步文档证据 |
+| UI first-run | 当前 `hack/e2e-ui.sh`：`117 passed / 0 failed` | pass | 仅代表脚本覆盖的 UI/API 闭环，不替代 production path 认证 |
 | MaxCompute remote certification | 无真实 SDK writer/credential e2e | blocked_external | 外部凭据、权限/表检查和远端认证 |
 
 ## 最小 GA 前置顺序

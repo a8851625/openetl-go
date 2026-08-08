@@ -181,6 +181,14 @@ const dict: Dict = {
   'pipe.handleIssues': { en: 'Handle issues', zh: '处理问题' },
   'pipe.recentIssues': { en: 'Recent issues', zh: '最近问题' },
   'pipe.goDlq': { en: 'Go to DLQ', zh: '去 DLQ' },
+  'pipe.checkpointRecovery': { en: 'Checkpoint recovery is blocked', zh: '检查点恢复被阻断' },
+  'pipe.checkpointRecoveryHint': {
+    en: 'The persisted source position was rejected before the source opened. Verify the source position and configuration, then retry; reset only after confirming replay is safe.',
+    zh: '持久化 source position 在打开 source 前被拒绝。请先核对位点与配置，再重试；只有确认重放安全后才考虑重置。',
+  },
+  'pipe.checkpointCode': { en: 'Error code', zh: '错误码' },
+  'pipe.checkpointRetry': { en: 'Retry start', zh: '重试启动' },
+  'pipe.checkpointInspect': { en: 'Inspect logs', zh: '查看日志' },
   'pipe.dlqHint': {
     en: 'Fix the sink/transform, then replay with idempotent write mode.',
     zh: '先修复 sink/transform，再按幂等写入语义 replay。',

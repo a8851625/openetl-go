@@ -137,6 +137,16 @@ export function toApiErrorDetails(value: unknown, status = 0, fallback = 'Reques
   let summary = '';
   if (isRecord(payload)) {
     summary = asText(payload.error) || asText(payload.message) || asText(payload.title);
+    const topCode = asText(payload.code);
+    const topRemediation = asText(payload.remediation);
+    if (summary && (topCode || topRemediation)) {
+      appendIssue(issues, {
+        level: 'error',
+        code: topCode || undefined,
+        message: summary,
+        remediation: topRemediation || undefined,
+      });
+    }
     if (payload.valid === false && !summary) summary = 'Validation failed';
     if (payload.preflight_valid === false && !summary) summary = 'Preflight failed';
     appendStringIssues(issues, payload.errors, 'error');
@@ -305,6 +315,8 @@ export function zeroPipelineStats(raw: any = {}): PipelineStats {
     bytes_written: Number(raw.bytes_written) || 0,
     dlq_replay_count: Number(raw.dlq_replay_count) || 0,
     dlq_delete_count: Number(raw.dlq_delete_count) || 0,
+    last_error_code: typeof raw.last_error_code === 'string' ? raw.last_error_code : undefined,
+    last_error_remediation: typeof raw.last_error_remediation === 'string' ? raw.last_error_remediation : undefined,
   };
 }
 

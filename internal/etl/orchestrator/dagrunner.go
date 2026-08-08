@@ -131,15 +131,18 @@ func (w *DAGRunnerWrapper) Stats() pipeline.Stats {
 	}
 
 	return pipeline.Stats{
-		RecordsRead:    s.RecordsRead,
-		RecordsWritten: s.RecordsWritten,
-		RecordsFailed:  s.RecordsFailed,
-		RecordsDLQ:     s.RecordsDLQ,
-		DLQReplayCount: atomic.LoadInt64(&w.dlqReplay),
-		DLQDeleteCount: atomic.LoadInt64(&w.dlqDelete),
-		LastCheckpoint: time.Now(),
-		StartedAt:      startedPtr,
-		Uptime:         uptime,
+		RecordsRead:          s.RecordsRead,
+		RecordsWritten:       s.RecordsWritten,
+		RecordsFailed:        s.RecordsFailed,
+		RecordsDLQ:           s.RecordsDLQ,
+		LastError:            s.LastError,
+		LastErrorCode:        s.LastErrorCode,
+		LastErrorRemediation: s.LastErrorRemediation,
+		DLQReplayCount:       atomic.LoadInt64(&w.dlqReplay),
+		DLQDeleteCount:       atomic.LoadInt64(&w.dlqDelete),
+		LastCheckpoint:       time.Now(),
+		StartedAt:            startedPtr,
+		Uptime:               uptime,
 	}
 }
 

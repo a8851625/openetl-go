@@ -34,6 +34,7 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 7. A checkpoint-throttled sink acknowledgement is retained as a pending boundary. The write-loop timer persists it after `checkpoint_interval_sec` even when the stream becomes idle; Stop/EOF force the same boundary to durable storage.
 8. Kafka offset `0` is stored explicitly. Missing partition state is not conflated with the valid zero offset.
 9. Checkpoint storage/read or envelope validation errors fail the pipeline before its source is opened. They are never treated as an empty/new source position.
+10. A valid JSON payload must also pass the source codec's semantic validator before `Source.Open`: required fields, non-negative cursors, source/topic identity, phase, binlog handoff, and LSN/GTID syntax are checked explicitly.
 
 ## Production-Candidate Matrix
 
@@ -58,6 +59,7 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 - Sink write failure never advances the checkpoint.
 - Legacy source checkpoints continue to open; envelope source positions are unwrapped before source startup.
 - Corrupt legacy JSON, corrupt envelopes, unknown envelope versions, and envelopes without a source position fail startup and remain visible as `failed`.
+- Syntactically valid but semantically incomplete source positions (`{}`, missing offsets/pages/cursors, negative values, topic mismatch, invalid LSN/GTID/phase, or missing snapshot handoff) fail before source `Open`. Nil checkpoints and valid legacy positions remain accepted; Kafka's `-1` committed-offset sentinel remains valid for replaying offset zero.
 - Kafka `CheckpointForRecord` does not mark/commit offsets; auto-commit is disabled and `AckCheckpoint` marks/commits only after durable checkpoint save.
 - PostgreSQL CDC `CheckpointForRecord` does not advance `committedLsn`; `AckCheckpoint` sends the WAL status update first and publishes the committed LSN only after a successful send. Keepalives without a durable LSN use 0/0, and reconnects use the durable marker rather than the server/read-ahead end.
 - MySQL snapshot+CDC keeps producer pagination cursors separate from acknowledged snapshot cursors. Linear and DAG writers pass the complete source batch to the snapshot checkpointer; numeric and ordered string cursors are applied only after the checkpoint row is saved. Snapshot checkpoints retain the original CDC handoff position, and CDC reconnects use the last acknowledged binlog file/position rather than handler read-ahead.
@@ -73,6 +75,8 @@ Primary unit evidence:
 - `internal/etl/orchestrator/orchestrator_test.go`
 - `internal/etl/server/dlq_test.go`
 - `internal/etl/source/kafka_test.go`
+- `internal/etl/source/checkpoint_validation_test.go`
+- `internal/etl/server/checkpoint_error_visibility_test.go`
 
 Validated commands for the 2026-07-13 closure:
 
@@ -196,6 +200,59 @@ ClickHouse script now asserts `phase: cdc` only after a real CDC record is
 acknowledged, including after reset, rather than treating producer completion
 as a durable phase transition. The path remains at-least-once: use stable
 business keys/upsert or an equivalent deduplication strategy at the sink.
+
+### PR-2.4.4 source position semantic validation and recovery visibility (2026-08-08)
+
+Every built-in checkpoint codec now participates in the optional
+`core.CheckpointValidator` contract. The runner loads and unwraps the persisted
+position, then invokes this validator before `Source.Open`; the DAG source path
+uses the same order. Source `Open` methods also repeat the local validation as a
+defensive SDK/direct-call boundary.
+
+Covered codecs and compatibility rules:
+
+- Kafka requires a non-empty partition-offset map, rejects negative partitions,
+  offsets below the valid `-1` replay sentinel, and a checkpoint topic that does
+  not match the configured topic.
+- HTTP and REST require their mode-specific page/offset/page-count shape and
+  reject negative or out-of-range numeric positions; terminal empty cursor or
+  page-token values remain valid when the page count is present.
+- Redis and demo positions remain compatible with the historical plain decimal
+  representation while rejecting malformed or negative counters.
+- MySQL batch requires a non-negative `last_id`; MySQL CDC requires a verified
+  file/positive position or a valid enabled GTID, and understands legacy
+  `binlog_file`/`binlog_pos` names.
+- PostgreSQL CDC accepts empty LSN only in an enabled snapshot phase; CDC LSNs
+  and phases are parsed before the replication connection opens.
+- File positions require a non-negative record offset and optional non-negative
+  byte offset. MySQL snapshot+CDC validates phase, durable binlog handoff, and
+  per-table numeric/string cursor maps. Feishu Sheet explicitly rejects a
+  persisted cursor because that source does not yet implement durable row resume.
+
+Checkpoint startup failures populate `last_error`, `last_error_code`, and
+`last_error_remediation` in linear and DAG stats. Pipeline start returns HTTP
+422 instead of a successful error-shaped response. `/api/v2/health` keeps raw
+connector errors out of the flattened probe response while exposing a
+`pipeline_issues` JSON map containing status, stable error code, and safe
+remediation. The WebUI pipeline detail/issues view renders that remediation and
+offers retry-start and log inspection; it does not suggest checkpoint reset as
+the default repair.
+
+Evidence:
+
+```text
+go test ./internal/etl/... -count=1  PASS
+go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator ./internal/etl/server -count=1  PASS
+go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator ./internal/etl/server ./internal/etl/telemetry  PASS
+cd web && npm run typecheck && npm run build  PASS
+bash hack/e2e-ui.sh  PASS (117 passed, 0 failed)
+git diff --check  PASS
+```
+
+The E2E permanently seeds a file pipeline with `{}` as its persisted source
+position, verifies the start request returns 422 and the stable
+`checkpoint.file.invalid` code appears in API stats, then verifies the WebUI
+recovery panel, remediation text, and safe retry action.
 
 ## RPO / RTO (release declaration)
 

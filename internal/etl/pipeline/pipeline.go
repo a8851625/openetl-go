@@ -45,18 +45,22 @@ const (
 )
 
 type Stats struct {
-	RecordsRead    int64      `json:"records_read"`
-	RecordsWritten int64      `json:"records_written"`
-	RecordsFailed  int64      `json:"records_failed"`
-	RecordsDLQ     int64      `json:"records_dlq"`
-	BytesRead      int64      `json:"bytes_read"`
-	BytesWritten   int64      `json:"bytes_written"`
-	DLQReplayCount int64      `json:"dlq_replay_count"`
-	DLQDeleteCount int64      `json:"dlq_delete_count"`
-	LastError      string     `json:"last_error,omitempty"`
-	LastCheckpoint time.Time  `json:"last_checkpoint"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	Uptime         string     `json:"uptime"`
+	RecordsRead    int64  `json:"records_read"`
+	RecordsWritten int64  `json:"records_written"`
+	RecordsFailed  int64  `json:"records_failed"`
+	RecordsDLQ     int64  `json:"records_dlq"`
+	BytesRead      int64  `json:"bytes_read"`
+	BytesWritten   int64  `json:"bytes_written"`
+	DLQReplayCount int64  `json:"dlq_replay_count"`
+	DLQDeleteCount int64  `json:"dlq_delete_count"`
+	LastError      string `json:"last_error,omitempty"`
+	LastErrorCode  string `json:"last_error_code,omitempty"`
+	// LastErrorRemediation is deliberately separate from LastError so API/UI
+	// clients can render a safe next step without parsing human log text.
+	LastErrorRemediation string     `json:"last_error_remediation,omitempty"`
+	LastCheckpoint       time.Time  `json:"last_checkpoint"`
+	StartedAt            *time.Time `json:"started_at,omitempty"`
+	Uptime               string     `json:"uptime"`
 }
 
 type Runner struct {
@@ -455,6 +459,28 @@ func (r *Runner) setLastError(msg string) {
 	r.mu.Unlock()
 }
 
+func (r *Runner) setCheckpointFailure(prefix string, err error) {
+	if err == nil {
+		return
+	}
+	code := "checkpoint_invalid"
+	remediation := "Keep the pipeline stopped, verify or repair the persisted source position, then retry; reset only after confirming the sink can absorb replay."
+	var actionable *core.CheckpointValidationError
+	if errors.As(err, &actionable) {
+		code = actionable.ErrorCode()
+		remediation = actionable.ErrorRemediation()
+	}
+	msg := err.Error()
+	if prefix != "" {
+		msg = fmt.Sprintf("%s: %s", prefix, msg)
+	}
+	r.mu.Lock()
+	r.stats.LastError = msg
+	r.stats.LastErrorCode = code
+	r.stats.LastErrorRemediation = remediation
+	r.mu.Unlock()
+}
+
 func (r *Runner) setLastCheckpoint(t time.Time) {
 	r.mu.Lock()
 	r.stats.LastCheckpoint = t
@@ -568,7 +594,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		loaded, err := r.checkpointStore.Load(ctx, r.spec.Name)
 		if err != nil {
 			r.setStatus(StatusFailed)
-			r.setLastError(fmt.Sprintf("load checkpoint: %v", err))
+			r.setCheckpointFailure("load checkpoint", err)
 			r.logError(fmt.Sprintf("Failed to load checkpoint: %v", err))
 			_ = r.sink.Close()
 			markStartFailed()
@@ -578,13 +604,24 @@ func (r *Runner) Start(ctx context.Context) error {
 			cp, err = checkpoint.UnwrapForSource(loaded)
 			if err != nil {
 				r.setStatus(StatusFailed)
-				r.setLastError(fmt.Sprintf("validate checkpoint: %v", err))
+				r.setCheckpointFailure("validate checkpoint", err)
 				r.logError(fmt.Sprintf("Invalid checkpoint: %v", err))
 				_ = r.sink.Close()
 				markStartFailed()
 				return fmt.Errorf("validate checkpoint: %w", err)
 			}
 			r.logInfo("Resuming from checkpoint")
+		}
+	}
+
+	if validator, ok := r.source.(core.CheckpointValidator); ok {
+		if err := validator.ValidateCheckpoint(ctx, cp); err != nil {
+			r.setStatus(StatusFailed)
+			r.setCheckpointFailure("validate source checkpoint", err)
+			r.logError(fmt.Sprintf("Invalid source checkpoint: %v", err))
+			_ = r.sink.Close()
+			markStartFailed()
+			return fmt.Errorf("validate source checkpoint: %w", err)
 		}
 	}
 

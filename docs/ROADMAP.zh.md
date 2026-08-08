@@ -505,7 +505,7 @@ PR-1.3 证据（合入 agent/fullstack-dev/f856487d，并保留既有逻辑导�
 
 ### PR-2.4：checkpoint 恢复 fail-closed（用户明确授权的有界后续）
 
-状态：`delivered`（2026-08-08 · PR-2.4.1/.2/.3）
+状态：`delivered`（2026-08-08 · PR-2.4.1/.2/.3/.4）
 
 本项不改变已交付 PR-2 的主链路声明，也不把当前 blocked_external 的 MaxCompute P0 静默改为已完成；它只修复审计确认的恢复边界：checkpoint storage/envelope 读取失败时，linear 与 DAG 不得以空位点继续打开 source。
 
@@ -584,6 +584,31 @@ PR-2.4.3 本轮验收矩阵（Round 3/5）：
 | CDC 重连、snapshot crash/restart、reset/DLQ 与异构 numeric/string path | `TestSnapshotCDCReconnectPositionUsesDurableCheckpoint`；`CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc.sh`；`CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc-crash.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-snapshot-cdc-clickhouse.sh`；`CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc-heteropk.sh` | passed | 共享 MySQL/ClickHouse 容器已存在时 compose 输出环境 warning，但脚本退出码为 0 |
 | linear/DAG 完整 batch checkpoint 与生成错误 fail-closed | `TestRunnerCheckpointUsesCompleteBatchCheckpointer`、`TestRunnerCheckpointThrottleRetainsAllPendingBatches`、`TestRunnerCheckpointGenerationErrorFailsClosed`、`TestDAGCheckpointUsesCompleteSourceBatch`、`TestDAGCheckpointGenerationErrorFailsClosed` | passed | DAG reader 在 writer drain 后统一关闭；多 sink 语义残余见上 |
 | package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1`；`go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator`；`git diff --check` | passed | 未执行全量 connector certification；本轮只要求 snapshot 路径 |
+
+当前领取记录（Round 1/5）：
+
+```text
+Round: 1/5
+Roadmap item: PR-2.4.4
+Profile/path: standalone linear + DAG；主要 checkpoint source codecs；API/WebUI failure visibility
+Objective: 合法 JSON 但语义损坏的 source position 不得回退到首次启动；checkpoint 启动失败在 API、health 和 WebUI 中保留可操作错误与 remediation。
+Scope: core Source checkpoint-validator contract、Kafka/HTTP/REST/Redis/MySQL/PostgreSQL/File position validators、Runner/DAG startup wiring、fault-injection/API/UI regression tests and evidence。
+Non-goals: backup/restore atomicity、ClickHouse ordering、lifecycle generation fencing、MaxCompute external certification、new connector semantics。
+Acceptance: 1) validator 在 source.Open 前执行，缺少必需字段、负 offset/page/cursor、topic/source mismatch、非法 LSN/phase 均 fail-closed；2) 无 checkpoint 与合法 legacy position 继续兼容；3) linear/DAG failed 状态和 LastError 可从 API/health 读取；4) WebUI pipeline detail/issues 面板展示 checkpoint remediation，并提供安全的停止/重试入口；5) targeted/race/vet、嵌入式 UI build/e2e 与 git diff --check 通过。
+Evidence: internal/etl/core/*、internal/etl/source/*checkpoint*_test.go、internal/etl/pipeline/runner_test.go、internal/etl/orchestrator/orchestrator_test.go、internal/etl/server/*checkpoint*_test.go、web/src/pages/pipelines/PipelineDetailPage.tsx、hack/e2e-ui.sh、docs/reliability-certification.md。
+Result: delivered
+Residual/follow-up: durable run_history 尚未保存结构化 error/code/remediation；restore-from-DB 的 malformed spec 保留/restore_failed 状态、backup secret/atomicity 和 lifecycle fencing 另列后续，不扩大本轮。
+```
+
+PR-2.4.4 本轮验收矩阵（Round 1/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| source-specific semantic validator 在 `Source.Open` 前 fail-closed | `internal/etl/source/checkpoint_validation.go`；`TestSourceCheckpointValidatorsFailClosedOnSemanticCorruption`、`TestSourceCheckpointValidatorsAcceptNilFirstStart`；Kafka/HTTP/REST/Redis/MySQL batch+CDC+snapshot/PostgreSQL CDC/File/Demo/Feishu 覆盖 | passed | Kafka 保留合法 `-1` committed-offset sentinel；Feishu 尚无 durable row cursor，因此显式拒绝 persisted checkpoint |
+| linear/DAG validator 顺序、failed 状态与 source 未打开 | `TestRunnerValidatesCheckpointBeforeSourceOpenAndExposesRemediation`、`TestRunnerAllowsValidLegacyCheckpointThroughValidator`、`TestDAGSourceCheckpointValidatorFailsBeforeOpenAndSurfacesStats` | passed | DAG source failure 仍为异步状态转换，但 stats/health 会在失败后立即可见 |
+| API/health 稳定错误码与 remediation | `last_error_code` / `last_error_remediation` stats；pipeline start HTTP 422；health `pipeline_issues`；`TestPipelineAPIAndHealthExposeCheckpointRemediation`、`TestPipelineStartReturnsNon2xxWithCheckpointRemediation` | passed | durable run_history row 仍只保存 status/counters，不保存结构化错误详情 |
+| WebUI 安全恢复入口 | `PipelineDetailPage.tsx` checkpoint recovery overview/issues panels；retry start + inspect logs；不把 reset 作为默认修复；`resource/public` 已重建 | passed | source-specific reset/generation fencing 仍属 lifecycle 后续 |
+| targeted/full/race/static/UI evidence | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator ./internal/etl/server -count=1`；`go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator ./internal/etl/server ./internal/etl/telemetry`；`npm run typecheck && npm run build`；`bash hack/e2e-ui.sh`（117 passed / 0 failed）；`git diff --check` | passed | 未执行与本 codec-only 变更无关的全量外部 connector certification |
 
 ### PR-D1：Distributed 安全与任务所有权
 
@@ -700,7 +725,7 @@ P4.2a follow-up 验收矩阵（Round 2/5）：
 
 **2026-07-21 已交付（证据）**：全宽管道列表 + URL 筛选；`#/pipelines/new` 全页三段式向导 + 草稿；DLQ 聚合主视图 + Replay 确认面板；详情写入语义/生命周期；总览时间范围切换；Connections 抽屉；问题中心固定排序；顶栏用户菜单与扩展分组；e2e/文档区分「路由可达」与「原型对齐」。Residual：DAG 空画布模板、小屏信息行、截图刷新、多 run 历史。
 
-**2026-08-08 现状核对**：`hack/e2e-ui.sh` 在当前嵌入式生产镜像上为 112 passed/0 failed；P4.2a 进一步收口了 validate/create/update/dry-run 的结构化错误契约、持久错误面板、字段级 remediation、显式 DAG 格式保持和失败不落库。PR-0 的独立 token 安全门槛由 `hack/e2e-ui-token.sh` 单独验证并通过，不与 UI 全量 e2e 混计。
+**2026-08-08 现状核对**：`hack/e2e-ui.sh` 在当前嵌入式生产镜像上为 117 passed/0 failed；P4.2a 进一步收口了 validate/create/update/dry-run 的结构化错误契约、持久错误面板、字段级 remediation、显式 DAG 格式保持和失败不落库。PR-0 的独立 token 安全门槛由 `hack/e2e-ui-token.sh` 单独验证并通过，不与 UI 全量 e2e 混计。
 
 本项在现有 React UI、connector descriptor/introspection/preflight 和同一份 pipeline spec 上渐进收口，不另建独立 UI 语义、设计器模型或服务端执行模型。内部按以下顺序实施；同一时间只推进一个子阶段：
 

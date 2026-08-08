@@ -534,6 +534,30 @@ curl -fsS -X PUT "${BASE_URL}/api/v2/pipelines" \
   -H 'Content-Type: application/json' \
   -d '{"reset_checkpoint":false,"spec":{"name":"ui-dag-dlq-replay","dag":{"nodes":[{"id":"src","kind":"source","plugin":"file","config":{"path":"/app/data/input/ui_dag_dlq.jsonl","format":"json"}},{"id":"parse","kind":"transform","plugin":"identity","config":{}},{"id":"sink","kind":"sink","plugin":"file_sink","config":{"output_dir":"/app/data/output/ui-dag-dlq","format":"jsonl","prefix":"dag_"}}],"edges":[{"from":"src","to":"parse"},{"from":"parse","to":"sink"}]},"execution":{"batch_size":1,"checkpoint_interval_sec":1,"backpressure_buffer":10},"retry":{"max_attempts":2,"initial_interval_ms":100,"max_interval_ms":1000},"dlq":{"enable":true}}}' >/dev/null
 
+echo "==> Seed malformed source checkpoint fixture"
+cat >"$DATA_DIR/input/ui_checkpoint_invalid.jsonl" <<'JSON'
+{"id":701,"name":"checkpoint-invalid"}
+JSON
+curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \
+  -H 'Content-Type: application/json' \
+  -d '{"spec":{"name":"ui-checkpoint-invalid","source":{"type":"file","config":{"path":"/app/data/input/ui_checkpoint_invalid.jsonl","format":"json"}},"sink":{"type":"file_sink","config":{"output_dir":"/app/data/output/ui-checkpoint-invalid","format":"jsonl","prefix":"checkpoint_"}},"batch_size":1,"checkpoint_interval_sec":1}}' >/dev/null
+curl -fsS -X POST "${BASE_URL}/api/v2/pipelines/ui-checkpoint-invalid/stop" >/dev/null 2>&1 || true
+curl -fsS -X PUT "${BASE_URL}/api/v2/pipelines/ui-checkpoint-invalid/checkpoint/set" \
+  -H 'Content-Type: application/json' \
+  -d '{"position":{}}' >/dev/null
+checkpoint_start_http="$(curl -sS -o "$DATA_DIR/checkpoint-start-response.json" -w '%{http_code}' -X POST "${BASE_URL}/api/v2/pipelines/ui-checkpoint-invalid/start")"
+check "D2.7: Malformed checkpoint start is non-2xx" "$([ "$checkpoint_start_http" = "422" ] && echo true || echo false)"
+checkpoint_failed="false"
+for _ in $(seq 1 12); do
+  checkpoint_state="$(curl -fsS "${BASE_URL}/api/v2/pipelines" || true)"
+  if echo "$checkpoint_state" | grep -q 'ui-checkpoint-invalid' && echo "$checkpoint_state" | grep -q 'checkpoint.file.invalid'; then
+    checkpoint_failed="true"
+    break
+  fi
+  sleep 0.5
+done
+check "D2.7a: Checkpoint failure code persisted in pipeline stats" "$checkpoint_failed"
+
 # ════════════════════════════════════════════════
 echo "=== E: Designer Page (Visual DAG Editor) ==="
 open_app
@@ -681,6 +705,20 @@ for _ in $(seq 1 10); do
   sleep 0.5
 done
 check "E15c: Repaired DAG validates in UI" "$dag_repaired"
+
+# ════════════════════════════════════════════════
+echo "=== E2: Checkpoint recovery visibility ==="
+open_app
+evaljs "(() => { window.location.hash = '#/pipelines/ui-checkpoint-invalid/issues'; return true; })()" >/dev/null
+checkpoint_panel="false"
+for _ in $(seq 1 15); do
+  checkpoint_panel="$(evaljs "Boolean(document.querySelector('[data-testid=checkpoint-recovery-issues]') || document.querySelector('[data-testid=checkpoint-recovery-panel]'))")"
+  if [[ "$checkpoint_panel" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "E2.1: Checkpoint recovery panel visible" "$checkpoint_panel"
+check "E2.2: Checkpoint remediation and code visible" "$(evaljs "(() => { const text=document.body.innerText; return text.includes('checkpoint.file.invalid') && (text.includes('Repair') || text.includes('修复') || text.includes('Verify') || text.includes('核对')); })()")"
+check "E2.3: Safe retry start action visible" "$(evaljs "document.querySelector('[data-testid=pipeline-retry-start-issues]') !== null || document.querySelector('[data-testid=pipeline-retry-start]') !== null")"
 
 # ════════════════════════════════════════════════
 echo "=== F: DLQ Page ==="

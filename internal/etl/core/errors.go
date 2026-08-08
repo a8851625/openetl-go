@@ -6,6 +6,55 @@ import (
 	"strings"
 )
 
+// CheckpointValidationError is returned when a persisted source position is
+// syntactically readable but cannot be safely interpreted by the source.  It
+// is intentionally separate from ordinary connector/configuration errors so
+// the control plane can expose a stable remediation without asking operators
+// to guess whether a reset is safe.
+type CheckpointValidationError struct {
+	Code        string
+	Message     string
+	Remediation string
+}
+
+func (e *CheckpointValidationError) Error() string {
+	if e == nil || e.Message == "" {
+		return "invalid checkpoint"
+	}
+	return e.Message
+}
+
+// ErrorCode returns the stable machine-readable category used by API/UI
+// clients.  It is a method rather than a field-only contract so wrapped
+// errors can be inspected with errors.As without exposing implementation
+// details in every caller.
+func (e *CheckpointValidationError) ErrorCode() string {
+	if e == nil || e.Code == "" {
+		return "checkpoint_invalid"
+	}
+	return e.Code
+}
+
+func (e *CheckpointValidationError) ErrorRemediation() string {
+	if e == nil || e.Remediation == "" {
+		return "Keep the pipeline stopped, verify or repair the persisted source position, then retry; reset only after confirming the sink can absorb replay."
+	}
+	return e.Remediation
+}
+
+// NewCheckpointValidationError constructs an actionable checkpoint error.
+// Callers should keep Message free of credentials or full DSNs because it is
+// surfaced through pipeline stats, health, and the WebUI.
+func NewCheckpointValidationError(code, message, remediation string) error {
+	if code == "" {
+		code = "checkpoint_invalid"
+	}
+	if remediation == "" {
+		remediation = "Keep the pipeline stopped, verify or repair the persisted source position, then retry; reset only after confirming the sink can absorb replay."
+	}
+	return &CheckpointValidationError{Code: code, Message: message, Remediation: remediation}
+}
+
 type ErrorClass string
 
 const (

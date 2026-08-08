@@ -430,6 +430,9 @@ func columnType(ctx context.Context, db *sql.DB, database, table, col string) (s
 }
 
 func (s *MySQLSnapshotCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&loc=Local&timeout=10s&readTimeout=300s", s.user, s.password, s.host, s.port, s.database)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -485,8 +488,8 @@ func (s *MySQLSnapshotCDCSource) Open(ctx context.Context, cp *core.Checkpoint) 
 	}
 
 	if cp != nil {
-		var pos snapshotCDCPosition
-		if err := json.Unmarshal(cp.Position, &pos); err != nil {
+		pos, err := decodeSnapshotCDCCheckpointPosition(cp.Position)
+		if err != nil {
 			db.Close()
 			return nil, fmt.Errorf("decode mysql_snapshot_cdc checkpoint: %w", err)
 		}

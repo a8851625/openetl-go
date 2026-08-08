@@ -13,6 +13,8 @@ export type PipelineStats = {
   bytes_written?: number;
   dlq_replay_count?: number;
   dlq_delete_count?: number;
+  last_error_code?: string;
+  last_error_remediation?: string;
 };
 
 export type MetricsPipeline = PipelineStats & {

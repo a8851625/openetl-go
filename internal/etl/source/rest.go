@@ -448,6 +448,9 @@ func (s *RestSource) ensureOAuth2Token(ctx context.Context) (string, error) {
 }
 
 func (s *RestSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	reader := &restReader{
 		source: s,
 		done:   false,

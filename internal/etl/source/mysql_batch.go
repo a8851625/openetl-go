@@ -165,6 +165,9 @@ func (s *MySQLBatchSource) Describe(ctx context.Context) (core.SchemaInfo, error
 }
 
 func (s *MySQLBatchSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
+		return nil, err
+	}
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&loc=Local&timeout=10s&readTimeout=300s",
 		s.user, s.password, s.host, s.port, s.database)
 	db, err := sql.Open("mysql", dsn)

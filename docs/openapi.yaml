@@ -81,6 +81,8 @@ components:
             started_at: { type: string, format: date-time }
             uptime: { type: string }
             last_error: { type: string }
+            last_error_code: { type: string, description: Stable machine-readable failure category }
+            last_error_remediation: { type: string, description: Safe operator next step; checkpoint reset is not implied }
     MetricsResponse:
       type: object
       properties:
@@ -99,6 +101,9 @@ components:
         records_written: { type: integer, format: int64 }
         records_failed: { type: integer, format: int64 }
         records_dlq: { type: integer, format: int64 }
+        last_error: { type: string }
+        last_error_code: { type: string }
+        last_error_remediation: { type: string }
         state_metrics:
           type: array
           items:
