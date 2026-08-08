@@ -17,8 +17,11 @@ APP_PORT="8021"
 PIPELINE="mysql-batch-join-to-postgres"
 
 cleanup() {
-  "$CONTAINER_CLI" rm -f "$APP_CONTAINER" "$PG_CONTAINER" >/dev/null 2>&1 || true
+	"$CONTAINER_CLI" rm -f "$APP_CONTAINER" "$PG_CONTAINER" >/dev/null 2>&1 || true
 }
+
+validate_body_file="$(mktemp)"
+trap 'rm -f "$validate_body_file"; cleanup' EXIT
 
 wait_http() {
   url="$1"
@@ -176,7 +179,7 @@ alice="$("$CONTAINER_CLI" exec "$PG_CONTAINER" psql -U etl -d analytics -At -c "
 test "$alice" = "AliceChen|MacBookPro|18999.00"
 
 echo "==> Verify schema preflight blocks incompatible PostgreSQL target"
-validate_body="$(cat <<'JSON' | curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/specs/validate" -H 'Content-Type: application/json' -d @-
+validate_status="$(cat <<'JSON' | curl -sS -o "$validate_body_file" -w '%{http_code}' -X POST "http://127.0.0.1:$APP_PORT/api/v2/specs/validate" -H 'Content-Type: application/json' -d @-
 {
   "spec": {
     "name": "mysql-batch-join-to-postgres-schema-mismatch",
@@ -214,6 +217,8 @@ validate_body="$(cat <<'JSON' | curl -fsS -X POST "http://127.0.0.1:$APP_PORT/ap
 }
 JSON
 )"
+test "$validate_status" = "400"
+validate_body="$(cat "$validate_body_file")"
 echo "$validate_body"
 echo "$validate_body" | grep '"valid":false'
 echo "$validate_body" | grep 'schema-compatibility'
