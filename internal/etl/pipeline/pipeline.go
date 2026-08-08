@@ -566,8 +566,24 @@ func (r *Runner) Start(ctx context.Context) error {
 	var cp *core.Checkpoint
 	if r.checkpointStore != nil {
 		loaded, err := r.checkpointStore.Load(ctx, r.spec.Name)
-		if err == nil && loaded != nil {
-			cp = unwrapCheckpointForSource(loaded)
+		if err != nil {
+			r.setStatus(StatusFailed)
+			r.setLastError(fmt.Sprintf("load checkpoint: %v", err))
+			r.logError(fmt.Sprintf("Failed to load checkpoint: %v", err))
+			_ = r.sink.Close()
+			markStartFailed()
+			return fmt.Errorf("load checkpoint: %w", err)
+		}
+		if loaded != nil {
+			cp, err = checkpoint.UnwrapForSource(loaded)
+			if err != nil {
+				r.setStatus(StatusFailed)
+				r.setLastError(fmt.Sprintf("validate checkpoint: %v", err))
+				r.logError(fmt.Sprintf("Invalid checkpoint: %v", err))
+				_ = r.sink.Close()
+				markStartFailed()
+				return fmt.Errorf("validate checkpoint: %w", err)
+			}
 			r.logInfo("Resuming from checkpoint")
 		}
 	}
@@ -1175,8 +1191,11 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	// successful batch indefinitely.
 	r.mu.Lock()
 	r.uncheckpointedBatches++
-	r.pendingCheckpointProcessed = append(r.pendingCheckpointProcessed[:0], processed...)
-	r.pendingCheckpointCommitted = append(r.pendingCheckpointCommitted[:0], transformed...)
+	// Retain every successful source record since the last durable save. A
+	// snapshot batch may span tables; keeping only the newest batch would omit
+	// an earlier table's cursor when checkpoint throttling is enabled.
+	r.pendingCheckpointProcessed = append(r.pendingCheckpointProcessed, processed...)
+	r.pendingCheckpointCommitted = append(r.pendingCheckpointCommitted, transformed...)
 	shouldSave := time.Since(r.lastCheckpointSave) >= r.checkpointInterval || r.uncheckpointedBatches >= 10
 	r.mu.Unlock()
 	if shouldSave {
@@ -1469,10 +1488,6 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 	if r.reader == nil || r.checkpointStore == nil || len(processed) == 0 {
 		return false
 	}
-	checkpointer, ok := r.reader.(core.RecordCheckpointer)
-	if !ok {
-		return false
-	}
 	r.mu.RLock()
 	blocked := r.checkpointBlocked
 	blockReason := r.checkpointBlockReason
@@ -1481,8 +1496,23 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 		r.handleCheckpointBoundaryError(ctx, "checkpoint blocked until restart: "+blockReason)
 		return false
 	}
-	cp, err := checkpointer.CheckpointForRecord(ctx, processed[len(processed)-1])
+	var cp core.Checkpoint
+	var err error
+	if batchCheckpointer, ok := r.reader.(core.BatchRecordCheckpointer); ok {
+		cp, err = batchCheckpointer.CheckpointForRecords(ctx, processed)
+	} else if checkpointer, ok := r.reader.(core.RecordCheckpointer); ok {
+		cp, err = checkpointer.CheckpointForRecord(ctx, processed[len(processed)-1])
+	} else {
+		return false
+	}
 	if err != nil {
+		errMsg := fmt.Sprintf("source checkpoint generation failed: %v", err)
+		r.blockCheckpoint(errMsg)
+		r.setStatus(StatusFailed)
+		if r.cancel != nil {
+			r.cancel()
+		}
+		r.handleCheckpointBoundaryError(ctx, errMsg)
 		return false
 	}
 	cp.JobName = r.spec.Name
@@ -1511,6 +1541,7 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 
 	if saveErr := r.checkpointStore.Save(ctx, cp); saveErr != nil {
 		errMsg := fmt.Sprintf("checkpoint save failed: %v", saveErr)
+		r.blockCheckpoint(errMsg)
 		r.mu.Lock()
 		r.stats.LastError = errMsg
 		r.mu.Unlock()
@@ -1532,6 +1563,17 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 		return false
 	}
 
+	if err := acknowledgeExternalCheckpoint(ctx, r.reader, cp); err != nil {
+		errMsg := fmt.Sprintf("external checkpoint acknowledgement failed: %v", err)
+		r.blockCheckpoint(errMsg)
+		r.setStatus(StatusFailed)
+		if r.cancel != nil {
+			r.cancel()
+		}
+		r.handleCheckpointBoundaryError(ctx, errMsg)
+		return false
+	}
+
 	r.mu.Lock()
 	r.stats.LastCheckpoint = time.Now()
 	r.lastCheckpointSave = time.Now()
@@ -1545,6 +1587,24 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 		Config:        r.spec.Hooks.getConfig(core.HookOnCheckpoint),
 	})
 	return true
+}
+
+// acknowledgeExternalCheckpoint runs after CheckpointStore.Save. The source
+// receives its raw position rather than the state/sink envelope because the
+// external protocol cannot acknowledge transform state metadata.
+func acknowledgeExternalCheckpoint(ctx context.Context, reader core.RecordReader, cp core.Checkpoint) error {
+	acker, ok := reader.(core.CheckpointAcker)
+	if !ok {
+		return nil
+	}
+	raw, err := checkpoint.UnwrapForSource(&cp)
+	if err != nil {
+		return fmt.Errorf("unwrap persisted checkpoint: %w", err)
+	}
+	if raw == nil {
+		return fmt.Errorf("persisted checkpoint is nil")
+	}
+	return acker.AckCheckpoint(ctx, *raw)
 }
 
 func (r *Runner) handleCheckpointBoundaryError(ctx context.Context, errMsg string) {
@@ -1563,17 +1623,4 @@ func (r *Runner) handleCheckpointBoundaryError(ctx context.Context, errMsg strin
 		})
 	}
 	r.logError(errMsg + " — checkpoint not saved")
-}
-
-func unwrapCheckpointForSource(cp *core.Checkpoint) *core.Checkpoint {
-	if cp == nil {
-		return nil
-	}
-	env, ok, err := checkpoint.ParseEnvelope(cp.Position)
-	if err != nil || !ok {
-		return cp
-	}
-	unwrapped := *cp
-	unwrapped.Position = append([]byte(nil), env.Source...)
-	return &unwrapped
 }

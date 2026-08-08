@@ -374,6 +374,8 @@ Snapshots by primary-key chunks, records binlog position, then switches to CDC. 
 
 For whole-database snapshots, set `tables: ["*"]` and omit `pk_column`: each table's snapshot cursor is derived from its own single-column PRIMARY KEY (auto-detected from `information_schema`), so heterogeneous-PK databases no longer require a single global key. Integer keys page with a numeric cursor (and optional `shard_*` hashing); non-integer orderable keys (e.g. `VARCHAR`, `DATETIME`) page with a lexicographic string cursor. Tables without a usable single-column key (composite PK or no PK) are skipped during the historical snapshot but still captured by the CDC phase.
 
+Schema preflight for `mysql_cdc` / `mysql_snapshot_cdc` treats a list with more than one table, or `tables: ["*"]`, as a multi-table contract. It inspects every resolved table, reports missing/no-key tables on `source.config.tables`, and does not emit a single target DDL preview. Dynamic per-record target routing is allowed with a partial warning. A fixed single target is blocked unless `table_mapping` or explicit filtering/schema-normalizing transforms make the consolidation intentional; even then preflight reports a partial warning because it does not infer the post-transform schema.
+
 ### `kafka`
 
 ```yaml

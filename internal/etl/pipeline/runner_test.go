@@ -150,6 +150,193 @@ func (r checkpointTestReader) CheckpointForRecord(_ context.Context, rec core.Re
 	return core.Checkpoint{Source: "checkpoint-test", Position: pos}, nil
 }
 
+type batchCheckpointReader struct {
+	batchCalls int
+	seen       []core.Record
+	err        error
+}
+
+func (r *batchCheckpointReader) Read(_ context.Context) (core.Record, error) {
+	return core.Record{}, io.EOF
+}
+func (r *batchCheckpointReader) ReadBatch(_ context.Context, _ int) ([]core.Record, error) {
+	return nil, io.EOF
+}
+func (r *batchCheckpointReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (r *batchCheckpointReader) Close() error { return nil }
+func (r *batchCheckpointReader) CheckpointForRecord(context.Context, core.Record) (core.Checkpoint, error) {
+	return core.Checkpoint{}, errors.New("single-record checkpoint path was used")
+}
+func (r *batchCheckpointReader) CheckpointForRecords(_ context.Context, records []core.Record) (core.Checkpoint, error) {
+	r.batchCalls++
+	r.seen = append([]core.Record(nil), records...)
+	if r.err != nil {
+		return core.Checkpoint{}, r.err
+	}
+	offsets := make([]int64, 0, len(records))
+	for _, rec := range records {
+		offsets = append(offsets, rec.Metadata.Offset)
+	}
+	pos, err := json.Marshal(map[string]any{"offsets": offsets})
+	if err != nil {
+		return core.Checkpoint{}, err
+	}
+	return core.Checkpoint{Source: "batch-checkpoint-test", Position: pos}, nil
+}
+
+func TestRunnerCheckpointUsesCompleteBatchCheckpointer(t *testing.T) {
+	store := newMemoryCPStore()
+	am := alert.NewManager()
+	defer am.Close()
+	reader := &batchCheckpointReader{}
+	r := &Runner{
+		spec:            &Spec{Name: "batch-checkpoint"},
+		transforms:      nil,
+		sink:            &recordingSink{},
+		checkpointStore: store,
+		alertManager:    am,
+		reader:          reader,
+		logBuf:          NewLogBuffer(20),
+	}
+	records := []core.Record{
+		{Metadata: core.Metadata{Offset: 11}},
+		{Metadata: core.Metadata{Offset: 22}},
+	}
+	if !r.saveCommittedCheckpoint(context.Background(), records, nil) {
+		t.Fatal("saveCommittedCheckpoint returned false")
+	}
+	if reader.batchCalls != 1 || len(reader.seen) != 2 {
+		t.Fatalf("batch checkpointer calls=%d records=%d, want 1/2", reader.batchCalls, len(reader.seen))
+	}
+	cp, err := store.Load(context.Background(), "batch-checkpoint")
+	if err != nil {
+		t.Fatalf("Load checkpoint: %v", err)
+	}
+	if cp == nil || !strings.Contains(string(cp.Position), "11") || !strings.Contains(string(cp.Position), "22") {
+		t.Fatalf("checkpoint position = %s, want both offsets", cp.Position)
+	}
+}
+
+func TestRunnerCheckpointThrottleRetainsAllPendingBatches(t *testing.T) {
+	store := newMemoryCPStore()
+	am := alert.NewManager()
+	defer am.Close()
+	reader := &batchCheckpointReader{}
+	r := &Runner{
+		spec:               &Spec{Name: "batch-checkpoint-throttle"},
+		transforms:         nil,
+		sink:               &recordingSink{},
+		checkpointStore:    store,
+		alertManager:       am,
+		reader:             reader,
+		logBuf:             NewLogBuffer(20),
+		checkpointInterval: time.Hour,
+		lastCheckpointSave: time.Now(),
+	}
+	r.writeBatch(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 11}}})
+	r.writeBatch(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 22}}})
+	if !r.flushPendingCheckpoint(context.Background(), true) {
+		t.Fatal("flushPendingCheckpoint returned false")
+	}
+	if reader.batchCalls != 1 || len(reader.seen) != 2 {
+		t.Fatalf("pending batch checkpoint calls=%d records=%d, want 1/2", reader.batchCalls, len(reader.seen))
+	}
+}
+
+func TestRunnerCheckpointGenerationErrorFailsClosed(t *testing.T) {
+	store := newMemoryCPStore()
+	am := alert.NewManager()
+	defer am.Close()
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-generation-failure"},
+		transforms:      nil,
+		sink:            &recordingSink{},
+		checkpointStore: store,
+		alertManager:    am,
+		reader:          &batchCheckpointReader{err: errors.New("cursor encoding failed")},
+		logBuf:          NewLogBuffer(20),
+	}
+	if r.saveCommittedCheckpoint(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 11}}}, nil) {
+		t.Fatal("checkpoint generation error reported success")
+	}
+	if r.Status() != StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status())
+	}
+	r.mu.RLock()
+	blocked := r.checkpointBlocked
+	reason := r.checkpointBlockReason
+	r.mu.RUnlock()
+	if !blocked || !strings.Contains(reason, "cursor encoding failed") {
+		t.Fatalf("checkpoint block = %v %q, want cursor error", blocked, reason)
+	}
+	if cp, err := store.Load(context.Background(), "checkpoint-generation-failure"); err != nil || cp != nil {
+		t.Fatalf("checkpoint persisted after generation failure: cp=%#v err=%v", cp, err)
+	}
+}
+
+type checkpointOrderProbe struct {
+	mu     sync.Mutex
+	events []string
+	ackErr error
+}
+
+func (p *checkpointOrderProbe) record(event string) {
+	p.mu.Lock()
+	p.events = append(p.events, event)
+	p.mu.Unlock()
+}
+
+func (p *checkpointOrderProbe) snapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.events...)
+}
+
+type orderedCheckpointReader struct {
+	probe *checkpointOrderProbe
+}
+
+func (r *orderedCheckpointReader) Read(context.Context) (core.Record, error) {
+	return core.Record{}, io.EOF
+}
+func (r *orderedCheckpointReader) ReadBatch(context.Context, int) ([]core.Record, error) {
+	return nil, io.EOF
+}
+func (r *orderedCheckpointReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (r *orderedCheckpointReader) Close() error { return nil }
+func (r *orderedCheckpointReader) CheckpointForRecord(_ context.Context, rec core.Record) (core.Checkpoint, error) {
+	r.probe.record("checkpoint")
+	pos, _ := json.Marshal(map[string]any{"offset": rec.Metadata.Offset})
+	return core.Checkpoint{Source: "ordered-reader", Position: pos}, nil
+}
+func (r *orderedCheckpointReader) AckCheckpoint(_ context.Context, _ core.Checkpoint) error {
+	r.probe.record("ack")
+	return r.probe.ackErr
+}
+
+type orderedCheckpointStore struct {
+	inner *memoryCPStore
+	probe *checkpointOrderProbe
+}
+
+func (s *orderedCheckpointStore) Save(ctx context.Context, cp core.Checkpoint) error {
+	s.probe.record("save")
+	return s.inner.Save(ctx, cp)
+}
+func (s *orderedCheckpointStore) Load(ctx context.Context, job string) (*core.Checkpoint, error) {
+	return s.inner.Load(ctx, job)
+}
+func (s *orderedCheckpointStore) Delete(ctx context.Context, job string) error {
+	return s.inner.Delete(ctx, job)
+}
+func (s *orderedCheckpointStore) List(ctx context.Context) ([]core.Checkpoint, error) {
+	return s.inner.List(ctx)
+}
+
 type batchCountingReader struct {
 	mu         sync.Mutex
 	batches    [][]core.Record
@@ -298,6 +485,17 @@ func (s *commitMetadataFailSink) SinkCommitMetadata(context.Context) (map[string
 	return nil, errors.New("commit metadata unavailable")
 }
 
+type checkpointLoadErrorStore struct{ err error }
+
+func (s checkpointLoadErrorStore) Save(context.Context, core.Checkpoint) error { return nil }
+func (s checkpointLoadErrorStore) Load(context.Context, string) (*core.Checkpoint, error) {
+	return nil, s.err
+}
+func (s checkpointLoadErrorStore) Delete(context.Context, string) error { return nil }
+func (s checkpointLoadErrorStore) List(context.Context) ([]core.Checkpoint, error) {
+	return nil, nil
+}
+
 func makeRunnerSpec(t *testing.T, batchSize int) (*Spec, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -367,6 +565,59 @@ func TestRunnerFailsStartupOnSchemaValidationError(t *testing.T) {
 	}
 	if r.Status() != StatusFailed {
 		t.Fatalf("status = %s, want failed", r.Status())
+	}
+}
+
+func TestRunnerFailsStartupWhenCheckpointLoadFails(t *testing.T) {
+	src := &schemaSource{}
+	snk := &schemaValidatingSink{}
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-load-failure"},
+		source:          src,
+		sink:            snk,
+		checkpointStore: checkpointLoadErrorStore{err: errors.New("checkpoint backend unavailable")},
+	}
+
+	err := r.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "load checkpoint") {
+		t.Fatalf("Start() error = %v, want checkpoint load failure", err)
+	}
+	if r.Status() != StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status())
+	}
+	if atomic.LoadInt32(&src.openCalls) != 0 {
+		t.Fatalf("source Open calls = %d, want 0", atomic.LoadInt32(&src.openCalls))
+	}
+	if atomic.LoadInt32(&snk.closeCalls) != 1 {
+		t.Fatalf("sink Close calls = %d, want 1", atomic.LoadInt32(&snk.closeCalls))
+	}
+}
+
+func TestRunnerFailsStartupWhenCheckpointEnvelopeIsCorrupt(t *testing.T) {
+	store := newMemoryCPStore()
+	store.cps["checkpoint-envelope-failure"] = core.Checkpoint{
+		JobName:  "checkpoint-envelope-failure",
+		Source:   "schema-source",
+		Position: []byte(`{"version":99,"source":{"offset":1}}`),
+	}
+	src := &schemaSource{}
+	snk := &schemaValidatingSink{}
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-envelope-failure"},
+		source:          src,
+		sink:            snk,
+		checkpointStore: store,
+	}
+
+	err := r.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "validate checkpoint") {
+		t.Fatalf("Start() error = %v, want checkpoint validation failure", err)
+	}
+	if r.Status() != StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status())
+	}
+	if atomic.LoadInt32(&src.openCalls) != 0 {
+		t.Fatalf("source Open calls = %d, want 0", atomic.LoadInt32(&src.openCalls))
 	}
 }
 
@@ -642,6 +893,71 @@ func TestRunnerCheckpointAfterCommit(t *testing.T) {
 	}
 }
 
+func TestRunnerCheckpointBoundaryOrdersDurableSaveBeforeExternalAck(t *testing.T) {
+	probe := &checkpointOrderProbe{}
+	store := &orderedCheckpointStore{inner: newMemoryCPStore(), probe: probe}
+	am := alert.NewManager()
+	defer am.Close()
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-order"},
+		transforms:      nil,
+		sink:            &recordingSink{},
+		checkpointStore: store,
+		alertManager:    am,
+		reader:          &orderedCheckpointReader{probe: probe},
+		logBuf:          NewLogBuffer(20),
+	}
+
+	if !r.saveCommittedCheckpoint(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 7}}}, nil) {
+		t.Fatal("saveCommittedCheckpoint returned false")
+	}
+	got := probe.snapshot()
+	want := []string{"checkpoint", "save", "ack"}
+	if len(got) != len(want) {
+		t.Fatalf("boundary events = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("boundary events = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestRunnerExternalAckFailureBlocksAndFailsAfterDurableSave(t *testing.T) {
+	probe := &checkpointOrderProbe{ackErr: errors.New("broker unavailable")}
+	store := &orderedCheckpointStore{inner: newMemoryCPStore(), probe: probe}
+	am := alert.NewManager()
+	defer am.Close()
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-ack-failure"},
+		transforms:      nil,
+		sink:            &recordingSink{},
+		checkpointStore: store,
+		alertManager:    am,
+		reader:          &orderedCheckpointReader{probe: probe},
+		logBuf:          NewLogBuffer(20),
+	}
+
+	if r.saveCommittedCheckpoint(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 7}}}, nil) {
+		t.Fatal("saveCommittedCheckpoint succeeded despite external ack failure")
+	}
+	if r.Status() != StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status())
+	}
+	r.mu.RLock()
+	blocked := r.checkpointBlocked
+	r.mu.RUnlock()
+	if !blocked {
+		t.Fatal("checkpoint boundary was not blocked after external ack failure")
+	}
+	if got := probe.snapshot(); len(got) != 3 || got[1] != "save" || got[2] != "ack" {
+		t.Fatalf("boundary events = %v, want checkpoint/save/ack", got)
+	}
+	if cp, err := store.Load(context.Background(), "checkpoint-ack-failure"); err != nil || cp == nil {
+		t.Fatalf("durable checkpoint missing after ack failure: cp=%#v err=%v", cp, err)
+	}
+}
+
 func TestRunnerCanRestartAfterCompletedCheckpointReset(t *testing.T) {
 	spec, _ := makeRunnerSpec(t, 5)
 	spec.CheckpointIntervalSec = 3600
@@ -800,7 +1116,10 @@ func TestUnwrapCheckpointForSourceExtractsEnvelopeSource(t *testing.T) {
 	}
 	cp := &core.Checkpoint{JobName: "p", Position: raw}
 
-	got := unwrapCheckpointForSource(cp)
+	got, err := checkpoint.UnwrapForSource(cp)
+	if err != nil {
+		t.Fatalf("UnwrapForSource: %v", err)
+	}
 
 	if string(got.Position) != `{"offset":42}` {
 		t.Fatalf("unwrapped position = %s", got.Position)

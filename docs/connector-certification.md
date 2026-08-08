@@ -1,6 +1,6 @@
 # Connector And Plugin Certification Test Kit
 
-This kit turns connector and plugin maturity claims into executable checks. It is focused on the first production-candidate connector set: MySQL, ClickHouse, Kafka, S3, and File. Plugin ABI checks cover the extension boundary; each third-party plugin still needs its own evidence before it can be called production-certified.
+This kit turns connector and plugin maturity claims into executable checks. It covers every built-in source or sink currently marked `production`; adding an unknown production connector without a certification target fails the suite. Plugin ABI checks cover the extension boundary; each third-party plugin still needs its own evidence before it can be called production-certified.
 
 Cross-connector crash, replay, DLQ, state, and sink-commit evidence is tracked in [reliability-certification.md](./reliability-certification.md).
 
@@ -11,6 +11,8 @@ The current kit checks:
 - connector descriptor exists and is registered
 - maturity is `production`
 - typed config schema is present
+- descriptor fields, required markers, secret flags, defaults, and connection/behavior scopes come from the same config schema
+- legacy `/api/v2/plugins.metadata.required` values are derived from schema instead of authored separately
 - expected secret fields are marked secret
 - readiness gates have the expected status
 - partial gates include evidence and remediation
@@ -19,7 +21,7 @@ The current kit checks:
 - referenced `hack/e2e-*.sh` scripts exist
 - Plugin ABI v1 constants, manifest requirements, compatibility matrix, and TypeScript SDK helpers are documented
 
-The first certified set is:
+The certified production connector set is:
 
 | Area | Connectors | Evidence |
 | --- | --- | --- |
@@ -27,6 +29,9 @@ The first certified set is:
 | ClickHouse | `clickhouse` sink | ClickHouse CDC/autocreate/snapshot+CDC e2e |
 | Kafka | `kafka` source/sink | Kafka source/sink, raw ODS, Debezium, wide-table e2e |
 | S3/File | `file` source, `file_sink`, `s3` sink | file smoke e2e and S3 MinIO replay/outage e2e |
+| HTTP | `http` source | pagination/auth-header e2e plus typed schema/sample preflight |
+| PostgreSQL | `postgres` / `postgresql` sink aliases | MySQL batch and CDC to PostgreSQL e2e |
+| Doris | `doris` sink | Stream Load/upsert, outage, DLQ, replay, and schema-drift e2e |
 
 Plugin ABI v1 evidence:
 
@@ -43,7 +48,7 @@ Plugin ABI v1 evidence:
 Run the descriptor/doc certification checks:
 
 ```sh
-go test ./internal/etl/server -run TestConnectorCertificationKitProductionSet -count=1
+go test ./internal/etl/server -run 'Test(ConnectorDescriptorConfigContractMatchesSchemaExactly|PluginMetadataRequiredFieldsAreDerivedFromSchema|ConnectorCertificationKitProductionSet)' -count=1
 go test ./internal/etl/server -run TestPluginABIV1CertificationDocs -count=1
 go test ./internal/etl/server -run TestFeishuSheetSourcePluginSampleCertification -count=1
 go test ./internal/etl/server -run TestWASMPluginCertificationFixture -count=1

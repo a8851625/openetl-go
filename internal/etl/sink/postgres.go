@@ -25,20 +25,20 @@ func init() {
 }
 
 type PostgresSink struct {
-	name             string
-	host             string
-	port             int
-	user             string
-	password         string
-	database         string
-	table            string
-	schema           string
-	sslmode          string
-	pkColumns        []string
-	batchMode        string
-	incrementColumns map[string]string
-	pool             *pgxpool.Pool
-	insertChunkSize  int
+	name                string
+	host                string
+	port                int
+	user                string
+	password            string
+	database            string
+	table               string
+	schema              string
+	sslmode             string
+	pkColumns           []string
+	batchMode           string
+	incrementColumns    map[string]string
+	pool                *pgxpool.Pool
+	insertChunkSize     int
 	autoCreate          bool
 	schemaDrift         string
 	ddLPolicy           DDLPolicy
@@ -730,7 +730,7 @@ func (s *PostgresSink) pgGetColumns(ctx context.Context, table string) (map[stri
 func (s *PostgresSink) pgGetColumnInfo(ctx context.Context, table string) ([]core.ColumnInfo, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT c.column_name, c.data_type, c.is_nullable,
-		        COALESCE(a.attgenerated, '') AS attgenerated
+		        COALESCE(a.attgenerated <> '', false) AS is_generated
 		 FROM information_schema.columns c
 		 JOIN pg_attribute a ON a.attrelid = (quote_ident($1)||'.'||quote_ident($2))::regclass AND a.attname = c.column_name
 		 WHERE c.table_schema = $1 AND c.table_name = $2
@@ -740,7 +740,7 @@ func (s *PostgresSink) pgGetColumnInfo(ctx context.Context, table string) ([]cor
 	if err != nil {
 		// Fallback for older PostgreSQL / permission issues: skip generated detection.
 		rows, ferr := s.pool.Query(ctx,
-			`SELECT column_name, data_type, is_nullable, '' AS attgenerated FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
+			`SELECT column_name, data_type, is_nullable, false AS is_generated FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
 			s.schema, table,
 		)
 		if ferr != nil {
@@ -749,22 +749,24 @@ func (s *PostgresSink) pgGetColumnInfo(ctx context.Context, table string) ([]cor
 		defer rows.Close()
 		var cols []core.ColumnInfo
 		for rows.Next() {
-			var name, dataType, nullable, gen string
-			if err := rows.Scan(&name, &dataType, &nullable, &gen); err != nil {
+			var name, dataType, nullable string
+			var generated bool
+			if err := rows.Scan(&name, &dataType, &nullable, &generated); err != nil {
 				return nil, err
 			}
-			cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES"), Generated: gen != ""})
+			cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES"), Generated: generated})
 		}
 		return cols, rows.Err()
 	}
 	defer rows.Close()
 	var cols []core.ColumnInfo
 	for rows.Next() {
-		var name, dataType, nullable, gen string
-		if err := rows.Scan(&name, &dataType, &nullable, &gen); err != nil {
+		var name, dataType, nullable string
+		var generated bool
+		if err := rows.Scan(&name, &dataType, &nullable, &generated); err != nil {
 			return nil, err
 		}
-		cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES"), Generated: gen != ""})
+		cols = append(cols, core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES"), Generated: generated})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

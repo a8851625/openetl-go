@@ -102,6 +102,7 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 		localTableCache:    make(map[string]string),
 		protocol:           "native",
 		compressionMethod:  "LZ4",
+		asyncInsertWait:    true,
 		maxInsertBlockSize: 1048576, // CH default max_insert_block_size
 	}
 	if v, ok := config["name"]; ok {

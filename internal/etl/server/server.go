@@ -4033,83 +4033,110 @@ func (s *Server) handlePluginAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func pluginMetadata() map[string]any {
+	return pluginMetadataFromSchema(pluginCapabilityMetadata(), configSchema())
+}
+
+// pluginCapabilityMetadata contains only connector capabilities and maturity.
+// Required/default/secret/scope config semantics belong to configSchema(); the
+// compatibility metadata response is enriched from that schema at runtime.
+func pluginCapabilityMetadata() map[string]any {
 	return map[string]any{
 		"sources": map[string]any{
-			"file":               pluginInfo([]string{"path", "format"}, []string{"batch", "checkpoint"}, "production"),
-			"http":               pluginInfo([]string{"url"}, []string{"pagination", "auth_headers", "checkpoint"}, "production"),
-			"mysql_batch":        pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "checkpoint", "schema_descriptor"}, "production"),
-			"mysql_cdc":          pluginInfo([]string{"host", "user", "database", "tables"}, []string{"cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
-			"mysql_snapshot_cdc": pluginInfo([]string{"host", "user", "database", "table"}, []string{"snapshot", "cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
-			"kafka":              pluginInfo([]string{"brokers", "topic"}, []string{"stream", "checkpoint"}, "production"),
-			"postgres_cdc":       pluginInfo([]string{"host", "user", "database", "slot_name"}, []string{"cdc", "snapshot", "checkpoint"}, "beta"),
-			"redis":              pluginInfo([]string{"host", "port"}, []string{"stream", "checkpoint"}, "experimental"),
-			"feishu_sheet":       pluginInfo([]string{"app_id", "app_secret", "spreadsheet_token"}, []string{"batch", "oauth2_client_credentials", "scheduled_pull"}, "beta"),
-			"rest_source":        pluginInfo([]string{"url"}, []string{"batch", "pagination", "auth_headers", "checkpoint", "oauth2_client_credentials"}, "beta"),
-			"salesforce":         pluginInfo([]string{"client_id", "client_secret"}, []string{"batch", "pagination", "oauth2_client_credentials", "template"}, "beta"),
-			"github":             pluginInfo([]string{"repo", "token"}, []string{"batch", "pagination", "auth_headers", "template"}, "beta"),
-			"hubspot":            pluginInfo([]string{}, []string{"batch", "pagination", "auth_headers", "template"}, "beta"),
-			"stripe":             pluginInfo([]string{"token"}, []string{"batch", "pagination", "auth_headers", "template"}, "beta"),
-			"notion":             pluginInfo([]string{"database_id", "token"}, []string{"batch", "pagination", "auth_headers", "template"}, "beta"),
+			"file":               pluginInfo([]string{"batch", "checkpoint"}, "production"),
+			"http":               pluginInfo([]string{"pagination", "auth_headers", "checkpoint"}, "production"),
+			"mysql_batch":        pluginInfo([]string{"snapshot", "checkpoint", "schema_descriptor"}, "production"),
+			"mysql_cdc":          pluginInfo([]string{"cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
+			"mysql_snapshot_cdc": pluginInfo([]string{"snapshot", "cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
+			"kafka":              pluginInfo([]string{"stream", "checkpoint"}, "production"),
+			"postgres_cdc":       pluginInfo([]string{"cdc", "snapshot", "checkpoint"}, "beta"),
+			"redis":              pluginInfo([]string{"stream", "checkpoint"}, "experimental"),
+			"feishu_sheet":       pluginInfo([]string{"batch", "oauth2_client_credentials", "scheduled_pull"}, "beta"),
+			"rest_source":        pluginInfo([]string{"batch", "pagination", "auth_headers", "checkpoint", "oauth2_client_credentials"}, "beta"),
+			"salesforce":         pluginInfo([]string{"batch", "pagination", "oauth2_client_credentials", "template"}, "beta"),
+			"github":             pluginInfo([]string{"batch", "pagination", "auth_headers", "template"}, "beta"),
+			"hubspot":            pluginInfo([]string{"batch", "pagination", "auth_headers", "template"}, "beta"),
+			"stripe":             pluginInfo([]string{"batch", "pagination", "auth_headers", "template"}, "beta"),
+			"notion":             pluginInfo([]string{"batch", "pagination", "auth_headers", "template"}, "beta"),
 		},
 		"sinks": map[string]any{
-			"file_sink":     pluginInfo([]string{"output_dir", "format"}, []string{"batch", "local_file"}, "production"),
-			"s3":            pluginInfo([]string{"bucket", "format"}, []string{"batch", "minio_compatible"}, "production"),
-			"mysql":         pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator", "remote_preflight"}, "production"),
-			"clickhouse":    pluginInfo([]string{"host", "database", "table"}, []string{"batch", "auto_create", "schema_drift", "schema_validator", "remote_preflight", "sync", "distributed", "update", "delete", "optimize"}, "production"),
-			"postgres":      pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator", "remote_preflight"}, "production"),
-			"postgresql":    pluginInfo([]string{"host", "user", "database", "table"}, []string{"batch", "upsert", "schema_validator", "remote_preflight"}, "production"),
-			"kafka":         pluginInfo([]string{"brokers", "topic"}, []string{"stream"}, "production"),
-			"elasticsearch": pluginInfo([]string{"hosts", "index"}, []string{"bulk", "schema_validator", "remote_mapping_preflight"}, "beta"),
-			"es":            pluginInfo([]string{"hosts", "index"}, []string{"bulk", "schema_validator", "remote_mapping_preflight"}, "beta"),
-			"redis":         pluginInfo([]string{"host", "port"}, []string{"stream"}, "experimental"),
+			"file_sink":     pluginInfo([]string{"batch", "local_file"}, "production"),
+			"s3":            pluginInfo([]string{"batch", "minio_compatible"}, "production"),
+			"mysql":         pluginInfo([]string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator", "remote_preflight"}, "production"),
+			"clickhouse":    pluginInfo([]string{"batch", "auto_create", "schema_drift", "schema_validator", "remote_preflight", "sync", "distributed", "update", "delete", "optimize"}, "production"),
+			"postgres":      pluginInfo([]string{"batch", "upsert", "auto_create", "schema_drift", "schema_validator", "remote_preflight"}, "production"),
+			"postgresql":    pluginInfo([]string{"batch", "upsert", "schema_validator", "remote_preflight"}, "production"),
+			"kafka":         pluginInfo([]string{"stream"}, "production"),
+			"elasticsearch": pluginInfo([]string{"bulk", "schema_validator", "remote_mapping_preflight"}, "beta"),
+			"es":            pluginInfo([]string{"bulk", "schema_validator", "remote_mapping_preflight"}, "beta"),
+			"redis":         pluginInfo([]string{"stream"}, "experimental"),
 
-			"doris":      pluginInfo([]string{"host", "database", "table"}, []string{"batch", "stream_load", "insert_fallback", "upsert", "delete", "auto_create", "schema_drift", "schema_validator", "remote_preflight", "unique_key_replay_safe"}, "production"),
-			"jdbc":       pluginInfo([]string{"dsn", "table"}, []string{"batch", "upsert", "auto_create", "schema_drift", "generic"}, "experimental"),
-			"maxcompute": pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "sdk_batch_writer", "partitioned_table", "schema_validator", "remote_preflight", "partition_preflight", "experimental_contract"}, "experimental"),
-			"odps":       pluginInfo([]string{"endpoint", "project", "table", "access_key_id", "access_key_secret"}, []string{"batch", "sdk_batch_writer", "partitioned_table", "schema_validator", "remote_preflight", "partition_preflight", "experimental_contract"}, "experimental"),
+			"doris":      pluginInfo([]string{"batch", "stream_load", "insert_fallback", "upsert", "delete", "auto_create", "schema_drift", "schema_validator", "remote_preflight", "unique_key_replay_safe"}, "production"),
+			"jdbc":       pluginInfo([]string{"batch", "upsert", "auto_create", "schema_drift", "generic"}, "experimental"),
+			"maxcompute": pluginInfo([]string{"batch", "sdk_batch_writer", "partitioned_table", "schema_validator", "remote_preflight", "partition_preflight", "experimental_contract"}, "experimental"),
+			"odps":       pluginInfo([]string{"batch", "sdk_batch_writer", "partitioned_table", "schema_validator", "remote_preflight", "partition_preflight", "experimental_contract"}, "experimental"),
 		},
 		"transforms": map[string]any{
-			"identity":           pluginInfo(nil, []string{"pass_through"}, "production"),
-			"rename":             pluginInfo([]string{"mappings"}, []string{"schema_mapping"}, "production"),
-			"drop_field":         pluginInfo([]string{"fields"}, []string{"projection"}, "production"),
-			"add_field":          pluginInfo([]string{"field", "value"}, []string{"enrichment"}, "production"),
-			"map_fields":         pluginInfo([]string{"fields"}, []string{"dictionary_mapping"}, "production"),
-			"extract":            pluginInfo([]string{"rules"}, []string{"field_extraction", "template_concat"}, "production"),
-			"project":            pluginInfo(nil, []string{"projection", "schema_mapping", "constant_fields", "time_format"}, "beta"),
-			"select_fields":      pluginInfo(nil, []string{"projection", "schema_mapping", "constant_fields", "time_format"}, "beta"),
-			"type_convert":       pluginInfo([]string{"conversions"}, []string{"type_mapping"}, "production"),
-			"filter":             pluginInfo([]string{"expression"}, []string{"record_filter"}, "production"),
-			"flat_map":           pluginInfo([]string{"script"}, []string{"one_to_many", "projection", "record_lineage", "transform_metrics"}, "beta"),
-			"udtf":               pluginInfo([]string{"script"}, []string{"one_to_many", "projection", "record_lineage", "transform_metrics"}, "beta"),
-			"normalize_envelope": pluginInfo(nil, []string{"debezium_envelope", "event_time", "cdc_metadata"}, "beta"),
-			"debezium_envelope":  pluginInfo(nil, []string{"debezium_envelope", "event_time", "cdc_metadata"}, "beta"),
-			"debezium_cdc":       pluginInfo(nil, []string{"debezium_envelope", "cdc_metadata", "table_mapping", "event_time"}, "beta"),
-			"cdc_policy":         pluginInfo(nil, []string{"cdc_policy", "ddl_guard", "source_filter", "record_filter", "transform_metrics"}, "beta"),
-			"ddl_guard":          pluginInfo(nil, []string{"ddl_guard", "schema_change_policy", "source_filter", "transform_metrics"}, "beta"),
-			"lua":                pluginInfo([]string{"script"}, []string{"script", "inline"}, "beta"),
-			"ts":                 pluginInfo([]string{"script"}, []string{"script", "inline", "typescript", "one_to_many"}, "experimental"),
-			"javascript":         pluginInfo([]string{"script"}, []string{"script", "inline", "javascript", "one_to_many"}, "experimental"),
-			"js":                 pluginInfo([]string{"script"}, []string{"script", "inline", "javascript", "one_to_many"}, "experimental"),
-			"router":             pluginInfo(nil, []string{"conditional_routing", "flow_control"}, "beta"),
-			"fanout":             pluginInfo(nil, []string{"broadcast", "flow_control"}, "beta"),
-			"tap":                pluginInfo([]string{"log_every"}, []string{"observe", "logging"}, "beta"),
-			"rate_limiter":       pluginInfo([]string{"rps"}, []string{"throttle", "flow_control"}, "beta"),
-			"enricher":           pluginInfo([]string{"mode", "url"}, []string{"http_enrichment", "sql_enrichment", "cache"}, "beta"),
-			"lookup":             pluginInfo([]string{"dsn", "query", "fields"}, []string{"dimension_join", "stream_table_join"}, "beta"),
-			"window":             pluginInfo([]string{"window_size_seconds", "aggregates"}, []string{"tumbling_window", "aggregation"}, "experimental"),
-			"deduplicate":        pluginInfo([]string{"keys"}, []string{"dedup", "lru"}, "beta"),
-			"validate":           pluginInfo([]string{"rules"}, []string{"data_quality", "schema_validation"}, "beta"),
-			"join":               pluginInfo([]string{"join_key", "join_fields"}, []string{"stream_join", "interval_join"}, "beta"),
-			"dbt":                pluginInfo([]string{"project_dir", "model_name", "source_table"}, []string{"dbt_bridge", "batch_transform", "external_process"}, "experimental"),
+			"identity":           pluginInfo([]string{"pass_through"}, "production"),
+			"rename":             pluginInfo([]string{"schema_mapping"}, "production"),
+			"drop_field":         pluginInfo([]string{"projection"}, "production"),
+			"add_field":          pluginInfo([]string{"enrichment"}, "production"),
+			"map_fields":         pluginInfo([]string{"dictionary_mapping"}, "production"),
+			"extract":            pluginInfo([]string{"field_extraction", "template_concat"}, "production"),
+			"project":            pluginInfo([]string{"projection", "schema_mapping", "constant_fields", "time_format"}, "beta"),
+			"select_fields":      pluginInfo([]string{"projection", "schema_mapping", "constant_fields", "time_format"}, "beta"),
+			"type_convert":       pluginInfo([]string{"type_mapping"}, "production"),
+			"filter":             pluginInfo([]string{"record_filter"}, "production"),
+			"flat_map":           pluginInfo([]string{"one_to_many", "projection", "record_lineage", "transform_metrics"}, "beta"),
+			"udtf":               pluginInfo([]string{"one_to_many", "projection", "record_lineage", "transform_metrics"}, "beta"),
+			"normalize_envelope": pluginInfo([]string{"debezium_envelope", "event_time", "cdc_metadata"}, "beta"),
+			"debezium_envelope":  pluginInfo([]string{"debezium_envelope", "event_time", "cdc_metadata"}, "beta"),
+			"debezium_cdc":       pluginInfo([]string{"debezium_envelope", "cdc_metadata", "table_mapping", "event_time"}, "beta"),
+			"cdc_policy":         pluginInfo([]string{"cdc_policy", "ddl_guard", "source_filter", "record_filter", "transform_metrics"}, "beta"),
+			"ddl_guard":          pluginInfo([]string{"ddl_guard", "schema_change_policy", "source_filter", "transform_metrics"}, "beta"),
+			"lua":                pluginInfo([]string{"script", "inline"}, "beta"),
+			"ts":                 pluginInfo([]string{"script", "inline", "typescript", "one_to_many"}, "experimental"),
+			"javascript":         pluginInfo([]string{"script", "inline", "javascript", "one_to_many"}, "experimental"),
+			"js":                 pluginInfo([]string{"script", "inline", "javascript", "one_to_many"}, "experimental"),
+			"router":             pluginInfo([]string{"conditional_routing", "flow_control"}, "beta"),
+			"fanout":             pluginInfo([]string{"broadcast", "flow_control"}, "beta"),
+			"tap":                pluginInfo([]string{"observe", "logging"}, "beta"),
+			"rate_limiter":       pluginInfo([]string{"throttle", "flow_control"}, "beta"),
+			"enricher":           pluginInfo([]string{"http_enrichment", "sql_enrichment", "cache"}, "beta"),
+			"lookup":             pluginInfo([]string{"dimension_join", "stream_table_join"}, "beta"),
+			"window":             pluginInfo([]string{"tumbling_window", "aggregation"}, "experimental"),
+			"deduplicate":        pluginInfo([]string{"dedup", "lru"}, "beta"),
+			"validate":           pluginInfo([]string{"data_quality", "schema_validation"}, "beta"),
+			"join":               pluginInfo([]string{"stream_join", "interval_join"}, "beta"),
+			"dbt":                pluginInfo([]string{"dbt_bridge", "batch_transform", "external_process"}, "experimental"),
 		},
 	}
 }
 
-func pluginInfo(required, capabilities []string, maturity string) map[string]any {
-	if required == nil {
-		required = []string{}
+func pluginInfo(capabilities []string, maturity string) map[string]any {
+	return map[string]any{"capabilities": capabilities, "maturity": maturity}
+}
+
+func pluginMetadataFromSchema(metadata, schema map[string]any) map[string]any {
+	for groupName, kind := range map[string]string{
+		"sources":    "source",
+		"sinks":      "sink",
+		"transforms": "transform",
+	} {
+		group, _ := metadata[groupName].(map[string]any)
+		fieldsByPlugin, _ := schema[groupName].(map[string][]ConfigField)
+		for name, rawInfo := range group {
+			info, ok := rawInfo.(map[string]any)
+			if !ok {
+				continue
+			}
+			required := requiredFields(annotateFieldScopes(kind, fieldsByPlugin[name]))
+			if required == nil {
+				required = []string{}
+			}
+			info["required"] = required
+		}
 	}
-	return map[string]any{"required": required, "capabilities": capabilities, "maturity": maturity}
+	return metadata
 }
 
 func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {

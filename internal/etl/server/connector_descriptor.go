@@ -97,11 +97,6 @@ func descriptorsForKind(kind string, registered []string, schemas map[string][]C
 			if caps, ok := info["capabilities"].([]string); ok {
 				capabilities = append(capabilities, caps...)
 			}
-			if len(required) == 0 {
-				if req, ok := info["required"].([]string); ok {
-					required = append(required, req...)
-				}
-			}
 		}
 		sort.Strings(required)
 		sort.Strings(secretFields)
@@ -196,8 +191,10 @@ func connectorReadiness(kind, typ, maturity string, capabilities []string, regis
 
 func sourceSchemaGate(typ string, capSet map[string]bool) ConnectorReadinessGate {
 	switch typ {
-	case "mysql_batch", "mysql_cdc", "mysql_snapshot_cdc":
+	case "mysql_batch":
 		return passGate("schema_introspection", "Schema introspection", "source implements SchemaDescriptor for table/query metadata")
+	case "mysql_cdc", "mysql_snapshot_cdc":
+		return passGate("schema_introspection", "Schema introspection", "single-table SchemaDescriptor plus per-table multi-table/wildcard preflight contract")
 	case "file", "http", "kafka", "rest_source", "salesforce", "github", "hubspot", "stripe", "notion":
 		return ConnectorReadinessGate{
 			Code:        "schema_introspection",

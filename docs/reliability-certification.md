@@ -1,6 +1,6 @@
 # Reliability Certification Matrix
 
-This matrix is the evidence source for OpenETL-Go production-candidate recovery boundaries. The default guarantee is at-least-once: a sink acknowledgement happens before the corresponding source checkpoint is persisted. A crash or checkpoint-store failure in between can replay records; it must not silently skip them.
+This matrix is the evidence source for OpenETL-Go production-candidate recovery boundaries. The default guarantee is at-least-once: a sink acknowledgement happens before the corresponding source checkpoint is persisted. For sources with an external cursor (Kafka consumer offsets or PostgreSQL WAL), that external acknowledgement happens only after the same checkpoint is durably saved. A crash or checkpoint-store failure in between can replay records; it must not silently skip them.
 
 Path-level production contracts (source → transforms → sink write mode + business key + storage/runtime + RPO/RTO) live in [path-contract.md](./path-contract.md) and `GET /api/v2/paths/contracts`. Connector maturity alone does not certify a path.
 
@@ -29,9 +29,11 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 2. The sink acknowledges the batch.
 3. Sink acknowledgement metadata, state versions, and source position are saved together.
 4. If state metadata, sink commit metadata, or checkpoint persistence fails, the source checkpoint does not advance and the range replays.
-5. If a failed record cannot be written to the DLQ, later successful batches cannot advance past it during the same run. Restart reopens the source from the last durable checkpoint.
-6. A checkpoint-throttled sink acknowledgement is retained as a pending boundary. The write-loop timer persists it after `checkpoint_interval_sec` even when the stream becomes idle; Stop/EOF force the same boundary to durable storage.
-7. Kafka offset `0` is stored explicitly. Missing partition state is not conflated with the valid zero offset.
+5. For Kafka/PostgreSQL CDC, the source external acknowledgement is sent after step 3. An external-ack failure blocks further checkpoint advancement and fails/stops the pipeline; restart reopens from the durable checkpoint and may replay the range.
+6. If a failed record cannot be written to the DLQ, later successful batches cannot advance past it during the same run. Restart reopens the source from the last durable checkpoint.
+7. A checkpoint-throttled sink acknowledgement is retained as a pending boundary. The write-loop timer persists it after `checkpoint_interval_sec` even when the stream becomes idle; Stop/EOF force the same boundary to durable storage.
+8. Kafka offset `0` is stored explicitly. Missing partition state is not conflated with the valid zero offset.
+9. Checkpoint storage/read or envelope validation errors fail the pipeline before its source is opened. They are never treated as an empty/new source position.
 
 ## Production-Candidate Matrix
 
@@ -55,6 +57,11 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 - DLQ persistence failure blocks later checkpoint advancement past the unsafe record.
 - Sink write failure never advances the checkpoint.
 - Legacy source checkpoints continue to open; envelope source positions are unwrapped before source startup.
+- Corrupt legacy JSON, corrupt envelopes, unknown envelope versions, and envelopes without a source position fail startup and remain visible as `failed`.
+- Kafka `CheckpointForRecord` does not mark/commit offsets; auto-commit is disabled and `AckCheckpoint` marks/commits only after durable checkpoint save.
+- PostgreSQL CDC `CheckpointForRecord` does not advance `committedLsn`; `AckCheckpoint` sends the WAL status update first and publishes the committed LSN only after a successful send. Keepalives without a durable LSN use 0/0, and reconnects use the durable marker rather than the server/read-ahead end.
+- MySQL snapshot+CDC keeps producer pagination cursors separate from acknowledged snapshot cursors. Linear and DAG writers pass the complete source batch to the snapshot checkpointer; numeric and ordered string cursors are applied only after the checkpoint row is saved. Snapshot checkpoints retain the original CDC handoff position, and CDC reconnects use the last acknowledged binlog file/position rather than handler read-ahead.
+- MySQL snapshot+CDC malformed numeric cursors, missing cursor columns, unsupported phases, and missing snapshot/CDC binlog handoff positions fail closed. A checkpoint-generation error blocks later advancement and marks the linear/DAG pipeline failed so restart replays from the last durable boundary.
 - Kafka offset zero is retained and an idle stream flushes the latest throttled checkpoint boundary after the configured interval.
 - CDC/Kafka to file/S3 remains rejected unless `allow_unsafe: true` explicitly acknowledges the documented duplicate boundary.
 - DAG DLQ records without `dag_node` remain stored and replay returns HTTP 400.
@@ -75,6 +82,120 @@ go test ./internal/etl/... -count=1
 E2E_SKIP_BUILD=1 ./hack/e2e-wide-table.sh
 E2E_SKIP_BUILD=1 ./hack/e2e-lookup-state.sh
 ```
+
+### PR-2.4.1 checkpoint restore fail-closed evidence (2026-08-08)
+
+The recovery boundary now has explicit fault-injection coverage for the
+standalone linear runner and DAG executor:
+
+```text
+go test ./internal/etl/... -count=1                 PASS
+go test -race ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator -count=1  PASS
+go vet ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator  PASS
+```
+
+Covered cases include checkpoint-store load errors, malformed JSON, unknown
+envelope versions, missing envelope source payloads, valid legacy positions,
+and DAG source-open failures. A load/validation failure sets the pipeline to
+`failed`, cancels the DAG context where applicable, and does not call source
+`Open`. At the time of this evidence capture, external source acknowledgement
+ordering and source-specific cursor validation were listed as bounded
+follow-ups; they are now recorded in the `PR-2.4.2` and `PR-2.4.3` sections
+below.
+
+### PR-2.4.2 external acknowledgement ordering evidence (2026-08-08)
+
+The source cursor lifecycle is now explicitly split into candidate generation,
+durable checkpoint persistence, and external acknowledgement:
+
+```text
+CheckpointForRecord (no external side effect)
+    -> CheckpointStore.Save
+    -> AckCheckpoint (Kafka offset / PostgreSQL WAL status)
+```
+
+Evidence:
+
+```text
+go test ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1  PASS
+go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1  PASS
+go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator  PASS
+CONTAINER_CLI=docker ./hack/e2e-kafka.sh  PASS
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-postgres-cdc.sh  PASS
+```
+
+The tests cover Kafka auto-commit disabled, no mark/commit during
+`CheckpointForRecord`, active-session acknowledgement, PostgreSQL send failure
+without `committedLsn` advancement, keepalive 0/0 and durable reconnect behavior
+before the first acknowledged LSN, and linear/DAG save-before-ack fault ordering.
+The bounded `mysql_snapshot_cdc` cursor and handoff follow-up is covered in
+the PR-2.4.3 evidence below. Sarama's
+`ConsumerGroupSession.Commit()` does not return a broker result; synchronous
+session loss is rejected before commit, while broker commit errors remain
+visible through Sarama's consumer-group error channel.
+
+### PR-2.4.3 snapshot cursor and handoff evidence (2026-08-08)
+
+The snapshot source now has two explicit cursor layers:
+
+```text
+snapshot producer read-ahead (in-memory only)
+    -> records reaching the sink
+    -> CheckpointForRecords (candidate)
+    -> durable CheckpointStore.Save
+    -> AckCheckpoint (apply durable snapshot/CDC cursor)
+```
+
+The durable snapshot position contains per-table numeric/string cursors plus
+the binlog file/position captured at the snapshot handoff. A restart or canal
+reconnect discards producer read-ahead and starts from that durable position;
+an acknowledgement failure therefore replays rather than skips rows. The
+linear runner and DAG executor both preserve the complete source batch
+represented by the sink boundary when building this candidate, including
+multi-table snapshot batches.
+
+Producer completion alone does not persist `phase: cdc`, because snapshot rows
+may still be buffered before the sink. The durable phase changes only when an
+actual CDC record is sink-acknowledged; a restart before that point reopens the
+snapshot cursor, drains any empty tail pages, and continues from the original
+handoff without skipping buffered rows.
+
+Unit and static evidence:
+
+```text
+go test ./internal/etl/... -count=1
+go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1
+go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator
+git diff --check
+```
+
+All four commands passed. The targeted tests cover producer read-ahead
+isolation, numeric and ordered string cursors, local-wall-clock `time.Time`
+encoding, legacy `LastID` positions, multi-table batches,
+snapshot-to-CDC transition, durable reconnect position, missing/invalid
+cursor and handoff fail-closed behavior, channel EOF, linear/DAG batch
+checkpoint propagation (including throttled pending-batch accumulation), and
+checkpoint-generation failure blocking.
+
+Path evidence:
+
+```text
+CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc.sh
+CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc-crash.sh
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-snapshot-cdc-clickhouse.sh
+CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc-heteropk.sh
+```
+
+All four scripts passed. The local container environment already had the
+shared `etl-mysql-source` and ClickHouse containers, so compose printed
+name-in-use warnings before reusing the healthy services. The scripts still
+exited 0 and verified snapshot rows, post-handoff CDC, snapshot crash/restart,
+CDC restart, schema drift, checkpoint reset replay absorption, ClickHouse
+outage to DLQ/replay, and numeric/string heterogeneous-PK behavior. The
+ClickHouse script now asserts `phase: cdc` only after a real CDC record is
+acknowledged, including after reset, rather than treating producer completion
+as a durable phase transition. The path remains at-least-once: use stable
+business keys/upsert or an equivalent deduplication strategy at the sink.
 
 ## RPO / RTO (release declaration)
 

@@ -21,6 +21,12 @@ type connectorCertificationTarget struct {
 func TestConnectorCertificationKitProductionSet(t *testing.T) {
 	targets := []connectorCertificationTarget{
 		{
+			Kind: "source", Type: "http", DocPath: "docs/components/source-http.md",
+			Scripts:      []string{"hack/e2e-http-source.sh"},
+			SecretFields: []string{"auth_token", "auth_pass", "oauth2_client_secret"},
+			Gates:        productionSourceGates("partial", "partial"),
+		},
+		{
 			Kind: "source", Type: "mysql_batch", DocPath: "docs/components/source-mysql_batch.md",
 			Scripts:      []string{"hack/e2e.sh", "hack/e2e-mysql-postgres.sh"},
 			SecretFields: []string{"password"},
@@ -41,6 +47,24 @@ func TestConnectorCertificationKitProductionSet(t *testing.T) {
 		{
 			Kind: "sink", Type: "mysql", DocPath: "docs/components/sink-mysql.md",
 			Scripts:      []string{"hack/e2e-cdc-mysql.sh", "hack/e2e-debezium-mysql.sh"},
+			SecretFields: []string{"password"},
+			Gates:        productionSinkGates("pass", "pass", "pass"),
+		},
+		{
+			Kind: "sink", Type: "postgres", DocPath: "docs/components/sink-postgres.md",
+			Scripts:      []string{"hack/e2e-mysql-postgres.sh", "hack/e2e-cdc-postgres.sh"},
+			SecretFields: []string{"password"},
+			Gates:        productionSinkGates("pass", "pass", "pass"),
+		},
+		{
+			Kind: "sink", Type: "postgresql", DocPath: "docs/components/sink-postgres.md",
+			Scripts:      []string{"hack/e2e-mysql-postgres.sh", "hack/e2e-cdc-postgres.sh"},
+			SecretFields: []string{"password"},
+			Gates:        productionSinkGates("pass", "pass", "pass"),
+		},
+		{
+			Kind: "sink", Type: "doris", DocPath: "docs/components/sink-doris.md",
+			Scripts:      []string{"hack/e2e-doris.sh"},
 			SecretFields: []string{"password"},
 			Gates:        productionSinkGates("pass", "pass", "pass"),
 		},
@@ -82,6 +106,29 @@ func TestConnectorCertificationKitProductionSet(t *testing.T) {
 
 	descriptors := connectorDescriptorMap(connectorDescriptors())
 	repoRoot := filepath.Clean("../../..")
+	targetSet := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		key := target.Kind + ":" + target.Type
+		if targetSet[key] {
+			t.Fatalf("duplicate certification target %s", key)
+		}
+		targetSet[key] = true
+	}
+	for key, desc := range descriptors {
+		if (desc.Kind == "source" || desc.Kind == "sink") && desc.Maturity == "production" && !targetSet[key] {
+			t.Errorf("production connector %s is missing from the certification target set", key)
+		}
+	}
+	for key := range targetSet {
+		desc, ok := descriptors[key]
+		if !ok {
+			t.Errorf("certification target %s has no descriptor", key)
+			continue
+		}
+		if desc.Maturity != "production" {
+			t.Errorf("certification target %s maturity = %q, want production", key, desc.Maturity)
+		}
+	}
 
 	for _, target := range targets {
 		t.Run(target.Kind+"/"+target.Type, func(t *testing.T) {

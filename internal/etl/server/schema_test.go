@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -27,7 +29,7 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 
 	assertFields(t, sources, "mysql_batch", "query", "cursor_column", "shard_index", "shard_total")
 	assertFields(t, sources, "mysql_cdc", "server_id_base", "shard_index", "shard_total", "start_from")
-	assertFields(t, sources, "mysql_snapshot_cdc", "tables", "consistent_snapshot_lock", "server_id_base")
+	assertFields(t, sources, "mysql_snapshot_cdc", "tables", "pk_columns", "skip_no_pk_tables", "consistent_snapshot_lock", "server_id_base")
 	assertFields(t, sources, "http", "body", "auth_type", "auth_user", "auth_pass", "max_retries", "retry_base_ms")
 	assertFields(t, sources, "rest_source", "url", "auth", "pagination", "api_key_header", "cursor_field", "token_param", "variables", "max_retries", "retry_base_ms")
 	assertFields(t, sources, "salesforce", "object", "api_version", "instance_url", "client_id", "client_secret")
@@ -442,84 +444,97 @@ func TestConnectorDescriptorsMergeRegistrySchemaAndMetadata(t *testing.T) {
 	}
 }
 
-// TestConnectorDescriptorsRequiredFieldsExistInSchema is a regression guard for
-// descriptor field-name mismatches (e.g. the historical bug where Redis
-// metadata listed "addr" while the schema/implementation used "host"/"port",
-// and rate_limiter metadata listed "rate" while the schema used "rps").
-//
-// Every connector descriptor's Required field must name an actual config field
-// exposed in that descriptor's Fields list, otherwise UI/AI/wizard generation
-// produces specs with non-existent fields that silently fail at runtime.
-func TestConnectorDescriptorsRequiredFieldsExistInSchema(t *testing.T) {
+func TestConnectorDescriptorConfigContractMatchesSchemaExactly(t *testing.T) {
+	schema := configSchema()
+	groups := map[string]map[string][]ConfigField{
+		"source":    schema["sources"].(map[string][]ConfigField),
+		"sink":      schema["sinks"].(map[string][]ConfigField),
+		"transform": schema["transforms"].(map[string][]ConfigField),
+	}
 	descriptors := connectorDescriptors()
 	if len(descriptors) == 0 {
 		t.Fatal("connectorDescriptors returned no descriptors")
 	}
 	for _, d := range descriptors {
-		known := map[string]bool{}
-		for _, f := range d.Fields {
-			known[f.Name] = true
+		fields := groups[d.Kind][d.Type]
+		if !reflect.DeepEqual(d.Fields, fields) {
+			t.Errorf("%s/%s fields differ from config schema:\n descriptor=%#v\n schema=%#v", d.Kind, d.Type, d.Fields, fields)
 		}
-		for _, req := range d.Required {
-			if !known[req] {
-				t.Errorf("%s/%s: descriptor declares required field %q but it is not in its schema fields %v",
-					d.Kind, d.Type, req, fieldNames(d.Fields))
+		wantRequired := sortedStrings(requiredFields(fields))
+		if !reflect.DeepEqual(d.Required, wantRequired) {
+			t.Errorf("%s/%s required = %#v, want schema required %#v", d.Kind, d.Type, d.Required, wantRequired)
+		}
+		wantSecrets := sortedStrings(secretFields(fields))
+		if !reflect.DeepEqual(d.SecretFields, wantSecrets) {
+			t.Errorf("%s/%s secret_fields = %#v, want schema secrets %#v", d.Kind, d.Type, d.SecretFields, wantSecrets)
+		}
+		for _, field := range d.Fields {
+			if field.Scope != FieldScopeFor(d.Kind, field.Name) {
+				t.Errorf("%s/%s field %s scope = %q, want %q", d.Kind, d.Type, field.Name, field.Scope, FieldScopeFor(d.Kind, field.Name))
 			}
 		}
 	}
 }
 
-// TestMetadataRequiredFieldsExistInSchema is a second regression guard aimed at
-// the raw pluginMetadata() required list (the source of the historical bug).
-// Each metadata "required" entry must match a field exposed in configSchema(),
-// so descriptor consumers (UI forms, AI context pack, wizard) never see a
-// required field that the runtime cannot accept.
-func TestMetadataRequiredFieldsExistInSchema(t *testing.T) {
+func TestPluginMetadataRequiredFieldsAreDerivedFromSchema(t *testing.T) {
 	schema := configSchema()
 	metadata := pluginMetadata()
+	rawMetadata := pluginCapabilityMetadata()
 
-	sourcesSchema := schema["sources"].(map[string][]ConfigField)
-	sinksSchema := schema["sinks"].(map[string][]ConfigField)
-	transformsSchema := schema["transforms"].(map[string][]ConfigField)
-
-	check := func(t *testing.T, kind string, metaGroup any, schemas map[string][]ConfigField) {
+	check := func(t *testing.T, groupName string) {
 		t.Helper()
-		group, ok := metaGroup.(map[string]any)
+		group, ok := metadata[groupName].(map[string]any)
 		if !ok {
-			t.Fatalf("metadata[%s] has type %T", kind, metaGroup)
+			t.Fatalf("metadata[%s] has type %T", groupName, metadata[groupName])
 		}
+		rawGroup := rawMetadata[groupName].(map[string]any)
+		fieldsByPlugin := schema[groupName].(map[string][]ConfigField)
 		for name, raw := range group {
 			info, ok := raw.(map[string]any)
 			if !ok {
+				t.Fatalf("metadata[%s][%s] has type %T", groupName, name, raw)
+			}
+			rawInfo := rawGroup[name].(map[string]any)
+			if _, duplicated := rawInfo["required"]; duplicated {
+				t.Errorf("raw capability metadata %s/%s must not author required fields", groupName, name)
+			}
+			got, ok := info["required"].([]string)
+			if !ok {
+				t.Errorf("metadata[%s][%s].required has type %T", groupName, name, info["required"])
 				continue
 			}
-			required, _ := info["required"].([]string)
-			if len(required) == 0 {
-				continue
+			want := requiredFields(fieldsByPlugin[name])
+			if want == nil {
+				want = []string{}
 			}
-			fields := schemas[name]
-			known := map[string]bool{}
-			for _, f := range fields {
-				known[f.Name] = true
-			}
-			for _, req := range required {
-				if !known[req] {
-					t.Errorf("metadata[%s][%s] declares required field %q not present in schema fields %v",
-						kind, name, req, fieldNames(fields))
-				}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("metadata[%s][%s].required = %#v, want schema required %#v", groupName, name, got, want)
 			}
 		}
 	}
-	check(t, "sources", metadata["sources"], sourcesSchema)
-	check(t, "sinks", metadata["sinks"], sinksSchema)
-	check(t, "transforms", metadata["transforms"], transformsSchema)
+	check(t, "sources")
+	check(t, "sinks")
+	check(t, "transforms")
 }
 
-func fieldNames(fields []ConfigField) []string {
-	out := make([]string, 0, len(fields))
-	for _, f := range fields {
-		out = append(out, f.Name)
+func TestConnectorSchemaMarksSensitiveDSNAndClickHouseDefault(t *testing.T) {
+	sinks := configSchema()["sinks"].(map[string][]ConfigField)
+	jdbcDSN, ok := configFieldByName(sinks["jdbc"], "dsn")
+	if !ok || !jdbcDSN.Secret {
+		t.Fatalf("jdbc dsn field = %#v, want secret=true", jdbcDSN)
 	}
+	asyncWait, ok := configFieldByName(sinks["clickhouse"], "async_insert_wait")
+	if !ok || asyncWait.Default != true {
+		t.Fatalf("clickhouse async_insert_wait field = %#v, want default=true", asyncWait)
+	}
+}
+
+func sortedStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := append([]string(nil), values...)
+	sort.Strings(out)
 	return out
 }
 

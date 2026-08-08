@@ -380,7 +380,7 @@ Residual/follow-up: 不自动领取 PR-1；下一次显式 continue 重新同步
 
 ### PR-1：Secret 管理、Storage 演进与可恢复升级
 
-状态：`active`
+状态：`delivered`
 
 目标：让一个小团队能够安全保存连接信息，并在没有人工改表或猜测回滚步骤的情况下完成升级、备份和恢复。
 
@@ -503,6 +503,88 @@ PR-1.3 证据（合入 agent/fullstack-dev/f856487d，并保留既有逻辑导�
 
 目标证据：[reliability-certification.md](./reliability-certification.md)、[etl-idempotency.md](./etl-idempotency.md)、connector certification suite 和各 production-candidate e2e。
 
+### PR-2.4：checkpoint 恢复 fail-closed（用户明确授权的有界后续）
+
+状态：`delivered`（2026-08-08 · PR-2.4.1/.2/.3）
+
+本项不改变已交付 PR-2 的主链路声明，也不把当前 blocked_external 的 MaxCompute P0 静默改为已完成；它只修复审计确认的恢复边界：checkpoint storage/envelope 读取失败时，linear 与 DAG 不得以空位点继续打开 source。
+
+当前领取记录：
+
+```text
+Round: 1/5
+Roadmap item: PR-2.4.1
+Profile/path: standalone linear + DAG checkpoint restore
+Objective: checkpoint store 读取错误、损坏/未知版本 envelope 和 DAG source checkpoint 读取错误均 fail-closed，pipeline 进入 failed 并保留可诊断错误。
+Scope: internal/etl/checkpoint envelope unwrap、internal/etl/pipeline Runner.Start、internal/etl/orchestrator DAG source startup、targeted fault-injection tests、reliability evidence。
+Non-goals: PR-2.4.2 的 Kafka/PostgreSQL external ack 顺序；PR-2.4.3 的 mysql_snapshot_cdc producer read-ahead/string cursor；connector schema/UI 和多表 preflight。
+Acceptance: 1) linear checkpoint Load error 返回启动错误且不打开 source；2) DAG checkpoint Load/error 或 source Open error 将 executor 置为 failed 并停止其他 source；3) 损坏 JSON、未知 envelope version、缺失 envelope source 明确失败；4) legacy source position 仍兼容；5) 单测覆盖 fault injection，更新可靠性文档和证据索引。
+Evidence: internal/etl/checkpoint/*_test.go、internal/etl/pipeline/*checkpoint*_test.go、internal/etl/orchestrator/*checkpoint*_test.go、docs/reliability-certification.md。
+Result: delivered
+Residual/follow-up: PR-2.4.2 external ack ordering 与 PR-2.4.3 snapshot cursor commit boundary 已分别在 Round 2/3 交付；后续只按新 claim 处理残余语义。
+```
+
+PR-2.4.1 本轮证据（Round 1/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| linear checkpoint store Load error fail-closed | `internal/etl/pipeline/runner_test.go` `TestRunnerFailsStartupWhenCheckpointLoadFails`；`go test ./internal/etl/pipeline -count=1` | passed | source-specific legacy position shape validation留给后续增量 |
+| linear corrupt/unknown envelope 不打开 source | `TestRunnerFailsStartupWhenCheckpointEnvelopeIsCorrupt`；`internal/etl/checkpoint/envelope_test.go` | passed | external source ack ordering未处理 |
+| DAG checkpoint validation/load/source Open failure 可见且停止 | `internal/etl/orchestrator/orchestrator_test.go` `TestDAGExecutorCheckpointRestoreFailsClosed`、`TestDAGExecutorSourceStartupFailureStopsPipeline` | passed | 多 source 运行时错误聚合与 health API 对账留给后续 |
+| legacy valid position 兼容 | `TestUnwrapForSourceKeepsLegacyPosition` | passed | legacy 语义校验仍由各 source codec负责 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator -count=1`；`go vet ./internal/etl/checkpoint ./internal/etl/pipeline ./internal/etl/orchestrator`；`git diff --check` | passed | 未执行外部 connector e2e（本增量不要求） |
+
+当前领取记录（Round 2）：
+
+```text
+Round: 2/5
+Roadmap item: PR-2.4.2
+Profile/path: standalone linear + DAG；Kafka source / PostgreSQL CDC source
+Objective: 将 source checkpoint 生成、durable checkpoint Save 与 Kafka/PG external ack 拆成明确顺序，消除 external ack 早于内部 checkpoint 的丢失窗口。
+Scope: core CheckpointAcker contract、linear Runner/DAGExecutor boundary、Kafka consumer offset lifecycle、PostgreSQL WAL status lifecycle、fault-injection tests、reliability/component evidence。
+Non-goals: PR-2.4.3 的 mysql_snapshot_cdc producer read-ahead/string cursor；connector schema/UI、多表 preflight、跨 sink exactly-once。
+Acceptance: 1) CheckpointForRecord 不产生 Kafka MarkOffset/Commit 或 PG committedLsn/standby ack 副作用；2) durable Save 成功后才调用 AckCheckpoint；3) external ack 失败阻断后续 checkpoint、pipeline failed/停止并允许安全 replay；4) Kafka auto-commit 关闭；5) PG 无 durable LSN 的 keepalive 不使用 server read-ahead end；6) linear/DAG/source 单测、race、vet 及文档证据通过。
+Evidence: internal/etl/core/core.go、internal/etl/pipeline/runner_test.go、internal/etl/orchestrator/orchestrator_test.go、internal/etl/source/kafka_test.go、internal/etl/source/postgres_cdc_test.go、docs/reliability-certification.md、source component docs。
+Result: delivered
+Residual/follow-up: PR-2.4.3 mysql_snapshot_cdc producer read-ahead/string cursor 与 snapshot commit boundary 已在 Round 3 交付；其余 path 仍按各自 roadmap item 管理。
+```
+
+PR-2.4.2 本轮验收矩阵（Round 2/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| linear/DAG durable Save -> external Ack 顺序 | `TestRunnerCheckpointBoundaryOrdersDurableSaveBeforeExternalAck`、`TestRunnerExternalAckFailureBlocksAndFailsAfterDurableSave`、`TestDAGCheckpointBoundaryOrdersDurableSaveBeforeExternalAck` | passed | 进程级 crash 注入仍属于后续 path e2e |
+| Kafka external offset 生命周期 | `TestKafkaCheckpointForRecordHasNoExternalSideEffects`、`TestKafkaBuildSaramaConfigDisablesAutoCommit`、`TestKafkaAckCheckpointRequiresActiveSession`；`CONTAINER_CLI=docker ./hack/e2e-kafka.sh` | passed | Sarama `Commit()` 不返回 broker error；异步 group error 仍按 source error 可见性处理 |
+| PostgreSQL WAL ack 生命周期 | `TestPGCheckpointForRecordDoesNotAdvanceExternalLSN`、`TestPGResumeLSNUsesDurableMarkerNotReadAhead`、`TestPGAckCheckpointUpdatesExternalLSNAfterSend`、`TestPGAckCheckpointSendFailureDoesNotAdvanceExternalLSN`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-postgres-cdc.sh` | passed | 无 |
+| keepalive 不误报 read-ahead 进度 | `TestPGKeepaliveWithoutDurableLSNDoesNotAckServerEnd` | passed | 无 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1`；`go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator`；`git diff --check` | passed | 无 |
+
+当前领取记录（Round 3）：
+
+```text
+Round: 3/5
+Roadmap item: PR-2.4.3
+Profile/path: standalone mysql_snapshot_cdc -> idempotent sink；snapshot phase + CDC handoff
+Objective: 消除 snapshot producer read-ahead 与 checkpoint cursor 不一致导致的跳过窗口，统一字符串游标的可恢复提交边界，并让 snapshot/CDC restart 从最后 durable cursor 安全重放。
+Scope: core batch-checkpointer contract、linear/DAG checkpoint boundary、internal/etl/source/mysql_snapshot_cdc.go、snapshot cursor/checkpoint tests、相关可靠性/component evidence；仅触及 snapshot source 的读取与提交边界。
+Non-goals: connector schema/UI、多表 preflight、全库异构主键新能力、跨 sink exactly-once、其他 source 的 cursor 重构。
+Acceptance: 1) producer 不得在 checkpoint durable 前推进可丢失的 source cursor；2) linear/DAG 以完整 source batch 生成 checkpoint，numeric/string cursor 与 snapshot phase 在 Save -> external/source boundary 后一致；3) crash/restart、checkpoint reset、空页/末页和 cursor 编码错误均 fail-closed 或安全重放；4) checkpoint 生成错误阻断后续推进并使 pipeline failed；5) targeted/race/vet 与可用 snapshot e2e 通过；6) 更新 source 文档、reliability evidence。
+Evidence: internal/etl/source/mysql_snapshot_cdc*_test.go、相关 hack/e2e-snapshot-cdc*.sh（含安全 phase 断言更新）、docs/reliability-certification.md、docs/components/source-mysql_snapshot_cdc.md。
+Result: delivered
+Residual/follow-up: DAG 过滤后无 sink 输出的 checkpoint 进度与多 sink 跨批次单调合并仍沿用既有 at-least-once 边界；若需改变语义，另列有界后续，不扩大本轮。
+```
+
+PR-2.4.3 本轮验收矩阵（Round 3/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| producer read-ahead 不污染 durable cursor | `TestSnapshotCheckpointDoesNotUseProducerReadAhead`、`TestSnapshotCheckpointPersistsStringCursorAfterDurableAck`、`TestSnapshotCheckpointCoversAllRecordsInMultiTableBatch` | passed | producer 仍可在内存 channel 窗口内 read-ahead；重连只使用 durable binlog position |
+| numeric/string cursor、legacy LastID 与 snapshot→CDC handoff | `TestSnapshotAckKeepsLegacyLastIDCompatibility`、`TestSnapshotCheckpointTransitionsToCDCFromRecordBoundary`、`TestSnapshotStartPositionReusesRestoredHandoff`、`TestSnapshotCursorStringKeepsLocalWallClock` | passed | binlog 与 sink 不是分布式事务 |
+| 缺失/非法 cursor、缺失 handoff、channel 结束 fail-closed | `TestSnapshotCheckpointRejectsInvalidNumericCursor`、`TestSnapshotCheckpointRejectsMissingCursorColumn`、`TestSnapshotCheckpointRejectsMissingHandoff`、`TestSnapshotCDCReaderClosedChannelsReturnEOF`；linear/DAG checkpoint-generation fault tests | passed | 无 |
+| CDC 重连、snapshot crash/restart、reset/DLQ 与异构 numeric/string path | `TestSnapshotCDCReconnectPositionUsesDurableCheckpoint`；`CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc.sh`；`CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc-crash.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-snapshot-cdc-clickhouse.sh`；`CONTAINER_CLI=docker ./hack/e2e-snapshot-cdc-heteropk.sh` | passed | 共享 MySQL/ClickHouse 容器已存在时 compose 输出环境 warning，但脚本退出码为 0 |
+| linear/DAG 完整 batch checkpoint 与生成错误 fail-closed | `TestRunnerCheckpointUsesCompleteBatchCheckpointer`、`TestRunnerCheckpointThrottleRetainsAllPendingBatches`、`TestRunnerCheckpointGenerationErrorFailsClosed`、`TestDAGCheckpointUsesCompleteSourceBatch`、`TestDAGCheckpointGenerationErrorFailsClosed` | passed | DAG reader 在 writer drain 后统一关闭；多 sink 语义残余见上 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator -count=1`；`go vet ./internal/etl/core ./internal/etl/source ./internal/etl/pipeline ./internal/etl/orchestrator`；`git diff --check` | passed | 未执行全量 connector certification；本轮只要求 snapshot 路径 |
+
 ### PR-D1：Distributed 安全与任务所有权
 
 状态：`delivered`（2026-07-25 · PR-D1.1/.2/.3）
@@ -549,7 +631,64 @@ Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard mu
 
 ### P3：成熟度事实源与认证覆盖扩展
 
-状态：`queued`
+状态：`active`（2026-08-08 · P3.1/P3.2 delivered；剩余 evidence freshness gate）
+
+当前领取记录：
+
+```text
+Round: 4/5
+Roadmap item: P3.1 descriptor/schema 单一事实源
+Profile/path: standalone connector discovery + certification gate
+Objective: schema 成为 required/default/secret/scope 的唯一事实源，且任一 production source/sink 自动进入注册、schema、文档与 e2e evidence 门禁。
+Scope: internal/etl/server/schema.go、connector_descriptor.go、server.go plugin metadata、connector/schema certification tests、ClickHouse 构造默认值、PostgreSQL 16 generated-column introspection 认证失败恢复、docs/connector-certification.md 与本 roadmap 证据。
+Non-goals: P3.2 多表 schema/preflight 契约；新增 connector、maturity 提升、专用 UI 流程、MaxCompute 外部认证。
+Dependencies: PR-2 delivered；P0 仍 blocked_external；本 goal 已显式授权在独立 worktree 推进审计发现的 connector 契约问题。
+Acceptance: 1) metadata required 不再手写，且与 schema required 完全一致；2) descriptor required/secret/field scope/default 与 schema 完全一致；3) production source/sink 集合与 certification target 完全一致，未知 production 项自动失败；4) JDBC DSN 标记 secret，ClickHouse async_insert_wait 的 runtime 默认与 schema=true 一致；5) targeted/package/race/vet 与 git diff --check 通过并更新认证文档。
+Evidence: internal/etl/server/schema_test.go、connector_certification_test.go、internal/etl/sink/clickhouse_test.go、docs/connector-certification.md、Go targeted/package/race/vet checks。
+Result: delivered
+Residual/follow-up: P3.2 多表 source preflight 必须显式返回 per-table/partial/blocking 契约，不得用单表 DDL preview 代表异构表集合。
+```
+
+P3.1 本轮验收矩阵（Round 4/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| metadata required 只由 schema 派生 | `pluginCapabilityMetadata` 不再携带 required；`pluginMetadataFromSchema`；`TestPluginMetadataRequiredFieldsAreDerivedFromSchema` | passed | 条件必填（如 table/query 二选一）继续由 validate/preflight 表达，不伪装成静态 required |
+| descriptor required/secret/scope/default 与 schema 一致 | `TestConnectorDescriptorConfigContractMatchesSchemaExactly`；JDBC `dsn` secret；ClickHouse `async_insert_wait` schema/runtime default=true | passed | 其他 connector 构造默认值的全量自动对账可另列后续，不扩大本轮 |
+| 任一 production source/sink 自动进入 certification target | `TestConnectorCertificationKitProductionSet` 对 production 集合做双向完全匹配；新增 HTTP、PostgreSQL/PostgreSQL alias、Doris target 与组件文档/e2e 引用 | passed | maturity 未提升；MaxCompute/ODPS 仍 experimental + blocked_external |
+| 新增 production target 的实际路径证据 | `CONTAINER_CLI=docker ./hack/e2e-http-source.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-mysql-postgres.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh` | passed | 复用既有 MySQL 容器时 compose 输出 name-in-use 环境 warning，但脚本最终退出 0 |
+| PostgreSQL 16 generated-column schema introspection | 首次 e2e 暴露 `attgenerated` binary char -> string 扫描失败；改为 DB 端 `is_generated` bool 后同一 e2e 正常写入、schema rejection 与 checkpoint reset/upsert replay 均通过 | passed | 无 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/server ./internal/etl/sink -count=1`；`go vet ./internal/etl/server ./internal/etl/sink`；`git diff --check` | passed | 无 |
+
+当前领取记录（Round 5）：
+
+```text
+Round: 5/5
+Roadmap item: P3.2 多表 source preflight 契约
+Profile/path: standalone mysql_cdc/mysql_snapshot_cdc -> schema-aware sink preflight
+Objective: 多表与 tables=["*"] source 不再以空 schema 静默跳过，也不以任一单表 schema/DDL preview 代表整个异构表集合。
+Scope: internal/etl/server/preflight.go、pipelines_preflight_test.go、schema.go 的已实现 snapshot 字段、MySQL information_schema 定向检查、source component/config docs 与本 roadmap 证据。
+Non-goals: 改造 runtime SchemaInfo/runner 为多表 schema 传播；改变现有多表读取/路由/写入语义；新增 connector、maturity 提升、专用 UI 或全库 schema registry。
+Acceptance: 1) 固定多表列表与 `*` 展开检查全部 base tables，缺表/无列/显式 snapshot 无可用单列主键 fail-closed；2) whole-database 无单列主键表以结构化 warning 声明 snapshot skip/CDC-only；3) 动态 per-record sink 返回 `schema-multi-table-partial` warning + field issue 且无单表 DDL preview；4) 固定单目标 sink 未显式过滤/映射/归一化时阻断，显式归一化时降为 partial warning；5) 单表 schema/preflight 行为保持不变；6) targeted/package/race/vet、相关多表 e2e 与 git diff --check 通过。
+Data semantics/rollback: 本切片只改变 preflight 诊断与阻断，不改变 checkpoint、DLQ、replay 或 sink write；回滚即移除多表契约检查，运行时数据路径不迁移。
+Evidence: internal/etl/server/pipelines_preflight_test.go；docs/components/source-mysql_cdc.md、source-mysql_snapshot_cdc.md、docs/etl-config-schema.md；hack/e2e-multi-table-map.sh、hack/e2e-mysql-cdc-wide.sh、hack/e2e-snapshot-cdc-heteropk.sh。
+Result: delivered
+Residual/follow-up: runtime 级 per-table schema propagation/target-specific DDL preview 若未来需要，必须另列有界 item；本轮不把 preflight 扩展成 schema registry。
+```
+
+P3.2 本轮验收矩阵（Round 5/5）：
+
+| Criterion | Evidence | Result | Residual |
+| --- | --- | --- | --- |
+| 固定多表与 `*` 检查全部表，不取第一表代表集合 | `TestReadMySQLMultiTableSchemasInspectsEveryHeterogeneousTable`、`...FailsWhenAnyConfiguredTableIsMissing`、`...ExpandsWildcardAndReportsCDCOnlyTable` | passed | runtime `SchemaInfo` 仍为单表 flat contract；本轮只治理 preflight |
+| snapshot 无可用单列 key 的显式/whole-DB 边界 | 显式复合/无 key：`TestReadMySQLMultiTableSchemasFailsExplicitSnapshotWithoutUsableKey`；whole-DB：真实 API 返回 `schema-multi-table-snapshot-skip` + `source.config.tables` field issue | passed | `skip_no_pk_tables=true` 仍是显式接受 CDC-only 历史边界 |
+| 动态 sink partial、固定 sink block、显式归一化 partial | 定向 tests：`TestMultiTableSchemaContractReturnsPartialWarningForDynamicSink`、`...BlocksUnnormalizedFixedSink`、`...AllowsExplicitNormalizationWithWarning`；真实 `/api/v2/specs/validate` 分别返回 `valid=true/false/true` | passed | post-transform schema 不自动推导，需逐表 dry-run/目标验证 |
+| 不生成误导性单表 DDL preview | 上述定向 tests 与四次真实 API 复验均断言 `ddl_preview` 缺失；missing-table error 绑定 `source.config.tables` | passed | target-specific per-table DDL preview 留给独立后续 |
+| 单表行为与多表运行时路径保持 | `TestMySQLSingleTableSourceKeepsFlatSchemaContract`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-multi-table-map.sh`、`.../e2e-mysql-cdc-wide.sh`、`.../e2e-snapshot-cdc-heteropk.sh` | passed | multi-table-map 首次因共享 E2E 库残留原名目标表失败；脚本补隔离清理后同一镜像通过 |
+| 当前镜像/拓扑与故障证据 | image `3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f`；MySQL `8.0.46`；ClickHouse `24.3.18.7`；2026-08-08 09:17 CST；真实 API 覆盖 dynamic/fixed/normalized/wildcard-no-PK | passed | compose 复用共享 MySQL/ClickHouse 时输出 name-in-use 环境 warning，脚本退出码为 0 |
+| package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/server ./internal/etl/source -count=1`；`go vet ./internal/etl/server ./internal/etl/source`；`sh -n` 三个相关 e2e；`git diff --check` | passed | 无 |
+
+Round 5/5 后续交接：P3.1/P3.2 已交付，但 P3 总项仍保持 `active`。下一有界增量建议为 `P3.3 evidence freshness gate`：把 certification evidence 的 commit/image、依赖版本、实际执行时间和过期策略做成机器可检查输入，并在缺失/过期时把 readiness 自动降为 `production_with_review` 或更低。该工作不在本 goal 的 descriptor/schema 与多表 preflight 授权范围内，且默认五轮上限已到，不自动领取。
 
 目标：减少手写 maturity 字符串与测试证据之间的漂移。
 

@@ -287,6 +287,7 @@ func (e *DAGExecutor) runDAG(ctx context.Context) {
 		for _, sink := range e.sinks {
 			sink.Close()
 		}
+		e.closeReaders()
 	}()
 
 	records := make(chan recordMsg, e.backpressure)
@@ -338,20 +339,16 @@ func (e *DAGExecutor) runDAG(ctx context.Context) {
 
 // readSource continuously reads from a source and sends records to the channel.
 func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID string, records chan<- recordMsg) {
-	cp := e.loadSourceCheckpoint(ctx, sourceID)
-	reader, err := src.Open(ctx, cp)
+	cp, err := e.loadSourceCheckpoint(ctx, sourceID)
 	if err != nil {
-		g.Log().Errorf(ctx, "open source %s: %v", sourceID, err)
-		e.alertMgr.Send(ctx, alert.Event{
-			Level:   alert.LevelError,
-			Title:   "Source open failed",
-			Message: err.Error(),
-			JobName: e.spec.Name,
-		})
+		e.failSourceStart(ctx, sourceID, fmt.Errorf("load checkpoint: %w", err))
 		return
 	}
-	defer reader.Close()
-
+	reader, err := src.Open(ctx, cp)
+	if err != nil {
+		e.failSourceStart(ctx, sourceID, fmt.Errorf("open source: %w", err))
+		return
+	}
 	// Wrap with sharded reader if DAG source node has sharding config.
 	// Skip sources that handle sharding natively (SQL-level, consumer-group, page-modulo).
 	if node := e.spec.DAG.GetNode(sourceID); node != nil {
@@ -367,11 +364,6 @@ func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID 
 	e.mu.Lock()
 	e.readers[sourceID] = reader
 	e.mu.Unlock()
-	defer func() {
-		e.mu.Lock()
-		delete(e.readers, sourceID)
-		e.mu.Unlock()
-	}()
 
 	consecutiveErrors := 0
 	var seq int64
@@ -411,6 +403,26 @@ func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID 
 	}
 }
 
+// closeReaders runs after the router has drained the records channel. A
+// source may reach EOF before the writer flushes its final sink batch; closing
+// and removing the reader in readSource would make that batch unable to build
+// or acknowledge its checkpoint. Keep the reader reachable until the whole
+// DAG execution has quiesced, then close all readers together.
+func (e *DAGExecutor) closeReaders() {
+	e.mu.Lock()
+	readers := make([]core.RecordReader, 0, len(e.readers))
+	for sourceID, reader := range e.readers {
+		readers = append(readers, reader)
+		delete(e.readers, sourceID)
+	}
+	e.mu.Unlock()
+	for _, reader := range readers {
+		if reader != nil {
+			_ = reader.Close()
+		}
+	}
+}
+
 // routeAndWrite processes records from sources, routes them through the DAG
 // edges (applying transforms and conditions), and writes to sinks.
 func (e *DAGExecutor) routeAndWrite(ctx context.Context, records <-chan recordMsg) {
@@ -420,7 +432,7 @@ func (e *DAGExecutor) routeAndWrite(ctx context.Context, records <-chan recordMs
 	}
 
 	batchBySink := map[string][]core.Record{}
-	lastRecBySource := map[string]core.Record{}
+	recordsBySinkSource := map[string]map[string][]core.Record{}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
@@ -433,11 +445,11 @@ func (e *DAGExecutor) routeAndWrite(ctx context.Context, records <-chan recordMs
 		flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		for sinkID, batch := range batchBySink {
 			if len(batch) > 0 {
-				e.writeToSink(flushCtx, sinkID, batch, lastRecBySource)
+				e.writeToSink(flushCtx, sinkID, batch, recordsBySinkSource[sinkID])
 				batchBySink[sinkID] = batch[:0]
+				delete(recordsBySinkSource, sinkID)
 			}
 		}
-		lastRecBySource = map[string]core.Record{}
 		cancel()
 	}
 
@@ -448,16 +460,27 @@ func (e *DAGExecutor) routeAndWrite(ctx context.Context, records <-chan recordMs
 				flushAll()
 				return
 			}
-			lastRecBySource[msg.sourceID] = msg.rec
-			if !e.route(ctx, msg.sourceID, msg.rec, batchBySink) {
+			sourceRecord := cloneRecord(msg.rec)
+			routed := map[string][]core.Record{}
+			if !e.route(ctx, msg.sourceID, msg.rec, routed) {
 				e.blockSourceCheckpoint(msg.sourceID, "record failure could not be persisted to DLQ")
+			}
+			for sinkID, sinkRecords := range routed {
+				if len(sinkRecords) == 0 {
+					continue
+				}
+				batchBySink[sinkID] = append(batchBySink[sinkID], sinkRecords...)
+				if recordsBySinkSource[sinkID] == nil {
+					recordsBySinkSource[sinkID] = map[string][]core.Record{}
+				}
+				recordsBySinkSource[sinkID][msg.sourceID] = append(recordsBySinkSource[sinkID][msg.sourceID], sourceRecord)
 			}
 
 			for sinkID, batch := range batchBySink {
 				if len(batch) >= e.batchSize {
-					e.writeToSink(ctx, sinkID, batch, lastRecBySource)
+					e.writeToSink(ctx, sinkID, batch, recordsBySinkSource[sinkID])
 					batchBySink[sinkID] = batch[:0]
-					lastRecBySource = map[string]core.Record{}
+					delete(recordsBySinkSource, sinkID)
 				}
 			}
 
@@ -518,7 +541,7 @@ func (e *DAGExecutor) routeAndWriteParallel(ctx context.Context, records <-chan 
 	}()
 
 	batchBySink := map[string][]core.Record{}
-	lastRecBySource := map[string]core.Record{}
+	recordsBySinkSource := map[string]map[string][]core.Record{}
 	pending := map[string]map[int64]routeResult{}
 	nextSeq := map[string]int64{}
 	ticker := time.NewTicker(time.Second)
@@ -529,21 +552,24 @@ func (e *DAGExecutor) routeAndWriteParallel(ctx context.Context, records <-chan 
 		if !result.checkpointSafe {
 			e.blockSourceCheckpoint(result.msg.sourceID, "record failure could not be persisted to DLQ")
 		}
-		lastRecBySource[result.msg.sourceID] = result.msg.rec
 		for sinkID, batch := range result.batchBySink {
 			if len(batch) == 0 {
 				continue
 			}
 			batchBySink[sinkID] = append(batchBySink[sinkID], batch...)
+			if recordsBySinkSource[sinkID] == nil {
+				recordsBySinkSource[sinkID] = map[string][]core.Record{}
+			}
+			recordsBySinkSource[sinkID][result.msg.sourceID] = append(recordsBySinkSource[sinkID][result.msg.sourceID], result.msg.rec)
 		}
 		if ctx.Err() != nil {
 			return
 		}
 		for sinkID, batch := range batchBySink {
 			if len(batch) >= e.batchSize {
-				e.writeToSink(ctx, sinkID, batch, lastRecBySource)
+				e.writeToSink(ctx, sinkID, batch, recordsBySinkSource[sinkID])
 				batchBySink[sinkID] = batch[:0]
-				lastRecBySource = map[string]core.Record{}
+				delete(recordsBySinkSource, sinkID)
 			}
 		}
 	}
@@ -569,11 +595,11 @@ func (e *DAGExecutor) routeAndWriteParallel(ctx context.Context, records <-chan 
 		flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		for sinkID, batch := range batchBySink {
 			if len(batch) > 0 {
-				e.writeToSink(flushCtx, sinkID, batch, lastRecBySource)
+				e.writeToSink(flushCtx, sinkID, batch, recordsBySinkSource[sinkID])
 				batchBySink[sinkID] = batch[:0]
+				delete(recordsBySinkSource, sinkID)
 			}
 		}
-		lastRecBySource = map[string]core.Record{}
 		cancel()
 	}
 
@@ -608,6 +634,8 @@ func (e *DAGExecutor) routeAndWriteParallel(ctx context.Context, records <-chan 
 
 func (e *DAGExecutor) routeRecordSafely(ctx context.Context, msg recordMsg) (result routeResult) {
 	result = routeResult{msg: msg, batchBySink: map[string][]core.Record{}, checkpointSafe: true}
+	sourceRecord := cloneRecord(msg.rec)
+	result.msg.rec = sourceRecord
 	defer func() {
 		if rec := recover(); rec != nil {
 			err := fmt.Errorf("DAG route panic: %v", rec)
@@ -677,8 +705,10 @@ func (e *DAGExecutor) route(ctx context.Context, nodeID string, rec core.Record,
 
 // writeToSink writes a batch of records to a sink with retry.
 // After a successful write, saves a checkpoint for each source that contributed
-// records to this batch.
-func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []core.Record, lastRecBySource map[string]core.Record) {
+// records to this batch. The per-source slices preserve the complete source
+// boundary represented by the sink batch; using only the last record can omit
+// another table's cursor when a snapshot spans multiple tables.
+func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []core.Record, recordsBySource map[string][]core.Record) {
 	if len(batch) == 0 {
 		return
 	}
@@ -715,7 +745,7 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 			}
 		}
 		if !dlqDurable {
-			for sourceID := range lastRecBySource {
+			for sourceID := range recordsBySource {
 				e.blockSourceCheckpoint(sourceID, "sink failure could not be persisted to DLQ")
 			}
 		}
@@ -741,21 +771,29 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 		}
 		sinkCommit, err := checkpoint.BuildSinkCommitMetadata(ctx, sink, batch, sinkID)
 		if err != nil {
-			for sourceID := range lastRecBySource {
+			for sourceID := range recordsBySource {
 				e.blockSourceCheckpoint(sourceID, "sink commit metadata collection failed: "+err.Error())
 			}
 			e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("sink commit metadata collection failed: %v", err))
 			return
 		}
-		for sourceID, lastRec := range lastRecBySource {
+		for sourceID, sourceRecords := range recordsBySource {
+			if len(sourceRecords) == 0 {
+				continue
+			}
 			if reason, blocked := e.sourceCheckpointBlocked(sourceID); blocked {
 				e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("checkpoint for source %s blocked until restart: %s", sourceID, reason))
 				continue
 			}
-			cp, err := e.checkpointForRecord(ctx, sourceID, lastRec)
+			reader := e.readerForSource(sourceID)
+			cp, err := checkpointForReaders(ctx, reader, sourceID, sourceRecords)
 			if err != nil {
-				g.Log().Warningf(ctx, "checkpoint source %s: %v", sourceID, err)
-				continue
+				reason := fmt.Sprintf("source checkpoint generation failed: %v", err)
+				e.blockSourceCheckpoint(sourceID, reason)
+				e.setStatus("failed")
+				e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("source %s: %s", sourceID, reason))
+				e.cancelExecution()
+				return
 			}
 			saveKey := e.spec.Name + "-" + sourceID
 			cp.JobName = saveKey
@@ -774,42 +812,119 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 				// breaker and alert so the failure is not silent. Mirror the
 				// linear Runner (pipeline.go:925-946).
 				g.Log().Errorf(ctx, "DAG pipeline %s: checkpoint save failed for source %s: %v (already-written records will replay on restart)", e.spec.Name, sourceID, saveErr)
+				e.blockSourceCheckpoint(sourceID, fmt.Sprintf("checkpoint save failed: %v", saveErr))
 				if breaker != nil {
 					breaker.RecordFailure(ctx, saveErr)
 				}
-				e.alertMgr.Send(ctx, alert.Event{
-					Level:   alert.LevelError,
-					Title:   "DAG checkpoint save failure",
-					Message: fmt.Sprintf("pipeline %s source %s: %v", e.spec.Name, sourceID, saveErr),
-					JobName: e.spec.Name,
-				})
+				if e.alertMgr != nil {
+					e.alertMgr.Send(ctx, alert.Event{
+						Level:   alert.LevelError,
+						Title:   "DAG checkpoint save failure",
+						Message: fmt.Sprintf("pipeline %s source %s: %v", e.spec.Name, sourceID, saveErr),
+						JobName: e.spec.Name,
+					})
+				}
+				e.setStatus("failed")
+				e.cancelExecution()
+				return
+			}
+			if err := acknowledgeExternalCheckpoint(ctx, reader, cp); err != nil {
+				reason := fmt.Sprintf("external checkpoint acknowledgement failed: %v", err)
+				e.blockSourceCheckpoint(sourceID, reason)
+				e.setStatus("failed")
+				e.handleCheckpointBoundaryError(ctx, sinkID, fmt.Sprintf("source %s: %s", sourceID, reason))
+				e.cancelExecution()
+				return
 			}
 		}
 	}
 }
 
-func (e *DAGExecutor) loadSourceCheckpoint(ctx context.Context, sourceID string) *core.Checkpoint {
+func (e *DAGExecutor) loadSourceCheckpoint(ctx context.Context, sourceID string) (*core.Checkpoint, error) {
 	if e.cpAdapter == nil {
-		return nil
+		return nil, nil
 	}
 	cp, err := e.cpAdapter.Load(ctx, e.spec.Name+"-"+sourceID)
 	if err != nil {
-		g.Log().Warningf(ctx, "load checkpoint source %s: %v", sourceID, err)
+		return nil, err
+	}
+	return checkpoint.UnwrapForSource(cp)
+}
+
+func acknowledgeExternalCheckpoint(ctx context.Context, reader core.RecordReader, cp core.Checkpoint) error {
+	acker, ok := reader.(core.CheckpointAcker)
+	if !ok {
 		return nil
 	}
-	return unwrapCheckpointForSource(cp)
+	raw, err := checkpoint.UnwrapForSource(&cp)
+	if err != nil {
+		return fmt.Errorf("unwrap persisted checkpoint: %w", err)
+	}
+	if raw == nil {
+		return fmt.Errorf("persisted checkpoint is nil")
+	}
+	return acker.AckCheckpoint(ctx, *raw)
+}
+
+func (e *DAGExecutor) cancelExecution() {
+	e.mu.RLock()
+	cancel := e.cancel
+	e.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// failSourceStart makes checkpoint/source startup failures terminal for the
+// whole DAG. Continuing other source nodes would create a partial pipeline that
+// looks healthy while one source range was never safely opened.
+func (e *DAGExecutor) failSourceStart(ctx context.Context, sourceID string, err error) {
+	e.setStatus("failed")
+	g.Log().Errorf(ctx, "source %s startup failed: %v", sourceID, err)
+	if e.alertMgr != nil {
+		e.alertMgr.Send(ctx, alert.Event{
+			Level:   alert.LevelError,
+			Title:   "DAG source startup failed",
+			Message: fmt.Sprintf("source %s: %v", sourceID, err),
+			JobName: e.spec.Name,
+		})
+	}
+	e.mu.RLock()
+	cancel := e.cancel
+	e.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // checkpointForRecord generates a checkpoint from the source's reader based on the last committed record.
 func (e *DAGExecutor) checkpointForRecord(ctx context.Context, sourceID string, rec core.Record) (core.Checkpoint, error) {
+	reader := e.readerForSource(sourceID)
+	return checkpointForReader(ctx, reader, sourceID, rec)
+}
+
+func (e *DAGExecutor) readerForSource(sourceID string) core.RecordReader {
 	e.mu.RLock()
-	reader := e.readers[sourceID]
-	e.mu.RUnlock()
+	defer e.mu.RUnlock()
+	return e.readers[sourceID]
+}
+
+func checkpointForReader(ctx context.Context, reader core.RecordReader, sourceID string, rec core.Record) (core.Checkpoint, error) {
+	return checkpointForReaders(ctx, reader, sourceID, []core.Record{rec})
+}
+
+func checkpointForReaders(ctx context.Context, reader core.RecordReader, sourceID string, records []core.Record) (core.Checkpoint, error) {
 	if reader == nil {
 		return core.Checkpoint{}, fmt.Errorf("no reader for source %s", sourceID)
 	}
+	if len(records) == 0 {
+		return core.Checkpoint{}, fmt.Errorf("cannot checkpoint an empty record batch for source %s", sourceID)
+	}
+	if checkpointer, ok := reader.(core.BatchRecordCheckpointer); ok {
+		return checkpointer.CheckpointForRecords(ctx, records)
+	}
 	if checkpointer, ok := reader.(core.RecordCheckpointer); ok {
-		return checkpointer.CheckpointForRecord(ctx, rec)
+		return checkpointer.CheckpointForRecord(ctx, records[len(records)-1])
 	}
 	return reader.Snapshot(ctx)
 }
@@ -890,19 +1005,6 @@ func (e *DAGExecutor) handleCheckpointBoundaryError(ctx context.Context, sinkID 
 			JobName: e.spec.Name,
 		})
 	}
-}
-
-func unwrapCheckpointForSource(cp *core.Checkpoint) *core.Checkpoint {
-	if cp == nil {
-		return nil
-	}
-	env, ok, err := checkpoint.ParseEnvelope(cp.Position)
-	if err != nil || !ok {
-		return cp
-	}
-	unwrapped := *cp
-	unwrapped.Position = append([]byte(nil), env.Source...)
-	return &unwrapped
 }
 
 // handleFailed routes a failed record to the DLQ. dagNodeID is the node where

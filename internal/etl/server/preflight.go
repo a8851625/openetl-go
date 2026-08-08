@@ -682,18 +682,33 @@ func hasDebeziumCDCTransform(spec *pipeline.Spec) bool {
 }
 
 // sinkDerivesTableFromMetadata reports whether the sink is expected to derive
-// its target table from per-record metadata (e.g. Debezium CDC or Doris's
-// table_template-fed Kafka envelope). A non-empty Doris table_template is an
-// explicit routing contract, so a static table is not required; auto_create
-// remains an independent choice for missing routed tables.
+// its target table from per-record metadata instead of sink.config.table.
+// Debezium flows keep the existing auto_create gate. Built-in multi-table
+// MySQL sources already attach table metadata, so relational/Doris sinks with
+// an empty fixed table (or an explicit Doris template/table_mapping) are valid
+// dynamic routes; target existence is checked separately when possible.
 func sinkDerivesTableFromMetadata(spec *pipeline.Spec) bool {
 	if spec == nil {
 		return false
 	}
+	if hasDebeziumCDCTransform(spec) && boolField(spec.Sink.Config, "auto_create", false) {
+		return true
+	}
 	if strings.EqualFold(strings.TrimSpace(spec.Sink.Type), "doris") && strings.TrimSpace(stringField(spec.Sink.Config, "table_template", "")) != "" {
 		return true
 	}
-	return hasDebeziumCDCTransform(spec) && boolField(spec.Sink.Config, "auto_create", false)
+	if !isMySQLMultiTableSource(spec) {
+		return false
+	}
+	if spec.TableMapping != nil {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(spec.Sink.Type)) {
+	case "mysql", "postgres", "postgresql", "doris":
+		return strings.TrimSpace(stringField(spec.Sink.Config, "table", "")) == ""
+	default:
+		return false
+	}
 }
 
 // sinkDerivesPKFromMetadata reports whether the sink is expected to derive
@@ -1341,19 +1356,32 @@ func (s *Server) checkMySQLCDC(ctx context.Context, spec *pipeline.Spec, result 
 	if database != "" {
 		tables := stringSliceField(cfg, "tables")
 		for _, table := range tables {
+			table = strings.TrimSpace(table)
+			if table == "" || table == "*" {
+				continue
+			}
+			schemaName, tableName := mysqlPreflightTableTarget(database, table)
 			var count int
 			err := db.QueryRowContext(ctx,
-				"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?", database, table,
+				"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?", schemaName, tableName,
 			).Scan(&count)
 			if err != nil {
 				continue // best-effort
 			}
 			if count == 0 {
+				message := fmt.Sprintf("source table %s.%s not found in MySQL", schemaName, tableName)
 				result.Issues = append(result.Issues, PreflightIssue{
 					Level:       "warning",
 					Check:       "source-table-exists",
-					Message:     fmt.Sprintf("source table %s.%s not found in MySQL", database, table),
-					Remediation: fmt.Sprintf("create the table %s.%s in MySQL, or remove it from source.config.tables", database, table),
+					Message:     message,
+					Remediation: fmt.Sprintf("create the table %s.%s in MySQL, or remove it from source.config.tables", schemaName, tableName),
+				})
+				result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+					Level:       "warning",
+					Field:       "source.config.tables",
+					Check:       "source-table-exists",
+					Message:     message,
+					Remediation: "remove the missing table or create it before starting the CDC source",
 				})
 			}
 		}
@@ -2552,7 +2580,396 @@ func isMaxComputeSinkType(t string) bool {
 
 // ── Source/Sink schema compatibility ────────────────────────────────
 
+type mysqlPreflightColumn struct {
+	core.ColumnInfo
+	Primary bool
+}
+
+type mysqlPreflightTableSchema struct {
+	Database string
+	Table    string
+	Columns  []mysqlPreflightColumn
+}
+
+func (s mysqlPreflightTableSchema) qualifiedName() string {
+	if s.Database == "" {
+		return s.Table
+	}
+	return s.Database + "." + s.Table
+}
+
+type mysqlMultiTableSchemaReport struct {
+	Tables                []mysqlPreflightTableSchema
+	Heterogeneous         bool
+	Wildcard              bool
+	SnapshotSkippedTables []string
+}
+
+var describeMySQLMultiTableSchemasForPreflight = describeMySQLMultiTableSchemas
+
+func (s *Server) checkMySQLMultiTableSchemaCompatibility(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) bool {
+	if !isMySQLMultiTableSource(spec) {
+		return false
+	}
+
+	report, err := describeMySQLMultiTableSchemasForPreflight(ctx, spec)
+	if err != nil {
+		message := fmt.Sprintf("source %q multi-table schema description failed: %v", spec.Source.Type, err)
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "schema-multi-table-describe",
+			Message:     message,
+			Remediation: "verify every configured source table exists, schema metadata is readable, and snapshot tables have a usable single-column key or an explicit skip policy",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       "source.config.tables",
+			Check:       "schema-multi-table-describe",
+			Message:     message,
+			Remediation: "fix source.config.tables/pk_column/pk_columns, or grant information_schema access before starting",
+		})
+		result.Passed = false
+		result.DDLPreview = nil
+		return true
+	}
+
+	tableNames := make([]string, 0, len(report.Tables))
+	for _, table := range report.Tables {
+		tableNames = append(tableNames, table.qualifiedName())
+	}
+	summary := summarizePreflightTables(tableNames)
+	heterogeneous := "homogeneous"
+	if report.Heterogeneous {
+		heterogeneous = "heterogeneous"
+	}
+
+	if len(report.SnapshotSkippedTables) > 0 {
+		message := fmt.Sprintf("snapshot preflight will skip %d table(s) without a usable single-column key (%s); those tables remain CDC-only", len(report.SnapshotSkippedTables), summarizePreflightTables(report.SnapshotSkippedTables))
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "schema-multi-table-snapshot-skip",
+			Message:     message,
+			Remediation: "add per-table pk_columns to include historical rows, or keep the documented CDC-only boundary for these tables",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "warning",
+			Field:       "source.config.tables",
+			Check:       "schema-multi-table-snapshot-skip",
+			Message:     message,
+			Remediation: "set source.config.pk_columns for skipped tables when their snapshot history is required",
+		})
+	}
+
+	if field, fixed := fixedMultiTableSinkTarget(spec); fixed && !hasExplicitMultiTableNormalization(spec) {
+		message := fmt.Sprintf("source %q resolves %d %s tables (%s), but sink %q uses one fixed target; preflight cannot prove that heterogeneous records are safe for that table", spec.Source.Type, len(report.Tables), heterogeneous, summary, spec.Sink.Type)
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "error",
+			Check:       "schema-multi-table-fixed-target",
+			Message:     message,
+			Remediation: "route records to per-table targets, split the pipeline, or add explicit filtering/table_mapping/schema-normalizing transforms before using one fixed target",
+		})
+		result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+			Level:       "error",
+			Field:       field,
+			Check:       "schema-multi-table-fixed-target",
+			Message:     message,
+			Remediation: "remove the fixed target for per-record routing, or explicitly normalize the selected source tables into the target contract",
+		})
+		result.Passed = false
+		result.DDLPreview = nil
+		return true
+	}
+
+	check := "schema-multi-table-partial"
+	message := fmt.Sprintf("preflight inspected %d %s source tables (%s); flat single-table schema validation and DDL preview are intentionally skipped", len(report.Tables), heterogeneous, summary)
+	remediation := "validate or pre-create every routed target table and run a representative transform dry-run for each distinct source schema"
+	if _, fixed := fixedMultiTableSinkTarget(spec); fixed {
+		check = "schema-multi-table-normalized-partial"
+		message = fmt.Sprintf("preflight inspected %d %s source tables (%s); explicit mapping/transforms allow the fixed target path, but preflight cannot derive the post-transform schema for one safe DDL preview", len(report.Tables), heterogeneous, summary)
+		remediation = "dry-run each selected source-table shape through the transforms and verify the fixed target schema before starting"
+	}
+	result.Issues = append(result.Issues, PreflightIssue{
+		Level:       "warning",
+		Check:       check,
+		Message:     message,
+		Remediation: remediation,
+	})
+	result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+		Level:       "warning",
+		Field:       "source.config.tables",
+		Check:       check,
+		Message:     message,
+		Remediation: remediation,
+	})
+	result.DDLPreview = nil
+	return true
+}
+
+func isMySQLMultiTableSource(spec *pipeline.Spec) bool {
+	if spec == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(spec.Source.Type)) {
+	case "mysql_cdc", "mysql_snapshot_cdc":
+	default:
+		return false
+	}
+	tables, wildcard := configuredMySQLSourceTables(spec)
+	return wildcard || len(tables) > 1
+}
+
+func configuredMySQLSourceTables(spec *pipeline.Spec) ([]string, bool) {
+	if spec == nil {
+		return nil, false
+	}
+	raw := stringSliceField(spec.Source.Config, "tables")
+	if len(raw) == 0 {
+		if table := strings.TrimSpace(stringField(spec.Source.Config, "table", "")); table != "" {
+			raw = []string{table}
+		}
+	}
+	seen := map[string]bool{}
+	var tables []string
+	wildcard := false
+	for _, table := range raw {
+		table = strings.TrimSpace(table)
+		if table == "" {
+			continue
+		}
+		if table == "*" {
+			wildcard = true
+			continue
+		}
+		key := strings.ToLower(table)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		tables = append(tables, table)
+	}
+	return tables, wildcard
+}
+
+func describeMySQLMultiTableSchemas(ctx context.Context, spec *pipeline.Spec) (mysqlMultiTableSchemaReport, error) {
+	cfg := spec.Source.Config
+	host := strings.TrimSpace(stringField(cfg, "host", ""))
+	port := intField(cfg, "port", 3306)
+	user := strings.TrimSpace(stringField(cfg, "user", ""))
+	password := stringField(cfg, "password", "")
+	database := strings.TrimSpace(stringField(cfg, "database", ""))
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4&loc=Local&timeout=5s&readTimeout=5s", user, password, host, port, database)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return mysqlMultiTableSchemaReport{}, fmt.Errorf("configure MySQL schema connection: %w", err)
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		return mysqlMultiTableSchemaReport{}, fmt.Errorf("ping MySQL for multi-table schema: %w", err)
+	}
+	return readMySQLMultiTableSchemas(ctx, db, spec)
+}
+
+func readMySQLMultiTableSchemas(ctx context.Context, db *sql.DB, spec *pipeline.Spec) (mysqlMultiTableSchemaReport, error) {
+	tables, wildcard := configuredMySQLSourceTables(spec)
+	database := strings.TrimSpace(stringField(spec.Source.Config, "database", ""))
+	if wildcard {
+		rows, err := db.QueryContext(ctx, `SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name`, database)
+		if err != nil {
+			return mysqlMultiTableSchemaReport{}, fmt.Errorf("list base tables for %s: %w", database, err)
+		}
+		seen := map[string]bool{}
+		for _, table := range tables {
+			seen[strings.ToLower(table)] = true
+		}
+		for rows.Next() {
+			var table string
+			if err := rows.Scan(&table); err != nil {
+				rows.Close()
+				return mysqlMultiTableSchemaReport{}, fmt.Errorf("scan base table name: %w", err)
+			}
+			if key := strings.ToLower(table); !seen[key] {
+				seen[key] = true
+				tables = append(tables, table)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return mysqlMultiTableSchemaReport{}, fmt.Errorf("iterate base tables for %s: %w", database, err)
+		}
+		rows.Close()
+	}
+	if len(tables) == 0 {
+		return mysqlMultiTableSchemaReport{}, fmt.Errorf("no base tables resolved from source.config.tables")
+	}
+
+	report := mysqlMultiTableSchemaReport{Wildcard: wildcard}
+	for _, configured := range tables {
+		schemaName, tableName := mysqlPreflightTableTarget(database, configured)
+		rows, err := db.QueryContext(ctx, `
+			SELECT column_name, column_type, is_nullable, column_key
+			FROM information_schema.columns
+			WHERE table_schema = ? AND table_name = ?
+			ORDER BY ordinal_position`, schemaName, tableName)
+		if err != nil {
+			return mysqlMultiTableSchemaReport{}, fmt.Errorf("describe source table %s.%s: %w", schemaName, tableName, err)
+		}
+		tableSchema := mysqlPreflightTableSchema{Database: schemaName, Table: tableName}
+		for rows.Next() {
+			var name, dataType, nullable, columnKey string
+			if err := rows.Scan(&name, &dataType, &nullable, &columnKey); err != nil {
+				rows.Close()
+				return mysqlMultiTableSchemaReport{}, fmt.Errorf("scan schema for %s.%s: %w", schemaName, tableName, err)
+			}
+			tableSchema.Columns = append(tableSchema.Columns, mysqlPreflightColumn{
+				ColumnInfo: core.ColumnInfo{Name: name, DataType: dataType, Nullable: strings.EqualFold(nullable, "YES")},
+				Primary:    strings.EqualFold(columnKey, "PRI"),
+			})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return mysqlMultiTableSchemaReport{}, fmt.Errorf("iterate schema for %s.%s: %w", schemaName, tableName, err)
+		}
+		rows.Close()
+		if len(tableSchema.Columns) == 0 {
+			return mysqlMultiTableSchemaReport{}, fmt.Errorf("source table %s.%s was not found or has no readable columns", schemaName, tableName)
+		}
+		report.Tables = append(report.Tables, tableSchema)
+	}
+	sort.Slice(report.Tables, func(i, j int) bool { return report.Tables[i].qualifiedName() < report.Tables[j].qualifiedName() })
+	report.Heterogeneous = mysqlTableSchemasAreHeterogeneous(report.Tables)
+
+	if strings.EqualFold(spec.Source.Type, "mysql_snapshot_cdc") {
+		for _, table := range report.Tables {
+			hasKey, err := mysqlSnapshotTableHasUsableKey(spec.Source.Config, table)
+			if err != nil {
+				return mysqlMultiTableSchemaReport{}, fmt.Errorf("snapshot table %s: %w", table.qualifiedName(), err)
+			}
+			if hasKey {
+				continue
+			}
+			if wildcard || boolField(spec.Source.Config, "skip_no_pk_tables", false) {
+				report.SnapshotSkippedTables = append(report.SnapshotSkippedTables, table.qualifiedName())
+				continue
+			}
+			return mysqlMultiTableSchemaReport{}, fmt.Errorf("snapshot table %s has no usable single-column key; set source.config.pk_columns or skip_no_pk_tables=true", table.qualifiedName())
+		}
+	}
+	return report, nil
+}
+
+func mysqlPreflightTableTarget(database, table string) (string, string) {
+	if idx := strings.LastIndex(table, "."); idx > 0 && idx < len(table)-1 {
+		return table[:idx], table[idx+1:]
+	}
+	return database, table
+}
+
+func mysqlSnapshotTableHasUsableKey(cfg map[string]any, table mysqlPreflightTableSchema) (bool, error) {
+	overrides := stringMapField(cfg, "pk_columns")
+	for key, rawColumn := range overrides {
+		if strings.EqualFold(key, table.Table) || strings.EqualFold(key, table.qualifiedName()) {
+			column := strings.TrimSpace(rawColumn)
+			if column == "" {
+				return false, fmt.Errorf("pk_columns override is empty")
+			}
+			if !mysqlPreflightTableHasColumn(table, column) {
+				return false, fmt.Errorf("pk_columns override %q was not found", column)
+			}
+			return true, nil
+		}
+	}
+	if column := strings.TrimSpace(stringField(cfg, "pk_column", "id")); column != "" && mysqlPreflightTableHasColumn(table, column) {
+		return true, nil
+	}
+	primaryCount := 0
+	for _, column := range table.Columns {
+		if column.Primary {
+			primaryCount++
+		}
+	}
+	return primaryCount == 1, nil
+}
+
+func mysqlPreflightTableHasColumn(table mysqlPreflightTableSchema, name string) bool {
+	for _, column := range table.Columns {
+		if strings.EqualFold(column.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func mysqlTableSchemasAreHeterogeneous(tables []mysqlPreflightTableSchema) bool {
+	if len(tables) < 2 {
+		return false
+	}
+	want := mysqlTableSchemaSignature(tables[0])
+	for _, table := range tables[1:] {
+		if mysqlTableSchemaSignature(table) != want {
+			return true
+		}
+	}
+	return false
+}
+
+func mysqlTableSchemaSignature(table mysqlPreflightTableSchema) string {
+	parts := make([]string, 0, len(table.Columns))
+	for _, column := range table.Columns {
+		parts = append(parts, strings.ToLower(column.Name)+":"+strings.ToLower(column.DataType)+":"+fmt.Sprint(column.Nullable))
+	}
+	return strings.Join(parts, "|")
+}
+
+func fixedMultiTableSinkTarget(spec *pipeline.Spec) (string, bool) {
+	if spec == nil {
+		return "", false
+	}
+	cfg := spec.Sink.Config
+	switch strings.ToLower(strings.TrimSpace(spec.Sink.Type)) {
+	case "clickhouse", "maxcompute", "odps", "jdbc":
+		if strings.TrimSpace(stringField(cfg, "table", "")) != "" {
+			return "sink.config.table", true
+		}
+	case "doris":
+		if strings.TrimSpace(stringField(cfg, "table_template", "")) == "" && strings.TrimSpace(stringField(cfg, "table", "")) != "" {
+			return "sink.config.table", true
+		}
+	case "elasticsearch", "es":
+		if strings.TrimSpace(stringField(cfg, "index", "")) != "" {
+			return "sink.config.index", true
+		}
+	}
+	return "", false
+}
+
+func hasExplicitMultiTableNormalization(spec *pipeline.Spec) bool {
+	if spec == nil {
+		return false
+	}
+	if spec.TableMapping != nil {
+		return true
+	}
+	for _, transform := range spec.Transforms {
+		switch strings.ToLower(strings.TrimSpace(transform.Type)) {
+		case "filter", "cdc_policy", "project", "select_fields", "flat_map", "udtf", "lua", "javascript", "js", "ts":
+			return true
+		}
+	}
+	return false
+}
+
+func summarizePreflightTables(tables []string) string {
+	const limit = 6
+	if len(tables) <= limit {
+		return strings.Join(tables, ", ")
+	}
+	return strings.Join(tables[:limit], ", ") + fmt.Sprintf(", ... +%d", len(tables)-limit)
+}
+
 func (s *Server) checkSchemaCompatibility(ctx context.Context, spec *pipeline.Spec, sink core.Sink, result *PreflightResult) {
+	if s.checkMySQLMultiTableSchemaCompatibility(ctx, spec, result) {
+		return
+	}
 	validator, ok := sink.(core.SchemaValidator)
 	if !ok {
 		if schemaPreflightMatters(spec.Sink.Type) {

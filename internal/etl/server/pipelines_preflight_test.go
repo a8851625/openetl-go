@@ -658,6 +658,284 @@ func TestRunPreflightBlocksInvalidMySQLSnapshotCDCSourceConfig(t *testing.T) {
 	}
 }
 
+func TestMultiTableSchemaContractReturnsPartialWarningForDynamicSink(t *testing.T) {
+	previous := describeMySQLMultiTableSchemasForPreflight
+	describeMySQLMultiTableSchemasForPreflight = func(context.Context, *pipeline.Spec) (mysqlMultiTableSchemaReport, error) {
+		return heterogeneousMySQLSchemaReport(), nil
+	}
+	t.Cleanup(func() { describeMySQLMultiTableSchemasForPreflight = previous })
+
+	spec := multiTablePreflightSpec("mysql", map[string]any{"database": "target"})
+	result := &PreflightResult{Passed: true, DDLPreview: &PreflightDDLPreview{Table: "misleading"}}
+	(&Server{}).checkSchemaCompatibility(context.Background(), spec, &schemaPreflightSink{}, result)
+
+	if !result.Passed {
+		t.Fatalf("Passed = false, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "schema-multi-table-partial") {
+		t.Fatalf("issues = %#v, want schema-multi-table-partial", result.Issues)
+	}
+	if !preflightFieldIssueContain(result, "source.config.tables", "schema-multi-table-partial") {
+		t.Fatalf("field issues = %#v, want source.config.tables partial warning", result.FieldIssues)
+	}
+	if result.DDLPreview != nil {
+		t.Fatalf("DDLPreview = %#v, want nil for multi-table schema", result.DDLPreview)
+	}
+}
+
+func TestMultiTableSchemaContractBlocksUnnormalizedFixedSink(t *testing.T) {
+	previous := describeMySQLMultiTableSchemasForPreflight
+	describeMySQLMultiTableSchemasForPreflight = func(context.Context, *pipeline.Spec) (mysqlMultiTableSchemaReport, error) {
+		return heterogeneousMySQLSchemaReport(), nil
+	}
+	t.Cleanup(func() { describeMySQLMultiTableSchemasForPreflight = previous })
+
+	spec := multiTablePreflightSpec("clickhouse", map[string]any{"database": "warehouse", "table": "wide_orders"})
+	result := &PreflightResult{Passed: true}
+	(&Server{}).checkSchemaCompatibility(context.Background(), spec, &schemaPreflightSink{}, result)
+
+	if result.Passed {
+		t.Fatalf("Passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "schema-multi-table-fixed-target") {
+		t.Fatalf("issues = %#v, want schema-multi-table-fixed-target", result.Issues)
+	}
+	if !preflightFieldIssueContain(result, "sink.config.table", "schema-multi-table-fixed-target") {
+		t.Fatalf("field issues = %#v, want sink.config.table fixed-target error", result.FieldIssues)
+	}
+	if result.DDLPreview != nil {
+		t.Fatalf("DDLPreview = %#v, want nil", result.DDLPreview)
+	}
+}
+
+func TestMultiTableSchemaContractAllowsExplicitNormalizationWithWarning(t *testing.T) {
+	previous := describeMySQLMultiTableSchemasForPreflight
+	describeMySQLMultiTableSchemasForPreflight = func(context.Context, *pipeline.Spec) (mysqlMultiTableSchemaReport, error) {
+		return heterogeneousMySQLSchemaReport(), nil
+	}
+	t.Cleanup(func() { describeMySQLMultiTableSchemasForPreflight = previous })
+
+	spec := multiTablePreflightSpec("clickhouse", map[string]any{"database": "warehouse", "table": "wide_orders"})
+	spec.TableMapping = &pipeline.TableMapping{Rules: map[string]string{"orders": "wide_orders"}}
+	spec.Transforms = []pipeline.TransformSpec{{Type: "cdc_policy", Config: map[string]any{"include_tables": []string{"orders"}}}}
+	result := &PreflightResult{Passed: true}
+	(&Server{}).checkSchemaCompatibility(context.Background(), spec, &schemaPreflightSink{}, result)
+
+	if !result.Passed {
+		t.Fatalf("Passed = false, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "schema-multi-table-normalized-partial") {
+		t.Fatalf("issues = %#v, want schema-multi-table-normalized-partial", result.Issues)
+	}
+	if result.DDLPreview != nil {
+		t.Fatalf("DDLPreview = %#v, want nil", result.DDLPreview)
+	}
+}
+
+func TestMultiTableSchemaContractReturnsStructuredDescribeError(t *testing.T) {
+	previous := describeMySQLMultiTableSchemasForPreflight
+	describeMySQLMultiTableSchemasForPreflight = func(context.Context, *pipeline.Spec) (mysqlMultiTableSchemaReport, error) {
+		return mysqlMultiTableSchemaReport{}, errors.New("table app.missing was not found")
+	}
+	t.Cleanup(func() { describeMySQLMultiTableSchemasForPreflight = previous })
+
+	spec := multiTablePreflightSpec("mysql", map[string]any{"database": "target"})
+	result := &PreflightResult{Passed: true}
+	(&Server{}).checkSchemaCompatibility(context.Background(), spec, &schemaPreflightSink{}, result)
+
+	if result.Passed {
+		t.Fatalf("Passed = true, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "schema-multi-table-describe") || !preflightFieldIssueContain(result, "source.config.tables", "schema-multi-table-describe") {
+		t.Fatalf("issues=%#v field_issues=%#v, want structured schema-multi-table-describe", result.Issues, result.FieldIssues)
+	}
+}
+
+func TestMultiTableSchemaContractReportsSnapshotSkippedTables(t *testing.T) {
+	previous := describeMySQLMultiTableSchemasForPreflight
+	describeMySQLMultiTableSchemasForPreflight = func(context.Context, *pipeline.Spec) (mysqlMultiTableSchemaReport, error) {
+		report := heterogeneousMySQLSchemaReport()
+		report.Wildcard = true
+		report.SnapshotSkippedTables = []string{"app.audit_log"}
+		return report, nil
+	}
+	t.Cleanup(func() { describeMySQLMultiTableSchemasForPreflight = previous })
+
+	spec := multiTablePreflightSpec("mysql", map[string]any{"database": "target"})
+	spec.Source.Type = "mysql_snapshot_cdc"
+	spec.Source.Config["tables"] = []string{"*"}
+	result := &PreflightResult{Passed: true}
+	(&Server{}).checkSchemaCompatibility(context.Background(), spec, &schemaPreflightSink{}, result)
+
+	if !result.Passed {
+		t.Fatalf("Passed = false, issues = %#v", result.Issues)
+	}
+	if !preflightIssuesContain(result, "schema-multi-table-snapshot-skip") || !preflightFieldIssueContain(result, "source.config.tables", "schema-multi-table-snapshot-skip") {
+		t.Fatalf("issues=%#v field_issues=%#v, want snapshot skip warning", result.Issues, result.FieldIssues)
+	}
+}
+
+func TestReadMySQLMultiTableSchemasInspectsEveryHeterogeneousTable(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT column_name, column_type, is_nullable, column_key`).
+		WithArgs("app", "customers").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_key"}).
+			AddRow("id", "bigint", "NO", "PRI").
+			AddRow("name", "varchar(100)", "NO", ""))
+	mock.ExpectQuery(`SELECT column_name, column_type, is_nullable, column_key`).
+		WithArgs("app", "orders").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_key"}).
+			AddRow("id", "bigint", "NO", "PRI").
+			AddRow("amount", "decimal(18,2)", "YES", ""))
+
+	spec := multiTablePreflightSpec("mysql", nil)
+	report, err := readMySQLMultiTableSchemas(context.Background(), db, spec)
+	if err != nil {
+		t.Fatalf("readMySQLMultiTableSchemas: %v", err)
+	}
+	if len(report.Tables) != 2 || !report.Heterogeneous {
+		t.Fatalf("report = %#v, want two heterogeneous tables", report)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestReadMySQLMultiTableSchemasFailsWhenAnyConfiguredTableIsMissing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT column_name, column_type, is_nullable, column_key`).
+		WithArgs("app", "customers").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_key"}).AddRow("id", "bigint", "NO", "PRI"))
+	mock.ExpectQuery(`SELECT column_name, column_type, is_nullable, column_key`).
+		WithArgs("app", "missing").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_key"}))
+
+	spec := multiTablePreflightSpec("mysql", nil)
+	spec.Source.Config["tables"] = []string{"customers", "missing"}
+	_, err = readMySQLMultiTableSchemas(context.Background(), db, spec)
+	if err == nil || !strings.Contains(err.Error(), "app.missing") {
+		t.Fatalf("error = %v, want missing table error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestReadMySQLMultiTableSchemasFailsExplicitSnapshotWithoutUsableKey(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT column_name, column_type, is_nullable, column_key`).
+		WithArgs("app", "orders").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_key"}).AddRow("id", "bigint", "NO", "PRI"))
+	mock.ExpectQuery(`SELECT column_name, column_type, is_nullable, column_key`).
+		WithArgs("app", "ledger").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_key"}).
+			AddRow("tenant_id", "bigint", "NO", "PRI").
+			AddRow("entry_id", "bigint", "NO", "PRI"))
+
+	spec := multiTablePreflightSpec("mysql", nil)
+	spec.Source.Type = "mysql_snapshot_cdc"
+	spec.Source.Config["tables"] = []string{"orders", "ledger"}
+	_, err = readMySQLMultiTableSchemas(context.Background(), db, spec)
+	if err == nil || !strings.Contains(err.Error(), "app.ledger") || !strings.Contains(err.Error(), "no usable single-column key") {
+		t.Fatalf("error = %v, want explicit no-key failure", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestReadMySQLMultiTableSchemasExpandsWildcardAndReportsCDCOnlyTable(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT table_name FROM information_schema.tables`).
+		WithArgs("app").
+		WillReturnRows(sqlmock.NewRows([]string{"table_name"}).AddRow("audit_log").AddRow("orders"))
+	mock.ExpectQuery(`SELECT column_name, column_type, is_nullable, column_key`).
+		WithArgs("app", "audit_log").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_key"}).AddRow("message", "text", "NO", ""))
+	mock.ExpectQuery(`SELECT column_name, column_type, is_nullable, column_key`).
+		WithArgs("app", "orders").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_key"}).AddRow("id", "bigint", "NO", "PRI"))
+
+	spec := multiTablePreflightSpec("mysql", nil)
+	spec.Source.Type = "mysql_snapshot_cdc"
+	spec.Source.Config["tables"] = []string{"*"}
+	report, err := readMySQLMultiTableSchemas(context.Background(), db, spec)
+	if err != nil {
+		t.Fatalf("readMySQLMultiTableSchemas: %v", err)
+	}
+	if !report.Wildcard || len(report.Tables) != 2 || len(report.SnapshotSkippedTables) != 1 || report.SnapshotSkippedTables[0] != "app.audit_log" {
+		t.Fatalf("report = %#v, want wildcard with audit_log CDC-only", report)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestMySQLSingleTableSourceKeepsFlatSchemaContract(t *testing.T) {
+	spec := multiTablePreflightSpec("mysql", nil)
+	spec.Source.Config["tables"] = []string{"orders"}
+	if isMySQLMultiTableSource(spec) {
+		t.Fatal("single-table mysql_cdc source classified as multi-table")
+	}
+}
+
+func TestMultiTableMySQLSourceAllowsDynamicRelationalSinkTable(t *testing.T) {
+	for _, sinkType := range []string{"mysql", "postgres", "postgresql", "doris"} {
+		spec := multiTablePreflightSpec(sinkType, map[string]any{"database": "target"})
+		if !sinkDerivesTableFromMetadata(spec) {
+			t.Errorf("sink %s was not recognized as dynamic per-record table routing", sinkType)
+		}
+	}
+
+	spec := multiTablePreflightSpec("doris", map[string]any{"database": "target", "table_template": "ods_{table}"})
+	if !sinkDerivesTableFromMetadata(spec) {
+		t.Fatal("Doris table_template was not recognized as dynamic routing")
+	}
+}
+
+func multiTablePreflightSpec(sinkType string, sinkConfig map[string]any) *pipeline.Spec {
+	if sinkConfig == nil {
+		sinkConfig = map[string]any{}
+	}
+	return &pipeline.Spec{
+		Name: "multi-table-schema-contract",
+		Source: pipeline.SourceSpec{Type: "mysql_cdc", Config: map[string]any{
+			"host": "mysql", "user": "sync", "database": "app", "tables": []string{"customers", "orders"},
+		}},
+		Sink: pipeline.SinkSpec{Type: sinkType, Config: sinkConfig},
+	}
+}
+
+func heterogeneousMySQLSchemaReport() mysqlMultiTableSchemaReport {
+	return mysqlMultiTableSchemaReport{
+		Heterogeneous: true,
+		Tables: []mysqlPreflightTableSchema{
+			{Database: "app", Table: "customers", Columns: []mysqlPreflightColumn{{ColumnInfo: core.ColumnInfo{Name: "id", DataType: "bigint"}, Primary: true}, {ColumnInfo: core.ColumnInfo{Name: "name", DataType: "varchar(100)"}}}},
+			{Database: "app", Table: "orders", Columns: []mysqlPreflightColumn{{ColumnInfo: core.ColumnInfo{Name: "id", DataType: "bigint"}, Primary: true}, {ColumnInfo: core.ColumnInfo{Name: "amount", DataType: "decimal(18,2)"}}}},
+		},
+	}
+}
+
 func TestRunPreflightBlocksMissingFileSourcePath(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()

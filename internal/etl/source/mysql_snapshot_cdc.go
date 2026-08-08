@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,11 +36,11 @@ type MySQLSnapshotCDCSource struct {
 	password               string
 	database               string
 	table                  string
-	tables                 []string // multiple tables for snapshot (after '*' expansion)
-	explicitTables         []string // tables as configured, before '*' expansion
-	pkCol                  string               // global fallback pk column (legacy single-table config)
-	pkCols                 map[string]string    // explicit per-table pk overrides (table -> column)
-	skipNoPKTables         bool                 // skip tables without a usable snapshot pk instead of failing
+	tables                 []string          // multiple tables for snapshot (after '*' expansion)
+	explicitTables         []string          // tables as configured, before '*' expansion
+	pkCol                  string            // global fallback pk column (legacy single-table config)
+	pkCols                 map[string]string // explicit per-table pk overrides (table -> column)
+	skipNoPKTables         bool              // skip tables without a usable snapshot pk instead of failing
 	limit                  int
 	serverID               uint32
 	shardIndex             int
@@ -52,9 +54,9 @@ type MySQLSnapshotCDCSource struct {
 type resolvedPKKind int
 
 const (
-	pkKindNone     resolvedPKKind = iota // table has no usable snapshot key; skip snapshot, CDC only
-	pkKindNumeric                         // integer-like column: ORDER BY col, numeric cursor, optional MOD sharding
-	pkKindOrdered                         // non-numeric but orderable column (e.g. datetime/varchar): ORDER BY col, string cursor
+	pkKindNone    resolvedPKKind = iota // table has no usable snapshot key; skip snapshot, CDC only
+	pkKindNumeric                       // integer-like column: ORDER BY col, numeric cursor, optional MOD sharding
+	pkKindOrdered                       // non-numeric but orderable column (e.g. datetime/varchar): ORDER BY col, string cursor
 )
 
 type resolvedPK struct {
@@ -63,12 +65,12 @@ type resolvedPK struct {
 }
 
 type snapshotCDCPosition struct {
-	Phase   string           `json:"phase"`
-	LastID  int64            `json:"last_id"`            // backward-compatible single-table cursor
-	LastIDs map[string]int64 `json:"last_ids,omitempty"` // per-table numeric snapshot cursors
+	Phase    string            `json:"phase"`
+	LastID   int64             `json:"last_id"`             // backward-compatible single-table cursor
+	LastIDs  map[string]int64  `json:"last_ids,omitempty"`  // per-table numeric snapshot cursors
 	LastStrs map[string]string `json:"last_strs,omitempty"` // per-table non-numeric snapshot cursors
-	File    string           `json:"file"`
-	Pos     uint32           `json:"pos"`
+	File     string            `json:"file"`
+	Pos      uint32            `json:"pos"`
 }
 
 type snapshotCDCReader struct {
@@ -79,14 +81,28 @@ type snapshotCDCReader struct {
 	records chan core.Record
 	errors  chan error
 
-	mu           sync.RWMutex
-	phase        string
-	lastID       int64
-	tableLastIDs map[string]int64
+	mu    sync.RWMutex
+	phase string
+	// checkpointPhase/File/Pos and tableLast* represent the last source
+	// position that was acknowledged by the runner after durable checkpoint
+	// persistence. They must not be used by the snapshot producer as its
+	// read-ahead cursor.
+	checkpointPhase string
+	checkpointFile  string
+	checkpointPos   uint32
+	lastID          int64
+	tableLastIDs    map[string]int64
 	// tableLastStr holds string cursors for non-numeric (pkKindOrdered) keys.
 	tableLastStr map[string]string
-	file         string
-	pos          uint32
+	// snapshotRead* are producer-only cursors. They may run ahead of the sink;
+	// a restart discards them and reloads tableLast* from the durable checkpoint.
+	snapshotReadIDs      map[string]int64
+	snapshotReadStr      map[string]string
+	file                 string
+	pos                  uint32
+	snapshotHandoffFile  string
+	snapshotHandoffPos   uint32
+	snapshotHandoffValid bool
 
 	// resolvedPKs is the per-table snapshot key decision, populated at Open
 	// after the real table list is known. Tables with pkKindNone are skipped
@@ -447,23 +463,19 @@ func (s *MySQLSnapshotCDCSource) Open(ctx context.Context, cp *core.Checkpoint) 
 	}
 
 	reader := &snapshotCDCReader{
-		source:       s,
-		db:           db,
-		records:      make(chan core.Record, 1024),
-		errors:       make(chan error, 64),
-		phase:        "snapshot",
-		tableLastIDs: make(map[string]int64),
-		tableLastStr: make(map[string]string),
-		resolvedPKs:  resolved,
-		done:         make(chan struct{}),
+		source:          s,
+		db:              db,
+		records:         make(chan core.Record, 1024),
+		errors:          make(chan error, 64),
+		phase:           "snapshot",
+		checkpointPhase: "snapshot",
+		tableLastIDs:    make(map[string]int64),
+		tableLastStr:    make(map[string]string),
+		snapshotReadIDs: make(map[string]int64),
+		snapshotReadStr: make(map[string]string),
+		resolvedPKs:     resolved,
+		done:            make(chan struct{}),
 	}
-
-	c, err := s.newCanal(reader)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	reader.canal = c
 
 	if cp == nil {
 		// Fresh runs set the CDC handoff position inside runSnapshot while the
@@ -474,25 +486,60 @@ func (s *MySQLSnapshotCDCSource) Open(ctx context.Context, cp *core.Checkpoint) 
 
 	if cp != nil {
 		var pos snapshotCDCPosition
-		if err := json.Unmarshal(cp.Position, &pos); err == nil {
-			reader.phase = pos.Phase
-			reader.lastID = pos.LastID
-			if len(pos.LastIDs) > 0 {
-			reader.tableLastIDs = pos.LastIDs
-		} else if pos.LastID > 0 && s.table != "" {
+		if err := json.Unmarshal(cp.Position, &pos); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("decode mysql_snapshot_cdc checkpoint: %w", err)
+		}
+		if pos.Phase == "" {
+			pos.Phase = "snapshot"
+		}
+		if pos.Phase != "snapshot" && pos.Phase != "cdc" {
+			db.Close()
+			return nil, fmt.Errorf("mysql_snapshot_cdc checkpoint has unsupported phase %q", pos.Phase)
+		}
+		if pos.Phase == "cdc" && (pos.File == "" || pos.Pos == 0) {
+			db.Close()
+			return nil, fmt.Errorf("mysql_snapshot_cdc CDC checkpoint is missing the binlog position")
+		}
+		reader.phase = pos.Phase
+		reader.checkpointPhase = pos.Phase
+		reader.lastID = pos.LastID
+		reader.tableLastIDs = cloneIntCursorMap(pos.LastIDs)
+		if pos.LastID != 0 && s.table != "" {
+			if _, exists := reader.tableLastIDs[s.table]; !exists {
 				reader.tableLastIDs[s.table] = pos.LastID
 			}
-			if len(pos.LastStrs) > 0 {
-				reader.tableLastStr = pos.LastStrs
+		}
+		if len(pos.LastStrs) > 0 {
+			reader.tableLastStr = cloneStringCursorMap(pos.LastStrs)
+		}
+		if pos.File != "" {
+			reader.file = pos.File
+			reader.checkpointFile = pos.File
+		}
+		if pos.Pos != 0 {
+			reader.pos = pos.Pos
+			reader.checkpointPos = pos.Pos
+		}
+		if pos.Phase == "snapshot" {
+			if pos.File == "" || pos.Pos == 0 {
+				db.Close()
+				return nil, fmt.Errorf("mysql_snapshot_cdc snapshot checkpoint is missing the CDC handoff position")
 			}
-			if pos.File != "" {
-				reader.file = pos.File
-			}
-			if pos.Pos != 0 {
-				reader.pos = pos.Pos
-			}
+			reader.snapshotHandoffFile = pos.File
+			reader.snapshotHandoffPos = pos.Pos
+			reader.snapshotHandoffValid = true
 		}
 	}
+
+	c, err := s.newCanal(reader)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	reader.setCanal(c)
+	reader.snapshotReadIDs = cloneIntCursorMap(reader.tableLastIDs)
+	reader.snapshotReadStr = cloneStringCursorMap(reader.tableLastStr)
 
 	go reader.run(ctx)
 	return reader, nil
@@ -532,9 +579,7 @@ func (r *snapshotCDCReader) run(ctx context.Context) {
 	defer close(r.errors)
 	defer r.db.Close()
 	defer close(r.done)
-	if r.canal != nil {
-		defer r.canal.Close()
-	}
+	defer r.closeCanal()
 
 	if r.getPhase() != "cdc" {
 		if err := r.runSnapshot(ctx); err != nil {
@@ -546,8 +591,20 @@ func (r *snapshotCDCReader) run(ctx context.Context) {
 		}
 		r.setPhase("cdc")
 	}
+	// The canal used to capture the snapshot handoff is no longer needed once
+	// the snapshot transaction has finished. Release it before opening the CDC
+	// stream; Close() is idempotent and also unblocks an in-flight RunFrom.
+	r.closeCanal()
 
-	pos := mysql.Position{Name: r.file, Pos: r.pos}
+	curFile, curPos := r.getDurableBinlogPos()
+	if curFile == "" || curPos == 0 {
+		select {
+		case r.errors <- fmt.Errorf("mysql_snapshot_cdc has no durable CDC resume position"):
+		case <-ctx.Done():
+		}
+		return
+	}
+	pos := mysql.Position{Name: curFile, Pos: curPos}
 	g.Log().Infof(ctx, "Starting snapshot+CDC stream from %s:%d", pos.Name, pos.Pos)
 
 	// CDC reconnect loop with exponential backoff.
@@ -557,10 +614,19 @@ func (r *snapshotCDCReader) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		// Re-read latest known file/pos each iteration (updated by handler).
-		curFile, curPos := r.getBinlogPos()
-		curPos32 := uint32(curPos)
-		runPos := mysql.Position{Name: curFile, Pos: curPos32}
+		// Reopen from the last acknowledged checkpoint. The handler's runtime
+		// position may be many events ahead of the sink and must never become a
+		// recovery boundary merely because canal disconnected.
+		curFile, curPos := r.getDurableBinlogPos()
+		if curFile == "" || curPos == 0 {
+			select {
+			case r.errors <- fmt.Errorf("mysql_snapshot_cdc has no durable CDC resume position"):
+			case <-ctx.Done():
+				return
+			}
+			return
+		}
+		runPos := mysql.Position{Name: curFile, Pos: curPos}
 		c, err := r.source.newCanal(r)
 		if err != nil {
 			runErr := err
@@ -579,11 +645,10 @@ func (r *snapshotCDCReader) run(ctx context.Context) {
 			}
 			continue
 		}
-		r.mu.Lock()
-		r.canal = c
-		r.mu.Unlock()
+		r.setCanal(c)
 		runErr := c.RunFrom(runPos)
 		c.Close()
+		r.clearCanal(c)
 		if ctx.Err() != nil {
 			return
 		}
@@ -635,14 +700,11 @@ func (r *snapshotCDCReader) runSnapshot(ctx context.Context) error {
 			}
 		}()
 
-		startPos, err := r.canal.GetMasterPos()
+		startPos, err := r.snapshotStartPosition()
 		if err != nil {
-			return fmt.Errorf("get master pos under snapshot lock: %w", err)
+			return fmt.Errorf("get snapshot handoff position under lock: %w", err)
 		}
-		r.mu.Lock()
-		r.file = startPos.Name
-		r.pos = uint32(startPos.Pos)
-		r.mu.Unlock()
+		r.setRuntimeBinlogPos(startPos.Name, uint32(startPos.Pos))
 
 		tx, err = conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if err != nil {
@@ -658,14 +720,11 @@ func (r *snapshotCDCReader) runSnapshot(ctx context.Context) error {
 		}
 		locked = false
 	} else {
-		startPos, err := r.canal.GetMasterPos()
+		startPos, err := r.snapshotStartPosition()
 		if err != nil {
-			return fmt.Errorf("get master pos: %w", err)
+			return fmt.Errorf("get snapshot handoff position: %w", err)
 		}
-		r.mu.Lock()
-		r.file = startPos.Name
-		r.pos = uint32(startPos.Pos)
-		r.mu.Unlock()
+		r.setRuntimeBinlogPos(startPos.Name, uint32(startPos.Pos))
 		tx, err = r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if err != nil {
 			return fmt.Errorf("begin snapshot tx: %w", err)
@@ -688,6 +747,44 @@ func (r *snapshotCDCReader) runSnapshot(ctx context.Context) error {
 	return nil
 }
 
+func (r *snapshotCDCReader) snapshotStartPosition() (mysql.Position, error) {
+	r.mu.Lock()
+	if r.snapshotHandoffValid {
+		pos := mysql.Position{Name: r.snapshotHandoffFile, Pos: r.snapshotHandoffPos}
+		r.mu.Unlock()
+		return pos, nil
+	}
+	r.mu.Unlock()
+	c := r.getCanal()
+	if c == nil {
+		return mysql.Position{}, fmt.Errorf("canal is unavailable")
+	}
+	pos, err := c.GetMasterPos()
+	if err != nil {
+		return mysql.Position{}, err
+	}
+	if pos.Name == "" || pos.Pos == 0 {
+		return mysql.Position{}, fmt.Errorf("mysql_snapshot_cdc returned an invalid CDC handoff position %q:%d", pos.Name, pos.Pos)
+	}
+	r.mu.Lock()
+	r.snapshotHandoffFile = pos.Name
+	r.snapshotHandoffPos = uint32(pos.Pos)
+	r.snapshotHandoffValid = true
+	if r.checkpointFile == "" || r.checkpointPos == 0 {
+		r.checkpointFile = pos.Name
+		r.checkpointPos = uint32(pos.Pos)
+	}
+	r.mu.Unlock()
+	return pos, nil
+}
+
+func (r *snapshotCDCReader) setRuntimeBinlogPos(file string, pos uint32) {
+	r.mu.Lock()
+	r.file = file
+	r.pos = pos
+	r.mu.Unlock()
+}
+
 // snapshotTable pages through one table's historical rows using its resolved
 // snapshot key. Numeric keys use a numeric cursor (and optional MOD sharding);
 // ordered non-numeric keys (datetime/varchar) use a string > cursor without
@@ -697,7 +794,7 @@ func (r *snapshotCDCReader) snapshotTable(ctx context.Context, tx *sql.Tx, table
 		var query string
 		var args []any
 		if rpk.kind == pkKindNumeric {
-			lastID := r.getTableLastID(tableName)
+			lastID := r.getSnapshotReadID(tableName)
 			if r.source.shardTotal > 1 {
 				query = fmt.Sprintf("SELECT * FROM `%s` WHERE `%s` > ? AND MOD(`%s`, %d) = %d ORDER BY `%s` LIMIT %d",
 					tableName, rpk.column, rpk.column,
@@ -710,7 +807,7 @@ func (r *snapshotCDCReader) snapshotTable(ctx context.Context, tx *sql.Tx, table
 			args = []any{lastID}
 		} else {
 			// pkKindOrdered: string-typed cursor (datetime/varchar/char).
-			lastStr := r.getTableLastStr(tableName)
+			lastStr := r.getSnapshotReadStr(tableName)
 			query = fmt.Sprintf("SELECT * FROM `%s` WHERE `%s` > ? ORDER BY `%s` LIMIT %d",
 				tableName, rpk.column, rpk.column, r.source.limit)
 			args = []any{lastStr}
@@ -741,12 +838,21 @@ func (r *snapshotCDCReader) snapshotTable(ctx context.Context, tx *sql.Tx, table
 			}
 			if v, ok := data[rpk.column]; ok {
 				if rpk.kind == pkKindNumeric {
-					if nid := normalizeSnapshotID(v); nid > r.getTableLastID(tableName) {
-						r.setTableLastID(tableName, nid)
+					nid, parseErr := parseSnapshotID(v)
+					if parseErr != nil {
+						rows.Close()
+						return fmt.Errorf("snapshot cursor %s.%s: %w", tableName, rpk.column, parseErr)
+					}
+					if nid > r.getSnapshotReadID(tableName) {
+						r.setSnapshotReadID(tableName, nid)
 					}
 				} else {
-					if cs := cursorString(v); cs > r.getTableLastStr(tableName) {
-						r.setTableLastStr(tableName, cs)
+					if v == nil {
+						rows.Close()
+						return fmt.Errorf("snapshot cursor %s.%s is NULL", tableName, rpk.column)
+					}
+					if cs := cursorString(v); cs > r.getSnapshotReadStr(tableName) {
+						r.setSnapshotReadStr(tableName, cs)
 					}
 				}
 			}
@@ -799,81 +905,122 @@ func (r *snapshotCDCReader) primeSnapshotReadView(ctx context.Context, tx *sql.T
 	return rows.Close()
 }
 
-func normalizeSnapshotID(v any) int64 {
+func parseSnapshotID(v any) (int64, error) {
 	switch id := v.(type) {
 	case int:
-		return int64(id)
+		return int64(id), nil
 	case int8:
-		return int64(id)
+		return int64(id), nil
 	case int16:
-		return int64(id)
+		return int64(id), nil
 	case int32:
-		return int64(id)
+		return int64(id), nil
 	case int64:
-		return id
+		return id, nil
 	case uint:
-		return int64(id)
+		if uint64(id) > uint64(^uint64(0)>>1) {
+			return 0, fmt.Errorf("unsigned value %d overflows int64", id)
+		}
+		return int64(id), nil
 	case uint8:
-		return int64(id)
+		return int64(id), nil
 	case uint16:
-		return int64(id)
+		return int64(id), nil
 	case uint32:
-		return int64(id)
+		return int64(id), nil
 	case uint64:
 		if id > uint64(^uint64(0)>>1) {
-			return 0
+			return 0, fmt.Errorf("unsigned value %d overflows int64", id)
 		}
-		return int64(id)
-	case float64:
-		return int64(id)
+		return int64(id), nil
 	case float32:
-		return int64(id)
+		f := float64(id)
+		if f != f || f < float64(-1<<63) || f >= float64(1<<63) || f != float64(int64(f)) {
+			return 0, fmt.Errorf("non-integer numeric value %v", id)
+		}
+		return int64(f), nil
+	case float64:
+		if id != id || id < float64(-1<<63) || id >= float64(1<<63) || id != float64(int64(id)) {
+			return 0, fmt.Errorf("non-integer numeric value %v", id)
+		}
+		return int64(id), nil
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(id), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse %q: %w", id, err)
+		}
+		return parsed, nil
+	case []byte:
+		return parseSnapshotID(string(id))
+	default:
+		return 0, fmt.Errorf("unsupported numeric value type %T", v)
 	}
-	return 0
 }
 
-func (r *snapshotCDCReader) getTableLastID(table string) int64 {
+func cloneIntCursorMap(in map[string]int64) map[string]int64 {
+	out := make(map[string]int64, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneStringCursorMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func (r *snapshotCDCReader) getSnapshotReadID(table string) int64 {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.snapshotReadIDs != nil {
+		if v, ok := r.snapshotReadIDs[table]; ok {
+			return v
+		}
+	}
+	return r.getTableLastIDLocked(table)
+}
+
+func (r *snapshotCDCReader) setSnapshotReadID(table string, id int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.snapshotReadIDs == nil {
+		r.snapshotReadIDs = make(map[string]int64)
+	}
+	r.snapshotReadIDs[table] = id
+}
+
+func (r *snapshotCDCReader) getSnapshotReadStr(table string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.snapshotReadStr != nil {
+		return r.snapshotReadStr[table]
+	}
+	return ""
+}
+
+func (r *snapshotCDCReader) setSnapshotReadStr(table, value string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.snapshotReadStr == nil {
+		r.snapshotReadStr = make(map[string]string)
+	}
+	r.snapshotReadStr[table] = value
+}
+
+func (r *snapshotCDCReader) getTableLastIDLocked(table string) int64 {
 	if r.tableLastIDs != nil {
 		if v, ok := r.tableLastIDs[table]; ok {
 			return v
 		}
 	}
-	if table == r.source.table {
+	if r.source != nil && table == r.source.table {
 		return r.lastID
 	}
 	return 0
-}
-
-func (r *snapshotCDCReader) setTableLastID(table string, id int64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.tableLastIDs == nil {
-		r.tableLastIDs = make(map[string]int64)
-	}
-	r.tableLastIDs[table] = id
-	if table == r.source.table {
-		r.lastID = id
-	}
-}
-
-func (r *snapshotCDCReader) getTableLastStr(table string) string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.tableLastStr != nil {
-		return r.tableLastStr[table]
-	}
-	return ""
-}
-
-func (r *snapshotCDCReader) setTableLastStr(table, s string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.tableLastStr == nil {
-		r.tableLastStr = make(map[string]string)
-	}
-	r.tableLastStr[table] = s
 }
 
 // cursorString renders a snapshot cell value into its lexicographic cursor
@@ -890,7 +1037,13 @@ func cursorString(v any) string {
 	case []byte:
 		return string(x)
 	case time.Time:
-		return x.UTC().Format("2006-01-02 15:04:05.999999")
+		// Keep the driver's local wall-clock representation. The MySQL
+		// connection is configured with loc=Local, and converting to UTC here
+		// would make the next `WHERE col > ?` cursor differ from the ORDER BY
+		// value around non-UTC deployments.
+		// Use fixed-width microseconds so lexical comparison remains
+		// chronological when a value has trailing zero fractional digits.
+		return x.Format("2006-01-02 15:04:05.000000")
 	case fmt.Stringer:
 		return x.String()
 	}
@@ -906,23 +1059,40 @@ func numericOffset(rpk resolvedPK, data map[string]any) int64 {
 		return 0
 	}
 	if v, ok := data[rpk.column]; ok {
-		return normalizeSnapshotID(v)
+		if id, err := parseSnapshotID(v); err == nil {
+			return id
+		}
 	}
 	return 0
 }
 
 func (r *snapshotCDCReader) Read(ctx context.Context) (core.Record, error) {
-	select {
-	case rec, ok := <-r.records:
-		if !ok {
-			return core.Record{}, fmt.Errorf("snapshot cdc stream closed")
+	records := r.records
+	errors := r.errors
+	for records != nil || errors != nil {
+		select {
+		case rec, ok := <-records:
+			if !ok {
+				// Drain any pending error after the record stream has closed;
+				// a closed error channel must not win a select while snapshot
+				// rows are still buffered.
+				records = nil
+				continue
+			}
+			return rec, nil
+		case err, ok := <-errors:
+			if !ok {
+				errors = nil
+				continue
+			}
+			if err != nil {
+				return core.Record{}, err
+			}
+		case <-ctx.Done():
+			return core.Record{}, ctx.Err()
 		}
-		return rec, nil
-	case err := <-r.errors:
-		return core.Record{}, err
-	case <-ctx.Done():
-		return core.Record{}, ctx.Err()
 	}
+	return core.Record{}, io.EOF
 }
 
 func (r *snapshotCDCReader) ReadBatch(ctx context.Context, n int) ([]core.Record, error) {
@@ -941,50 +1111,166 @@ func (r *snapshotCDCReader) ReadBatch(ctx context.Context, n int) ([]core.Record
 }
 
 func (r *snapshotCDCReader) Snapshot(ctx context.Context) (core.Checkpoint, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	lastIDs := make(map[string]int64, len(r.tableLastIDs))
-	for k, v := range r.tableLastIDs {
-		lastIDs[k] = v
-	}
-	lastStrs := make(map[string]string, len(r.tableLastStr))
-	for k, v := range r.tableLastStr {
-		lastStrs[k] = v
-	}
-	pos := snapshotCDCPosition{Phase: r.phase, LastID: r.lastID, LastIDs: lastIDs, LastStrs: lastStrs, File: r.file, Pos: r.pos}
-	data, _ := json.Marshal(pos)
-	return core.Checkpoint{Source: "mysql_snapshot_cdc", Position: data, Timestamp: time.Now()}, nil
+	return r.checkpointFromRecords(ctx, nil)
 }
 
 func (r *snapshotCDCReader) CheckpointForRecord(ctx context.Context, rec core.Record) (core.Checkpoint, error) {
-	phase := r.getPhase()
-	if rec.Metadata.Offset > 0 && phase != "cdc" {
-		// Prefer original source table when pipeline table_mapping rewrote Metadata.Table.
-		tableName := rec.Metadata.Table
-		if rec.Data != nil {
-			if v, ok := rec.Data["_source_table"].(string); ok && strings.TrimSpace(v) != "" {
-				tableName = v
+	return r.CheckpointForRecords(ctx, []core.Record{rec})
+}
+
+// CheckpointForRecords builds a candidate from the records that actually
+// reached the sink boundary. Producer read-ahead cursors are intentionally not
+// consulted; they may be many pages ahead of the durable sink position.
+func (r *snapshotCDCReader) CheckpointForRecords(ctx context.Context, records []core.Record) (core.Checkpoint, error) {
+	return r.checkpointFromRecords(ctx, records)
+}
+
+func (r *snapshotCDCReader) checkpointFromRecords(_ context.Context, records []core.Record) (core.Checkpoint, error) {
+	r.mu.RLock()
+	phase := r.checkpointPhase
+	file := r.checkpointFile
+	pos := r.checkpointPos
+	lastID := r.lastID
+	lastIDs := cloneIntCursorMap(r.tableLastIDs)
+	lastStrs := cloneStringCursorMap(r.tableLastStr)
+	r.mu.RUnlock()
+	if phase == "" {
+		phase = "snapshot"
+	}
+
+	if len(records) == 0 {
+		return marshalSnapshotCheckpoint(snapshotCDCPosition{
+			Phase: phase, LastID: lastID, LastIDs: lastIDs, LastStrs: lastStrs, File: file, Pos: pos,
+		})
+	}
+	if r.source == nil {
+		return core.Checkpoint{}, fmt.Errorf("mysql_snapshot_cdc source is unavailable while building checkpoint")
+	}
+
+	for _, rec := range records {
+		if rec.Metadata.BinlogFile != "" {
+			if rec.Metadata.BinlogPos == 0 {
+				return core.Checkpoint{}, fmt.Errorf("mysql_snapshot_cdc CDC record %s has an empty binlog position", rec.Metadata.BinlogFile)
+			}
+			phase = "cdc"
+			file = rec.Metadata.BinlogFile
+			pos = rec.Metadata.BinlogPos
+			continue
+		}
+
+		if phase == "cdc" {
+			// Snapshot records must precede CDC records in the source channel. A
+			// later snapshot record would make the handoff boundary ambiguous.
+			return core.Checkpoint{}, fmt.Errorf("mysql_snapshot_cdc snapshot record arrived after CDC phase")
+		}
+		tableName := sourceSnapshotTable(rec)
+		rpk := r.resolvedPKs[tableName]
+		if rpk.kind == pkKindNumeric {
+			value, ok := rec.Data[rpk.column]
+			if !ok {
+				return core.Checkpoint{}, fmt.Errorf("mysql_snapshot_cdc snapshot record for %s is missing cursor column %s", tableName, rpk.column)
+			}
+			id, err := parseSnapshotID(value)
+			if err != nil {
+				return core.Checkpoint{}, fmt.Errorf("mysql_snapshot_cdc snapshot cursor %s.%s: %w", tableName, rpk.column, err)
+			}
+			if current, ok := lastIDs[tableName]; !ok || id > current {
+				lastIDs[tableName] = id
+			}
+			if tableName == r.source.table && lastIDs[tableName] > lastID {
+				lastID = lastIDs[tableName]
+			}
+		} else if rpk.kind == pkKindOrdered {
+			value, ok := rec.Data[rpk.column]
+			if !ok {
+				return core.Checkpoint{}, fmt.Errorf("mysql_snapshot_cdc snapshot record for %s is missing cursor column %s", tableName, rpk.column)
+			}
+			if value == nil {
+				return core.Checkpoint{}, fmt.Errorf("mysql_snapshot_cdc snapshot cursor %s.%s is NULL", tableName, rpk.column)
+			}
+			cursor := cursorString(value)
+			if current, ok := lastStrs[tableName]; !ok || cursor > current {
+				lastStrs[tableName] = cursor
+			}
+		} else {
+			// Legacy unit/in-memory readers may not have resolvedPKs. Preserve
+			// the historical numeric offset fallback for those single-table
+			// positions; real Open() readers always resolve a key.
+			if rec.Metadata.Offset != 0 {
+				lastIDs[tableName] = rec.Metadata.Offset
+				if tableName == r.source.table && rec.Metadata.Offset > lastID {
+					lastID = rec.Metadata.Offset
+				}
+			} else {
+				return core.Checkpoint{}, fmt.Errorf("mysql_snapshot_cdc cannot determine snapshot cursor for table %s", tableName)
 			}
 		}
-		r.setTableLastID(tableName, rec.Metadata.Offset)
+		phase = "snapshot"
+		if file == "" || pos == 0 {
+			return core.Checkpoint{}, fmt.Errorf("mysql_snapshot_cdc snapshot handoff position is unavailable")
+		}
 	}
-	r.mu.RLock()
-	lastIDs := make(map[string]int64, len(r.tableLastIDs))
-	for k, v := range r.tableLastIDs {
-		lastIDs[k] = v
+
+	return marshalSnapshotCheckpoint(snapshotCDCPosition{
+		Phase: phase, LastID: lastID, LastIDs: lastIDs, LastStrs: lastStrs, File: file, Pos: pos,
+	})
+}
+
+// AckCheckpoint applies a snapshot/CDC cursor only after the checkpoint store
+// has durably saved it. The producer's read-ahead maps remain untouched so a
+// failed checkpoint cannot make the current reader skip rows.
+func (r *snapshotCDCReader) AckCheckpoint(_ context.Context, cp core.Checkpoint) error {
+	if len(cp.Position) == 0 || !json.Valid(cp.Position) {
+		return fmt.Errorf("mysql_snapshot_cdc checkpoint position is not valid JSON")
 	}
-	lastStrs := make(map[string]string, len(r.tableLastStr))
-	for k, v := range r.tableLastStr {
-		lastStrs[k] = v
+	var pos snapshotCDCPosition
+	if err := json.Unmarshal(cp.Position, &pos); err != nil {
+		return fmt.Errorf("decode mysql_snapshot_cdc checkpoint: %w", err)
 	}
-	pos := snapshotCDCPosition{Phase: r.phase, LastID: r.lastID, LastIDs: lastIDs, LastStrs: lastStrs, File: r.file, Pos: r.pos}
-	r.mu.RUnlock()
-	if rec.Metadata.BinlogFile != "" {
-		pos.Phase = "cdc"
-		pos.File = rec.Metadata.BinlogFile
-		pos.Pos = rec.Metadata.BinlogPos
+	if pos.Phase != "snapshot" && pos.Phase != "cdc" {
+		return fmt.Errorf("mysql_snapshot_cdc checkpoint has unsupported phase %q", pos.Phase)
 	}
-	data, _ := json.Marshal(pos)
+	if pos.Phase == "snapshot" && (pos.File == "" || pos.Pos == 0) {
+		return fmt.Errorf("mysql_snapshot_cdc snapshot checkpoint is missing the CDC handoff position")
+	}
+	if pos.Phase == "cdc" && (pos.File == "" || pos.Pos == 0) {
+		return fmt.Errorf("mysql_snapshot_cdc CDC checkpoint is missing the binlog position")
+	}
+	r.mu.Lock()
+	r.checkpointPhase = pos.Phase
+	r.checkpointFile = pos.File
+	r.checkpointPos = pos.Pos
+	r.lastID = pos.LastID
+	r.tableLastIDs = cloneIntCursorMap(pos.LastIDs)
+	if pos.LastID != 0 && r.source != nil && r.source.table != "" {
+		if _, exists := r.tableLastIDs[r.source.table]; !exists {
+			r.tableLastIDs[r.source.table] = pos.LastID
+		}
+	}
+	r.tableLastStr = cloneStringCursorMap(pos.LastStrs)
+	if pos.Phase == "snapshot" {
+		r.snapshotHandoffFile = pos.File
+		r.snapshotHandoffPos = pos.Pos
+		r.snapshotHandoffValid = true
+	}
+	r.mu.Unlock()
+	return nil
+}
+
+func sourceSnapshotTable(rec core.Record) string {
+	if rec.Data != nil {
+		if v, ok := rec.Data["_source_table"].(string); ok && strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return rec.Metadata.Table
+}
+
+func marshalSnapshotCheckpoint(pos snapshotCDCPosition) (core.Checkpoint, error) {
+	data, err := json.Marshal(pos)
+	if err != nil {
+		return core.Checkpoint{}, fmt.Errorf("marshal mysql_snapshot_cdc checkpoint: %w", err)
+	}
 	return core.Checkpoint{Source: "mysql_snapshot_cdc", Position: data, Timestamp: time.Now()}, nil
 }
 
@@ -992,7 +1278,7 @@ func (r *snapshotCDCReader) Close() error {
 	if r.db != nil {
 		_ = r.db.Close()
 	}
-	r.canal.Close()
+	r.closeCanal()
 	return nil
 }
 
@@ -1003,6 +1289,42 @@ func (r *snapshotCDCReader) getBinlogPos() (string, uint32) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.file, r.pos
+}
+
+func (r *snapshotCDCReader) getDurableBinlogPos() (string, uint32) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.checkpointFile, r.checkpointPos
+}
+
+func (r *snapshotCDCReader) getCanal() *canal.Canal {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.canal
+}
+
+func (r *snapshotCDCReader) setCanal(c *canal.Canal) {
+	r.mu.Lock()
+	r.canal = c
+	r.mu.Unlock()
+}
+
+func (r *snapshotCDCReader) clearCanal(c *canal.Canal) {
+	r.mu.Lock()
+	if r.canal == c {
+		r.canal = nil
+	}
+	r.mu.Unlock()
+}
+
+func (r *snapshotCDCReader) closeCanal() {
+	r.mu.Lock()
+	c := r.canal
+	r.canal = nil
+	r.mu.Unlock()
+	if c != nil {
+		c.Close()
+	}
 }
 
 type snapshotCDCHandler struct {

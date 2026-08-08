@@ -157,6 +157,24 @@ func (r *ShardedReader) CheckpointForRecord(ctx context.Context, rec Record) (Ch
 	return r.inner.Snapshot(ctx)
 }
 
+func (r *ShardedReader) CheckpointForRecords(ctx context.Context, records []Record) (Checkpoint, error) {
+	if cp, ok := r.inner.(BatchRecordCheckpointer); ok {
+		return cp.CheckpointForRecords(ctx, records)
+	}
+	if len(records) == 0 {
+		return Checkpoint{}, fmt.Errorf("cannot checkpoint an empty record batch")
+	}
+	return r.CheckpointForRecord(ctx, records[len(records)-1])
+}
+
+func (r *ShardedReader) AckCheckpoint(ctx context.Context, cp Checkpoint) error {
+	acker, ok := r.inner.(CheckpointAcker)
+	if !ok {
+		return nil
+	}
+	return acker.AckCheckpoint(ctx, cp)
+}
+
 func (r *ShardedReader) Close() error {
 	return r.inner.Close()
 }
