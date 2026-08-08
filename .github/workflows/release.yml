@@ -31,6 +31,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Strict connector evidence gate
+        run: bash ./hack/check-connector-evidence.sh -strict -commit "$(git rev-parse --short=7 HEAD)"
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:

@@ -52,8 +52,8 @@ while [ "$i" -lt 60 ]; do
 done
 [ "$("$CONTAINER_CLI" inspect -f '{{.State.Health.Status}}' "$MYSQL_CONTAINER")" = "healthy" ]
 
-echo "==> Prepare MySQL target"
-"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "CREATE DATABASE IF NOT EXISTS dzh3136_target; CREATE TABLE IF NOT EXISTS dzh3136_target.customers LIKE dzh3136_go.customers; DELETE FROM dzh3136_go.customers WHERE id >= 9000; TRUNCATE TABLE dzh3136_target.customers; GRANT ALL PRIVILEGES ON dzh3136_target.* TO 'sync_user'@'%'; FLUSH PRIVILEGES;"
+echo "==> Prepare deterministic MySQL source/target fixtures"
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "CREATE DATABASE IF NOT EXISTS dzh3136_target; CREATE TABLE IF NOT EXISTS dzh3136_target.customers LIKE dzh3136_go.customers; TRUNCATE TABLE dzh3136_go.customers; INSERT INTO dzh3136_go.customers (id, name, email, phone, status, amount) VALUES (1, 'Alice Wang', 'alice@example.com', '13800000001', 'active', 15000.00), (2, 'Bob Li', 'bob@example.com', '13800000002', 'active', 25000.00), (3, 'Charlie Zhang', 'charlie@example.com', '13800000003', 'inactive', 5000.00), (4, 'Diana Chen', 'diana@example.com', '13800000004', 'active', 32000.00), (5, 'Eve Liu', 'eve@example.com', '13800000005', 'active', 8000.00); TRUNCATE TABLE dzh3136_target.customers; GRANT ALL PRIVILEGES ON dzh3136_target.* TO 'sync_user'@'%'; FLUSH PRIVILEGES;"
 
 echo "==> Reset ETL data"
 rm -rf data/output data/checkpoint data/dlq data/etl.db data/etl.db-* "$E2E_PIPES_DIR"

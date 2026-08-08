@@ -22,8 +22,12 @@ wait_http() {
   return 1
 }
 
-echo "==> Build image"
-"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
+if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
+  echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
+else
+  echo "==> Build image"
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
+fi
 
 echo "==> Start HTTP fixture"
 "$CONTAINER_CLI" rm -f "$FIXTURE_CONTAINER" >/dev/null 2>&1 || true

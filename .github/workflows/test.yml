@@ -18,6 +18,22 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+  connector-evidence:
+    name: Connector Evidence Manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Structural evidence check
+        run: bash ./hack/check-connector-evidence.sh
+      - name: Strict evidence gate on main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: bash ./hack/check-connector-evidence.sh -strict -commit "$(git rev-parse --short=7 HEAD)"
+
   unit-test:
     name: Unit Tests (-race)
     runs-on: ubuntu-latest

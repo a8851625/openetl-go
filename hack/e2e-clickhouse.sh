@@ -31,8 +31,12 @@ if ! "$CONTAINER_CLI" image inspect docker.io/clickhouse/clickhouse-server:24.3-
   exit 2
 fi
 
-echo "==> Build image"
-"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
+if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
+  echo "==> Skip image build (E2E_SKIP_BUILD=1, using $IMAGE)"
+else
+  echo "==> Build image"
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
+fi
 
 echo "==> Start MySQL and ClickHouse"
 compose -f docker-compose.dev.yml up -d mysql-source clickhouse
