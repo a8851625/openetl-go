@@ -3,204 +3,360 @@
   "policy": {
     "max_age_hours": 720
   },
-  "certified_commit": "0c39424",
-  "certified_image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
+  "certified_commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+  "certified_image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
   "records": [
     {
       "kind": "source",
       "type": "file",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e.sh"],
-      "cases": ["file_to_file", "checkpoint_persisted"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2"
+      },
+      "started_at": "2026-08-08T07:15:45Z",
+      "finished_at": "2026-08-08T07:15:49Z",
+      "expires_at": "2026-09-07T07:15:49Z",
+      "scripts": [
+        "hack/e2e.sh"
+      ],
+      "cases": [
+        "file_to_file",
+        "checkpoint_persisted"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "source",
       "type": "http",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-http-source.sh"],
-      "cases": ["pagination", "auth_headers"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "http_fixture": "python 3.12-alpine"
+      },
+      "started_at": "2026-08-08T07:15:50Z",
+      "finished_at": "2026-08-08T07:15:53Z",
+      "expires_at": "2026-09-07T07:15:53Z",
+      "scripts": [
+        "hack/e2e-http-source.sh"
+      ],
+      "cases": [
+        "pagination",
+        "auth_headers"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "source",
       "type": "kafka",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "redpanda": "documented"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-kafka.sh", "hack/e2e-kafka-raw-ods.sh"],
-      "cases": ["source_sink", "offset_replay", "broker_restart", "rebalance"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "redpanda": "24.1.1",
+        "mysql": "8.0.46"
+      },
+      "started_at": "2026-08-08T07:17:57Z",
+      "finished_at": "2026-08-08T07:18:47Z",
+      "expires_at": "2026-09-07T07:18:47Z",
+      "scripts": [
+        "hack/e2e-kafka.sh",
+        "hack/e2e-kafka-raw-ods.sh"
+      ],
+      "cases": [
+        "source_sink",
+        "offset_replay",
+        "broker_restart",
+        "rebalance"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "source",
       "type": "mysql_batch",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "mysql": "8.0.46"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e.sh", "hack/e2e-mysql-postgres.sh"],
-      "cases": ["batch_read", "custom_query", "schema_preflight"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "mysql": "8.0.46",
+        "postgres": "16.14"
+      },
+      "started_at": "2026-08-08T07:15:45Z",
+      "finished_at": "2026-08-08T07:16:12Z",
+      "expires_at": "2026-09-07T07:16:12Z",
+      "scripts": [
+        "hack/e2e.sh",
+        "hack/e2e-mysql-postgres.sh"
+      ],
+      "cases": [
+        "batch_read",
+        "custom_query",
+        "schema_preflight"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "source",
       "type": "mysql_cdc",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "mysql": "8.0.46"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-cdc-mysql.sh", "hack/e2e-cdc-postgres.sh"],
-      "cases": ["insert_update_delete", "checkpoint_restart", "postgres_upsert"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "mysql": "8.0.46",
+        "postgres": "16.14"
+      },
+      "started_at": "2026-08-08T07:16:12Z",
+      "finished_at": "2026-08-08T07:16:29Z",
+      "expires_at": "2026-09-07T07:16:29Z",
+      "scripts": [
+        "hack/e2e-cdc-mysql.sh",
+        "hack/e2e-cdc-postgres.sh"
+      ],
+      "cases": [
+        "insert_update_delete",
+        "checkpoint_restart",
+        "postgres_upsert"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "source",
       "type": "mysql_snapshot_cdc",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "mysql": "8.0.46", "clickhouse": "24.3.18.7"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-snapshot-cdc.sh", "hack/e2e-snapshot-cdc-clickhouse.sh"],
-      "cases": ["snapshot", "cdc_handoff", "checkpoint_restart", "checkpoint_reset"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "mysql": "8.0.46",
+        "clickhouse": "24.3.18.7"
+      },
+      "started_at": "2026-08-08T07:16:30Z",
+      "finished_at": "2026-08-08T07:17:57Z",
+      "expires_at": "2026-09-07T07:17:57Z",
+      "scripts": [
+        "hack/e2e-snapshot-cdc.sh",
+        "hack/e2e-snapshot-cdc-clickhouse.sh"
+      ],
+      "cases": [
+        "snapshot",
+        "cdc_handoff",
+        "checkpoint_restart",
+        "checkpoint_reset"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "sink",
       "type": "file_sink",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e.sh"],
-      "cases": ["file_output", "checkpoint_persisted"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2"
+      },
+      "started_at": "2026-08-08T07:15:45Z",
+      "finished_at": "2026-08-08T07:15:49Z",
+      "expires_at": "2026-09-07T07:15:49Z",
+      "scripts": [
+        "hack/e2e.sh"
+      ],
+      "cases": [
+        "file_output",
+        "checkpoint_persisted"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "sink",
       "type": "s3",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "minio": "documented"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-s3-minio.sh"],
-      "cases": ["deterministic_replay", "target_outage", "dlq_replay"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "minio": "RELEASE.2024-07-16T23-46-41Z"
+      },
+      "started_at": "2026-08-08T07:19:17Z",
+      "finished_at": "2026-08-08T07:20:00Z",
+      "expires_at": "2026-09-07T07:20:00Z",
+      "scripts": [
+        "hack/e2e-s3-minio.sh"
+      ],
+      "cases": [
+        "deterministic_replay",
+        "target_outage",
+        "dlq_replay"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "sink",
       "type": "kafka",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "redpanda": "documented"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-kafka.sh", "hack/e2e-kafka-raw-ods.sh"],
-      "cases": ["producer_write", "offset_replay", "append_duplicate_boundary"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "redpanda": "24.1.1",
+        "mysql": "8.0.46"
+      },
+      "started_at": "2026-08-08T07:17:57Z",
+      "finished_at": "2026-08-08T07:18:47Z",
+      "expires_at": "2026-09-07T07:18:47Z",
+      "scripts": [
+        "hack/e2e-kafka.sh",
+        "hack/e2e-kafka-raw-ods.sh"
+      ],
+      "cases": [
+        "producer_write",
+        "offset_replay",
+        "append_duplicate_boundary"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "sink",
       "type": "mysql",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "mysql": "8.0.46"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-cdc-mysql.sh", "hack/e2e-debezium-mysql.sh"],
-      "cases": ["upsert", "metadata_pk", "dlq_replay"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "mysql": "8.0.46",
+        "redpanda": "24.1.1"
+      },
+      "started_at": "2026-08-08T07:16:12Z",
+      "finished_at": "2026-08-08T07:19:16Z",
+      "expires_at": "2026-09-07T07:19:16Z",
+      "scripts": [
+        "hack/e2e-cdc-mysql.sh",
+        "hack/e2e-debezium-mysql.sh"
+      ],
+      "cases": [
+        "upsert",
+        "metadata_pk",
+        "dlq_replay"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "sink",
       "type": "postgres",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "postgres": "16"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-mysql-postgres.sh", "hack/e2e-cdc-postgres.sh"],
-      "cases": ["insert_update_delete", "upsert", "checkpoint_replay"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "mysql": "8.0.46",
+        "postgres": "16.14"
+      },
+      "started_at": "2026-08-08T07:16:04Z",
+      "finished_at": "2026-08-08T07:16:29Z",
+      "expires_at": "2026-09-07T07:16:29Z",
+      "scripts": [
+        "hack/e2e-mysql-postgres.sh",
+        "hack/e2e-cdc-postgres.sh"
+      ],
+      "cases": [
+        "insert_update_delete",
+        "upsert",
+        "checkpoint_replay"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "sink",
       "type": "postgresql",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "postgres": "16"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-mysql-postgres.sh", "hack/e2e-cdc-postgres.sh"],
-      "cases": ["insert_update_delete", "upsert", "checkpoint_replay"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "mysql": "8.0.46",
+        "postgres": "16.14"
+      },
+      "started_at": "2026-08-08T07:16:04Z",
+      "finished_at": "2026-08-08T07:16:29Z",
+      "expires_at": "2026-09-07T07:16:29Z",
+      "scripts": [
+        "hack/e2e-mysql-postgres.sh",
+        "hack/e2e-cdc-postgres.sh"
+      ],
+      "cases": [
+        "insert_update_delete",
+        "upsert",
+        "checkpoint_replay"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "sink",
       "type": "clickhouse",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "clickhouse": "24.3.18.7"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-clickhouse.sh", "hack/e2e-snapshot-cdc-clickhouse.sh"],
-      "cases": ["schema_autocreate", "replacing_merge_tree", "outage_replay"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "mysql": "8.0.46",
+        "clickhouse": "24.3.18.7"
+      },
+      "started_at": "2026-08-08T07:16:37Z",
+      "finished_at": "2026-08-08T07:17:57Z",
+      "expires_at": "2026-09-07T07:17:57Z",
+      "scripts": [
+        "hack/e2e-clickhouse.sh",
+        "hack/e2e-snapshot-cdc-clickhouse.sh"
+      ],
+      "cases": [
+        "schema_autocreate",
+        "replacing_merge_tree",
+        "outage_replay"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     },
     {
       "kind": "sink",
       "type": "doris",
-      "commit": "0c39424",
-      "image": "sha256:3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f",
-      "dependencies": {"go": "1.24.13", "doris": "2.1.11", "redpanda": "documented"},
-      "started_at": "2026-08-08T00:00:00Z",
-      "finished_at": "2026-08-08T01:17:00Z",
-      "expires_at": "2026-09-07T01:17:00Z",
-      "scripts": ["hack/e2e-doris.sh"],
-      "cases": ["stream_load", "upsert", "outage_dlq_replay"],
-      "verified": false,
-      "note": "Baseline imported from documented evidence; refresh with a certification run before release."
+      "commit": "4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80",
+      "image": "sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "mysql": "8.0.46",
+        "doris": "2.1.11"
+      },
+      "started_at": "2026-08-08T07:20:01Z",
+      "finished_at": "2026-08-08T07:21:59Z",
+      "expires_at": "2026-09-07T07:21:59Z",
+      "scripts": [
+        "hack/e2e-doris.sh"
+      ],
+      "cases": [
+        "stream_load",
+        "upsert",
+        "outage_dlq_replay"
+      ],
+      "verified": true,
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
     }
   ]
 }

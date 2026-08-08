@@ -140,7 +140,7 @@ Roadmap 状态只使用以下值：
 | `PR-0` | 可靠、安全、持久化一致 | API/内存/DB 一致；加密恢复和生产安全默认值通过 | 当前 P0 完成或显式切换 | `delivered` |
 | `PR-1` | 易维护、安全 | secret、migration、backup/restore、upgrade/rollback 可重复 | `PR-0` | `delivered` (1.1/1.2/1.3) |
 | `PR-2` | 数据一致性 | 主推荐链路通过 crash/reset/outage/DLQ replay 对账 | `PR-0`，并复用 `PR-1` storage gate | `delivered` |
-| P3 | 证据治理 | maturity 与当前版本实际认证证据一致 | `PR-2` 定义 path gate | `queued` |
+| P3 | 证据治理 | maturity 与当前版本实际认证证据一致 | `PR-2` 定义 path gate | `delivered` |
 | P4 | 易上手 | 30 分钟首次任务与 10 分钟故障定位目标可验证 | `PR-0` 安全/profile 约定 | `delivered` |
 | P5 | 易维护、可观测 | 业务健康、资源基线、CI 和 production runbook 成为发布门槛 | `PR-1`、`PR-2` | `delivered` |
 | `PR-D1` | distributed 可靠性 | worker 认证、fencing、重试和真实多进程恢复通过 | standalone 收口后，或显式提前 | `delivered` |
@@ -656,7 +656,7 @@ Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard mu
 
 ### P3：成熟度事实源与认证覆盖扩展
 
-状态：`active`（2026-08-08 · P3.1/P3.2 delivered；剩余 evidence freshness gate）
+状态：`delivered`（2026-08-08 · P3.1/P3.2/P3.3.1/P3.3.2）
 
 当前领取记录：
 
@@ -713,7 +713,7 @@ P3.2 本轮验收矩阵（Round 5/5）：
 | 当前镜像/拓扑与故障证据 | image `3ec316269fc685b289c2ae5130fa9cf5460eaa1234d535bdc4b336be86e6c32f`；MySQL `8.0.46`；ClickHouse `24.3.18.7`；2026-08-08 09:17 CST；真实 API 覆盖 dynamic/fixed/normalized/wildcard-no-PK | passed | compose 复用共享 MySQL/ClickHouse 时输出 name-in-use 环境 warning，脚本退出码为 0 |
 | package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/server ./internal/etl/source -count=1`；`go vet ./internal/etl/server ./internal/etl/source`；`sh -n` 三个相关 e2e；`git diff --check` | passed | 无 |
 
-Round 5/5 后续交接：P3.1/P3.2 已交付，但 P3 总项仍保持 `active`。下一有界增量建议为 `P3.3 evidence freshness gate`：把 certification evidence 的 commit/image、依赖版本、实际执行时间和过期策略做成机器可检查输入，并在缺失/过期时把 readiness 自动降为 `production_with_review` 或更低。该工作不在本 goal 的 descriptor/schema 与多表 preflight 授权范围内，且默认五轮上限已到，不自动领取。
+Round 5/5 后续交接已由后续窗口完成：P3.3 将 certification evidence 的 commit/image、依赖版本、实际执行时间和过期策略收敛为机器可检查输入，并在缺失/过期时自动降低 readiness。
 
 目标：减少手写 maturity 字符串与测试证据之间的漂移。
 
@@ -753,11 +753,11 @@ P3.3.1 当前验收矩阵：
 
 | Criterion | Evidence | Result | Residual/blocker |
 | --- | --- | --- | --- |
-| 14 个 production source/sink 有唯一 manifest record 与 commit/image/dependency/time/scripts/cases | `internal/etl/server/evidence/connector-evidence.json`；`TestConnectorEvidenceManifestLoadsAndCoversProductionConnectors`；`go test ./internal/etl/server -run 'TestConnectorEvidence' -count=1` | passed | baseline records 保持 `verified:false`，等待真实认证 run 写回结果 |
+| 14 个 production source/sink 有唯一 manifest record 与 commit/image/dependency/time/scripts/cases | `internal/etl/server/evidence/connector-evidence.json`；`TestConnectorEvidenceManifestLoadsAndCoversProductionConnectors`；`go test ./internal/etl/server -run 'TestConnectorEvidence' -count=1` | passed | P3.3.2 已在真实认证后回写 `verified:true` |
 | manifest 重复键、时间窗口、脚本路径和 JSON 结构 deterministic 校验 | `ValidateConnectorEvidenceManifest`；`TestValidateConnectorEvidenceManifestRejectsStructuralDrift`；`sh -n hack/check-connector-evidence.sh` | passed | 无 |
-| readiness 自动区分 fresh/verified、unverified、expired、missing/corrupt | `TestConnectorEvidenceFreshnessControlsReadinessGate`；production descriptors 当前为 `production_with_review` | passed | strict release gate 仍按预期失败，避免把未执行 e2e 当作通过 |
+| readiness 自动区分 fresh/verified、unverified、expired、missing/corrupt | `TestConnectorEvidenceFreshnessControlsReadinessGate`；production descriptors 的 evidence gate 按 manifest freshness 派生 | passed | 当前 verified/fresh evidence gate 为 `pass`；过期后自动降级 |
 | descriptor/API 暴露 evidence metadata，认证 kit 不再要求 e2e gate 永远 pass | `ConnectorReadinessGate.evidence_metadata`；`TestConnectorCertificationKitProductionSet`；`go test ./internal/etl/server -count=1` | passed | 无 |
-| checker 可绑定 commit/image 并在 strict/expiry 模式失败 | `./hack/check-connector-evidence.sh`；`-strict` 与 `-now 2026-10-01T00:00:00Z` 负向验证 | passed | 当前 `verified:false` baseline 是明确残余，不标记 P3.3 delivered |
+| checker 可绑定 commit/image 并在 strict/expiry 模式失败 | `./hack/check-connector-evidence.sh`；commit ancestry/allowlist tests；`-strict`、expiry、image mismatch 负向验证 | passed | 证据回写提交只允许改 manifest/认证文档；runtime/script/workflow 变化要求重跑 |
 | package/race/static checks | `go test ./...`；`go test -race ./internal/etl/server -count=1`；`go vet ./...`；`git diff --check` | passed | Web `npm run typecheck/build` 在新 worktree 缺少 `web/node_modules`，未执行；本切片不改 Web 源码 |
 
 当前领取记录（Round 2/5）：
@@ -772,18 +772,19 @@ Non-goals: connector runtime 语义、checkpoint/UI 错误契约、MaxCompute �
 Dependencies: P3.3.1 manifest gate delivered；使用仓库标准 container runtime 和现有 production connector e2e fixtures。
 Acceptance: 1) 对每个 manifest record 对应脚本执行或记录明确 skip/block 原因；2) 只有脚本及其 required cases 全部通过的 record 才标记 verified=true，并回写 finished_at/expires_at/image；3) strict checker 在当前认证集合通过，在未验证/过期/commit-image 不匹配时非零；4) CI/release gate 调用同一 checker，外部环境缺失显示为 skip/block 而非 pass；5) package/race/vet、脚本语法、git diff --check 和认证文档证据更新通过。
 Evidence: `hack/e2e*.sh` 实际输出、`internal/etl/server/evidence/connector-evidence.json`、`hack/check-connector-evidence.sh`、`.github/workflows/*`、`docs/connector-certification.md`。
-Result: active
-Residual/follow-up: 需要凭据/服务的 connector（尤其 MaxCompute）保持 blocked_external；任何未完成 record 不得提升 P3 maturity。
+Result: delivered
+Residual/follow-up: MaxCompute/ODPS 仍为 experimental + blocked_external，不属于本次 production connector 集合；其成熟度不因本项提升。
 ```
 
-P3.3.2 执行前验收矩阵（待回写）：
+P3.3.2 验收矩阵：
 
 | Criterion | Evidence | Result | Residual/blocker |
 | --- | --- | --- | --- |
-| manifest 列出的 production connector 脚本逐项执行 | 每个脚本的实际命令输出与退出码 | pending | 共享依赖或外部凭据缺失必须记录 skip/block |
-| verified record 只来自完整通过的 required cases | manifest diff + script case assertions | pending | 不允许仅因脚本存在而标记 verified |
-| strict freshness/commit/image gate | `hack/check-connector-evidence.sh -strict` 及负向检查 | pending | manifest 更新后需绑定认证构建 |
-| CI/release 接入同一 gate | workflow diff + dry-run/negative run | pending | 外部 e2e 不得被静默降级为绿色 |
+| manifest 列出的 production connector 脚本逐项执行 | `docs/connector-certification.md` 记录 2026-08-08 UTC 的 13 个唯一脚本窗口；最终 run 13/13 退出 0 | passed | 初次探索暴露 expected-400、旧 app SQLite、Podman broker restart、Doris 端口/网络隔离问题，修复后在最终基线重跑 |
+| verified record 只来自完整通过的 required cases | `internal/etl/server/evidence/connector-evidence.json`：14/14 `verified:true`，逐记录 scripts/cases/time/dependencies | passed | MaxCompute/ODPS 未进入 production 集合，未伪造外部认证 |
+| strict freshness/commit/image gate | commit `4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80`；image `sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2`；checker 正向与 commit/image/expiry/runtime-change 负向检查 | passed | 仅 manifest 与两份认证文档可作为 certified commit 的后代变化 |
+| CI/release 接入同一 gate | `.github/workflows/test.yml`、`release.yml`、`release-beta-container.yml` 调用同一 checker，checkout 保留 ancestry | passed | PR 只做结构检查；main push/release 执行 strict gate |
+| package/race/static/syntax | `go test ./... -count=1`；`go test -race ./internal/etl/server ./hack/cmd/check-connector-evidence -count=1`；`go vet ./...`；相关 `bash -n`；`git diff --check` | passed | 无 |
 
 ### P4：首次任务体验残留收口
 

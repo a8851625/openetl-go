@@ -29,11 +29,11 @@ certified commit and image, dependency versions, execution window, expiry,
 scripts, and named cases. The descriptor API exposes the same metadata in the
 `evidence_metadata` object on the `e2e_evidence` readiness gate.
 
-The checked-in baseline is intentionally `verified: false` until the listed
-certification run has actually been executed for that build and environment.
-That state is reported as `partial` / `production_with_review`; it does not
-change connector maturity. Missing or malformed records are `missing`, and an
-expired verified record is `partial`.
+The checked-in records are `verified: true` only because every listed script
+and required case was executed against the recorded commit and image. An
+unverified record is reported as `partial` / `production_with_review` without
+changing connector maturity. Missing or malformed records are `missing`, and
+an expired verified record is `partial`.
 
 Run the structural checker from the repository root:
 
@@ -64,6 +64,30 @@ they change the evidence manifest or these certification documents; runtime,
 connector, script, and workflow changes require a fresh certification run.
 Image binding is checked when the release environment supplies a certified
 image digest.
+
+Latest checked-in certification (2026-08-08 UTC):
+
+- source commit: `4d16ff318a7583b8c9e51dd95cfcc0e940eb8a80`
+- image: `sha256:876ae664e462e695ef0682b523157a1943caceac98c4c77e1c361bc57fa774d2`
+- environment: Linux/arm64 image, Podman `5.8.2`, Go `1.24.13`
+- dependency set: MySQL `8.0.46`, PostgreSQL `16.14`, ClickHouse `24.3.18.7`, Redpanda `24.1.1`, Doris `2.1.11`, MinIO `RELEASE.2024-07-16T23-46-41Z`
+- result: 13 unique scripts passed; all 14 production source/sink records are verified through their per-record `expires_at`
+
+| Script | UTC window | Result |
+| --- | --- | --- |
+| `hack/e2e.sh` | 07:15:45-07:15:49 | passed |
+| `hack/e2e-http-source.sh` | 07:15:50-07:15:53 | passed |
+| `hack/e2e-mysql-postgres.sh` | 07:16:04-07:16:12 | passed |
+| `hack/e2e-cdc-mysql.sh` | 07:16:12-07:16:16 | passed |
+| `hack/e2e-cdc-postgres.sh` | 07:16:17-07:16:29 | passed |
+| `hack/e2e-snapshot-cdc.sh` | 07:16:30-07:16:36 | passed |
+| `hack/e2e-clickhouse.sh` | 07:16:37-07:16:42 | passed |
+| `hack/e2e-snapshot-cdc-clickhouse.sh` | 07:16:43-07:17:57 | passed |
+| `hack/e2e-kafka.sh` | 07:17:57-07:18:34 | passed |
+| `hack/e2e-kafka-raw-ods.sh` | 07:18:36-07:18:47 | passed |
+| `hack/e2e-debezium-mysql.sh` | 07:18:48-07:19:16 | passed |
+| `hack/e2e-s3-minio.sh` | 07:19:17-07:20:00 | passed |
+| `hack/e2e-doris.sh` | 07:20:01-07:21:59 | passed |
 
 The certified production connector set is:
 
