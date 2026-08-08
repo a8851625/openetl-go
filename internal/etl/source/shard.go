@@ -60,48 +60,61 @@ func readStringSlice(config map[string]any, key string) []string {
 	case []string:
 		out := make([]string, 0, len(values))
 		for _, value := range values {
-			if value != "" {
-				out = append(out, value)
-			}
+			out = append(out, flattenBrokerListText(value)...)
 		}
 		return out
 	case []any:
 		out := make([]string, 0, len(values))
 		for _, value := range values {
-			if s, ok := value.(string); ok && s != "" {
-				out = append(out, s)
+			if s, ok := value.(string); ok {
+				out = append(out, flattenBrokerListText(s)...)
 			}
 		}
 		return out
 	case string:
-		trimmed := strings.TrimSpace(values)
-		if trimmed == "" {
-			return nil
-		}
-		// API/UI updates sometimes carry a YAML sequence as a JSON string,
-		// e.g. `["redpanda:9092"]`. Decode that shape instead of passing the
-		// whole JSON literal to the Kafka client as one broker address.
-		if strings.HasPrefix(trimmed, "[") {
-			var decoded []string
-			if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
-				out := make([]string, 0, len(decoded))
-				for _, value := range decoded {
-					if value = strings.TrimSpace(value); value != "" {
-						out = append(out, value)
-					}
-				}
-				return out
-			}
-		}
-		// A bracket-prefixed scalar can be a valid IPv6 broker such as
-		// `[::1]:9092`; preserve it when it is not valid JSON.
-		return []string{trimmed}
+		return flattenBrokerListText(values)
 	default:
 		if raw != nil {
 			return []string{fmt.Sprint(raw)}
 		}
 	}
 	return nil
+}
+
+// flattenBrokerListText interprets a config scalar that may be a plain broker
+// address ("redpanda:9092", "[::1]:9092"), a JSON array of addresses
+// ("[\"redpanda:9092\"]", "[a:9092,b:9092]"), or a JSON string wrapping either
+// form. yaml<->json round-trips and UI form fields can produce every one of
+// these shapes; failing to flatten them passes the JSON literal verbatim to
+// the Kafka client, which then dials `["redpanda:9092"]` as a single address.
+func flattenBrokerListText(text string) []string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var decoded []string
+		if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+			out := make([]string, 0, len(decoded))
+			for _, value := range decoded {
+				if value = strings.TrimSpace(value); value != "" {
+					out = append(out, value)
+				}
+			}
+			return out
+		}
+	}
+	// A JSON string wrapping a JSON array ("[\"a:9092\"]") is emitted by some
+	// yaml<->json converters when the inner text already quotes the array.
+	if strings.HasPrefix(trimmed, "\"") {
+		var inner string
+		if err := json.Unmarshal([]byte(trimmed), &inner); err == nil {
+			return flattenBrokerListText(inner)
+		}
+	}
+	// A bracket-prefixed scalar can be a valid IPv6 broker such as
+	// `[::1]:9092`; preserve it when it is not valid JSON.
+	return []string{trimmed}
 }
 
 // readStringMap reads a map[string]string config value from the shapes

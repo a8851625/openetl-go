@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.5] — 2026-08-08 — mysql_snapshot_cdc unsigned 主键分类修复 + Kafka brokers 解析加固
+
+### 修复
+
+- **mysql_snapshot_cdc 无符号整型主键分类错误（严重）**：`pkKindForType` 先截掉列长度再匹配基础类型，但未截掉 `unsigned`/`zerofill` 后缀，导致 `bigint unsigned`、`int unsigned` 等无显示宽度的整型主键被误判为 `pkKindOrdered`（字符串游标）。后果：快照走字符串游标分页（`WHERE pk > '99'`），跨页时 `'100' < '99'` 字符串比较造成漏行/重复，且该路径禁用 MOD 分片，千万级表只能单线程扫描；多轮重跑叠加导致目标 topic 出现上亿重复消息。修复：截掉长度后额外截掉首个空格后的限定符，使 `bigint unsigned` → `bigint` → 数字游标；并新增 checkpoint 迁移桥，将历史 `last_strs` 中可解析为整数的字符串游标（如 `"99"`）回填到 `last_ids`，避免修复后从头重扫造成更多重复。
+- **Kafka brokers 配置解析加固**：`stringSliceField`（preflight）与 `readStringSlice`（runtime）此前只在字符串标量分支解析 JSON 数组文本，未处理「切片元素本身是 JSON 数组文本」（如 `[]interface{}{"[\"redpanda:9092\"]"}`）与双层 JSON 字符串包裹两种形态，导致 sarama 把字面量 `["redpanda:9092"]` 当作单个 broker 地址拨号，报 `missing port in address`。修复：提取递归扁平化 helper 覆盖纯地址、JSON 数组、JSON 字符串包裹三种形态；preflight 路径保留空元素以便继续诊断 "empty partition field" / "empty column name"。
+
+### 验证边界
+
+- `go vet ./internal/etl/...` 通过；`go test -race -count=1 ./internal/etl/...` 全部 24 个包通过。
+- 新增单测：`TestPKKindForType` 覆盖 `bigint unsigned`/`int unsigned`/`smallint unsigned` 等无宽度整型；`TestMigrateStringCursorsToNumeric` 覆盖 checkpoint 迁移桥；`TestStringSliceFieldFlattensNestedJSON`、`TestSourceConfigStringSliceNestedJSON`、`TestFlattenBrokerListText` 覆盖 brokers 解析。
+- `CONTAINER_CLI=podman bash hack/e2e-snapshot-cdc-heteropk.sh` 扩展为含 `audit_id BIGINT UNSIGNED` 表（含 100/101 三位数 id，旧代码会卡死超时），修复镜像 16 条记录全写成功（records_written=16），buggy 镜像失败（超时 got=0）。
+- 13 脚本 / 14 记录 connector 认证套件在本发布 commit 重新执行通过，详见 `docs/connector-certification.md`。
+
 ## [v0.2.12-beta.4] — 2026-08-08 — checkpoint 恢复 fail-closed + connector 认证证据门禁（beta）
 
 ### 新增

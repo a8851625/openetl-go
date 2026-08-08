@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.5] — 2026-08-08 — mysql_snapshot_cdc unsigned PK classification fix + Kafka brokers parsing hardening
+
+### Fixed
+
+- **mysql_snapshot_cdc misclassified unsigned integer primary keys (critical)**: `pkKindForType` stripped the column length but not the `unsigned`/`zerofill` suffix, so `bigint unsigned`, `int unsigned` and other display-width-less integer PKs fell through to `pkKindOrdered` (string cursor). Consequences: the snapshot paged with a string cursor (`WHERE pk > '99'`), which misses/replays rows across pages because `'100' < '99'` as strings, and that path disables MOD sharding so multi-million-row tables ran single-threaded; repeated full rescans stacked duplicates into the target topic. Fixed by also trimming the qualifier after the length so `bigint unsigned` → `bigint` → numeric cursor; added a checkpoint migration bridge that back-fills integer-valued string cursors (e.g. `"99"`) from legacy `last_strs` into `last_ids` so the snapshot resumes instead of replaying after the fix.
+- **Kafka brokers config parsing hardening**: `stringSliceField` (preflight) and `readStringSlice` (runtime) only decoded JSON array text on the string-scalar branch and left two shapes unhandled — a slice whose element is itself JSON array text (e.g. `[]interface{}{"[\"redpanda:9092\"]"}`) and a double-wrapped JSON string — so sarama dialled the literal `["redpanda:9092"]` as a single broker address and failed with `missing port in address`. Fixed by a recursive flatten helper covering plain addresses, JSON arrays, and JSON-string wrapping; the preflight path keeps empty elements so "empty partition field" / "empty column name" diagnostics still fire.
+
+### Verification Boundary
+
+- `go vet ./internal/etl/...` clean; `go test -race -count=1 ./internal/etl/...` passes all 24 packages.
+- New unit tests: `TestPKKindForType` covers width-less unsigned integer types; `TestMigrateStringCursorsToNumeric` covers the checkpoint bridge; `TestStringSliceFieldFlattensNestedJSON`, `TestSourceConfigStringSliceNestedJSON`, `TestFlattenBrokerListText` cover broker parsing.
+- `CONTAINER_CLI=podman bash hack/e2e-snapshot-cdc-heteropk.sh` extended with an `audit_id BIGINT UNSIGNED` table (ids 100/101 force three-digit cursor advance that the legacy string path breaks on); the fixed image writes all 16 records (records_written=16) while the buggy image times out (got=0).
+- 13-script / 14-record connector certification suite re-run at this release commit; see `docs/connector-certification.md`.
+
 ## [v0.2.12-beta.4] — 2026-08-08 — Checkpoint restore fail-closed + connector certification evidence gate (beta)
 
 ### Added

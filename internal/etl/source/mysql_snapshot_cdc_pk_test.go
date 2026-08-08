@@ -263,9 +263,16 @@ func TestPKKindForType(t *testing.T) {
 		want resolvedPKKind
 	}{
 		{"int(11)", pkKindNumeric},
+		{"int unsigned", pkKindNumeric},
+		{"int(11) unsigned", pkKindNumeric},
+		{"bigint", pkKindNumeric},
+		{"bigint unsigned", pkKindNumeric},
 		{"bigint(20) unsigned", pkKindNumeric},
 		{"smallint(6)", pkKindNumeric},
+		{"smallint unsigned", pkKindNumeric},
 		{"tinyint(1)", pkKindNumeric},
+		{"tinyint unsigned", pkKindNumeric},
+		{"mediumint unsigned", pkKindNumeric},
 		{"bit(1)", pkKindNumeric},
 		{"varchar(64)", pkKindOrdered},
 		{"char(36)", pkKindOrdered},
@@ -292,5 +299,38 @@ func TestCursorString(t *testing.T) {
 	}
 	if got := cursorString([]byte("xyz")); got != "xyz" {
 		t.Errorf("cursorString([]byte) = %q", got)
+	}
+}
+
+func TestMigrateStringCursorsToNumeric(t *testing.T) {
+	// Legacy checkpoint: audit_log (bigint unsigned PK) was misclassified as
+	// pkKindOrdered and checkpointed as last_strs={"audit_log":"99"}. The
+	// numeric cursor map is empty. After migration the table must resume from
+	// id=99 instead of replaying from id=0.
+	num := map[string]int64{}
+	migrateStringCursorsToNumeric(num, map[string]string{"audit_log": "99"})
+	if num["audit_log"] != 99 {
+		t.Fatalf("migrate audit_log: got %#v, want audit_log=99", num)
+	}
+
+	// A genuine non-numeric ordered cursor (e.g. datetime) must be left alone.
+	num = map[string]int64{}
+	migrateStringCursorsToNumeric(num, map[string]string{"events": "2026-01-01 00:00:00"})
+	if _, migrated := num["events"]; migrated {
+		t.Fatalf("non-integer cursor should not migrate: %#v", num)
+	}
+
+	// An existing numeric entry must win over a stale string cursor.
+	num = map[string]int64{"orders": 500}
+	migrateStringCursorsToNumeric(num, map[string]string{"orders": "1"})
+	if num["orders"] != 500 {
+		t.Fatalf("numeric cursor must win: got %d, want 500", num["orders"])
+	}
+
+	// Empty string cursors are ignored.
+	num = map[string]int64{}
+	migrateStringCursorsToNumeric(num, map[string]string{"orders": ""})
+	if len(num) != 0 {
+		t.Fatalf("empty cursor should not migrate: %#v", num)
 	}
 }

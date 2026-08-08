@@ -89,3 +89,68 @@ func TestSourceConfigStringSlices(t *testing.T) {
 		t.Fatalf("mysql_batch columns = %#v, want []string columns", mysqlBatch.columns)
 	}
 }
+
+// A slice whose only element is a JSON array literal (ui form fields and
+// yaml<->json round-trips can produce this shape) must flatten to the inner
+// broker addresses rather than passing the literal text to sarama.
+func TestSourceConfigStringSliceNestedJSON(t *testing.T) {
+	kafka, err := NewKafkaSource(map[string]any{
+		"brokers": []interface{}{`["redpanda:9092"]`},
+		"topic":   "events",
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaSource(nested JSON): %v", err)
+	}
+	if len(kafka.brokers) != 1 || kafka.brokers[0] != "redpanda:9092" {
+		t.Fatalf("nested JSON kafka brokers = %#v, want [redpanda:9092]", kafka.brokers)
+	}
+
+	multi, err := NewKafkaSource(map[string]any{
+		"brokers": []interface{}{`["a:9092", "b:9092"]`},
+		"topic":   "events",
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaSource(nested multi): %v", err)
+	}
+	if len(multi.brokers) != 2 || multi.brokers[0] != "a:9092" || multi.brokers[1] != "b:9092" {
+		t.Fatalf("nested multi kafka brokers = %#v, want [a:9092 b:9092]", multi.brokers)
+	}
+
+	wrapped, err := NewKafkaSource(map[string]any{
+		"brokers": `"[\"redpanda:9092\"]"`,
+		"topic":   "events",
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaSource(wrapped JSON): %v", err)
+	}
+	if len(wrapped.brokers) != 1 || wrapped.brokers[0] != "redpanda:9092" {
+		t.Fatalf("wrapped JSON kafka brokers = %#v, want [redpanda:9092]", wrapped.brokers)
+	}
+}
+
+func TestFlattenBrokerListText(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"   ", nil},
+		{"redpanda:9092", []string{"redpanda:9092"}},
+		{"[::1]:9092", []string{"[::1]:9092"}},
+		{`["redpanda:9092"]`, []string{"redpanda:9092"}},
+		{`["a:9092", "b:9092"]`, []string{"a:9092", "b:9092"}},
+		{`"redpanda:9092"`, []string{"redpanda:9092"}},
+		{`"[\"redpanda:9092\"]"`, []string{"redpanda:9092"}},
+	}
+	for i, c := range cases {
+		got := flattenBrokerListText(c.in)
+		if len(got) != len(c.want) {
+			t.Fatalf("case %d in=%q got=%#v want=%#v", i, c.in, got, c.want)
+		}
+		for j := range got {
+			if got[j] != c.want[j] {
+				t.Fatalf("case %d in=%q got=%#v want=%#v", i, c.in, got, c.want)
+			}
+		}
+	}
+}

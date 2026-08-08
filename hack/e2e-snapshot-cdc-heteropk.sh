@@ -10,8 +10,11 @@
 #   - tables=["*"] whole-database snapshot, no pk_column configured
 #   - table A: integer PK (order_id BIGINT) -> numeric cursor + MOD sharding path disabled
 #   - table B: varchar PK (user_no VARCHAR) -> ordered string cursor
-#   - historical snapshot rows copied for both tables
-#   - post-snapshot CDC insert/update applied for both tables
+#   - table C: unsigned integer PK (audit_id BIGINT UNSIGNED) -> numeric cursor,
+#     regression for the pkKindForType("bigint unsigned") misclassification that
+#     forced the string-cursor path and broke pagination past two-digit ids
+#   - historical snapshot rows copied for all three tables
+#   - post-snapshot CDC insert applied for all three tables
 #
 # Requires: docker/podman, docker-compose.dev.yml mysql-source healthy.
 
@@ -76,8 +79,10 @@ CREATE DATABASE IF NOT EXISTS heteropk_src;
 CREATE DATABASE IF NOT EXISTS heteropk_tgt;
 DROP TABLE IF EXISTS heteropk_src.orders;
 DROP TABLE IF EXISTS heteropk_src.users;
+DROP TABLE IF EXISTS heteropk_src.audit;
 DROP TABLE IF EXISTS heteropk_tgt.orders;
 DROP TABLE IF EXISTS heteropk_tgt.users;
+DROP TABLE IF EXISTS heteropk_tgt.audit;
 CREATE TABLE heteropk_src.orders (
   order_id BIGINT NOT NULL PRIMARY KEY,
   amount DECIMAL(10,2) NOT NULL,
@@ -87,6 +92,10 @@ CREATE TABLE heteropk_src.users (
   user_no VARCHAR(32) NOT NULL PRIMARY KEY,
   name VARCHAR(64) NOT NULL
 ) ENGINE=InnoDB;
+CREATE TABLE heteropk_src.audit (
+  audit_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  note VARCHAR(64) NOT NULL
+) ENGINE=InnoDB;
 INSERT INTO heteropk_src.orders (order_id, amount, status) VALUES
   (1001, 10.00, 'new'),
   (1002, 20.00, 'paid'),
@@ -94,8 +103,11 @@ INSERT INTO heteropk_src.orders (order_id, amount, status) VALUES
 INSERT INTO heteropk_src.users (user_no, name) VALUES
   ('U001', 'Alice'),
   ('U002', 'Bob');
+INSERT INTO heteropk_src.audit (audit_id, note) VALUES
+  (1, 'a'), (2, 'b'), (9, 'c'), (10, 'd'), (11, 'e'), (99, 'f'), (100, 'g'), (101, 'h');
 CREATE TABLE heteropk_tgt.orders LIKE heteropk_src.orders;
 CREATE TABLE heteropk_tgt.users LIKE heteropk_src.users;
+CREATE TABLE heteropk_tgt.audit LIKE heteropk_src.audit;
 GRANT ALL PRIVILEGES ON heteropk_src.* TO 'sync_user'@'%';
 GRANT ALL PRIVILEGES ON heteropk_tgt.* TO 'sync_user'@'%';
 FLUSH PRIVILEGES;
@@ -120,25 +132,33 @@ echo "==> Run whole-database snapshot+CDC pipeline (no pk_column, auto-detect)"
 
 wait_http "http://127.0.0.1:${PORT}/api/v2/health"
 
-echo "==> Wait snapshot copied (orders=3, users=2)"
+echo "==> Wait snapshot copied (orders=3, users=2, audit=8)"
 wait_count "SELECT COUNT(*) FROM heteropk_tgt.orders;" 3
 wait_count "SELECT COUNT(*) FROM heteropk_tgt.users;" 2
+wait_count "SELECT COUNT(*) FROM heteropk_tgt.audit;" 8
 
-echo "==> Emit CDC after snapshot (insert into both tables)"
+# The numeric cursor must have reached the three-digit ids (100, 101); the
+# legacy string-cursor path would have missed these because '100' < '99' as
+# strings, leaving them un-snapshotted.
+wait_count "SELECT COUNT(*) FROM heteropk_tgt.audit WHERE audit_id >= 100;" 2
+
+echo "==> Emit CDC after snapshot (insert into all three tables)"
 "$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 heteropk_src -e "
 INSERT INTO orders (order_id, amount, status) VALUES (1004, 40.00, 'new');
 INSERT INTO users (user_no, name) VALUES ('U003', 'Carol');
+INSERT INTO audit (audit_id, note) VALUES (102, 'cdc');
 "
 
-echo "==> Verify CDC copied (orders=4, users=3)"
+echo "==> Verify CDC copied (orders=4, users=3, audit=9)"
 wait_count "SELECT COUNT(*) FROM heteropk_tgt.orders;" 4
 wait_count "SELECT COUNT(*) FROM heteropk_tgt.users;" 3
+wait_count "SELECT COUNT(*) FROM heteropk_tgt.audit;" 9
 
 body="$(curl -fsS http://127.0.0.1:${PORT}/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep '"name":"heteropk-snapshot-cdc"' | grep '"status":"running"'
-# 3 orders + 2 users snapshot + 1 order + 1 user CDC = 7 writes
-echo "$body" | grep '"records_written":7'
+# 3 orders + 2 users + 8 audit snapshot + 1 order + 1 user + 1 audit CDC = 16 writes
+echo "$body" | grep '"records_written":16'
 
 test -f data-heteropk/etl.db
 

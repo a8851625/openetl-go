@@ -4315,33 +4315,67 @@ func stringSliceField(cfg map[string]any, key string) []string {
 	var result []string
 	switch arr := cfg[key].(type) {
 	case []string:
-		result = append(result, arr...)
+		for _, value := range arr {
+			// Preserve every list element (including empties) so preflight checks
+			// can surface "empty partition field" / "empty column name" issues.
+			flattened := flattenBrokerScalar(value)
+			if len(flattened) > 0 {
+				result = append(result, flattened...)
+			} else {
+				result = append(result, value)
+			}
+		}
 	case []interface{}:
 		for _, v := range arr {
 			if s, ok := v.(string); ok {
-				result = append(result, s)
+				flattened := flattenBrokerScalar(s)
+				if len(flattened) > 0 {
+					result = append(result, flattened...)
+				} else {
+					result = append(result, s)
+				}
 			}
 		}
 	case string:
-		trimmed := strings.TrimSpace(arr)
-		if strings.HasPrefix(trimmed, "[") {
-			var decoded []string
-			if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
-				for _, value := range decoded {
-					if value = strings.TrimSpace(value); value != "" {
-						result = append(result, value)
-					}
-				}
-				return result
-			}
-		}
-		// A bracket-prefixed scalar can be a valid IPv6 broker such as
-		// `[::1]:9092`; preserve it when it is not valid JSON.
-		if trimmed != "" {
-			result = append(result, trimmed)
+		// A top-level scalar is a single config value; drop pure-whitespace
+		// text but preserve everything else.
+		if strings.TrimSpace(arr) != "" {
+			result = append(result, flattenBrokerScalar(arr)...)
 		}
 	}
 	return result
+}
+
+// flattenBrokerScalar interprets a config scalar that may be a plain broker
+// address ("redpanda:9092", "[::1]:9092"), a JSON array of addresses
+// ("[\"redpanda:9092\"]", "[a:9092,b:9092]"), or a JSON string wrapping either
+// form. yaml<->json round-trips and UI form fields can produce every one of
+// these shapes; failing to flatten them passes the JSON literal verbatim to
+// the Kafka client, which then dials `["redpanda:9092"]` as a single address.
+// Returns nil for a plain empty/whitespace scalar so callers can decide
+// whether to preserve it as an explicit empty element.
+func flattenBrokerScalar(text string) []string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var decoded []string
+		if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+			return decoded
+		}
+	}
+	// A JSON string wrapping a JSON array ("[\"a:9092\"]") is emitted by some
+	// yaml<->json converters when the inner text already quotes the array.
+	if strings.HasPrefix(trimmed, "\"") {
+		var inner string
+		if err := json.Unmarshal([]byte(trimmed), &inner); err == nil {
+			return flattenBrokerScalar(inner)
+		}
+	}
+	// A bracket-prefixed scalar can be a valid IPv6 broker such as
+	// `[::1]:9092`; preserve it when it is not valid JSON.
+	return []string{trimmed}
 }
 
 func stringMapField(cfg map[string]any, key string) map[string]string {

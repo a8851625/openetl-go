@@ -1163,6 +1163,35 @@ func TestStringSliceFieldPreservesBracketedScalarBroker(t *testing.T) {
 	}
 }
 
+// A slice whose only element is a JSON array literal (ui form fields and
+// yaml<->json round-trips can produce this shape) must flatten to the inner
+// broker addresses rather than passing the literal to sarama, which would
+// otherwise dial `["redpanda:9092"]` as a single address.
+func TestStringSliceFieldFlattensNestedJSON(t *testing.T) {
+	cases := []struct {
+		in   any
+		want []string
+	}{
+		{[]interface{}{`["redpanda:9092"]`}, []string{"redpanda:9092"}},
+		{[]interface{}{`["a:9092", "b:9092"]`}, []string{"a:9092", "b:9092"}},
+		{[]string{`["redpanda:9092"]`}, []string{"redpanda:9092"}},
+		{`["redpanda:9092"]`, []string{"redpanda:9092"}},
+		{`"[\"redpanda:9092\"]"`, []string{"redpanda:9092"}},
+		{[]interface{}{"redpanda:9092"}, []string{"redpanda:9092"}},
+	}
+	for i, c := range cases {
+		got := stringSliceField(map[string]any{"brokers": c.in}, "brokers")
+		if len(got) != len(c.want) {
+			t.Fatalf("case %d in=%#v got=%#v want=%#v", i, c.in, got, c.want)
+		}
+		for j := range got {
+			if got[j] != c.want[j] {
+				t.Fatalf("case %d in=%#v got=%#v want=%#v", i, c.in, got, c.want)
+			}
+		}
+	}
+}
+
 func TestRunPreflightBlocksMissingKafkaSourceTopic(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()

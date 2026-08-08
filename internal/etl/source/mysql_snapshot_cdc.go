@@ -357,11 +357,19 @@ func (s *MySQLSnapshotCDCSource) classifyPKByName(ctx context.Context, db *sql.D
 
 func pkKindForType(columnType string) resolvedPKKind {
 	t := strings.ToLower(strings.TrimSpace(columnType))
-	// Strip length/type modifiers: "int(11) unsigned" -> "int", "varchar(64)" -> "varchar".
+	// Strip length/type modifiers: "int(11) unsigned" -> "int unsigned".
 	if i := strings.IndexByte(t, '('); i >= 0 {
 		t = t[:i]
 	}
 	t = strings.TrimSpace(t)
+	// Drop trailing qualifiers so "bigint unsigned" (the column_type MySQL
+	// reports for an unsigned bigint without a display width) is classified
+	// the same as "bigint". Without this, an `id bigint unsigned` primary key
+	// falls through to the string-cursor (pkKindOrdered) snapshot path, which
+	// disables MOD sharding and stores the cursor as a string.
+	if i := strings.Index(t, " "); i >= 0 {
+		t = t[:i]
+	}
 	switch t {
 	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "bit":
 		return pkKindNumeric
@@ -515,6 +523,12 @@ func (s *MySQLSnapshotCDCSource) Open(ctx context.Context, cp *core.Checkpoint) 
 		}
 		if len(pos.LastStrs) > 0 {
 			reader.tableLastStr = cloneStringCursorMap(pos.LastStrs)
+			// Migration: older releases misclassified `bigint unsigned`/`int unsigned`
+			// primary keys as pkKindOrdered and checkpointed their progress as
+			// string cursors in last_strs. pkKindForType now classifies them as
+			// numeric, so without a bridge the snapshot would restart those tables
+			// from id=0 and re-emit every row.
+			migrateStringCursorsToNumeric(reader.tableLastIDs, pos.LastStrs)
 		}
 		if pos.File != "" {
 			reader.file = pos.File
@@ -957,6 +971,36 @@ func parseSnapshotID(v any) (int64, error) {
 		return parseSnapshotID(string(id))
 	default:
 		return 0, fmt.Errorf("unsupported numeric value type %T", v)
+	}
+}
+
+// parseStrictIntCursor reports whether a string cursor carries an integer
+// value. It is used to migrate legacy string-cursor checkpoints (written
+// when an unsigned integer PK was misclassified as ordered) into numeric
+// cursors so the snapshot resumes instead of replaying the table.
+func parseStrictIntCursor(s string) (int64, bool) {
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// migrateStringCursorsToNumeric carries integer-valued string cursors forward
+// as numeric cursors. A numeric entry already present for a table wins, so a
+// correctly-checkpointed numeric cursor is never overwritten by a stale
+// string value.
+func migrateStringCursorsToNumeric(numeric map[string]int64, strs map[string]string) {
+	for table, strCursor := range strs {
+		if strCursor == "" {
+			continue
+		}
+		if _, hasNumeric := numeric[table]; hasNumeric {
+			continue
+		}
+		if n, ok := parseStrictIntCursor(strCursor); ok {
+			numeric[table] = n
+		}
 	}
 }
 
