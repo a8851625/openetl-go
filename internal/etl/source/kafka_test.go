@@ -155,10 +155,10 @@ func TestKafkaHandlerEnvelopeRestoresCDCSemantics(t *testing.T) {
 	// primary-key row (matches mysql_cdc / mysql_snapshot_cdc delete events).
 	envBytes, err := json.Marshal(map[string]any{
 		"event_id":  "evt-42",
-		"op":       string(core.OpDelete),
-		"table":    "orders",
-		"key":      "42",
-		"data":     map[string]any{"order_id": float64(42)},
+		"op":        string(core.OpDelete),
+		"table":     "orders",
+		"key":       "42",
+		"data":      map[string]any{"order_id": float64(42)},
 		"timestamp": "2026-08-06T10:00:00Z",
 	})
 	if err != nil {
@@ -191,6 +191,45 @@ func TestKafkaHandlerEnvelopeRestoresCDCSemantics(t *testing.T) {
 		}
 		if got, ok := rec.Data["order_id"].(float64); !ok || got != 42 {
 			t.Errorf("data.order_id = %#v, want 42", rec.Data["order_id"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("envelope record not delivered")
+	}
+}
+
+func TestKafkaHandlerEnvelopePreservesJSONKeyForMetadataDrivenUpsert(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "cdc-events", format: "envelope"}
+	reader := &kafkaReader{
+		source:           src,
+		records:          make(chan core.Record, 1),
+		offsets:          make(map[int32]int64),
+		committedOffsets: make(map[int32]int64),
+		sessions:         make(map[int32]sarama.ConsumerGroupSession),
+	}
+	sess := newFakeSession()
+	defer sess.cancel()
+	handler := &kafkaHandler{reader: reader}
+	envBytes, err := json.Marshal(map[string]any{
+		"event_id": "evt-json-key",
+		"op":       "UPDATE",
+		"table":    "orders",
+		"key":      `{"tenant_id":"t1","order_id":42}`,
+		"data":     map[string]any{"tenant_id": "t1", "order_id": 42, "amount": 12.5},
+	})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	claim := &fakeConsumerGroupClaim{ch: make(chan *sarama.ConsumerMessage, 1)}
+	claim.ch <- &sarama.ConsumerMessage{Topic: "cdc-events", Partition: 0, Offset: 8, Value: envBytes}
+	close(claim.ch)
+
+	if err := handler.ConsumeClaim(sess, claim); err != nil {
+		t.Fatalf("ConsumeClaim: %v", err)
+	}
+	select {
+	case rec := <-reader.records:
+		if rec.Metadata.Key != `{"tenant_id":"t1","order_id":42}` {
+			t.Fatalf("metadata key = %q, want JSON Debezium key", rec.Metadata.Key)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("envelope record not delivered")
@@ -434,14 +473,14 @@ func TestKafkaFetchConfigDefaults(t *testing.T) {
 // applied to the underlying sarama.Config before Validate().
 func TestKafkaFetchConfigAppliedToSarama(t *testing.T) {
 	s, err := NewKafkaSource(map[string]any{
-		"brokers":                 []any{"b1:9092"},
-		"topic":                   "cdc-events",
-		"fetch_min_bytes":         2048,
-		"fetch_max_bytes":         4 * 1024 * 1024,
-		"fetch_max_wait_ms":        250,
-		"channel_buffer_size":     512,
-		"max_processing_time_ms":  1000,
-		"max_open_requests":       3,
+		"brokers":                []any{"b1:9092"},
+		"topic":                  "cdc-events",
+		"fetch_min_bytes":        2048,
+		"fetch_max_bytes":        4 * 1024 * 1024,
+		"fetch_max_wait_ms":      250,
+		"channel_buffer_size":    512,
+		"max_processing_time_ms": 1000,
+		"max_open_requests":      3,
 	})
 	if err != nil {
 		t.Fatalf("NewKafkaSource: %v", err)
@@ -489,7 +528,7 @@ func TestKafkaFetchConfigYAMLParsing(t *testing.T) {
 		"topic":                  "events",
 		"fetch_min_bytes":        float64(4096),
 		"fetch_max_bytes":        float64(2 * 1024 * 1024),
-		"fetch_max_wait_ms":       float64(100),
+		"fetch_max_wait_ms":      float64(100),
 		"channel_buffer_size":    float64(128),
 		"max_processing_time_ms": float64(200),
 		"max_open_requests":      float64(10),

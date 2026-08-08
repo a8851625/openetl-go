@@ -1,6 +1,10 @@
 package source
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 // readShardConfig extracts shard_index and shard_total from a source config map.
 // Returns (0, 0) if not present (single-shard mode).
@@ -70,9 +74,28 @@ func readStringSlice(config map[string]any, key string) []string {
 		}
 		return out
 	case string:
-		if values != "" {
-			return []string{values}
+		trimmed := strings.TrimSpace(values)
+		if trimmed == "" {
+			return nil
 		}
+		// API/UI updates sometimes carry a YAML sequence as a JSON string,
+		// e.g. `["redpanda:9092"]`. Decode that shape instead of passing the
+		// whole JSON literal to the Kafka client as one broker address.
+		if strings.HasPrefix(trimmed, "[") {
+			var decoded []string
+			if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+				out := make([]string, 0, len(decoded))
+				for _, value := range decoded {
+					if value = strings.TrimSpace(value); value != "" {
+						out = append(out, value)
+					}
+				}
+				return out
+			}
+		}
+		// A bracket-prefixed scalar can be a valid IPv6 broker such as
+		// `[::1]:9092`; preserve it when it is not valid JSON.
+		return []string{trimmed}
 	default:
 		if raw != nil {
 			return []string{fmt.Sprint(raw)}

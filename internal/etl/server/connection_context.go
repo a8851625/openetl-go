@@ -1406,6 +1406,27 @@ func stringSlice(v any) []string {
 			}
 		}
 		return out
+	case string:
+		trimmed := strings.TrimSpace(vv)
+		if trimmed == "" {
+			return nil
+		}
+		// Connection updates can carry a string-array field as a JSON string
+		// (for example `["broker:9092"]` after an API round trip). Keep
+		// introspection consistent with source runtime and pipeline preflight.
+		if strings.HasPrefix(trimmed, "[") {
+			var decoded []string
+			if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+				out := make([]string, 0, len(decoded))
+				for _, item := range decoded {
+					if item = strings.TrimSpace(item); item != "" {
+						out = append(out, item)
+					}
+				}
+				return out
+			}
+		}
+		return []string{trimmed}
 	default:
 		return nil
 	}

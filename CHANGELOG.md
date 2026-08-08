@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Doris/Kafka preflight and runtime contract**: Doris `table_template` no longer triggers a false missing-static-table error. With `pk_columns_from_metadata: true`, Doris derives composite keys from JSON-object Kafka envelope keys for compaction, upsert, DELETE, and auto-create DDL; scalar keys fail with actionable remediation. A `debezium_cdc` transform alone no longer bypasses the stable-key check.
+- **Kafka broker array compatibility**: source/sink runtime, connection context, and preflight now parse JSON-string arrays such as `"[\"broker:9092\"]"`, while preserving YAML arrays, ordinary single-string values, and IPv6 brokers.
+
+### Verification Boundary
+
+- `go test ./... -count=1`, targeted `-race` tests, and frontend typecheck/build/lint pass. `CONTAINER_CLI=podman sh hack/e2e-doris-table-template.sh` also passed live with `auto_create: true` generating orders.order_id/users.user_no Unique Key DDL, six envelope records, `records_read=6 records_written=6 failed=0 dlq=0`, the final metadata-key update assertion, and metadata-key DELETE verification.
+
 ## [v0.2.12-beta.1] — 2026-08-06 — Lightweight DWH scenario + Kafka CDC relay link (beta)
 
 First beta targeting the "lightweight data warehouse" scenario. Adds the

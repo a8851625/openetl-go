@@ -666,14 +666,15 @@ sink:
 | `table` | 否 | | 目标表名。与 `table_template` 配合时可留空，按记录 metadata 路由。 |
 | `table_template` | 否 | | 按记录路由目标表的模板（如 `ods_{table}`）。`{table}`/`{db}` 从记录 metadata 替换；可将一个混合多表的流（如 kafka source 用 `format: envelope`）从一个 sink 扇出到多张 Doris 表。该模式跳过单表 schema preflight；需预建所有路由目标表或设 `auto_create: true`。 |
 | `write_mode` | 否 | `stream_load` | `stream_load` 或 MySQL 协议 `insert` fallback。 |
-| `batch_mode` | 否 | `insert` | `insert` 或 `upsert`。生产 CDC/upsert 需要 Doris Unique Key 表和稳定 `pk_columns`。 |
+| `batch_mode` | 否 | `insert` | `insert` 或 `upsert`。生产 CDC/upsert 需要 Doris Unique Key 表和稳定 `pk_columns`，或显式开启 `pk_columns_from_metadata: true`。 |
 | `pk_columns` | 否 | | DELETE、自动创建 Unique Key 表和 replay-safe upsert 校验使用的业务主键列。 |
+| `pk_columns_from_metadata` | 否 | `false` | 从 JSON 对象形式的 `record.metadata.key`（Debezium/Kafka envelope）按表推导主键列，支持复合键和 DELETE；标量 key 必须使用静态 `pk_columns`。 |
 | `stream_load_format` | 否 | `json` | `json` 或 `csv`。 |
 | `stream_load_scheme` | 否 | `http` | `http` 或 `https`。 |
 | `stream_load_timeout_sec` | 否 | `30` | Stream Load HTTP 超时时间，单位秒。 |
 | `insert_chunk_size` | 否 | `500` | 使用 `write_mode: insert` 时每个 INSERT 语句的行数。 |
 | `tls_skip_verify` | 否 | `false` | 跳过 TLS 证书校验。 |
-| `auto_create` | 否 | `false` | 自动创建 Doris Unique Key 表。未配置 `pk_columns` 时必须存在 `id` 字段。 |
+| `auto_create` | 否 | `false` | 自动创建 Doris Unique Key 表。未配置 `pk_columns` 且未显式开启 `pk_columns_from_metadata: true` 时必须存在 `id` 字段。 |
 | `schema_drift` | 否 | `ignore` | `ignore`、`fail` 或 `add_columns`。 |
 | `ddl_policy` | 否 | `reject` | `reject`、`ignore` 或 `apply`。生产默认拒绝源端 DDL；Doris `apply` 仅允许安全的 `ALTER TABLE ... ADD COLUMN` 子集。 |
 | `allow_mixed_cdc_non_atomic` | 否 | `false` | 允许混合 write/delete CDC 批次，需接受 Stream Load 与 MySQL DELETE 非原子语义。 |

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -631,7 +632,7 @@ func TestConnectionContextIntrospectsKafkaSink(t *testing.T) {
 		"kind": "sink",
 		"type": "kafka",
 		"config": map[string]any{
-			"brokers": []string{broker.Addr()},
+			"brokers": fmt.Sprintf("[%q]", broker.Addr()),
 			"topic":   "ods.orders",
 		},
 	})

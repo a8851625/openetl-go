@@ -985,6 +985,18 @@ func stringSliceConfig(config map[string]any, key string) []string {
 				out = append(out, s)
 			}
 		}
+	case string:
+		trimmed := strings.TrimSpace(vv)
+		if strings.HasPrefix(trimmed, "[") {
+			var decoded []string
+			if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+				out = append(out, decoded...)
+			} else if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		} else if trimmed != "" {
+			out = append(out, trimmed)
+		}
 	}
 	for i := range out {
 		out[i] = strings.TrimSpace(out[i])

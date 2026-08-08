@@ -3,33 +3,39 @@ package sink
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 func TestDorisConfigParsing(t *testing.T) {
 	s, err := NewDorisSink(map[string]any{
-		"host":                    "doris.example.com",
-		"port":                    9030,
-		"http_port":               8030,
-		"user":                    "etl",
-		"password":                "secret",
-		"database":                "warehouse",
-		"table":                   "orders",
-		"write_mode":              "stream_load",
-		"batch_mode":              "upsert",
-		"pk_columns":              []interface{}{"order_id"},
-		"stream_load_format":      "csv",
-		"stream_load_timeout_sec": 60,
-		"insert_chunk_size":       200,
-		"auto_create":             true,
-		"schema_drift":            "add_columns",
+		"host":                     "doris.example.com",
+		"port":                     9030,
+		"http_port":                8030,
+		"user":                     "etl",
+		"password":                 "secret",
+		"database":                 "warehouse",
+		"table":                    "orders",
+		"write_mode":               "stream_load",
+		"batch_mode":               "upsert",
+		"pk_columns":               []interface{}{"order_id"},
+		"pk_columns_from_metadata": true,
+		"stream_load_format":       "csv",
+		"stream_load_timeout_sec":  60,
+		"insert_chunk_size":        200,
+		"auto_create":              true,
+		"schema_drift":             "add_columns",
 	})
 	if err != nil {
 		t.Fatalf("NewDorisSink: %v", err)
@@ -54,6 +60,9 @@ func TestDorisConfigParsing(t *testing.T) {
 	}
 	if len(s.pkColumns) != 1 || s.pkColumns[0] != "order_id" {
 		t.Errorf("pk_columns = %v", s.pkColumns)
+	}
+	if !s.pkColumnsFromMetadata {
+		t.Error("pk_columns_from_metadata = false, want true")
 	}
 	if s.streamLoadFormat != "csv" {
 		t.Errorf("stream_load_format = %q", s.streamLoadFormat)
@@ -137,6 +146,101 @@ func TestDorisBuildJSONBody(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], `"name":"bob"`) {
 		t.Errorf("second line missing name:bob: %s", lines[1])
+	}
+}
+
+func TestDorisWriteCompactsUsingEnvelopeMetadataKey(t *testing.T) {
+	var bodies []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read stream load body: %v", err)
+		}
+		bodies = append(bodies, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Status":"Success","StatusCode":200,"NumberTotalRows":1,"NumberLoadedRows":1}`))
+	}))
+	defer ts.Close()
+
+	host, portText, err := net.SplitHostPort(strings.TrimPrefix(ts.URL, "http://"))
+	if err != nil {
+		t.Fatalf("parse test server URL: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse test server port: %v", err)
+	}
+	s := &DorisSink{
+		host:                  host,
+		httpPort:              port,
+		database:              "ods",
+		tableTemplate:         "ods_{table}",
+		pkColumnsFromMetadata: true,
+		streamLoadScheme:      "http",
+		streamLoadFormat:      "json",
+		httpClient:            ts.Client(),
+		insertChunkSize:       500,
+		streamLoadTimeout:     time.Second,
+		schemaCache:           core.NewSchemaCache(),
+	}
+	records := []core.Record{
+		{Operation: core.OpUpdate, Data: map[string]any{"id": 1, "value": "old"}, Metadata: core.Metadata{Table: "orders", Key: `{"id":1}`}},
+		{Operation: core.OpUpdate, Data: map[string]any{"id": 1, "value": "new"}, Metadata: core.Metadata{Table: "orders", Key: `{"id":1}`}},
+	}
+	if err := s.Write(context.Background(), records); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("stream load requests = %d, want 1", len(bodies))
+	}
+	if strings.Count(strings.TrimSpace(bodies[0]), "\n") != 0 || !strings.Contains(bodies[0], `"value":"new"`) || strings.Contains(bodies[0], `"value":"old"`) {
+		t.Fatalf("compacted stream load body = %q, want only final record", bodies[0])
+	}
+}
+
+func TestDorisWriteCompactsMetadataKeyWithStaticTargetAndEmptySourceTable(t *testing.T) {
+	var bodies []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read stream load body: %v", err)
+		}
+		bodies = append(bodies, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Status":"Success","StatusCode":200,"NumberTotalRows":1,"NumberLoadedRows":1}`))
+	}))
+	defer ts.Close()
+
+	host, portText, err := net.SplitHostPort(strings.TrimPrefix(ts.URL, "http://"))
+	if err != nil {
+		t.Fatalf("parse test server URL: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse test server port: %v", err)
+	}
+	s := &DorisSink{
+		host:                  host,
+		httpPort:              port,
+		database:              "ods",
+		table:                 "orders",
+		pkColumnsFromMetadata: true,
+		streamLoadScheme:      "http",
+		streamLoadFormat:      "json",
+		httpClient:            ts.Client(),
+		insertChunkSize:       500,
+		streamLoadTimeout:     time.Second,
+		schemaCache:           core.NewSchemaCache(),
+	}
+	records := []core.Record{
+		{Operation: core.OpUpdate, Data: map[string]any{"order_id": 1, "value": "old"}, Metadata: core.Metadata{Key: `{"order_id":1}`}},
+		{Operation: core.OpUpdate, Data: map[string]any{"order_id": 1, "value": "new"}, Metadata: core.Metadata{Key: `{"order_id":1}`}},
+	}
+	if err := s.Write(context.Background(), records); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(bodies) != 1 || strings.Contains(bodies[0], `"value":"old"`) || !strings.Contains(bodies[0], `"value":"new"`) {
+		t.Fatalf("static-target compact body = %q, want only final record", bodies)
 	}
 }
 
@@ -333,6 +437,125 @@ func TestDorisCreateTableRequiresStableKey(t *testing.T) {
 	_, err := s.buildCreateTableDDL("events", []string{"event_name", "payload"}, map[string]any{"payload": "{}"})
 	if err == nil || !strings.Contains(err.Error(), "pk_columns is required") {
 		t.Fatalf("buildCreateTableDDL error = %v, want pk_columns required", err)
+	}
+}
+
+func TestDorisMetadataKeyColumnsFromEnvelope(t *testing.T) {
+	s, err := NewDorisSink(map[string]any{
+		"host":                     "fe",
+		"database":                 "ods",
+		"table_template":           "ods_{table}",
+		"batch_mode":               "upsert",
+		"pk_columns_from_metadata": true,
+	})
+	if err != nil {
+		t.Fatalf("NewDorisSink: %v", err)
+	}
+	pkByTable, err := s.pkColumnsByTable([]core.Record{{
+		Metadata: core.Metadata{
+			Table: "orders",
+			Key:   `{"tenant_id":"t1","order_id":42}`,
+		},
+		Data: map[string]any{"tenant_id": "t1", "order_id": 42, "amount": 10},
+	}})
+	if err != nil {
+		t.Fatalf("pkColumnsByTable: %v", err)
+	}
+	if got := pkByTable["orders"]; !sameIdentifierSet(got, []string{"order_id", "tenant_id"}) {
+		t.Fatalf("metadata pk columns = %v, want [order_id tenant_id]", got)
+	}
+	nestedPK, err := s.pkColumnsByTable([]core.Record{{
+		Metadata: core.Metadata{Table: "orders", Key: `{"schema":{},"payload":{"order_id":42}}`},
+		Data:     map[string]any{"order_id": 42},
+	}})
+	if err != nil {
+		t.Fatalf("nested metadata key: %v", err)
+	}
+	if got := nestedPK["orders"]; !sameIdentifierSet(got, []string{"order_id"}) {
+		t.Fatalf("nested metadata pk columns = %v, want [order_id]", got)
+	}
+	ddl, err := s.buildCreateTableDDLWithPK("ods_orders", []string{"tenant_id", "order_id", "amount"}, map[string]any{
+		"tenant_id": "t1",
+		"order_id":  int64(42),
+		"amount":    10,
+	}, pkByTable["orders"])
+	if err != nil {
+		t.Fatalf("buildCreateTableDDLWithPK: %v", err)
+	}
+	if !strings.Contains(ddl, "UNIQUE KEY(`order_id`, `tenant_id`)") && !strings.Contains(ddl, "UNIQUE KEY(`tenant_id`, `order_id`)") {
+		t.Fatalf("DDL missing metadata-derived composite key:\n%s", ddl)
+	}
+}
+
+func TestDorisMetadataKeyColumnsRejectScalarEnvelopeKey(t *testing.T) {
+	s := &DorisSink{tableTemplate: "ods_{table}", pkColumnsFromMetadata: true}
+	_, err := s.pkColumnsByTable([]core.Record{{Metadata: core.Metadata{Table: "orders", Key: `"42"`}}})
+	if err == nil || !strings.Contains(err.Error(), "non-empty JSON object") {
+		t.Fatalf("scalar metadata key error = %v, want actionable JSON-object error", err)
+	}
+}
+
+func TestDorisValidateSchemaAllowsMetadataPKAutoCreate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	s := &DorisSink{
+		db:                    db,
+		database:              "ods",
+		table:                 "orders",
+		batchMode:             "upsert",
+		autoCreate:            true,
+		pkColumnsFromMetadata: true,
+		schemaCache:           core.NewSchemaCache(),
+	}
+	expectation := mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?"))
+	expectation.WithArgs("ods", "orders").WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(0))
+
+	err = s.ValidateSchema(context.Background(), core.SchemaInfo{Columns: []core.ColumnInfo{{Name: "order_id", DataType: "BIGINT"}}})
+	if err != nil {
+		t.Fatalf("ValidateSchema: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("schema expectation: %v", err)
+	}
+}
+
+func TestDorisDeleteUsesEnvelopeMetadataKey(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	s := &DorisSink{
+		db:                    db,
+		tableTemplate:         "ods_{table}",
+		pkColumnsFromMetadata: true,
+		insertChunkSize:       500,
+		schemaCache:           core.NewSchemaCache(),
+	}
+	expectation := mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `ods_orders` WHERE (`order_id`=? AND `tenant_id`=?)"))
+	expectation.WithArgs(int64(42), "t1").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = s.Write(context.Background(), []core.Record{{
+		Operation: core.OpDelete,
+		Data: map[string]any{
+			"tenant_id": "t1",
+			"order_id":  int64(42),
+		},
+		Metadata: core.Metadata{
+			Table: "orders",
+			Key:   `{"tenant_id":"t1","order_id":42}`,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Write delete: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("delete expectation: %v", err)
 	}
 }
 

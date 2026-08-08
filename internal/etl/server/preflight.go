@@ -666,9 +666,9 @@ func isSupportedKafkaCompression(compression string) bool {
 }
 
 // hasDebeziumCDCTransform reports whether the pipeline carries a debezium_cdc
-// transform. Such pipelines derive the target table and primary key columns
-// from Debezium record metadata at runtime, so static sink.config.table and
-// sink.config.pk_columns requirements are relaxed.
+// transform. Such pipelines can derive the target table from record metadata
+// when the sink is configured for metadata routing. Primary-key derivation is
+// checked separately because each sink must explicitly opt in.
 func hasDebeziumCDCTransform(spec *pipeline.Spec) bool {
 	if spec == nil {
 		return false
@@ -682,10 +682,17 @@ func hasDebeziumCDCTransform(spec *pipeline.Spec) bool {
 }
 
 // sinkDerivesTableFromMetadata reports whether the sink is expected to derive
-// its target table from per-record metadata (e.g. Debezium CDC multi-table
-// sync). This requires auto_create so missing target tables can be created on
-// the fly.
+// its target table from per-record metadata (e.g. Debezium CDC or Doris's
+// table_template-fed Kafka envelope). A non-empty Doris table_template is an
+// explicit routing contract, so a static table is not required; auto_create
+// remains an independent choice for missing routed tables.
 func sinkDerivesTableFromMetadata(spec *pipeline.Spec) bool {
+	if spec == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(spec.Sink.Type), "doris") && strings.TrimSpace(stringField(spec.Sink.Config, "table_template", "")) != "" {
+		return true
+	}
 	return hasDebeziumCDCTransform(spec) && boolField(spec.Sink.Config, "auto_create", false)
 }
 
@@ -693,10 +700,17 @@ func sinkDerivesTableFromMetadata(spec *pipeline.Spec) bool {
 // primary key columns from per-record metadata (e.g. Debezium key payload)
 // instead of a static sink.config.pk_columns list.
 func sinkDerivesPKFromMetadata(spec *pipeline.Spec) bool {
-	if boolField(spec.Sink.Config, "pk_columns_from_metadata", false) {
-		return true
+	if spec == nil {
+		return false
 	}
-	return hasDebeziumCDCTransform(spec)
+	switch strings.ToLower(strings.TrimSpace(spec.Sink.Type)) {
+	case "mysql", "doris":
+		return boolField(spec.Sink.Config, "pk_columns_from_metadata", false)
+	default:
+		// The flag is not implemented by the other relational sinks yet. Do
+		// not let an unknown field suppress a required stable-key check.
+		return false
+	}
 }
 
 func checkRelationalSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
@@ -3890,6 +3904,24 @@ func stringSliceField(cfg map[string]any, key string) []string {
 			if s, ok := v.(string); ok {
 				result = append(result, s)
 			}
+		}
+	case string:
+		trimmed := strings.TrimSpace(arr)
+		if strings.HasPrefix(trimmed, "[") {
+			var decoded []string
+			if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+				for _, value := range decoded {
+					if value = strings.TrimSpace(value); value != "" {
+						result = append(result, value)
+					}
+				}
+				return result
+			}
+		}
+		// A bracket-prefixed scalar can be a valid IPv6 broker such as
+		// `[::1]:9092`; preserve it when it is not valid JSON.
+		if trimmed != "" {
+			result = append(result, trimmed)
 		}
 	}
 	return result

@@ -13,6 +13,16 @@ func TestSinkConfigStringSlices(t *testing.T) {
 	if len(kafka.brokers) != 2 || kafka.brokers[0] != "b1:9092" || kafka.brokers[1] != "b2:9092" {
 		t.Fatalf("kafka brokers = %#v, want []string brokers", kafka.brokers)
 	}
+	kafkaJSON, err := NewKafkaSink(map[string]any{
+		"brokers": `["b1:9092"]`,
+		"topic":   "events",
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaSink(JSON brokers): %v", err)
+	}
+	if len(kafkaJSON.brokers) != 1 || kafkaJSON.brokers[0] != "b1:9092" {
+		t.Fatalf("JSON-string kafka brokers = %#v, want [b1:9092]", kafkaJSON.brokers)
+	}
 
 	mysql, err := NewMySQLSink(map[string]any{"pk_columns": []string{"id", "tenant_id"}})
 	if err != nil {
@@ -20,6 +30,13 @@ func TestSinkConfigStringSlices(t *testing.T) {
 	}
 	if len(mysql.pkColumns) != 2 || mysql.pkColumns[0] != "id" || mysql.pkColumns[1] != "tenant_id" {
 		t.Fatalf("mysql pk_columns = %#v, want []string pk_columns", mysql.pkColumns)
+	}
+	mysqlJSON, err := NewMySQLSink(map[string]any{"pk_columns": `["id","tenant_id"]`})
+	if err != nil {
+		t.Fatalf("NewMySQLSink(JSON pk_columns): %v", err)
+	}
+	if len(mysqlJSON.pkColumns) != 2 || mysqlJSON.pkColumns[0] != "id" || mysqlJSON.pkColumns[1] != "tenant_id" {
+		t.Fatalf("JSON-string mysql pk_columns = %#v, want [id tenant_id]", mysqlJSON.pkColumns)
 	}
 
 	postgres, err := NewPostgresSink(map[string]any{"pk_columns": []string{"id", "tenant_id"}})

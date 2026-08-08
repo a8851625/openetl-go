@@ -742,14 +742,15 @@ sink:
 | `table` | no | | Target table name. Leave empty with `table_template` to route per-record by metadata. |
 | `table_template` | no | | Per-record target table template (e.g. `ods_{table}`). `{table}`/`{db}` substitute from record metadata; fans out a mixed multi-table stream (e.g. kafka source with `format: envelope`) into multiple Doris tables from one sink. Single-table schema preflight is skipped in this mode; pre-create all routed Unique Key tables or set `auto_create: true`. |
 | `write_mode` | no | `stream_load` | `stream_load` or MySQL-protocol `insert` fallback. |
-| `batch_mode` | no | `insert` | `insert` or `upsert`. Production CDC/upsert requires a Doris Unique Key table and stable `pk_columns`. |
+| `batch_mode` | no | `insert` | `insert` or `upsert`. Production CDC/upsert requires a Doris Unique Key table and stable `pk_columns` or `pk_columns_from_metadata: true`. |
 | `pk_columns` | no | | Key columns for DELETE, auto-created Unique Key tables, and replay-safe upsert validation. |
+| `pk_columns_from_metadata` | no | `false` | Derive per-table key columns from a JSON-object `record.metadata.key` (Debezium/Kafka envelope). Supports composite keys and DELETEs; scalar keys must use static `pk_columns`. |
 | `stream_load_format` | no | `json` | `json` or `csv`. |
 | `stream_load_scheme` | no | `http` | `http` or `https`. |
 | `stream_load_timeout_sec` | no | `30` | Stream Load HTTP timeout in seconds. |
 | `insert_chunk_size` | no | `500` | Rows per INSERT statement when `write_mode: insert` is used. |
 | `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
-| `auto_create` | no | `false` | Auto-create missing Doris Unique Key tables. If no `pk_columns` are set, an `id` column is required. |
+| `auto_create` | no | `false` | Auto-create missing Doris Unique Key tables. If neither `pk_columns` nor `pk_columns_from_metadata: true` is set, an `id` column is required. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
 | `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. The production default rejects source DDL; Doris `apply` is limited to safe `ALTER TABLE ... ADD COLUMN` statements. |
 | `allow_mixed_cdc_non_atomic` | no | `false` | Allow mixed write/delete CDC batches even though Stream Load and MySQL DELETE are not atomic together. |

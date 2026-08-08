@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **Doris/Kafka 配置 preflight 与运行时契约收口**：Doris `table_template` 不再被误报为缺少静态 `sink.config.table`；`pk_columns_from_metadata: true` 现在从 Kafka envelope 的 JSON object key 推导复合主键，覆盖 batch compact、upsert、DELETE 和 auto-create DDL，标量 key 会给出明确 remediation；仅有 `debezium_cdc` transform 不再隐式绕过主键检查。
+- **Kafka brokers 字符串数组兼容**：source/sink runtime、connection context 与 preflight 统一解析 `"[\"broker:9092\"]"` 形式的 JSON 字符串数组，同时保留真实 YAML 数组、普通单字符串和 IPv6 broker 兼容。
+
+### 验证边界
+
+- `go test ./... -count=1`、`go test -race ./internal/etl/server ./internal/etl/sink ./internal/etl/source -count=1`、前端 typecheck/build/lint 均通过；`CONTAINER_CLI=podman sh hack/e2e-doris-table-template.sh` 实跑通过（`auto_create: true` 实际生成 orders.order_id/users.user_no Unique Key DDL；6 条 envelope，`records_read=6 records_written=6 failed=0 dlq=0`，metadata-key update 最终值和 DELETE 后 users 表行数校验均通过）。
+
 ## [v0.2.12-beta.3] — 2026-08-08 — Doris sink table_template 多表扇出 + kafka source format=envelope（beta）
 
 ### 新增
@@ -18,7 +27,7 @@
 ### 残留边界
 
 - **Doris Stream Load `LABEL_ALREADY_EXISTS`**：doris sink 的 stream load label = `hash(db.table|body)`，设计上用于幂等去重。当不同次写入的 body 字节完全相同时（如 e2e 重复跑同一条消息），Doris 会以 `LABEL_ALREADY_EXISTS` 拒绝该 load。当前 sink 对该响应的失败判定可能存在既有 bug（误报 written 成功），已登记为独立的有界增强后续处理。生产侧建议确保写入内容带版本/时间戳使 label 天然唯一。
-- **`table_template` + `auto_create` + 异构主键**：单 sink 只有一个 `pk_columns` 配置，无法同时为不同主键的多张表 auto-create 正确的 Unique Key 表。异构主键多表场景需预建 Doris 表（本版 e2e 即采用此模式），或每张表一个 sink。
+- **`table_template` + `auto_create` + 异构主键**：未开启 metadata PK 时，单 sink 只有一个 `pk_columns` 配置，无法同时为不同主键的多张表 auto-create 正确的 Unique Key 表；开启 `pk_columns_from_metadata: true` 并提供 JSON object key 后，运行时可按表生成对应 Unique Key DDL。标量 key 仍需预建表或静态 `pk_columns`。
 
 ### 验证（本机收口）
 

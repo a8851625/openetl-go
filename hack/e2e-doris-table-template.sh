@@ -10,12 +10,13 @@
 #   - envelope messages for two tables (orders, users) are produced into ONE
 #     Kafka topic via rpk
 #   - one pipeline: kafka source(topic, format=envelope) -> doris sink(
-#     table_template="{table}", auto_create)
+#     table_template="{table}", pk_columns_from_metadata=true)
 #
 # Coverage:
 #   - kafka source format=envelope restores Table metadata from envelope
-#   - doris sink table_template="{table}" fans out to ods.orders / ods.users
-#   - auto_create builds both Doris UNIQUE KEY tables from streamed data
+#   - doris sink table_template="{table}" fans out to orders / users
+#   - JSON-object envelope keys drive per-table UNIQUE KEY upserts
+#   - pk_columns_from_metadata supplies heterogeneous auto-create Unique Key DDL
 #
 # SKIP (exit 77) when Doris FE/BE or Redpanda is not available; this is a skip,
 # not a pass. Core routing logic is covered by unit tests
@@ -87,21 +88,13 @@ while [ "$i" -lt 120 ]; do
 done
 [ "${alive:-0}" -ge 1 ] || { echo "SKIP: no alive Doris backend"; exit 77; }
 
-echo "==> Prepare Doris DB, pre-create tables, and Kafka topic"
-# Pre-create both Doris UNIQUE KEY tables (heterogeneous PKs: orders.order_id
-# BIGINT, users.user_no VARCHAR). A single sink pk_columns cannot describe both,
-# so production table_template usage pre-creates tables and the sink only routes
-# writes by metadata.
+echo "==> Prepare Doris DB and Kafka topic"
+# The sink auto-creates both Doris UNIQUE KEY tables from heterogeneous
+# metadata keys (orders.order_id BIGINT, users.user_no VARCHAR). A single
+# static pk_columns list cannot describe both, so the pipeline opts into
+# metadata-derived keys from the envelope.
 doris_sql -e "CREATE DATABASE IF NOT EXISTS ${DORIS_DB};" >/dev/null
 doris_sql "$DORIS_DB" -e "DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS users;" 2>/dev/null || true
-doris_sql "$DORIS_DB" -e "
-CREATE TABLE orders (order_id BIGINT NOT NULL, amount DECIMAL(18,2) NOT NULL)
-ENGINE=OLAP UNIQUE KEY(order_id) DISTRIBUTED BY HASH(order_id) BUCKETS 1
-PROPERTIES (\"replication_allocation\" = \"tag.location.default: 1\");
-CREATE TABLE users (user_no VARCHAR(32) NOT NULL, name VARCHAR(64) NOT NULL)
-ENGINE=OLAP UNIQUE KEY(user_no) DISTRIBUTED BY HASH(user_no) BUCKETS 1
-PROPERTIES (\"replication_allocation\" = \"tag.location.default: 1\");
-" >/dev/null
 "$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic create "$TOPIC" --partitions 1 >/dev/null 2>&1 || true
 "$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic delete "$TOPIC" >/dev/null 2>&1 || true
 "$CONTAINER_CLI" exec "$REDPANDA_CONTAINER" rpk topic create "$TOPIC" --partitions 1 >/dev/null 2>&1 || true
@@ -110,7 +103,6 @@ echo "==> Produce envelope messages for two tables into the single topic"
 # orders: BIGINT PK order_id; users: VARCHAR PK user_no. Both go to one topic.
 # rpk topic produce reads one record per line by default; each line becomes
 # one Kafka message whose value is the line content.
-doris_sql "$DORIS_DB" -e "TRUNCATE TABLE orders; TRUNCATE TABLE users;" 2>/dev/null || true
 RUN_TAG="run$(date +%s)"
 
 produce_envelope() {
@@ -120,10 +112,11 @@ produce_envelope() {
 # Unique run tag in each message body keeps the Doris Stream Load label (a hash
 # of db.table|body) unique across e2e runs; otherwise Doris rejects the load
 # with LABEL_ALREADY_EXISTS (its idempotent-load protection).
-produce_envelope "{\"event_id\":\"e1\",\"op\":\"INSERT\",\"table\":\"orders\",\"key\":\"5001\",\"data\":{\"order_id\":5001,\"amount\":11.00,\"run\":\"$RUN_TAG\"}}"
-produce_envelope "{\"event_id\":\"e2\",\"op\":\"INSERT\",\"table\":\"orders\",\"key\":\"5002\",\"data\":{\"order_id\":5002,\"amount\":22.00,\"run\":\"$RUN_TAG\"}}"
-produce_envelope "{\"event_id\":\"e3\",\"op\":\"INSERT\",\"table\":\"users\",\"key\":\"TMPL_U1\",\"data\":{\"user_no\":\"TMPL_U1\",\"name\":\"Alice\",\"run\":\"$RUN_TAG\"}}"
-produce_envelope "{\"event_id\":\"e4\",\"op\":\"INSERT\",\"table\":\"users\",\"key\":\"TMPL_U2\",\"data\":{\"user_no\":\"TMPL_U2\",\"name\":\"Bob\",\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e1\",\"op\":\"INSERT\",\"table\":\"orders\",\"key\":\"{\\\"order_id\\\":5001}\",\"data\":{\"order_id\":5001,\"amount\":11.00,\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e2\",\"op\":\"UPDATE\",\"table\":\"orders\",\"key\":\"{\\\"order_id\\\":5001}\",\"data\":{\"order_id\":5001,\"amount\":15.00,\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e3\",\"op\":\"INSERT\",\"table\":\"orders\",\"key\":\"{\\\"order_id\\\":5002}\",\"data\":{\"order_id\":5002,\"amount\":22.00,\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e4\",\"op\":\"INSERT\",\"table\":\"users\",\"key\":\"{\\\"user_no\\\":\\\"TMPL_U1\\\"}\",\"data\":{\"user_no\":\"TMPL_U1\",\"name\":\"Alice\",\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e5\",\"op\":\"INSERT\",\"table\":\"users\",\"key\":\"{\\\"user_no\\\":\\\"TMPL_U2\\\"}\",\"data\":{\"user_no\":\"TMPL_U2\",\"name\":\"Bob\",\"run\":\"$RUN_TAG\"}}"
 
 
 echo "==> Reset data + pipes"
@@ -147,8 +140,28 @@ echo "==> Wait table_template fan-out: orders=2, users=2"
 wait_doris_count "orders" 2
 wait_doris_count "users" 2
 
+echo "==> Verify metadata-derived Unique Key DDL"
+orders_ddl="$(doris_sql "$DORIS_DB" -e "SHOW CREATE TABLE orders;")"
+users_ddl="$(doris_sql "$DORIS_DB" -e "SHOW CREATE TABLE users;")"
+printf '%s\n' "$orders_ddl" | grep 'UNIQUE KEY(`order_id`)' >/dev/null
+printf '%s\n' "$users_ddl" | grep 'UNIQUE KEY(`user_no`)' >/dev/null
+
+echo "==> Verify metadata-key upsert retained the final update"
+i=0
+amount=""
+while [ "$i" -lt 120 ]; do
+  amount="$(doris_sql -N "$DORIS_DB" -e "SELECT amount FROM orders WHERE order_id=5001;" 2>/dev/null | tr -d '[:space:]' || true)"
+  [ "$amount" = "15.00" ] && break
+  i=$((i + 1)); sleep 2
+done
+[ "$amount" = "15.00" ] || { echo "TIMEOUT waiting for metadata-key update, last=$amount" >&2; exit 1; }
+
+echo "==> Verify metadata-key DELETE"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e6\",\"op\":\"DELETE\",\"table\":\"users\",\"key\":\"{\\\"user_no\\\":\\\"TMPL_U2\\\"}\",\"data\":{\"user_no\":\"TMPL_U2\",\"name\":\"Bob\",\"run\":\"$RUN_TAG\"}}"
+wait_doris_count "users" 1
+
 body="$(curl -fsS http://127.0.0.1:${API_PORT}/api/v2/pipelines)"
 echo "$body" | grep '"name":"kafka-to-doris-table-template"' | grep '"status":"running"'
 
 "$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-echo "Doris table_template multi-table fan-out E2E passed"
+echo "Doris table_template + metadata-key upsert multi-table E2E passed"

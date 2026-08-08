@@ -14,6 +14,28 @@ func TestSourceConfigStringSlices(t *testing.T) {
 		t.Fatalf("kafka brokers = %#v, want []string brokers", kafka.brokers)
 	}
 
+	kafkaJSON, err := NewKafkaSource(map[string]any{
+		"brokers": `["redpanda:9092"]`,
+		"topic":   "events",
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaSource(JSON brokers): %v", err)
+	}
+	if len(kafkaJSON.brokers) != 1 || kafkaJSON.brokers[0] != "redpanda:9092" {
+		t.Fatalf("JSON-string kafka brokers = %#v, want [redpanda:9092]", kafkaJSON.brokers)
+	}
+
+	kafkaIPv6, err := NewKafkaSource(map[string]any{
+		"brokers": "[::1]:9092",
+		"topic":   "events",
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaSource(IPv6 broker): %v", err)
+	}
+	if len(kafkaIPv6.brokers) != 1 || kafkaIPv6.brokers[0] != "[::1]:9092" {
+		t.Fatalf("IPv6 kafka brokers = %#v, want [[::1]:9092]", kafkaIPv6.brokers)
+	}
+
 	mysqlCDC, err := NewMySQLCDCSource(map[string]any{
 		"host":     "mysql",
 		"user":     "sync",

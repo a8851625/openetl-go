@@ -571,13 +571,54 @@ Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard mu
 
 ### P4：首次任务体验残留收口
 
-状态：`queued`（2026-07-21 原型对齐批次已落地主路径；剩余 residual 见 `docs/UI-REDESIGN-TODO.zh.md`）
+状态：`delivered`（P4.2a 已完成；后续 Doris/Kafka 事实核验作为独立有界 follow-up，不改变其他 roadmap 优先级）
+
+当前领取记录：
+
+```text
+Round: 1/5
+Roadmap item: P4.2a
+Profile/path: standalone Web UI + ETL API pipeline validate/create/update
+Objective: 线性和 DAG 管道配置失败不再被显示为成功、原始 JSON 或隐藏状态，并能定位到 pipeline/node/field 与 remediation。
+Scope: DAG/linear validate-create-update 错误契约、Web API error adapter、向导/Designer 错误面板与字段映射、对应服务端测试和浏览器 e2e。
+Non-goals: 新 connector、connector runtime 语义变更、P4 其他信息架构/状态口径重构、distributed 执行语义。
+Acceptance: 1) DAG 未知/无效 connector 在 validate 和 create/update 中明确失败，任何 error payload 不得使用 2xx；2) 前端解析结构化错误，Toast 只显示摘要，完整详情持久可查看；3) preflight issue 靠近对应步骤/字段并保留 remediation，不以折叠高级区或前 5 条截断代替；4) create/update/dry-run 失败在当前操作上下文可见；5) Playwright 验证错误详情、字段定位、修复后重验和失败不创建 pipeline。
+Evidence: `go test ./internal/etl/server -run 'TestDAG(ValidationRejectsConnectorBuilderErrors|CreateAndUpdateRejectConnectorBuilderErrorsWithNon2xx)' -count=1`；`npm run typecheck`；`npm run build`；`hack/e2e-ui.sh`（嵌入式生产镜像，112 passed/0 failed，含向导/DAG 错误详情、字段 remediation、失败不落库和修复后重验）；`git diff --check`。
+Result: delivered
+Residual/follow-up: Doris/Kafka table_template、Debezium envelope key、brokers JSON 字符串作为独立 follow-up 核验；不回写本项验收标准。
+```
+
+当前领取记录（独立有界 follow-up）：
+
+```text
+Round: 2/5
+Roadmap item: P4.2a-follow-up
+Profile/path: standalone connector preflight + Kafka(envelope) -> Doris(table_template)
+Objective: 核验并修复 table_template 静态 table 假阳性、metadata PK 运行时缺口和 JSON 字符串 brokers 解析不一致。
+Scope: Doris preflight/runtime/schema key path、Kafka source/sink/connection-context slice parsing、targeted unit tests、Doris/Redpanda E2E fixture and evidence。
+Non-goals: 改变 upsert 必须有稳定主键的语义；Kafka exactly-once；其他 connector 的动态主键实现；UI 信息架构重构。
+Acceptance: 1) Doris table_template 不要求静态 table；2) pk_columns_from_metadata 的 JSON object key 可用于 compact/upsert/DELETE/auto-create DDL，标量 key 明确失败；3) Kafka brokers 的 YAML array 与 JSON-string array 在 runtime/preflight 一致；4) 可用外部服务时 E2E 验证，缺失时明确 skip/block。
+Evidence: internal/etl/server/pipelines_preflight_test.go、internal/etl/server/connection_catalog_test.go、internal/etl/sink/config_slices_test.go、internal/etl/sink/doris_test.go、internal/etl/source/config_slices_test.go、internal/etl/source/kafka_test.go、hack/e2e-doris-table-template.sh、go test ./...、go test -race ./internal/etl/server ./internal/etl/sink ./internal/etl/source、git diff --check。
+Result: delivered
+Residual/follow-up: 无；首次执行因 Doris FE/BE 未启动而 skip，随后启动仓库标准 2.1.11 FE/BE 后完成真实 E2E。后续仍需在发布环境按认证矩阵复跑。
+```
+
+P4.2a follow-up 验收矩阵（Round 2/5）：
+
+| Criterion | Evidence | Result | Residual/blocker |
+| --- | --- | --- | --- |
+| `table_template` 不再要求静态 `sink.config.table` | `TestRunPreflightDorisTableTemplateRelaxesStaticTableRequirement` | passed | — |
+| metadata PK JSON object 支持 compact/upsert、DELETE 和 auto-create DDL；标量 key 明确失败 | `TestDorisMetadataKeyColumnsFromEnvelope`、`TestDorisWriteCompactsUsingEnvelopeMetadataKey`、`TestDorisWriteCompactsMetadataKeyWithStaticTargetAndEmptySourceTable`、`TestDorisDeleteUsesEnvelopeMetadataKey`、`TestDorisValidateSchemaAllowsMetadataPKAutoCreate`、`TestDorisMetadataKeyColumnsRejectScalarEnvelopeKey` | passed | — |
+| 仅有 `debezium_cdc` 不隐式绕过 PK 检查 | `TestRunPreflightDorisCDCRequiresExplicitMetadataPKFlag` | passed | — |
+| Kafka brokers YAML array / JSON-string array 在 runtime、preflight 与 connection context 一致 | `TestSinkConfigStringSlices`、`TestSourceConfigStringSlices`、`TestStringSliceFieldPreservesBracketedScalarBroker`、`TestRunPreflightParsesJSONStringKafkaBrokers`、`TestConnectionContextIntrospectsKafkaSink` | passed | — |
+| 回归、竞态和格式检查 | `go test ./... -count=1`；`go test -race ./internal/etl/server ./internal/etl/sink ./internal/etl/source -count=1`；`npm run typecheck`；`npm run build`；`npm run lint`；`git diff --check` | passed（lint 仅既有 warnings） | — |
+| Kafka envelope -> Doris table_template 真实链路 | `CONTAINER_CLI=podman sh hack/e2e-doris-table-template.sh`（Doris 2.1.11 + Redpanda；`auto_create: true`；orders.order_id/users.user_no DDL；6 records，0 failed/0 DLQ；orders update 和 users DELETE 均核验） | passed | — |
 
 现有向导和上下文闭环已经交付，但 2026-07-20 产品走查确认当前 Web UI 仍更接近“能力完整的工程控制台”，尚未完全收敛为围绕“创建成功、稳定运行、快速修复”的任务型产品。主要证据包括：一级导航平铺构建、运维和系统对象；首次任务向导在单个长弹窗中同时暴露模板、连接、descriptor、运行参数、transform、样例、YAML 和 preflight；运行状态、健康度和累计指标存在口径混用；页面状态没有可分享 URL；部分危险操作、国际化和无障碍表达不一致。
 
 **2026-07-21 已交付（证据）**：全宽管道列表 + URL 筛选；`#/pipelines/new` 全页三段式向导 + 草稿；DLQ 聚合主视图 + Replay 确认面板；详情写入语义/生命周期；总览时间范围切换；Connections 抽屉；问题中心固定排序；顶栏用户菜单与扩展分组；e2e/文档区分「路由可达」与「原型对齐」。Residual：DAG 空画布模板、小屏信息行、截图刷新、多 run 历史。
 
-**2026-08-06 现状核对**：`hack/e2e-ui.sh` 在当前构建镜像上为 108 passed/0 failed；P4 residual（首次任务向导的 schema-driven form、transform stage dry-run/reorder、DLQ filter 稳定 testid、behavior-scope hint）已收口。PR-0 的独立 token 安全门槛由 `hack/e2e-ui-token.sh` 单独验证并通过，不与 UI 全量 e2e 混计。
+**2026-08-08 现状核对**：`hack/e2e-ui.sh` 在当前嵌入式生产镜像上为 112 passed/0 failed；P4.2a 进一步收口了 validate/create/update/dry-run 的结构化错误契约、持久错误面板、字段级 remediation、显式 DAG 格式保持和失败不落库。PR-0 的独立 token 安全门槛由 `hack/e2e-ui-token.sh` 单独验证并通过，不与 UI 全量 e2e 混计。
 
 本项在现有 React UI、connector descriptor/introspection/preflight 和同一份 pipeline spec 上渐进收口，不另建独立 UI 语义、设计器模型或服务端执行模型。内部按以下顺序实施；同一时间只推进一个子阶段：
 

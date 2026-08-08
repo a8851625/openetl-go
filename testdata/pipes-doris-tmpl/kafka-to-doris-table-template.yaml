@@ -30,13 +30,12 @@ sink:
     table_template: "{table}"
     write_mode: stream_load
     stream_load_format: json
-    batch_mode: insert
-    # Tables are pre-created (heterogeneous PKs: orders.order_id BIGINT,
-    # users.user_no VARCHAR); a single sink pk_columns cannot describe both, so
-    # the sink only routes writes by metadata and relies on Doris UNIQUE KEY
-    # tables already existing.
-    auto_create: false
+    # Auto-create derives heterogeneous Unique Key DDL per routed table from
+    # the JSON envelope key instead of forcing one static pk_columns list.
+    auto_create: true
     schema_drift: ignore
+    batch_mode: upsert
+    pk_columns_from_metadata: true
 
 batch_size: 100
 checkpoint_interval_sec: 2

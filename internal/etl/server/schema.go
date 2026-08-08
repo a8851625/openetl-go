@@ -389,6 +389,7 @@ func sinkConfigSchemas() map[string][]ConfigField {
 			{Name: "write_mode", Type: FieldString, Required: false, Default: "stream_load", Description: "Write method", Enum: []string{"stream_load", "insert"}},
 			{Name: "batch_mode", Type: FieldString, Required: false, Default: "insert", Description: "Write mode", Enum: []string{"insert", "upsert"}},
 			{Name: "pk_columns", Type: FieldStringArray, Required: false, Description: "Key columns for DELETE and auto-create UNIQUE KEY model"},
+			{Name: "pk_columns_from_metadata", Type: FieldBool, Required: false, Default: false, Description: "Derive per-table key columns from the JSON Debezium/Kafka key in record metadata. Required for multi-table CDC upsert/delete when pk_columns is not static."},
 			{Name: "stream_load_format", Type: FieldString, Required: false, Default: "json", Description: "Stream Load payload format", Enum: []string{"json", "csv"}},
 			{Name: "stream_load_scheme", Type: FieldString, Required: false, Default: "http", Description: "Stream Load scheme", Enum: []string{"http", "https"}},
 			{Name: "https", Type: FieldBool, Required: false, Default: false, Description: "Shortcut to use HTTPS for Stream Load"},

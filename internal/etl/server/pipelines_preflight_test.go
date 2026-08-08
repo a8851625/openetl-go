@@ -837,6 +837,54 @@ func TestRunPreflightChecksKafkaSourceTopic(t *testing.T) {
 	}
 }
 
+func TestRunPreflightParsesJSONStringKafkaBrokers(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t),
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()).
+			SetLeader("orders.events", 0, broker.BrokerID()),
+		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
+	})
+
+	spec := pipeline.Spec{
+		Name: "kafka-source-json-brokers-preflight",
+		Source: pipeline.SourceSpec{
+			Type: "kafka",
+			Config: map[string]any{
+				"brokers":  fmt.Sprintf("[%q]", broker.Addr()),
+				"topic":    "orders.events",
+				"group_id": "kafka-source-json-brokers-preflight",
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type:   "file_sink",
+			Config: map[string]any{"output_dir": t.TempDir()},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if preflightIssuesContain(result, "kafka-source-brokers") {
+		t.Fatalf("JSON-string brokers were treated as missing: %#v", result.Issues)
+	}
+	if preflightIssuesContain(result, "kafka-source-topic") {
+		t.Fatalf("JSON-string brokers did not reach topic metadata: %#v", result.Issues)
+	}
+}
+
+func TestStringSliceFieldPreservesBracketedScalarBroker(t *testing.T) {
+	got := stringSliceField(map[string]any{"brokers": "[::1]:9092"}, "brokers")
+	if len(got) != 1 || got[0] != "[::1]:9092" {
+		t.Fatalf("stringSliceField IPv6 broker = %#v, want [[::1]:9092]", got)
+	}
+}
+
 func TestRunPreflightBlocksMissingKafkaSourceTopic(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()
@@ -1517,6 +1565,73 @@ func TestRunPreflightBlocksInvalidDorisSinkConfig(t *testing.T) {
 		if !preflightFieldIssueContain(result, item.field, item.check) {
 			t.Fatalf("field issues = %#v, want %s/%s", result.FieldIssues, item.field, item.check)
 		}
+	}
+}
+
+func TestRunPreflightDorisTableTemplateRelaxesStaticTableRequirement(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "doris-table-template-preflight",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "doris",
+			Config: map[string]any{
+				"host":                     "127.0.0.1",
+				"database":                 "ods",
+				"table_template":           "ods_{table}",
+				"batch_mode":               "upsert",
+				"pk_columns_from_metadata": true,
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	for _, issue := range result.Issues {
+		if issue.Check == "doris-sink-required-config" && strings.Contains(issue.Message, "sink.config.table") {
+			t.Fatalf("table_template still produced static table issue: %#v", issue)
+		}
+	}
+	if preflightFieldIssueContain(result, "sink.config.table", "doris-sink-required-config") {
+		t.Fatalf("field issues = %#v, table_template should relax sink.config.table", result.FieldIssues)
+	}
+}
+
+func TestRunPreflightDorisCDCRequiresExplicitMetadataPKFlag(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	spec := pipeline.Spec{
+		Name: "doris-cdc-metadata-pk-flag-required",
+		Source: pipeline.SourceSpec{
+			Type:   testPlainPreflightSource,
+			Config: map[string]any{},
+		},
+		Transforms: []pipeline.TransformSpec{{Type: "debezium_cdc"}},
+		Sink: pipeline.SinkSpec{
+			Type: "doris",
+			Config: map[string]any{
+				"host":           "127.0.0.1",
+				"database":       "ods",
+				"table_template": "ods_{table}",
+				"batch_mode":     "upsert",
+				"auto_create":    true,
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if !preflightIssuesContain(result, "doris-sink-upsert-keys") {
+		t.Fatalf("issues = %#v, want explicit metadata PK opt-in to be required", result.Issues)
+	}
+	if !preflightFieldIssueContain(result, "sink.config.pk_columns", "doris-sink-upsert-keys") {
+		t.Fatalf("field issues = %#v, want sink.config.pk_columns remediation", result.FieldIssues)
 	}
 }
 

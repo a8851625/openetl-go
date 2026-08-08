@@ -77,6 +77,11 @@ type DorisSink struct {
 	writeMode string // "stream_load" | "insert"
 	batchMode string // "insert" | "upsert" (informational; Doris UK model dedupes)
 	pkColumns []string
+	// pkColumnsFromMetadata derives per-table key columns from the JSON
+	// Debezium/Kafka key carried in core.Metadata.Key. This is required for
+	// multi-table CDC upsert/delete flows where one static pk_columns list
+	// cannot describe every routed table.
+	pkColumnsFromMetadata bool
 
 	streamLoadTimeout time.Duration
 	streamLoadFormat  string
@@ -155,6 +160,11 @@ func NewDorisSink(config map[string]any) (*DorisSink, error) {
 		s.batchMode = v.(string)
 	}
 	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
+	if v, ok := config["pk_columns_from_metadata"]; ok {
+		if b, ok := v.(bool); ok {
+			s.pkColumnsFromMetadata = b
+		}
+	}
 	if v, ok := config["stream_load_timeout_sec"]; ok {
 		switch t := v.(type) {
 		case int:
@@ -239,8 +249,8 @@ func (s *DorisSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) 
 	}
 	if !exists {
 		if s.autoCreate {
-			if s.batchMode == "upsert" && len(s.pkColumns) == 0 && !schemaHasColumn(schema, "id") {
-				return fmt.Errorf("schema validation failed for doris %s.%s: batch_mode=upsert with auto_create requires pk_columns or an id column for a stable Doris UNIQUE KEY model", s.database, s.table)
+			if s.batchMode == "upsert" && len(s.pkColumns) == 0 && !s.pkColumnsFromMetadata && !schemaHasColumn(schema, "id") {
+				return fmt.Errorf("schema validation failed for doris %s.%s: batch_mode=upsert with auto_create requires pk_columns, pk_columns_from_metadata, or an id column for a stable Doris UNIQUE KEY model", s.database, s.table)
 			}
 			return nil
 		}
@@ -260,6 +270,11 @@ func (s *DorisSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) 
 		return err
 	}
 	if s.batchMode == "upsert" || len(s.pkColumns) > 0 {
+		if s.pkColumnsFromMetadata && len(s.pkColumns) == 0 {
+			// The concrete UNIQUE KEY is resolved from each record's metadata
+			// during Write; a static preflight table cannot validate it here.
+			return nil
+		}
 		if len(s.pkColumns) == 0 {
 			return fmt.Errorf("schema validation failed for doris %s.%s: batch_mode=upsert requires pk_columns so checkpoint/DLQ replay targets a stable Doris UNIQUE KEY", s.database, s.table)
 		}
@@ -337,9 +352,26 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) (err error
 		return nil
 	}
 
+	pkColumnsByTable, err := s.pkColumnsByTable(dataRecords)
+	if err != nil {
+		return err
+	}
+
 	// Compact by (table, PK) in source order so mixed CDC batches on the same
 	// key do not get reordered by the write/delete phase split.
 	dataRecords = CompactRecordsByPK(dataRecords, func(table string) []string {
+		if pk, ok := pkColumnsByTable[table]; ok {
+			return pk
+		}
+		// CompactRecordsByPK receives the source metadata table. With a
+		// configured static destination, that metadata may be empty (or may be
+		// intentionally ignored), while pkColumnsByTable is keyed by the
+		// resolved target table.
+		if s.table != "" {
+			if pk, ok := pkColumnsByTable[s.table]; ok {
+				return pk
+			}
+		}
 		if len(s.pkColumns) > 0 {
 			return s.pkColumns
 		}
@@ -347,7 +379,7 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) (err error
 	})
 
 	// Auto-create missing tables and handle schema drift before writing.
-	if err := s.ensureTablesAndColumns(ctx, dataRecords); err != nil {
+	if err := s.ensureTablesAndColumns(ctx, dataRecords, pkColumnsByTable); err != nil {
 		return err
 	}
 
@@ -379,12 +411,80 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) (err error
 		}
 	}
 	if len(deletes) > 0 {
-		if err := s.batchDeleteRecords(ctx, deletes); err != nil {
+		if err := s.batchDeleteRecords(ctx, deletes, pkColumnsByTable); err != nil {
 			return err
 		}
 	}
 	s.recordMetrics(len(records), time.Since(start))
 	return nil
+}
+
+// pkColumnsByTable derives the key columns used by a batch when the sink is
+// configured for metadata-driven keys. Kafka envelope sources preserve the
+// original Debezium key in Metadata.Key; the key must be a JSON object because
+// its property names are the only available column names. A scalar key is
+// deliberately rejected instead of silently falling back to id.
+func (s *DorisSink) pkColumnsByTable(records []core.Record) (map[string][]string, error) {
+	result := make(map[string][]string)
+	if !s.pkColumnsFromMetadata {
+		return result, nil
+	}
+	for _, rec := range records {
+		targetTable, err := s.resolveTable(rec)
+		if err != nil {
+			return nil, err
+		}
+		pk := parseDorisMetadataKeyColumns(rec.Metadata.Key)
+		if len(pk) == 0 {
+			return nil, fmt.Errorf("doris sink: pk_columns_from_metadata requires Metadata.Key to be a non-empty JSON object for table %q; use pk_columns for scalar keys", targetTable)
+		}
+		for _, table := range []string{targetTable, rec.Metadata.Table} {
+			if table == "" {
+				continue
+			}
+			if existing, ok := result[table]; ok && !sameIdentifierSet(existing, pk) {
+				return nil, fmt.Errorf("doris sink: metadata key columns for table %q changed within one batch (%v -> %v)", table, existing, pk)
+			}
+			result[table] = pk
+		}
+	}
+	return result, nil
+}
+
+func parseDorisMetadataKeyColumns(raw string) []string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil
+	}
+	var decoded any
+	for attempts := 0; attempts < 2; attempts++ {
+		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+			return nil
+		}
+		if nested, ok := decoded.(string); ok {
+			value = strings.TrimSpace(nested)
+			continue
+		}
+		break
+	}
+	obj, ok := decoded.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if payload, ok := obj["payload"].(map[string]any); ok && len(payload) > 0 {
+		obj = payload
+	}
+	if key, ok := obj["key"].(map[string]any); ok && len(obj) == 1 {
+		obj = key
+	}
+	columns := make([]string, 0, len(obj))
+	for column := range obj {
+		if strings.TrimSpace(column) != "" {
+			columns = append(columns, column)
+		}
+	}
+	sort.Strings(columns)
+	return columns
 }
 
 // applyDDL executes a DDL statement on the Doris target via MySQL protocol
@@ -733,7 +833,7 @@ func (s *DorisSink) buildInsertStatement(table string, cols []string, rowCount i
 
 // ── DELETE via MySQL protocol ───────────────────────────────────────────
 
-func (s *DorisSink) batchDeleteRecords(ctx context.Context, records []core.Record) error {
+func (s *DorisSink) batchDeleteRecords(ctx context.Context, records []core.Record, pkColumnsByTable map[string][]string) error {
 	// Group by table
 	tableGroups := make(map[string][]core.Record)
 	for _, rec := range records {
@@ -744,12 +844,14 @@ func (s *DorisSink) batchDeleteRecords(ctx context.Context, records []core.Recor
 		tableGroups[tableName] = append(tableGroups[tableName], rec)
 	}
 
-	pkCols := s.pkColumns
-	if len(pkCols) == 0 {
-		pkCols = []string{"id"}
-	}
-
 	for tableName, recs := range tableGroups {
+		pkCols := s.pkColumns
+		if derived, ok := pkColumnsByTable[tableName]; ok {
+			pkCols = derived
+		}
+		if len(pkCols) == 0 {
+			pkCols = []string{"id"}
+		}
 		for offset := 0; offset < len(recs); offset += s.insertChunkSize {
 			end := offset + s.insertChunkSize
 			if end > len(recs) {
@@ -811,13 +913,21 @@ func (s *DorisSink) batchDeleteRecords(ctx context.Context, records []core.Recor
 
 // EnsureSchema implements core.SchemaManager.
 func (s *DorisSink) EnsureSchema(ctx context.Context, tableName string, fields []string, fieldValues map[string]any) error {
+	return s.ensureSchemaWithPK(ctx, tableName, fields, fieldValues, nil)
+}
+
+func (s *DorisSink) ensureSchemaWithPK(ctx context.Context, tableName string, fields []string, fieldValues map[string]any, pkColumns []string) error {
 	return core.EnsureSchemaGeneric(ctx, s.schemaCache, tableName, fields, fieldValues,
 		s.autoCreate, core.SchemaDriftMode(s.schemaDrift),
-		s.tableExists, s.createTableFromFields, s.getExistingColumns, s.addColumn,
+		s.tableExists,
+		func(ctx context.Context, table string, columns []string, values map[string]any) error {
+			return s.createTableFromFieldsWithPK(ctx, table, columns, values, pkColumns)
+		},
+		s.getExistingColumns, s.addColumn,
 	)
 }
 
-func (s *DorisSink) ensureTablesAndColumns(ctx context.Context, records []core.Record) error {
+func (s *DorisSink) ensureTablesAndColumns(ctx context.Context, records []core.Record, pkColumnsByTable map[string][]string) error {
 	if !s.autoCreate && s.schemaDrift != "add_columns" && s.schemaDrift != "fail" {
 		return nil
 	}
@@ -826,7 +936,7 @@ func (s *DorisSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 		return err
 	}
 	for tableName, cols := range tableCols {
-		if err := s.EnsureSchema(ctx, tableName, cols, tableValues[tableName]); err != nil {
+		if err := s.ensureSchemaWithPK(ctx, tableName, cols, tableValues[tableName], pkColumnsByTable[tableName]); err != nil {
 			return err
 		}
 	}
@@ -1065,10 +1175,23 @@ func validateDorisApplyDDL(ddl string) error {
 }
 
 // createTableFromFields creates a Doris table with UNIQUE KEY model.
-// Doris requires ENGINE=OLAP and a key definition. We use pk_columns, or id
-// only when present, so replay-safe upsert never relies on an arbitrary column.
+// Doris requires ENGINE=OLAP and a key definition. We use configured or
+// metadata-derived pk_columns, or id only when present, so replay-safe upsert
+// never relies on an arbitrary column.
 func (s *DorisSink) createTableFromFields(ctx context.Context, table string, columns []string, fieldValues map[string]any) error {
-	ddl, err := s.buildCreateTableDDL(table, columns, fieldValues)
+	return s.createTableFromFieldsWithPK(ctx, table, columns, fieldValues, nil)
+}
+
+func (s *DorisSink) createTableFromFieldsWithPK(ctx context.Context, table string, columns []string, fieldValues map[string]any, pkColumns []string) error {
+	var (
+		ddl string
+		err error
+	)
+	if len(pkColumns) > 0 {
+		ddl, err = s.buildCreateTableDDLWithPK(table, columns, fieldValues, pkColumns)
+	} else {
+		ddl, err = s.buildCreateTableDDL(table, columns, fieldValues)
+	}
 	if err != nil || ddl == "" {
 		return err
 	}
@@ -1077,6 +1200,10 @@ func (s *DorisSink) createTableFromFields(ctx context.Context, table string, col
 }
 
 func (s *DorisSink) buildCreateTableDDL(table string, columns []string, fieldValues map[string]any) (string, error) {
+	return s.buildCreateTableDDLWithPK(table, columns, fieldValues, s.pkColumns)
+}
+
+func (s *DorisSink) buildCreateTableDDLWithPK(table string, columns []string, fieldValues map[string]any, pkColumns []string) (string, error) {
 	if len(columns) == 0 {
 		return "", nil
 	}
@@ -1087,10 +1214,10 @@ func (s *DorisSink) buildCreateTableDDL(table string, columns []string, fieldVal
 	for _, c := range columns {
 		columnByNorm[normalizeIdentifier(c)] = c
 	}
-	keyCols := make([]string, 0, len(s.pkColumns))
-	if len(s.pkColumns) > 0 {
-		seen := make(map[string]bool, len(s.pkColumns))
-		for _, configured := range s.pkColumns {
+	keyCols := make([]string, 0, len(pkColumns))
+	if len(pkColumns) > 0 {
+		seen := make(map[string]bool, len(pkColumns))
+		for _, configured := range pkColumns {
 			norm := normalizeIdentifier(configured)
 			if seen[norm] {
 				continue
