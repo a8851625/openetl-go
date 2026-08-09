@@ -924,6 +924,38 @@ P4.2a follow-up 验收矩阵（Round 2/5）：
 - production deployment profile 的 config validation、compose config、启动/停止/备份/恢复和升级 smoke 在 release candidate 中全部执行。
 - 发布说明记录资源基线、显著回归阈值、支持的 storage/backend 矩阵、RPO/RTO 和仍需人工操作的步骤。
 
+## 已知缺陷（BUG backlog）
+
+### BUG-1：`mysql_batch` 字符串主键游标不推进（2026-08-09 发现）
+
+状态：`queued`
+
+**现象与根因**：`mysql_batch` 源的 `updateLastID` 只处理 int/int64/float64，
+字符串主键（如 `request_id`）作为 `pk_column` 时游标从不推进，每次轮询
+`WHERE pk > lastID` 都从头重读整张表：records_read 无限增长、管道永不完成
+（`schedule: once` 不收敛，streaming 则无限重读同一批数据）。
+
+**复现**：2026-08-09 在 ClickHouse metainfo 验证期间于容器级复现 —— 源表 2 行
+（varchar 主键），`pk_column: request_id`，records_read 持续增长至数十万，
+管道不结束；换数字主键后同一链路正常。
+
+**范围**：`internal/etl/source/mysql_batch.go` 游标类型（`lastID` 由 int64 改为
+any/字符串游标）、checkpoint position 序列化与恢复兼容（旧数值 checkpoint 可读）、
+字符串比较与 MySQL 排序规则对齐（utf8mb4 二进制比较）、custom query 与 shard 路径
+同步覆盖。
+
+**验收**：
+1. varchar 主键表完整读一遍后管道完成（records_read = 表行数，不再循环）；
+2. 中断重启/checkpoint 恢复从上次游标继续，不重复读取；
+3. 数字主键路径行为不变（旧 checkpoint 可恢复）；
+4. 容器级 e2e（varchar PK 源 → 任意 sink）通过并记录证据。
+
+**Non-goals**：数值字符串的 MySQL 隐式转换兼容（如 `'001'` 与 `1` 比较）、
+自然排序等多级键语义；这些按源语义文档化即可。
+
+**证据**：ref — beta.9 周期容器验证日志（etl-mt-e2e，records_read 持续增长）；
+修复后在本条目更新验收矩阵。
+
 ## 有界后续
 
 这些事项只有在上方当前任务完成或被明确重新排序后才进入执行：
