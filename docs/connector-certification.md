@@ -65,7 +65,7 @@ connector, script, and workflow changes require a fresh certification run.
 Image binding is checked when the release environment supplies a certified
 image digest.
 
-Latest checked-in certification (2026-08-09 UTC, v0.2.12-beta.6 release cut):
+Latest checked-in certification (2026-08-09 UTC, v0.2.12-beta.7 release cut):
 
 - source commit: `a9d0003e75e31cad4ceaea2979fa03030e580e10`
 - image: `sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2`
@@ -95,6 +95,7 @@ The certified production connector set is:
 | --- | --- | --- |
 | MySQL | `mysql_batch`, `mysql_cdc`, `mysql_snapshot_cdc`, `mysql` sink | `hack/e2e.sh`, MySQL CDC/batch e2e, Debezium MySQL e2e |
 | ClickHouse | `clickhouse` sink | ClickHouse CDC/autocreate/snapshot+CDC e2e |
+| ClickHouse multi-table | `clickhouse` sink `table_template` + `pk_columns_from_metadata` | Kafka envelope multi-table fan-out e2e (`hack/e2e-kafka-multitable-clickhouse.sh`): heterogeneous ORDER BY, update absorption, delete mutation, schema drift, checkpoint reset replay |
 | Kafka | `kafka` source/sink | Kafka source/sink, raw ODS, Debezium, wide-table e2e |
 | S3/File | `file` source, `file_sink`, `s3` sink | file smoke e2e and S3 MinIO replay/outage e2e |
 | HTTP | `http` source | pagination/auth-header e2e plus typed schema/sample preflight |

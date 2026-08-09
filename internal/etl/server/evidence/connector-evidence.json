@@ -3,14 +3,14 @@
   "policy": {
     "max_age_hours": 720
   },
-  "certified_commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-  "certified_image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+  "certified_commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+  "certified_image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
   "records": [
     {
       "kind": "source",
       "type": "file",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
@@ -31,8 +31,8 @@
     {
       "kind": "source",
       "type": "http",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -54,8 +54,8 @@
     {
       "kind": "source",
       "type": "kafka",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -81,8 +81,8 @@
     {
       "kind": "source",
       "type": "mysql_batch",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -107,8 +107,8 @@
     {
       "kind": "source",
       "type": "mysql_cdc",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -133,8 +133,8 @@
     {
       "kind": "source",
       "type": "mysql_snapshot_cdc",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -160,8 +160,8 @@
     {
       "kind": "sink",
       "type": "file_sink",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
@@ -182,8 +182,8 @@
     {
       "kind": "sink",
       "type": "s3",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -206,8 +206,8 @@
     {
       "kind": "sink",
       "type": "kafka",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -232,8 +232,8 @@
     {
       "kind": "sink",
       "type": "mysql",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -258,8 +258,8 @@
     {
       "kind": "sink",
       "type": "postgres",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -284,8 +284,8 @@
     {
       "kind": "sink",
       "type": "postgresql",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -310,8 +310,8 @@
     {
       "kind": "sink",
       "type": "clickhouse",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -336,8 +336,8 @@
     {
       "kind": "sink",
       "type": "doris",
-      "commit": "a9d0003e75e31cad4ceaea2979fa03030e580e10",
-      "image": "sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -357,6 +357,34 @@
       ],
       "verified": true,
       "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+    },
+    {
+      "kind": "sink",
+      "type": "clickhouse_multi_table",
+      "commit": "9e2c5fd728e3cd68f4598a2b56bb0bc628f05d34",
+      "image": "sha256:1b09f2883273bdbc788a77a37e47f98afaa86b015b09293be524b8b8616c110",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "clickhouse": "24.3.18.7",
+        "redpanda": "v24.1.1"
+      },
+      "started_at": "2026-08-09T05:44:00Z",
+      "finished_at": "2026-08-09T05:46:00Z",
+      "expires_at": "2026-09-08T05:46:00Z",
+      "scripts": [
+        "hack/e2e-kafka-multitable-clickhouse.sh"
+      ],
+      "cases": [
+        "table_template_fanout",
+        "heterogeneous_order_by",
+        "update_absorption",
+        "delete_mutation",
+        "schema_drift_add_columns",
+        "checkpoint_reset_replay"
+      ],
+      "verified": true,
+      "note": "Kafka envelope multi-table -> ClickHouse table_template fan-out with pk_columns_from_metadata; exit 0 PASS on the certified local dev image."
     }
   ]
 }
