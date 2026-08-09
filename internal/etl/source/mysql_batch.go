@@ -270,6 +270,17 @@ func (r *mysqlBatchReader) ReadBatch(ctx context.Context, n int) ([]core.Record,
 	defer rows.Close()
 
 	columns, _ = rows.Columns()
+	// Driver-reported column types ride along as source metainfo so auto_create
+	// sinks (ClickHouse/Doris/…) can build DDL from the real source schema
+	// instead of guessing from sample values + column-name hints.
+	colTypes := map[string]string{}
+	if cts, err := rows.ColumnTypes(); err == nil {
+		for _, ct := range cts {
+			if t := ct.DatabaseTypeName(); t != "" {
+				colTypes[ct.Name()] = t
+			}
+		}
+	}
 	var records []core.Record
 	for rows.Next() {
 		values := make([]any, len(columns))
@@ -304,9 +315,10 @@ func (r *mysqlBatchReader) ReadBatch(ctx context.Context, n int) ([]core.Record,
 			Operation: core.OpInsert,
 			Data:      data,
 			Metadata: core.Metadata{
-				Database:  r.database,
-				Table:     tableName,
-				Timestamp: time.Now(),
+				Database:    r.database,
+				Table:       tableName,
+				Timestamp:   time.Now(),
+				ColumnTypes: colTypes,
 			},
 		})
 	}

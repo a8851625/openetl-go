@@ -101,3 +101,36 @@ func TestIsTimestampString(t *testing.T) {
 		}
 	}
 }
+
+func TestInferFromValueNumericHintRequiresParseableString(t *testing.T) {
+	tests := []struct {
+		name    string
+		dialect Dialect
+		col     string
+		val     any
+		want    string
+	}{
+		// hex/uuid text in *_id columns must not force an Int64 column.
+		{name: "request_id_hex", dialect: DialectClickHouse, col: "request_id", val: "33b6338a2c78d0c7", want: "String"},
+		{name: "request_id_hex_mysql", dialect: DialectMySQL, col: "request_id", val: "33b6338a2c78d0c7", want: "TEXT"},
+		{name: "order_id_text", dialect: DialectClickHouse, col: "order_id", val: "ORD-10001", want: "String"},
+		{name: "amount_text", dialect: DialectClickHouse, col: "amount", val: "12.5abc", want: "String"},
+		// Parseable strings keep the numeric hint.
+		{name: "request_id_numeric", dialect: DialectClickHouse, col: "request_id", val: "123456", want: "Int64"},
+		{name: "user_id_float_str", dialect: DialectClickHouse, col: "user_id", val: "12.5", want: "Int64"},
+		// Empty string keeps the hint (converted to 0 at write time).
+		{name: "request_id_empty", dialect: DialectClickHouse, col: "request_id", val: "", want: "Int64"},
+		// Non-string values unaffected.
+		{name: "request_id_int", dialect: DialectClickHouse, col: "request_id", val: int64(7), want: "Int64"},
+		{name: "deleted_flag_str", dialect: DialectClickHouse, col: "deleted", val: "0", want: "UInt8"},
+		{name: "deleted_flag_text", dialect: DialectClickHouse, col: "deleted", val: "not-a-flag", want: "String"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := InferFromValue(tt.dialect, tt.col, tt.val)
+			if got != tt.want {
+				t.Fatalf("InferFromValue(%s, %s, %v) = %q, want %q", tt.dialect, tt.col, tt.val, got, tt.want)
+			}
+		})
+	}
+}

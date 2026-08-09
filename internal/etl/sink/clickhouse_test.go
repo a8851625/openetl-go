@@ -149,3 +149,35 @@ func TestConvertClickHouseValueEmptyStringToNumeric(t *testing.T) {
 		})
 	}
 }
+
+func TestInferClickHouseTypeDeclaredPriority(t *testing.T) {
+	tests := []struct {
+		name     string
+		col      string
+		val      any
+		declared string
+		want     string
+	}{
+		// Source metainfo (MySQL COLUMN_TYPE) wins: request_id stayed varchar.
+		{name: "varchar_declared", col: "request_id", val: "33b6338a2c78d0c7", declared: "varchar(255)", want: "String"},
+		{name: "bigint_declared", col: "request_id", val: "33b6338a2c78d0c7", declared: "bigint unsigned", want: "Int64"},
+		{name: "int_declared", col: "user_id", val: "7", declared: "int", want: "Int32"},
+		{name: "decimal_declared", col: "amount", val: "12.50", declared: "decimal(10,2)", want: "Decimal(18, 2)"},
+		{name: "datetime_declared", col: "created_at", val: "2026-05-31 21:23:39", declared: "datetime", want: "DateTime64(3)"},
+		{name: "enum_declared", col: "status", val: "1", declared: "enum('0','1')", want: "String"},
+		{name: "json_declared", col: "custom_field", val: "[]", declared: "json", want: "String"},
+		// No metainfo: falls back to value+name inference (hex text stays String).
+		{name: "no_declared_hex", col: "request_id", val: "33b6338a2c78d0c7", declared: "", want: "String"},
+		{name: "no_declared_numeric", col: "request_id", val: "123456", declared: "", want: "Int64"},
+		// Unknown declared types also fall back instead of producing garbage DDL.
+		{name: "unknown_declared", col: "weird", val: "x", declared: "hstore", want: "String"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := inferClickHouseType(tt.col, tt.val, tt.declared)
+			if got != tt.want {
+				t.Fatalf("inferClickHouseType(%s, %v, %q) = %q, want %q", tt.col, tt.val, tt.declared, got, tt.want)
+			}
+		})
+	}
+}

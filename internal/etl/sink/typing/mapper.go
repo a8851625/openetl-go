@@ -5,6 +5,7 @@
 package typing
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,8 +49,23 @@ func InferFromValue(dialect Dialect, columnName string, value any) string {
 		}
 		return inferFromGoType(dialect, value)
 	}
-	// Column name hints for string and unknown values.
+	// Column name hints for string and unknown values. Numeric DDL hints
+	// (id / *_id → Int64/BCDINT, is_* → flags, …) must only be applied when the
+	// string is actually parseable as a number: a varchar request_id carrying
+	// hex/uuid text must not build an Int64 column that aborts every AppendRow.
 	if hint := nameHint(dialect, columnName); hint != "" {
+		if isNumericDDL(hint) {
+			if s, ok := value.(string); ok {
+				t := strings.TrimSpace(s)
+				if t != "" {
+					if _, err := strconv.ParseInt(t, 10, 64); err != nil {
+						if _, err := strconv.ParseFloat(t, 64); err != nil {
+							return defaultStringType(dialect)
+						}
+					}
+				}
+			}
+		}
 		return hint
 	}
 	return inferFromGoType(dialect, value)

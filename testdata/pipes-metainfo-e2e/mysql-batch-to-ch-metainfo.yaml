@@ -1,0 +1,36 @@
+# e2e: mysql_batch -> clickhouse auto_create using source metainfo
+# (Metadata.ColumnTypes) so varchar request_id stays a String column,
+# not Int64 (which would fail AppendRow with hex ids).
+name: mysql-batch-to-ch-metainfo
+source:
+  type: mysql_batch
+  config:
+    host: etl-mysql-source
+    port: 3306
+    user: root
+    password: root123456
+    database: metainfo_e2e
+    table: audit_logs
+    pk_column: id
+    batch_size: 10
+sink:
+  type: clickhouse
+  config:
+    host: etl-clickhouse
+    port: 9000
+    database: dzh3136_go
+    table: ods_metainfo_audit_logs
+    user: default
+    password: dzh123456
+    pk_columns: [request_id]
+    auto_create: true
+    schema_drift: add_columns
+schedule:
+  type: once
+  max_attempts: 2
+  retry:
+    initial_interval_ms: 1000
+    max_interval_ms: 10000
+batch_size: 100
+checkpoint_interval_sec: 5
+backpressure_buffer: 1000

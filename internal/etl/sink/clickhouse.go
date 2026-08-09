@@ -938,15 +938,16 @@ func (s *ClickHouseSink) ensureColumns(ctx context.Context, tableName string, re
 
 	for _, rec := range records {
 		for name, value := range rec.Data {
+			declared := rec.Metadata.ColumnTypes[name]
 			if col, ok := existing[name]; ok {
 				// Check if the value type is compatible with the column type.
 				// If not, and schema_drift is "sync", we'll ALTER the column type.
-				desiredType := inferClickHouseType(name, value)
+				desiredType := inferClickHouseType(name, value, declared)
 				if s.schemaDrift == "sync" && !chTypeCompatible(col.Type, desiredType, value) {
 					typeMismatches[name] = desiredType
 				}
 			} else {
-				missing[name] = inferClickHouseType(name, value)
+				missing[name] = inferClickHouseType(name, value, declared)
 			}
 		}
 	}
@@ -1015,13 +1016,21 @@ func (s *ClickHouseSink) createTable(ctx context.Context, tableName string, reco
 		return nil
 	}
 	types := map[string]string{}
+	declared := map[string]string{}
+	for _, rec := range records {
+		for name, ct := range rec.Metadata.ColumnTypes {
+			if _, ok := declared[name]; !ok {
+				declared[name] = ct
+			}
+		}
+	}
 	for _, rec := range records {
 		for name, value := range rec.Data {
 			if name == s.versionCol {
 				continue
 			}
 			if _, ok := types[name]; !ok {
-				types[name] = inferClickHouseType(name, value)
+				types[name] = inferClickHouseType(name, value, declared[name])
 			}
 		}
 	}
@@ -1343,11 +1352,16 @@ func convertNestedValue(v any) any {
 	return []any{v}
 }
 
-// inferClickHouseType delegates to the unified typing engine so auto-created
-// ClickHouse tables get name-hinted + value-driven types (id→Int64, amount→
-// Decimal, _at→DateTime64, …) consistent with the other relational sinks,
-// instead of the old name-blind local inference (P4-22, SK-1).
-func inferClickHouseType(name string, v any) string {
+// inferClickHouseType resolves the DDL type for an auto-created/evolved
+// ClickHouse column with explicit priority:
+//  1. declared — the source-side column type (Metadata.ColumnTypes, e.g. MySQL
+//     information_schema COLUMN_TYPE / Debezium field type), mapped onto
+//     ClickHouse DDL (so a source varchar request_id never becomes Int64);
+//  2. unified typing engine — sample value + column-name heuristics.
+func inferClickHouseType(name string, v any, declared string) string {
+	if mapped := typing.MapSourceType(typing.DialectClickHouse, declared); mapped != "" {
+		return mapped
+	}
 	return typing.InferFromValue(typing.DialectClickHouse, name, v)
 }
 

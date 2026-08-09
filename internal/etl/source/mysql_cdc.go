@@ -447,6 +447,21 @@ func (h *mysqlCDCHandler) OnRow(e *canal.RowsEvent) error {
 	tableName := e.Table.Name
 	now := time.Now()
 
+	// Source-side column metainfo (canal library reads information_schema
+	// itself): lets auto_create sinks rebuild real source types instead of
+	// guessing from sample values / name hints.
+	colTypes := map[string]string{}
+	for _, col := range e.Table.Columns {
+		raw := col.RawType
+		if raw == "" {
+			continue
+		}
+		if col.IsUnsigned && !strings.Contains(raw, "unsigned") {
+			raw += " unsigned"
+		}
+		colTypes[col.Name] = raw
+	}
+
 	h.reader.mu.RLock()
 	file := h.reader.lastPosName
 	pos := h.reader.lastPos
@@ -457,13 +472,14 @@ func (h *mysqlCDCHandler) OnRow(e *canal.RowsEvent) error {
 		row := e.Rows[i]
 		rec := core.Record{
 			Metadata: core.Metadata{
-				Source:     h.reader.source.name,
-				Database:   h.reader.source.database,
-				Table:      tableName,
-				Timestamp:  now,
-				BinlogFile: file,
-				BinlogPos:  pos,
-				Gtid:       gtid,
+				Source:      h.reader.source.name,
+				Database:    h.reader.source.database,
+				Table:       tableName,
+				Timestamp:   now,
+				BinlogFile:  file,
+				BinlogPos:   pos,
+				Gtid:        gtid,
+				ColumnTypes: colTypes,
 			},
 		}
 
