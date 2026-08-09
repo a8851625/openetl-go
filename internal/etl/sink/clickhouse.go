@@ -49,6 +49,15 @@ type ClickHouseSink struct {
 	// engineCache stores the table engine per table name
 	engineCache     map[string]string
 	localTableCache map[string]string
+	// tableTemplate, when set (e.g. "ods_{table}"), fans out records to
+	// per-record target tables derived from metadata ({table}/{db}); when
+	// empty the static configured table (or metadata table) is used.
+	tableTemplate string
+	// pkColumnsFromMetadata derives per-table primary keys from JSON-object
+	// Metadata.Key values (multi-table CDC: heterogeneous keys per table).
+	pkColumnsFromMetadata bool
+	// pkByTable holds the per-table key columns for the batch being written.
+	pkByTable map[string][]string
 	// optimizeInterval controls automatic OPTIMIZE TABLE FINAL
 	optimizeInterval time.Duration
 	// useFinal appends FINAL to internal queries
@@ -130,6 +139,14 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 	}
 	if v, ok := config["table"]; ok {
 		s.table = v.(string)
+	}
+	if v, ok := config["table_template"]; ok {
+		s.tableTemplate = v.(string)
+	}
+	if v, ok := config["pk_columns_from_metadata"]; ok {
+		if b, ok := v.(bool); ok {
+			s.pkColumnsFromMetadata = b
+		}
 	}
 	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
 	if v, ok := config["version_column"]; ok {
@@ -459,8 +476,18 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 	}
 
 	// Compact by (table, PK) in source order so multiple events on the same key
-	// collapse to the final operation before grouping by op type.
+	// collapse to the final operation before grouping by op type. With
+	// pk_columns_from_metadata the key columns are derived per table from
+	// envelope metadata; otherwise the static pk_columns (or id) is used.
+	pkByTable, err := s.pkColumnsByTable(dataRecords)
+	if err != nil {
+		return err
+	}
+	s.pkByTable = pkByTable
 	dataRecords = CompactRecordsByPK(dataRecords, func(table string) []string {
+		if pk, ok := s.pkByTable[table]; ok {
+			return pk
+		}
 		if len(s.pkColumns) > 0 {
 			return s.pkColumns
 		}
@@ -476,7 +503,10 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 	batches := map[string]*tableBatch{}
 
 	for _, rec := range dataRecords {
-		tableName := s.resolveTable(rec)
+		tableName, err := s.resolveTable(rec)
+		if err != nil {
+			return err
+		}
 		tb, ok := batches[tableName]
 		if !ok {
 			tb = &tableBatch{}
@@ -542,14 +572,65 @@ func (s *ClickHouseSink) checkWritableEngine(ctx context.Context, tableName stri
 	return nil
 }
 
-// resolveTable determines the target table name for a record, resolving
-// Distributed table aliases to their underlying local tables.
-func (s *ClickHouseSink) resolveTable(rec core.Record) string {
-	tableName := s.table
-	if tableName == "" && rec.Metadata.Table != "" {
-		tableName = rec.Metadata.Table
+// resolveTable determines the target table name for a record. With a
+// table_template (e.g. "ods_{table}"), {table}/{db} are substituted from
+// record metadata; otherwise the static configured table (or record metadata
+// table when static is empty) is used. A template that references {table}/
+// {db} but the record carries no such metadata is a configuration error
+// rather than silently emitting a malformed name (e.g. "ods_") which would
+// mix unrelated tables into one destination.
+func (s *ClickHouseSink) resolveTable(rec core.Record) (string, error) {
+	if s.tableTemplate == "" {
+		if s.table != "" {
+			return s.table, nil
+		}
+		return rec.Metadata.Table, nil
 	}
-	return tableName
+	if strings.Contains(s.tableTemplate, "{db}") && rec.Metadata.Database == "" {
+		return "", fmt.Errorf("clickhouse sink: table_template %q references {db} but record has no database metadata", s.tableTemplate)
+	}
+	if strings.Contains(s.tableTemplate, "{table}") && rec.Metadata.Table == "" {
+		return "", fmt.Errorf("clickhouse sink: table_template %q references {table} but record has no table metadata", s.tableTemplate)
+	}
+	table := strings.ReplaceAll(s.tableTemplate, "{db}", rec.Metadata.Database)
+	table = strings.ReplaceAll(table, "{table}", rec.Metadata.Table)
+	if table == "" {
+		return "", fmt.Errorf("clickhouse sink: table_template %q resolved to empty", s.tableTemplate)
+	}
+	return table, nil
+}
+
+// pkColumnsByTable derives the per-table primary key columns used by a batch
+// when pk_columns_from_metadata is enabled. Each record's Metadata.Key must
+// be a non-empty JSON object; its property names become the key columns for
+// that record's target table (and source metadata table, so compaction and
+// auto-create lookups work for both). A key change within one batch for the
+// same table is rejected rather than silently mixing key schemes.
+func (s *ClickHouseSink) pkColumnsByTable(records []core.Record) (map[string][]string, error) {
+	result := make(map[string][]string)
+	if !s.pkColumnsFromMetadata {
+		return result, nil
+	}
+	for _, rec := range records {
+		targetTable, err := s.resolveTable(rec)
+		if err != nil {
+			return nil, err
+		}
+		pk := parseMetadataKeyColumns(rec.Metadata.Key)
+		if len(pk) == 0 {
+			return nil, fmt.Errorf("clickhouse sink: pk_columns_from_metadata requires Metadata.Key to be a non-empty JSON object for table %q; use pk_columns for scalar keys", targetTable)
+		}
+		for _, table := range []string{targetTable, rec.Metadata.Table} {
+			if table == "" {
+				continue
+			}
+			if existing, ok := result[table]; ok && !sameIdentifierSet(existing, pk) {
+				return nil, fmt.Errorf("clickhouse sink: metadata key columns for table %q changed within one batch (%v -> %v)", table, existing, pk)
+			}
+			result[table] = pk
+		}
+	}
+	return result, nil
 }
 
 // resolveLocalTable checks if the given table is a Distributed engine table
@@ -960,6 +1041,9 @@ func (s *ClickHouseSink) createTable(ctx context.Context, tableName string, reco
 
 	orderBy := "tuple()"
 	pkCols := s.pkColumns
+	if pkByTable, ok := s.pkByTable[tableName]; ok {
+		pkCols = pkByTable
+	}
 	if len(pkCols) == 0 {
 		if _, ok := types["id"]; ok {
 			pkCols = []string{"id"}
@@ -1294,6 +1378,9 @@ func (s *ClickHouseSink) writeUpdates(ctx context.Context, tableName string, rec
 	}
 
 	pkCols := s.pkColumns
+	if byTable, ok := s.pkByTable[tableName]; ok {
+		pkCols = byTable
+	}
 	if len(pkCols) == 0 {
 		pkCols = []string{"id"}
 	}
@@ -1362,6 +1449,9 @@ func (s *ClickHouseSink) writeDeletes(ctx context.Context, tableName string, rec
 	}
 
 	pkCols := s.pkColumns
+	if byTable, ok := s.pkByTable[tableName]; ok {
+		pkCols = byTable
+	}
 	if len(pkCols) == 0 {
 		pkCols = []string{"id"}
 	}

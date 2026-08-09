@@ -567,7 +567,9 @@ sink:
 | `password` | no | | ClickHouse password (**secret**). |
 | `database` | yes | | Target database. |
 | `table` | no | | Target table. Empty uses the source table name dynamically. |
+| `table_template` | no | | Multi-table fan-out template, e.g. `ods_{table}` (also supports `{db}`). Each record's destination is derived from its metadata `table`/`db`; set `table` empty. Requires envelope/json records carrying table metadata (e.g. `kafka` source `format: envelope`). |
 | `pk_columns` | no | `["id"]` | Primary key columns for ORDER BY, DELETE, and UPDATE conditions. |
+| `pk_columns_from_metadata` | no | `false` | Derive per-table primary keys from each record's JSON-object metadata key (`Metadata.Key`). Required for multi-table streams with heterogeneous keys (e.g. envelope CDC); auto-created tables get `ORDER BY (<key columns>)` per table. A missing/scalar key or a key-set change within one batch is a write error. |
 | `version_column` | no | `_version` | Version column for ReplacingMergeTree. |
 | `auto_create` | no | `false` | Auto-create table if missing. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, `add_columns`, or `sync`. |

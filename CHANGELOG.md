@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.7] — 2026-08-09 — ClickHouse sink multi-table fan-out (`table_template` + `pk_columns_from_metadata`)
+
+### Added
+
+- **ClickHouse sink multi-table fan-out**: the `clickhouse` sink now supports `table_template` (e.g. `ods_{table}`, with `{db}` placeholder) and `pk_columns_from_metadata`. A single sink can route a multi-table Kafka envelope stream (one topic, many tables) into per-table ClickHouse targets — the same capability the Doris sink already had:
+  - `table_template` substitutes `{table}`/`{db}` from each record's envelope metadata; a template referencing missing metadata is a configuration error instead of a silently malformed table name.
+  - `pk_columns_from_metadata` derives per-table primary-key columns from the JSON-object `Metadata.Key`; auto-created tables get heterogeneous `ORDER BY` keys (e.g. `ods_orders` ORDER BY order_id, `ods_users` ORDER BY user_no) on `ReplacingMergeTree(_version)`.
+  - Batch compaction, auto-create ORDER BY, UPDATE routing and DELETE conditions all use the per-table key; a key-set change within one batch for the same table is a write error (no silent key mixing).
+  - Legacy single-table behavior (static `table`/`pk_columns`/metadata fallback) is unchanged when the new fields are absent.
+- Shared metadata-key parsing extracted to `internal/etl/sink/metadata_pk.go` (used by both Doris and ClickHouse sinks; Doris behavior unchanged).
+- New unit tests `internal/etl/sink/clickhouse_table_template_test.go`: resolve static/template/error paths, config parsing, per-table PK derivation, key-change rejection, missing-key rejection, per-table compaction.
+- New end-to-end `hack/e2e-kafka-multitable-clickhouse.sh`: Kafka envelope multi-table → ClickHouse fan-out, heterogeneous auto-create DDL, update absorption via ReplacingMergeTree, delete mutation, schema drift add_columns, checkpoint reset replay absorption (uniqExact stable after replay).
+- New spec example `testdata/pipes-kafka-ch-multitable/kafka-multitable-to-clickhouse.yaml`.
+- `docs/etl-config-schema.md` documents `table_template`/`pk_columns_from_metadata` for the ClickHouse sink.
+- `docs/myduckserver-verification.zh.md`: reproducible evidence for the MySQL → MyDuckServer integration assessment (three OpenETL channels currently unusable, engine-level capability baseline).
+
+### Evidence
+
+- `go test ./internal/etl/sink/` (incl. new tests) and `go test ./internal/etl/...` pass; `go vet ./internal/etl/...` clean.
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` exit 0 PASS: ods_orders/ods_users fan-out, heterogeneous ORDER BY DDL, upsert absorption (FINAL), mid-stream add-column, DELETE mutation, checkpoint reset replay without duplicate inflation.
+- `bash hack/check-release-assets.sh` passed.
+
+### Residuals (bounded, not in scope)
+
+- Kafka source still starts at `OffsetNewest` unless `initial_offset: oldest` is set — new consumer groups skip pre-existing messages by default (documented in the new e2e spec; changing the default would be a separate item).
+- ClickHouse multi-table routing is e2e-covered on the native protocol; the HTTP write path shares the same routing (unit-level) but was not re-certified this round.
+
 ## [v0.2.12-beta.6] — 2026-08-08 — mysql_snapshot_cdc emits JSON primary-key, enabling kafka→doris/es auto PK detection
 
 ### Fixed

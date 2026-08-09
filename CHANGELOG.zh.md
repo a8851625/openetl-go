@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.7] — 2026-08-09 — ClickHouse sink 支持多表扇出(`table_template` + `pk_columns_from_metadata`)
+
+### Added
+
+- **ClickHouse sink 多表扇出**:`clickhouse` sink 新增 `table_template`(如 `ods_{table}`,支持 `{db}` 占位)与 `pk_columns_from_metadata`。单 Kafka topic 承载多表 CDC 时,一个 pipeline 即可扇出到多张目标表,补齐与 Doris sink 对齐的能力:
+  - `table_template` 用每条记录 metadata 的 `{table}`/`{db}` 替换目标表名;模板引用缺失 metadata 时直接报配置错误,避免静默归并到错误表。
+  - `pk_columns_from_metadata` 从 `Metadata.Key`(JSON object)推导每表主键;自动建表时每表 `ORDER BY` 使用各自的键(如 `ods_orders` ORDER BY order_id、`ods_users` ORDER BY user_no),表引擎为 `ReplacingMergeTree(_version)`。
+  - 批内压缩、auto-create 的 ORDER BY、UPDATE 路由、DELETE 条件均按每表键生效;同一表在同批内主键集合变化时直接报错(不做隐式键混用)。
+  - 未配置新字段时保持原有单表行为(静态 `table`/`pk_columns`/metadata 回退),向后兼容。
+- 主键 metadata 解析抽为共享函数 `internal/etl/sink/metadata_pk.go`(Doris 与 ClickHouse sink 共用,Doris 行为不变)。
+- 新增单测 `internal/etl/sink/clickhouse_table_template_test.go`:静态表/模板展开/回退/错误路径、配置解析、每表 metadata 主键、键集合变化拒绝、缺 key 拒绝、按每表主键压缩。
+- 新增端到端 `hack/e2e-kafka-multitable-clickhouse.sh`:Kafka envelope 多表 → ClickHouse 扇出(异构自动建表 DDL、ReplacingMergeTree 吸收同键更新、流中自动补列、DELETE 走 mutation、checkpoint reset 重放吸收且业务键不膨胀)。
+- 新增示例 spec `testdata/pipes-kafka-ch-multitable/kafka-multitable-to-clickhouse.yaml`;`docs/etl-config-schema.md` 增加 clickhouse sink 两个新字段说明。
+- `docs/myduckserver-verification.zh.md`:MySQL → MyDuckServer 替代评估的可复现证据(三条 OpenETL 通道当前均不可用 + 引擎能力基线)。
+
+### Evidence
+
+- `go test ./internal/etl/sink/`(含新单测)与 `go test ./internal/etl/...` 全部通过;`go vet ./internal/etl/...` 干净。
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` 退出码 0 全部 PASS:两表扇出、异构 ORDER BY、FINAL 吸收同键 update、流中 DELETE、运行时补列、checkpoint reset 重放无重复膨胀。
+- `bash hack/check-release-assets.sh` 通过。
+
+### Residuals
+
+- Kafka source 默认自 `newest` 消费(`initial_offset: oldest` 需显式配置),新 consumer group 默认跳过存量消息(已在示例 spec 标注;是否改为默认 `oldest` 属独立事项)。
+- ClickHouse 多表路由仅 native 协议经 e2e 覆盖;HTTP 写路径共享同一路由(单测级),本轮未单独跑 e2e。
+
 ## [v0.2.12-beta.6] — 2026-08-08 — mysql_snapshot_cdc 输出 JSON 主键键，打通 kafka→doris/es 自动主键探测
 
 ### 修复

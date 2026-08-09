@@ -434,7 +434,7 @@ func (s *DorisSink) pkColumnsByTable(records []core.Record) (map[string][]string
 		if err != nil {
 			return nil, err
 		}
-		pk := parseDorisMetadataKeyColumns(rec.Metadata.Key)
+		pk := parseMetadataKeyColumns(rec.Metadata.Key)
 		if len(pk) == 0 {
 			return nil, fmt.Errorf("doris sink: pk_columns_from_metadata requires Metadata.Key to be a non-empty JSON object for table %q; use pk_columns for scalar keys", targetTable)
 		}
@@ -449,42 +449,6 @@ func (s *DorisSink) pkColumnsByTable(records []core.Record) (map[string][]string
 		}
 	}
 	return result, nil
-}
-
-func parseDorisMetadataKeyColumns(raw string) []string {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return nil
-	}
-	var decoded any
-	for attempts := 0; attempts < 2; attempts++ {
-		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
-			return nil
-		}
-		if nested, ok := decoded.(string); ok {
-			value = strings.TrimSpace(nested)
-			continue
-		}
-		break
-	}
-	obj, ok := decoded.(map[string]any)
-	if !ok {
-		return nil
-	}
-	if payload, ok := obj["payload"].(map[string]any); ok && len(payload) > 0 {
-		obj = payload
-	}
-	if key, ok := obj["key"].(map[string]any); ok && len(obj) == 1 {
-		obj = key
-	}
-	columns := make([]string, 0, len(obj))
-	for column := range obj {
-		if strings.TrimSpace(column) != "" {
-			columns = append(columns, column)
-		}
-	}
-	sort.Strings(columns)
-	return columns
 }
 
 // applyDDL executes a DDL statement on the Doris target via MySQL protocol
@@ -1110,24 +1074,6 @@ func normalizeIdentifier(v string) string {
 		v = strings.Trim(v, "`\"[]")
 	}
 	return strings.ToLower(v)
-}
-
-func sameIdentifierSet(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	seen := make(map[string]int, len(a))
-	for _, item := range a {
-		seen[normalizeIdentifier(item)]++
-	}
-	for _, item := range b {
-		key := normalizeIdentifier(item)
-		if seen[key] == 0 {
-			return false
-		}
-		seen[key]--
-	}
-	return true
 }
 
 func schemaHasColumn(schema core.SchemaInfo, name string) bool {

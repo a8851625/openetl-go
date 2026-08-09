@@ -1,0 +1,43 @@
+name: "cdc-upsert-to-myduck"
+source:
+  type: mysql_cdc
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    server_id: 4301
+    tables:
+      - "myduck_e2e_customers"
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: mysql
+  config:
+    host: "etl-myduck"
+    port: 3306
+    user: "root"
+    password: "myduck123"
+    database: "etl_analytics"
+    table: "myduck_e2e_customers"
+    batch_mode: "upsert"
+    pk_columns:
+      - "id"
+    auto_create: true
+    schema_drift: "ignore"
+
+batch_size: 1
+checkpoint_interval_sec: 1
+backpressure_buffer: 20
+
+retry:
+  max_attempts: 1
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

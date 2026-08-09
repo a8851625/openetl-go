@@ -1,0 +1,46 @@
+# Kafka(envelope, multi-table) -> ClickHouse multi-table fan-out
+#
+# A single Kafka topic carries CDC events for multiple source tables
+# (orders, users). The ClickHouse sink fans each record out to its own
+# target table via table_template + pk_columns_from_metadata:
+#   - ods_orders (ORDER BY order_id)   <- orders envelope events
+#   - ods_users  (ORDER BY user_no)    <- users envelope events
+#
+# Both tables are auto-created as ReplacingMergeTree(_version) with
+# heterogeneous ORDER BY keys derived from the JSON-object envelope key.
+name: kafka-multitable-to-clickhouse
+source:
+  type: kafka
+  config:
+    brokers:
+      - redpanda:9092
+    format: envelope
+    group_id: kafka-multitable-to-clickhouse
+    initial_offset: oldest
+    topic: cdc-ch-multitable
+sink:
+  type: clickhouse
+  config:
+    host: etl-clickhouse
+    password: dzh123456
+    database: dzh3136_go
+    table_template: ods_{table}
+    pk_columns_from_metadata: true
+    auto_create: true
+    schema_drift: add_columns
+schedule:
+  type: streaming
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 30000
+batch_size: 100
+flush_interval_ms: 1000
+checkpoint_interval_sec: 10
+tags:
+  - dwh
+  - ods
+  - kafka
+  - clickhouse
+  - cdc
+  - multitable

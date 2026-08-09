@@ -1,0 +1,44 @@
+name: "big-batch-insert-to-myduck"
+source:
+  type: mysql_batch
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    table: "myduck_e2e_big"
+    pk_column: "id"
+    cursor_column: "id"
+    limit: 5000
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: mysql
+  config:
+    host: "etl-myduck"
+    port: 3306
+    user: "root"
+    password: "myduck123"
+    database: "etl_analytics"
+    table: "myduck_e2e_big"
+    batch_mode: "insert"
+    pk_columns:
+      - "id"
+    auto_create: true
+    schema_drift: "ignore"
+
+batch_size: 5000
+checkpoint_interval_sec: 1
+backpressure_buffer: 500
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

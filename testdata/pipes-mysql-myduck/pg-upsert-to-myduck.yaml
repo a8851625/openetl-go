@@ -1,0 +1,45 @@
+name: "batch-upsert-to-myduck-pg"
+source:
+  type: mysql_batch
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    table: "myduck_e2e_orders"
+    pk_column: "id"
+    cursor_column: "id"
+    limit: 100
+
+transforms:
+  - type: identity
+    config: {}
+
+sink:
+  type: postgres
+  config:
+    host: "etl-myduck"
+    port: 5432
+    user: "postgres"
+    password: "myduck123"
+    database: "postgres"
+    schema: "public"
+    table: "myduck_pg_orders"
+    batch_mode: "upsert"
+    pk_columns:
+      - "id"
+    auto_create: true
+    schema_drift: "ignore"
+
+batch_size: 100
+checkpoint_interval_sec: 1
+backpressure_buffer: 100
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true
