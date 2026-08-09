@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.9] — 2026-08-09 — ClickHouse 自动建表参考源表元数据;字符串值不再被数值列名提示强转
+
+### 修复
+
+- **ClickHouse 自动建表优先使用源表真实 schema**:此前建表完全依赖采样值 + 列名启发式(`*_id` 后缀 → Int64),MySQL `varchar` 的 `request_id` 携带 hex 主键时被建成 Int64,每条写入都报 `converting string to Int64 is unsupported`。现在 `inferClickHouseType` 优先消费源声明类型(`Metadata.ColumnTypes`),仅在缺失/无法映射时回退到值+名字推断。`mysql_batch` 源为每条 record 附带驱动列类型(零额外查询),`mysql_cdc` 源附带 canal `RawType`(含 `unsigned` 修饰),此前仅 Debezium 路径携带的元数据现在覆盖本机 MySQL 源全链路。
+- **字符串值不再被数值命名提示强转为数值列**:`InferFromValue` 的数值类命名提示(`id`/`*_id`/`is_*`/`deleted`/flag/amount…)仅当字符串可解析为数字时生效;hex/UUID 文本回退为对应方言字符串类型。空字符串保留提示(写入时按 0 处理)。同样保护不带 ColumnTypes 的 Kafka/envelope 管道。
+- 新增测试:`TestInferFromValueNumericHintRequiresParseableString`(typing)、`TestInferClickHouseTypeDeclaredPriority`(sink)。
+
+### Evidence
+
+- `go test ./internal/etl/...` 全部通过;`go vet` 干净。
+- 容器级(mysql:8.0 → ClickHouse 24.3,dev 镜像):自动建表 `request_id String`、`amount Decimal(18, 2)`、`created_at DateTime64(3)`、`user_id Int32`、`ORDER BY (request_id)`;两行 hex `request_id` 正常写入,零失败零 DLQ。
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` 退出码 0 PASS(回归)。
+
+### Residuals
+
+- `mysql_batch` 字符串主键游标不推进(`updateLastID` 仅支持数字类型),varchar 主键会造成无限重读循环。已登记为 ROADMAP BUG-1;需 any 类型游标 + checkpoint 格式变更。
+
 ## [v0.2.12-beta.8] — 2026-08-09 — ClickHouse 数值列空字符串按 0 写入
 
 ### 修复

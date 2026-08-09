@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.9] — 2026-08-09 — ClickHouse auto-create honors source metainfo; string-safe numeric type hints
+
+### Fixed
+
+- **Auto-created ClickHouse tables now prefer the real source schema**: the clickhouse sink built DDL purely from sample values + column-name heuristics (`*_id` suffix → Int64), so a MySQL `varchar` `request_id` carrying hex ids produced an Int64 column and every write failed with `converting string to Int64 is unsupported`. `inferClickHouseType` now takes the source-declared type (`Metadata.ColumnTypes`) first and falls back to value/name inference only when absent/unmapped. `mysql_batch` attaches driver-reported column types to every record (zero extra queries) and `mysql_cdc` attaches canal `RawType` (+ `unsigned` qualifier), so the previously Debezium-only metainfo path now covers the native MySQL sources end to end.
+- **String values no longer force numeric columns via name hints**: `InferFromValue` numeric DDL hints (`id`/`*_id`/`is_*`/`deleted`/flags/amount…) now apply only when the string parses as a number; hex/uuid text falls back to the dialect string type. Empty strings keep the hint (coerced to 0 at write time). This also protects Kafka/envelope pipelines that carry no ColumnTypes at all.
+- New tests: `TestInferFromValueNumericHintRequiresParseableString` (typing), `TestInferClickHouseTypeDeclaredPriority` (sink).
+
+### Evidence
+
+- `go test ./internal/etl/...` pass; `go vet` clean.
+- Container-level (mysql:8.0 → ClickHouse 24.3, dev image): auto-created table has `request_id String`, `amount Decimal(18, 2)`, `created_at DateTime64(3)`, `user_id Int32`, `ORDER BY (request_id)`; two rows with hex `request_id` write cleanly, zero failed/DLQ.
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` exit 0 PASS (regression).
+
+### Residuals (bounded, not in scope)
+
+- `mysql_batch` string-PK cursor does not advance (`updateLastID` is numeric-only); varchar primary keys cause an endless re-read loop. Tracked as BUG-1 in the roadmap; needs an any-typed cursor + checkpoint format change.
+
 ## [v0.2.12-beta.8] — 2026-08-09 — ClickHouse numeric columns coerce empty-string source values
 
 ### Fixed

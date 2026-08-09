@@ -39,7 +39,7 @@ ETL_TLS_SERVER_NAME=localhost \
 MYSQL_ROOT_PASSWORD="root-password-0123456789" \
 MYSQL_PASSWORD="metadata-password-0123456789" \
 REDIS_PASSWORD="redis-password-0123456789" \
-OPENETL_IMAGE="ghcr.io/a8851625/openetl-go:v0.2.12-beta.8" \
+OPENETL_IMAGE="ghcr.io/a8851625/openetl-go:v0.2.12-beta.9" \
 OPENETL_CERTS_DIR="$TMP_DIR/certs" \
   "$CONTAINER_CLI" compose -f docker-compose.yml config >"$TMP_DIR/complete.out"
 
