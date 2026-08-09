@@ -1,0 +1,45 @@
+name: "kafka-envelope-to-doris-metadata-pk"
+# Leg 2: kafka(envelope) -> doris(table_template, pk_columns_from_metadata).
+# Reads the relay stream produced by mysql_snapshot_cdc and relies on the
+# JSON-object envelope key to auto-detect each table's primary key column.
+# This is the path that failed before the source emitted Metadata.Key, with
+# the error: "pk_columns_from_metadata requires Metadata.Key to be a non-empty
+# JSON object". auto_create derives the UNIQUE KEY model from the detected PK.
+source:
+  type: kafka
+  config:
+    brokers:
+      - "host.docker.internal:19092"
+    topic: "snapshot-cdc-doris-relay"
+    group_id: "snapshot-cdc-doris-relay"
+    format: envelope
+    initial_offset: oldest
+
+sink:
+  type: doris
+  config:
+    host: "host.docker.internal"
+    port: 9030
+    http_port: 8030
+    user: "root"
+    password: ""
+    database: "ods_snapshot_doris"
+    table_template: "ods_{table}"
+    write_mode: stream_load
+    stream_load_format: json
+    auto_create: true
+    schema_drift: add_columns
+    batch_mode: upsert
+    pk_columns_from_metadata: true
+
+batch_size: 50
+checkpoint_interval_sec: 1
+backpressure_buffer: 200
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

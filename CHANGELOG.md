@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.6] — 2026-08-08 — mysql_snapshot_cdc emits JSON primary-key, enabling kafka→doris/es auto PK detection
+
+### Fixed
+
+- **mysql_snapshot_cdc no longer emits an empty `Metadata.Key` (important)**: previously neither the snapshot nor the CDC phase populated `Metadata.Key`, so after a Kafka relay the downstream doris/elasticsearch sink with `pk_columns_from_metadata` received an empty string and failed with `requires Metadata.Key to be a non-empty JSON object`. Fixed by a new `metadataKeyJSON` helper that builds a JSON object from the primary-key column name and value (e.g. `{"id":123}` / `{"audit_log_id":99}`). The snapshot path uses the resolved `rpk.column`; the CDC path looks up `resolvedPKs[table]` first, then falls back to canal's `e.Table.PKColumns` (covering tables skipped during snapshot but still streamed via CDC). insert/update use the after-image, delete uses the deleted row — all carry the PK. This makes the "native source → kafka → native sink" auto-PK path work end to end without a static `pk_columns` config.
+
+### Verification Boundary
+
+- `go test -race -count=1 ./internal/etl/...` passes all packages.
+- New unit tests: `TestMetadataKeyJSON` covers int/string/bigint unsigned/empty-column/missing-value/nil-value cases; `TestDorisMetadataKeyColumnsFromSnapshotCDCSource` verifies the doris sink derives `[address_id]` from `{"address_id":12345}`.
+- End-to-end proof: after `mysql_snapshot_cdc → kafka → kafka(envelope)`, the captured Kafka message partition key and envelope `key` field are both `{"id":1}` (empty before the fix), exactly the format doris sink `pk_columns_from_metadata` consumes.
+- New `hack/e2e-snapshot-cdc-kafka-doris.sh` script (could not pass locally due to an environmental Doris BE black-list failure; script logic mirrors `e2e-doris.sh` and validates snapshot dump 5 rows + auto-create `UNIQUE KEY(id)` + CDC upsert when BE is healthy).
+- 13-script / 14-record connector certification suite re-run at this release commit; see `docs/connector-certification.md`.
+
 ## [v0.2.12-beta.5] — 2026-08-08 — mysql_snapshot_cdc unsigned PK classification fix + Kafka brokers parsing hardening
 
 ### Fixed

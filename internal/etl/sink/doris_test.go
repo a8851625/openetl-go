@@ -487,6 +487,24 @@ func TestDorisMetadataKeyColumnsFromEnvelope(t *testing.T) {
 	}
 }
 
+func TestDorisMetadataKeyColumnsFromSnapshotCDCSource(t *testing.T) {
+	// mysql_snapshot_cdc emits a single-column JSON object key like {"id":123}
+	// (see source.metadataKeyJSON). Doris pk_columns_from_metadata must derive
+	// the key column name from it so the snapshot_cdc -> kafka -> doris path
+	// auto-detects the PK without a static pk_columns config.
+	s := &DorisSink{tableTemplate: "ods_cct_{table}", pkColumnsFromMetadata: true}
+	pkByTable, err := s.pkColumnsByTable([]core.Record{{
+		Metadata: core.Metadata{Table: "address", Key: `{"address_id":12345}`},
+		Data:     map[string]any{"address_id": int64(12345), "city": "sh"},
+	}})
+	if err != nil {
+		t.Fatalf("pkColumnsByTable: %v", err)
+	}
+	if got := pkByTable["ods_cct_address"]; len(got) != 1 || got[0] != "address_id" {
+		t.Fatalf("metadata pk columns for ods_cct_address = %v, want [address_id]", got)
+	}
+}
+
 func TestDorisMetadataKeyColumnsRejectScalarEnvelopeKey(t *testing.T) {
 	s := &DorisSink{tableTemplate: "ods_{table}", pkColumnsFromMetadata: true}
 	_, err := s.pkColumnsByTable([]core.Record{{Metadata: core.Metadata{Table: "orders", Key: `"42"`}}})

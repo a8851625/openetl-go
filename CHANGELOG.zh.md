@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.6] — 2026-08-08 — mysql_snapshot_cdc 输出 JSON 主键键，打通 kafka→doris/es 自动主键探测
+
+### 修复
+
+- **mysql_snapshot_cdc 不再输出空 `Metadata.Key`（重要）**：此前 snapshot 与 CDC 两个阶段生成的 record 从不写入 `Metadata.Key`，导致经 Kafka 中继后下游 doris/elasticsearch sink 的 `pk_columns_from_metadata` 拿到空字符串并报错 `requires Metadata.Key to be a non-empty JSON object`。修复：新增 `metadataKeyJSON` helper，把主键列名与值组装成 JSON 对象（如 `{"id":123}` / `{"audit_log_id":99}`），在 snapshot 路径用已解析的 `rpk.column`，在 CDC 路径优先查 `resolvedPKs[table]`、回退 canal 的 `e.Table.PKColumns`（覆盖 snapshot 被 skip 但 CDC 仍同步的无单列主键表）。insert/update 用 after-image，delete 用被删行，均携带主键。这让「本项目 source → kafka → 本项目 sink」全链路的自动主键探测真正可用，无需静态 `pk_columns`。
+
+### 验证边界
+
+- `go test -race -count=1 ./internal/etl/...` 全部包通过。
+- 新增单测：`TestMetadataKeyJSON` 覆盖 int/string/bigint unsigned/空列/缺失值/nil 值等场景；`TestDorisMetadataKeyColumnsFromSnapshotCDCSource` 验证 doris sink 从 `{"address_id":12345}` 解析出 `[address_id]`。
+- 全链路实证：`mysql_snapshot_cdc → kafka → kafka(envelope)` 后 rpk 捕获的 Kafka 消息 partition key 与 envelope `key` 字段均为 `{"id":1}`（修复前为空），正是 doris sink `pk_columns_from_metadata` 所需格式。
+- 新增 `hack/e2e-snapshot-cdc-kafka-doris.sh` 脚本（本地 Doris BE 进入黑名单的环境性故障未能跑通，脚本逻辑与 `e2e-doris.sh` 对齐；BE 健康时可验证 snapshot dump 5 行 + auto-create `UNIQUE KEY(id)` + CDC upsert）。
+- 13 脚本 / 14 记录 connector 认证套件在本发布 commit 重新执行通过，详见 `docs/connector-certification.md`。
+
 ## [v0.2.12-beta.5] — 2026-08-08 — mysql_snapshot_cdc unsigned 主键分类修复 + Kafka brokers 解析加固
 
 ### 修复

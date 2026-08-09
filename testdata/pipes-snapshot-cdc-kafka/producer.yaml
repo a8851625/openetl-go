@@ -1,0 +1,38 @@
+name: "mysql-snapshot-cdc-to-kafka"
+# Leg 1: mysql_snapshot_cdc -> kafka (envelope, single topic).
+# Validates that mysql_snapshot_cdc emits a JSON-object Metadata.Key (e.g.
+# {"id":123}) so the downstream doris sink with pk_columns_from_metadata can
+# auto-detect the primary key column without a static pk_columns config.
+# Uses a single static topic (no topic_template) so all tables fan into one
+# stream, mirroring the whole-database relay use case.
+source:
+  type: mysql_snapshot_cdc
+  config:
+    host: "host.docker.internal"
+    port: 13306
+    user: "sync_user"
+    password: "sync_password_123"
+    database: "dzh3136_go"
+    server_id: 2601
+    tables:
+      - "customers"
+
+sink:
+  type: kafka
+  config:
+    brokers:
+      - "host.docker.internal:19092"
+    topic: "snapshot-cdc-doris-relay"
+    compression: lz4
+
+batch_size: 50
+checkpoint_interval_sec: 1
+backpressure_buffer: 200
+
+retry:
+  max_attempts: 3
+  initial_interval_ms: 100
+  max_interval_ms: 1000
+
+dlq:
+  enable: true

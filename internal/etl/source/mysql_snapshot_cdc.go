@@ -873,7 +873,7 @@ func (r *snapshotCDCReader) snapshotTable(ctx context.Context, tx *sql.Tx, table
 					}
 				}
 			}
-			rec := core.Record{Operation: core.OpInsert, Data: data, Metadata: core.Metadata{Source: r.source.name, Database: r.source.database, Table: tableName, Timestamp: time.Now(), Offset: numericOffset(rpk, data)}}
+			rec := core.Record{Operation: core.OpInsert, Data: data, Metadata: core.Metadata{Source: r.source.name, Database: r.source.database, Table: tableName, Timestamp: time.Now(), Offset: numericOffset(rpk, data), Key: metadataKeyJSON(rpk.column, data)}}
 			select {
 			case r.records <- rec:
 			case <-ctx.Done():
@@ -1111,6 +1111,28 @@ func numericOffset(rpk resolvedPK, data map[string]any) int64 {
 		}
 	}
 	return 0
+}
+
+// metadataKeyJSON builds a JSON object representation of the primary key for a
+// record, e.g. {"id":123} or {"audit_log_id":99}. This is the format Debezium
+// and OpenETL's kafka sink encode into Metadata.Key, and the format doris/
+// elasticsearch sinks with pk_columns_from_metadata expect when reading back
+// from Kafka. The key is always emitted (even for deletes, where Data may be
+// sparse) so downstream sinks can identify rows by PK. An empty pkColumn or a
+// missing value yields "" (no key), which sinks treat as "no PK derivation".
+func metadataKeyJSON(pkColumn string, data map[string]any) string {
+	if pkColumn == "" {
+		return ""
+	}
+	v, ok := data[pkColumn]
+	if !ok || v == nil {
+		return ""
+	}
+	b, err := json.Marshal(map[string]any{pkColumn: v})
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func (r *snapshotCDCReader) Read(ctx context.Context) (core.Record, error) {
@@ -1381,6 +1403,22 @@ type snapshotCDCHandler struct {
 
 func (h *snapshotCDCHandler) OnRow(e *canal.RowsEvent) error {
 	file, pos := h.reader.getBinlogPos()
+	// Resolve the snapshot PK column once per event; CDC rows carry the same
+	// key columns as the snapshot, so the resolvedPKs map (built at Open from
+	// information_schema / overrides) is authoritative. When a table has no
+	// resolved key (e.g. skipped during snapshot, or DDL added it after Open),
+	// fall back to the canal row event's own PK columns if available.
+	rpk, rpkOK := h.reader.resolvedPKs[e.Table.Name]
+	pkColumn := ""
+	if rpkOK {
+		pkColumn = rpk.column
+	} else if len(e.Table.PKColumns) == 1 {
+		// Canal reports PK column indices; resolve to the column name.
+		idx := e.Table.PKColumns[0]
+		if idx >= 0 && idx < len(e.Table.Columns) {
+			pkColumn = e.Table.Columns[idx].Name
+		}
+	}
 	for i := 0; i < len(e.Rows); i++ {
 		row := e.Rows[i]
 		rec := core.Record{Metadata: core.Metadata{Source: h.reader.source.name, Database: h.reader.source.database, Table: e.Table.Name, Timestamp: time.Now(), BinlogFile: file, BinlogPos: pos}}
@@ -1398,6 +1436,14 @@ func (h *snapshotCDCHandler) OnRow(e *canal.RowsEvent) error {
 		case canal.DeleteAction:
 			rec.Operation = core.OpDelete
 			rec.Data = rowToMap(e.Table.Columns, row)
+		}
+		// Emit the primary key as a JSON object so downstream sinks reading
+		// this record via Kafka (doris/es with pk_columns_from_metadata) can
+		// derive the key columns without a static pk_columns config. Uses the
+		// after-image (rec.Data) which always carries the PK for insert/update;
+		// for delete, rec.Data is the deleted row which also carries the PK.
+		if pkColumn != "" {
+			rec.Metadata.Key = metadataKeyJSON(pkColumn, rec.Data)
 		}
 		select {
 		case h.reader.records <- rec:

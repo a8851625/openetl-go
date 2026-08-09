@@ -334,3 +334,28 @@ func TestMigrateStringCursorsToNumeric(t *testing.T) {
 		t.Fatalf("empty cursor should not migrate: %#v", num)
 	}
 }
+
+func TestMetadataKeyJSON(t *testing.T) {
+	cases := []struct {
+		name     string
+		pkColumn string
+		data     map[string]any
+		want     string
+	}{
+		{"int pk", "id", map[string]any{"id": int64(123), "name": "x"}, `{"id":123}`},
+		{"string pk", "code", map[string]any{"code": "ABC", "v": 1}, `{"code":"ABC"}`},
+		{"bigint unsigned pk", "audit_log_id", map[string]any{"audit_log_id": uint64(99)}, `{"audit_log_id":99}`},
+		{"float pk value", "id", map[string]any{"id": float64(7)}, `{"id":7}`},
+		{"empty column", "", map[string]any{"id": 1}, ""},
+		{"missing value", "id", map[string]any{"name": "x"}, ""},
+		{"nil value", "id", map[string]any{"id": nil}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := metadataKeyJSON(c.pkColumn, c.data)
+			if got != c.want {
+				t.Fatalf("metadataKeyJSON(%q, %#v) = %q, want %q", c.pkColumn, c.data, got, c.want)
+			}
+		})
+	}
+}
