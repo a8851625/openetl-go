@@ -3,6 +3,8 @@ package sink
 import (
 	"sync"
 	"testing"
+
+	"github.com/shopspring/decimal"
 	"time"
 )
 
@@ -103,6 +105,46 @@ func TestConvertClickHouseHTTPValueFormatsTemporalTypes(t *testing.T) {
 			got := convertClickHouseHTTPValue(ts, tt.typ)
 			if got != tt.want {
 				t.Fatalf("convertClickHouseHTTPValue() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConvertClickHouseValueEmptyStringToNumeric(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  string
+		val  any
+		want any
+	}{
+		{name: "int64_empty", typ: "Int64", val: "", want: int64(0)},
+		{name: "int64_blank", typ: "Int64", val: "   ", want: int64(0)},
+		{name: "uint64_empty", typ: "UInt64", val: "", want: int64(0)},
+		{name: "nullable_int32_empty", typ: "Nullable(Int32)", val: "", want: int64(0)},
+		{name: "lowcard_int_empty", typ: "LowCardinality(Int16)", val: "", want: int64(0)},
+		{name: "float64_empty", typ: "Float64", val: "", want: float64(0)},
+		{name: "decimal_empty", typ: "Decimal(18,2)", val: "", want: decimal.NewFromInt(0)},
+		// Non-empty garbage must NOT be coerced silently: it stays a string so
+		// AppendRow fails loudly and the row lands in the DLQ.
+		{name: "int64_garbage", typ: "Int64", val: "abc", want: "abc"},
+		// Existing happy paths must not regress.
+		{name: "int64_parse", typ: "Int64", val: "123", want: int64(123)},
+		{name: "int64_float_string", typ: "Int64", val: "12.5", want: int64(12)},
+		{name: "decimal_parse", typ: "Decimal(18,2)", val: "12.34", want: decimal.RequireFromString("12.34")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertClickHouseValue(tt.val, tt.typ)
+			// decimal.Decimal is a big.Int-backed struct: compare via Equal.
+			if dwant, ok := tt.want.(decimal.Decimal); ok {
+				dgot, dok := got.(decimal.Decimal)
+				if !dok || !dgot.Equal(dwant) {
+					t.Fatalf("convertClickHouseValue(%v, %s) = %v (%T), want %v", tt.val, tt.typ, got, got, tt.want)
+				}
+				return
+			}
+			if got != tt.want {
+				t.Fatalf("convertClickHouseValue(%v, %s) = %v (%T), want %v (%T)", tt.val, tt.typ, got, got, tt.want, tt.want)
 			}
 		})
 	}

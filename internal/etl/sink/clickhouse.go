@@ -1160,6 +1160,14 @@ func convertClickHouseValue(v any, typ string) any {
 	s := fmt.Sprintf("%v", v)
 	switch {
 	case strings.HasPrefix(innerType, "Int") || strings.HasPrefix(innerType, "UInt"):
+		// Empty/blank strings (e.g. MySQL '' synced into an existing numeric
+		// column) must not abort the whole batch: keep MySQL-ish semantics
+		// and convert them to 0. Non-numeric garbage is left untouched so it
+		// still fails loudly at AppendRow and lands in the DLQ instead of
+		// being silently coerced.
+		if strings.TrimSpace(s) == "" {
+			return int64(0)
+		}
 		i, err := strconv.ParseInt(s, 10, 64)
 		if err == nil {
 			return i
@@ -1169,11 +1177,17 @@ func convertClickHouseValue(v any, typ string) any {
 			return int64(f)
 		}
 	case strings.HasPrefix(innerType, "Float"):
+		if strings.TrimSpace(s) == "" {
+			return float64(0)
+		}
 		f, err := strconv.ParseFloat(s, 64)
 		if err == nil {
 			return f
 		}
 	case strings.HasPrefix(innerType, "Decimal"):
+		if strings.TrimSpace(s) == "" {
+			return decimal.NewFromInt(0)
+		}
 		d, err := decimal.NewFromString(s)
 		if err == nil {
 			return d
