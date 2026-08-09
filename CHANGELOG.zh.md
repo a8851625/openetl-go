@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.8] — 2026-08-09 — ClickHouse 数值列空字符串按 0 写入
+
+### 修复
+
+- **空字符串不再导致整批写入失败**:MySQL/CDC 源中 varchar 空串映射到已存在的数值 ClickHouse 列时,原生驱动 `AppendRow` 报 `converting string to Int64 is unsupported`,整批失败;单行隔离只救回无空串的行,其余落入 DLQ。现在 `convertClickHouseValue` 对数值目标列(Int/UInt/Float/Decimal)遇到空/空白字符串统一按 0 处理(native 与 HTTP 写路径共用)。非数字垃圾字符串仍在 `AppendRow` 处报错并进 DLQ——不做静默数据替换。
+- 新增单测 `TestConvertClickHouseValueEmptyStringToNumeric`:空串/空白 → 0(覆盖 Int64/UInt64/Nullable/LowCardinality/Float64/Decimal);垃圾字符串保持原样;正常数字解析无回归。
+
+### Evidence
+
+- `go test ./internal/etl/sink/` 通过;`go vet` 干净。
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` 退出码 0 PASS(重建镜像回归)。
+
+### Residuals
+
+- 空串→0 为 at-least-once 同步语义;需显式 NULL 语义的场景请在 sink 前加 `type_convert`/`validate` 转换。
+
 ## [v0.2.12-beta.7] — 2026-08-09 — ClickHouse sink 支持多表扇出(`table_template` + `pk_columns_from_metadata`)
 
 ### Added

@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.8] — 2026-08-09 — ClickHouse numeric columns coerce empty-string source values
+
+### Fixed
+
+- **ClickHouse sink no longer aborts whole batches on empty-string values**: MySQL/CDC sources often carry `''` in varchar columns mapped onto existing numeric ClickHouse columns. The native driver's `AppendRow` failed with `converting string to Int64 is unsupported`, failing the ENTIRE batch; single-row isolation recovered only the rows without empty strings and the rest went to the DLQ. `convertClickHouseValue` now coerces blank strings to numeric zero for Int/UInt/Float/Decimal target types (shared by native and HTTP write paths). Non-numeric garbage strings still fail loudly at `AppendRow` and land in the DLQ — no silent data coercion.
+- New unit test `TestConvertClickHouseValueEmptyStringToNumeric` (empty/blank -> 0 for Int64/UInt64/Nullable/LowCardinality/Float64/Decimal; garbage stays a string; normal parses unchanged).
+
+### Evidence
+
+- `go test ./internal/etl/sink/` pass; `go vet` clean.
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` exit 0 PASS (regression on rebuilt image).
+
+### Residuals (bounded, not in scope)
+
+- Empty-string -> 0 is the at-least-once sync semantic; users requiring explicit NULL semantics should add a `type_convert`/`validate` transform before the sink.
+
 ## [v0.2.12-beta.7] — 2026-08-09 — ClickHouse sink multi-table fan-out (`table_template` + `pk_columns_from_metadata`)
 
 ### Added
