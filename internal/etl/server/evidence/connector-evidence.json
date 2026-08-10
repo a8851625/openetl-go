@@ -3,14 +3,14 @@
   "policy": {
     "max_age_hours": 720
   },
-  "certified_commit": "94727d042717bccb06de31bed96336528e867e62",
-  "certified_image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+  "certified_commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+  "certified_image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
   "records": [
     {
       "kind": "source",
       "type": "file",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
@@ -31,8 +31,8 @@
     {
       "kind": "source",
       "type": "http",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -54,8 +54,8 @@
     {
       "kind": "source",
       "type": "kafka",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -81,8 +81,8 @@
     {
       "kind": "source",
       "type": "mysql_batch",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -107,8 +107,8 @@
     {
       "kind": "source",
       "type": "mysql_cdc",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -133,8 +133,8 @@
     {
       "kind": "source",
       "type": "mysql_snapshot_cdc",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -160,8 +160,8 @@
     {
       "kind": "sink",
       "type": "file_sink",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
@@ -182,8 +182,8 @@
     {
       "kind": "sink",
       "type": "s3",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -206,8 +206,8 @@
     {
       "kind": "sink",
       "type": "kafka",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -232,8 +232,8 @@
     {
       "kind": "sink",
       "type": "mysql",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -258,8 +258,8 @@
     {
       "kind": "sink",
       "type": "postgres",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -284,8 +284,8 @@
     {
       "kind": "sink",
       "type": "postgresql",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -310,8 +310,8 @@
     {
       "kind": "sink",
       "type": "clickhouse",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -336,8 +336,8 @@
     {
       "kind": "sink",
       "type": "doris",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -361,17 +361,17 @@
     {
       "kind": "sink",
       "type": "clickhouse_multi_table",
-      "commit": "94727d042717bccb06de31bed96336528e867e62",
-      "image": "sha256:c5db323a8e193517fc73153b83c5a5dd9143dbc3e586ed3dee2dcbcd4dc6f10e",
+      "commit": "2c8c28c1e2c4aaa1aa07c7fa96e3605bb777aa31",
+      "image": "sha256:10c8d28a1b3c6472eca54157ed52f0fa658c88bf614a82eed285c09b1d16f171",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "clickhouse": "24.3.18.7",
         "redpanda": "v24.1.1"
       },
-      "started_at": "2026-08-09T17:25:00Z",
-      "finished_at": "2026-08-09T17:30:00Z",
-      "expires_at": "2026-09-08T17:30:00Z",
+      "started_at": "2026-08-10T13:35:00Z",
+      "finished_at": "2026-08-10T13:43:00Z",
+      "expires_at": "2026-09-09T13:43:00Z",
       "scripts": [
         "hack/e2e-kafka-multitable-clickhouse.sh"
       ],
@@ -381,7 +381,9 @@
         "delete_mutation",
         "empty_string_numeric_coercion",
         "heterogeneous_order_by",
+        "kafka_schema_propagation",
         "metainfo_declared_types",
+        "multi_sample_hint_safety",
         "schema_drift_add_columns",
         "string_safe_numeric_hints",
         "table_template_fanout",
@@ -389,7 +391,7 @@
         "update_absorption"
       ],
       "verified": true,
-      "note": "Kafka envelope multi-table fan-out + mysql_batch metainfo-driven auto-create + string-safe temporal inference (work_time varchar -> String); rerun on beta.10 image."
+      "note": "Kafka envelope multi-table fan-out + source schema propagation through kafka (snapshot_cdc -> kafka -> clickhouse) + string-safe multi-sample inference; rerun on beta.11 image."
     }
   ]
 }
