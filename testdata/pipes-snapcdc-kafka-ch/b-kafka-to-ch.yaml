@@ -1,0 +1,27 @@
+name: b-kafka-to-ch
+source:
+  type: kafka
+  config:
+    brokers: ["etl-redpanda:9092"]
+    group_id: snapcdc-ch-consumer
+    topic: snapcdc-staff
+    format: envelope
+    initial_offset: oldest
+sink:
+  type: clickhouse
+  config:
+    host: etl-clickhouse
+    port: 9000
+    user: default
+    password: dzh123456
+    database: dzh3136_go
+    table: ods_snap_staff
+    pk_columns: [id]
+    auto_create: true
+schedule:
+  type: streaming
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 30000
+tags: [kafka, clickhouse, metainfo]

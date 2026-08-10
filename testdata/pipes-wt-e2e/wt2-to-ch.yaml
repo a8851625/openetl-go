@@ -1,0 +1,30 @@
+name: wt2-to-ch
+source:
+  type: mysql_batch
+  config:
+    host: etl-mysql-source
+    port: 3306
+    user: root
+    password: root123456
+    database: wt2
+    table: staff
+    pk_column: id
+    batch_size: 100
+sink:
+  type: clickhouse
+  config:
+    host: etl-clickhouse
+    port: 9000
+    user: default
+    password: dzh123456
+    database: dzh3136_go
+    table: wt2_staff
+    pk_columns: [id]
+    auto_create: true
+schedule:
+  type: once
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 30000
+tags: [work_time, e2e]

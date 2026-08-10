@@ -1,0 +1,26 @@
+name: a-snapshot-to-kafka
+source:
+  type: mysql_snapshot_cdc
+  config:
+    host: etl-mysql-source
+    port: 3306
+    user: root
+    password: root123456
+    database: snap_e2e
+    tables: ["staff"]
+    server_id: 4500
+    batch_size: 100
+sink:
+  type: kafka
+  config:
+    brokers: ["etl-redpanda:9092"]
+    topic: snapcdc-staff
+    format: envelope
+    auto_create_topic: true
+schedule:
+  type: streaming
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 30000
+tags: [snapshot_cdc, kafka, metainfo]

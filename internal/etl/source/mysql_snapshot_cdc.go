@@ -437,6 +437,36 @@ func columnType(ctx context.Context, db *sql.DB, database, table, col string) (s
 	return ct.String, nil
 }
 
+// tableColumnTypes returns the MySQL COLUMN_TYPE for every column of a table in
+// a single information_schema query. The returned map is attached to each
+// snapshot record's Metadata.ColumnTypes so downstream sinks (direct or via a
+// kafka hop) can auto-create target tables from the real source schema instead
+// of guessing from sample values.
+func tableColumnTypes(ctx context.Context, q interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}, database, table string) (map[string]string, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT column_name, column_type FROM information_schema.columns
+		WHERE table_schema = ? AND table_name = ?`, database, table)
+	if err != nil {
+		return nil, fmt.Errorf("read column_types for %s.%s: %w", database, table, err)
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var name string
+		var ct sql.NullString
+		if err := rows.Scan(&name, &ct); err != nil {
+			return nil, fmt.Errorf("scan column_type for %s.%s: %w", database, table, err)
+		}
+		out[name] = ct.String
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate column_types for %s.%s: %w", database, table, err)
+	}
+	return out, nil
+}
+
 func (s *MySQLSnapshotCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
 	if err := s.ValidateCheckpoint(ctx, cp); err != nil {
 		return nil, err
@@ -807,6 +837,16 @@ func (r *snapshotCDCReader) setRuntimeBinlogPos(file string, pos uint32) {
 // ordered non-numeric keys (datetime/varchar) use a string > cursor without
 // sharding, since MOD is only defined for integers.
 func (r *snapshotCDCReader) snapshotTable(ctx context.Context, tx *sql.Tx, tableName string, rpk resolvedPK) error {
+	// Fetch the source column types once per table so every snapshot record
+	// carries real schema metadata; downstream sinks (direct or via a kafka
+	// hop) can then auto-create target tables from the source schema instead
+	// of guessing from sample values.
+	colTypes, colTypeErr := tableColumnTypes(ctx, tx, r.source.database, tableName)
+	if colTypeErr != nil {
+		// Non-fatal: sinks fall back to value inference when ColumnTypes is nil.
+		g.Log().Warningf(ctx, "snapshot_cdc: read column types for %s.%s failed (sinks will infer from values): %v", r.source.database, tableName, colTypeErr)
+		colTypes = nil
+	}
 	for {
 		var query string
 		var args []any
@@ -873,7 +913,7 @@ func (r *snapshotCDCReader) snapshotTable(ctx context.Context, tx *sql.Tx, table
 					}
 				}
 			}
-			rec := core.Record{Operation: core.OpInsert, Data: data, Metadata: core.Metadata{Source: r.source.name, Database: r.source.database, Table: tableName, Timestamp: time.Now(), Offset: numericOffset(rpk, data), Key: metadataKeyJSON(rpk.column, data)}}
+			rec := core.Record{Operation: core.OpInsert, Data: data, Metadata: core.Metadata{Source: r.source.name, Database: r.source.database, Table: tableName, Timestamp: time.Now(), Offset: numericOffset(rpk, data), Key: metadataKeyJSON(rpk.column, data), ColumnTypes: colTypes}}
 			select {
 			case r.records <- rec:
 			case <-ctx.Done():

@@ -56,12 +56,13 @@ type kafkaSyncProducer interface {
 // kafkaEnvelope wraps CDC records with operation metadata so downstream
 // consumers can distinguish INSERT/UPDATE/DELETE.
 type kafkaEnvelope struct {
-	EventID   string         `json:"event_id"`
-	Op        string         `json:"op"`
-	Table     string         `json:"table,omitempty"`
-	Key       string         `json:"key,omitempty"`
-	Data      map[string]any `json:"data"`
-	Timestamp string         `json:"timestamp"`
+	EventID     string            `json:"event_id"`
+	Op          string            `json:"op"`
+	Table       string            `json:"table,omitempty"`
+	Key         string            `json:"key,omitempty"`
+	Data        map[string]any    `json:"data"`
+	Timestamp   string            `json:"timestamp"`
+	ColumnTypes map[string]string `json:"column_types,omitempty"`
 }
 
 func NewKafkaSink(config map[string]any) (*KafkaSink, error) {
@@ -272,12 +273,13 @@ func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error
 			srcTS = time.Now()
 		}
 		env := kafkaEnvelope{
-			EventID:   eventID,
-			Op:        string(rec.Operation),
-			Table:     rec.Metadata.Table,
-			Key:       rec.Metadata.Key,
-			Data:      rec.Data,
-			Timestamp: srcTS.Format(time.RFC3339Nano),
+			EventID:     eventID,
+			Op:          string(rec.Operation),
+			Table:       rec.Metadata.Table,
+			Key:         rec.Metadata.Key,
+			Data:        rec.Data,
+			Timestamp:   srcTS.Format(time.RFC3339Nano),
+			ColumnTypes: rec.Metadata.ColumnTypes,
 		}
 		value, err := json.Marshal(env)
 		if err != nil {

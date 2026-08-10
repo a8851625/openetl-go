@@ -34,6 +34,11 @@ func TestKafkaSinkWriteSendsEnvelopeAndRecordsMetrics(t *testing.T) {
 			Timestamp: ts,
 			Partition: 0,
 			Offset:    7,
+			ColumnTypes: map[string]string{
+				"event_id":     "varchar(64)",
+				"metric_type":  "varchar(32)",
+				"metric_value": "decimal(18,2)",
+			},
 		},
 	}
 
@@ -74,6 +79,12 @@ func TestKafkaSinkWriteSendsEnvelopeAndRecordsMetrics(t *testing.T) {
 	}
 	if env.Data["metric_type"] != "speed" {
 		t.Fatalf("data.metric_type = %#v", env.Data["metric_type"])
+	}
+	// ColumnTypes must round-trip through the kafka envelope so a downstream
+	// consumer (kafka -> clickhouse) can auto-create target tables from the
+	// real source schema instead of guessing from sample values.
+	if env.ColumnTypes["event_id"] != "varchar(64)" || env.ColumnTypes["metric_value"] != "decimal(18,2)" {
+		t.Fatalf("column_types not serialized: %#v", env.ColumnTypes)
 	}
 
 	metrics := s.SinkMetrics()
@@ -128,12 +139,12 @@ func TestKafkaSinkTopicTemplateRoutesByMetadata(t *testing.T) {
 		{
 			Operation: core.OpInsert,
 			Data:      map[string]any{"id": 1, "v": "a"},
-			Metadata: core.Metadata{Database: "shop", Table: "orders", Timestamp: ts},
+			Metadata:  core.Metadata{Database: "shop", Table: "orders", Timestamp: ts},
 		},
 		{
 			Operation: core.OpUpdate,
 			Data:      map[string]any{"id": 2, "v": "b"},
-			Metadata: core.Metadata{Database: "shop", Table: "users", Timestamp: ts},
+			Metadata:  core.Metadata{Database: "shop", Table: "users", Timestamp: ts},
 		},
 	}
 
@@ -167,7 +178,7 @@ func TestKafkaSinkTopicTemplateEmptyResolutionErrors(t *testing.T) {
 	rec := core.Record{
 		Operation: core.OpInsert,
 		Data:      map[string]any{"id": 1},
-		Metadata: core.Metadata{Timestamp: time.Now()},
+		Metadata:  core.Metadata{Timestamp: time.Now()},
 	}
 
 	err := s.Write(context.Background(), []core.Record{rec})

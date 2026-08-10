@@ -160,6 +160,11 @@ func TestKafkaHandlerEnvelopeRestoresCDCSemantics(t *testing.T) {
 		"key":       "42",
 		"data":      map[string]any{"order_id": float64(42)},
 		"timestamp": "2026-08-06T10:00:00Z",
+		"column_types": map[string]any{
+			"order_id":  "int(11)",
+			"amount":    "decimal(18,2)",
+			"work_time": "varchar(32)",
+		},
 	})
 	if err != nil {
 		t.Fatalf("marshal envelope: %v", err)
@@ -191,6 +196,14 @@ func TestKafkaHandlerEnvelopeRestoresCDCSemantics(t *testing.T) {
 		}
 		if got, ok := rec.Data["order_id"].(float64); !ok || got != 42 {
 			t.Errorf("data.order_id = %#v, want 42", rec.Data["order_id"])
+		}
+		// column_types must round-trip so a downstream clickhouse/doris sink can
+		// auto-create target tables from the real source schema.
+		if rec.Metadata.ColumnTypes["order_id"] != "int(11)" {
+			t.Errorf("column_types.order_id = %q, want int(11)", rec.Metadata.ColumnTypes["order_id"])
+		}
+		if rec.Metadata.ColumnTypes["work_time"] != "varchar(32)" {
+			t.Errorf("column_types.work_time = %q, want varchar(32)", rec.Metadata.ColumnTypes["work_time"])
 		}
 	case <-time.After(time.Second):
 		t.Fatal("envelope record not delivered")

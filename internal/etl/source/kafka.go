@@ -338,12 +338,13 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 				// original operation/table/row so downstream sinks (e.g. Doris
 				// upsert+delete) behave exactly like a direct CDC consumer.
 				var env struct {
-					EventID   string         `json:"event_id"`
-					Op        string         `json:"op"`
-					Table     string         `json:"table"`
-					Key       string         `json:"key"`
-					Data      map[string]any `json:"data"`
-					Timestamp string         `json:"timestamp"`
+					EventID     string            `json:"event_id"`
+					Op          string            `json:"op"`
+					Table       string            `json:"table"`
+					Key         string            `json:"key"`
+					Data        map[string]any    `json:"data"`
+					Timestamp   string            `json:"timestamp"`
+					ColumnTypes map[string]string `json:"column_types"`
 				}
 				if err := json.Unmarshal(msg.Value, &env); err == nil && env.Data != nil {
 					switch env.Op {
@@ -359,6 +360,9 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 					}
 					if env.Key != "" {
 						rec.Metadata.Key = env.Key
+					}
+					if len(env.ColumnTypes) > 0 {
+						rec.Metadata.ColumnTypes = env.ColumnTypes
 					}
 					for k, v := range env.Data {
 						data[k] = v

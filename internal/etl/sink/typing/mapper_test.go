@@ -82,6 +82,33 @@ func TestInferFromValues(t *testing.T) {
 	if got2 != "TEXT" {
 		t.Errorf("expected TEXT for all-nil, got %q", got2)
 	}
+
+	// Multi-sample hint safety: a single non-empty sample that disproves a
+	// numeric/temporal hint must downgrade the whole column to String, because
+	// the column is one DDL type and any non-conforming row would abort the
+	// batch. Regression for kafka work_time="[1,2,3]" with empty siblings.
+	multiCases := []struct {
+		dialect Dialect
+		col     string
+		vals    []any
+		want    string
+	}{
+		{DialectClickHouse, "work_time", []any{"", "[1,2,3]"}, "String"},
+		{DialectClickHouse, "work_time", []any{"[1,2,3]", ""}, "String"},
+		{DialectClickHouse, "work_time", []any{"", ""}, "DateTime64(3)"},
+		{DialectClickHouse, "work_time", []any{"2026-06-01 09:00:00", ""}, "DateTime64(3)"},
+		{DialectClickHouse, "amount", []any{"", "$12"}, "String"},
+		{DialectClickHouse, "amount", []any{"12.5", "10"}, "Decimal(18,2)"},
+		{DialectClickHouse, "request_id", []any{"", "abc123"}, "String"},
+		{DialectClickHouse, "request_id", []any{"123", "456"}, "Int64"},
+		{DialectMySQL, "work_time", []any{"", "[1,2,3]"}, "TEXT"},
+	}
+	for _, tc := range multiCases {
+		got := InferFromValues(tc.dialect, tc.col, tc.vals)
+		if got != tc.want {
+			t.Errorf("InferFromValues(%s, %s, %v) = %q, want %q", tc.dialect, tc.col, tc.vals, got, tc.want)
+		}
+	}
 }
 
 func TestIsTimestampString(t *testing.T) {

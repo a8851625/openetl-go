@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.11] — 2026-08-10 — 源表 schema 经 kafka 贯通;多样本字符串安全推断
+
+### 新增（kafka -> clickhouse 类型错误的根治）
+
+- **源列类型现在能贯穿 kafka 中转**。此前两段式管道（`mysql snapshot_cdc -> kafka -> clickhouse`）在 kafka 边界丢失了真实源 schema：snapshot 阶段不把列类型附到 record，kafka envelope 只序列化行数据。下游 sink 只能从样本值猜类型，导致建错列（如 `varchar` 的 `work_time` 含 `[1,2,3]` 或 `""` 被建成 `DateTime64(3)`，每条写入失败）。现在：
+  - `mysql_snapshot_cdc` snapshot 阶段每张表查一次 `information_schema.columns`，把每列的 `COLUMN_TYPE` 附到 record 的 `Metadata.ColumnTypes`（CDC 阶段此前已通过 canal `RawType` 填充）。
+  - kafka envelope 新增 `column_types` 字段（`map[string]string`）；kafka sink 序列化、kafka source 还原进 `Metadata.ColumnTypes`。
+  - 消费 `Metadata.ColumnTypes` 的 sink（clickhouse auto-create/schema-drift、doris、mysql、postgresql）现在端到端拿到真实源 schema，`varchar`/`json`/`text` 源列建成 String，不再从值猜。
+  - 不向后兼容（按要求）：envelope 格式变更；无 `column_types` 的旧 envelope 仍可解析（字段可选），但生产端和消费端应一起升级。
+
+### 修复
+
+- **`InferFromValues` 现在检查所有样本，而非只看第一个**。任一非空样本证伪数值/时间命名提示（如 `work_time` 有的行 `""`、有的行 `"[1,2,3]"`）会让整列回退 String。此前只看第一个样本，首行为空时建成 `DateTime64(3)`，后续 `[1,2,3]` 全部失败。这是上述 schema 贯通修复之下的值推断安全网。
+
+### Tests
+
+- 扩展 `TestKafkaSinkWriteSendsEnvelopeAndRecordsMetrics`：record 的 `ColumnTypes` 经 kafka envelope 往返。
+- 扩展 `TestKafkaHandlerEnvelopeRestoresCDCSemantics`：envelope 的 `column_types` 还原进 `Metadata.ColumnTypes`。
+- 扩展 `TestInferFromValues`：多样本提示安全（空+垃圾 -> String、空+真时间 -> DateTime、全数字 -> Decimal）。
+- `go test ./internal/etl/...` 全部通过；`go vet` 干净。
+
+### Evidence
+
+- 容器级两段式管道（mysql:8.0 `snapshot_cdc` -> Redpanda -> ClickHouse 24.3）：源 `staff(work_time varchar(32))` 含 `""`、`"[1,2,3]"` 和真实时间范围；验证 kafka 消息携带 `column_types:{work_time:"varchar(32)",...}`；自动建表 `work_time String, amount Decimal(18,2), created_at DateTime64(3), id Int32, name String`；3 行全部正常写入（空 created_at -> epoch），零失败零 DLQ。
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` 退出码 0 PASS（回归）。
+
+### Residuals
+
+- `mysql_batch` 字符串主键游标不推进（ROADMAP BUG-1）；与本修复无关。
+
 ## [v0.2.12-beta.10] — 2026-08-09 — ClickHouse 时间类型字符串安全推断;DateTime 空串兜底
 
 ### 修复

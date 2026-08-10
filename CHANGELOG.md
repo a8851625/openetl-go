@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.11] — 2026-08-10 — Propagate source schema through kafka; string-safe multi-sample inference
+
+### Added (root-cause fix for kafka -> clickhouse type errors)
+
+- **Source column types now flow through the kafka hop.** Previously a two-stage pipeline (`mysql snapshot_cdc -> kafka -> clickhouse`) lost the real source schema at the kafka boundary: the snapshot phase did not attach column types to records, and the kafka envelope only serialized row values. Downstream sinks then guessed types from sample values and mis-built columns (e.g. a `varchar` `work_time` carrying `[1,2,3]` or `""` became `DateTime64(3)` and every write failed). Now:
+  - `mysql_snapshot_cdc` snapshot phase queries `information_schema.columns` once per table and attaches `COLUMN_TYPE` for every column to each record's `Metadata.ColumnTypes` (the CDC phase already did this via canal `RawType`).
+  - The kafka envelope carries a new `column_types` field (`map[string]string`); the kafka sink serializes it and the kafka source restores it into `Metadata.ColumnTypes`.
+  - Sinks that honor `Metadata.ColumnTypes` (clickhouse auto-create/schema-drift, doris, mysql, postgresql) now receive the real source schema end to end, so a `varchar`/`json`/`text` source column is built as String instead of being guessed from values.
+  - Backward incompatibility (per request): the envelope format changed; old envelopes without `column_types` still parse (the field is optional), but producers and consumers should be upgraded together.
+
+### Fixed
+
+- **`InferFromValues` now inspects all samples, not just the first.** A single non-empty sample that disproves a numeric/temporal name hint (e.g. `work_time` carries `""` on some rows but `"[1,2,3]"` on others) now downgrades the whole column to String. Previously only the first sample decided the type, so an empty first row built `DateTime64(3)` and every subsequent `[1,2,3]` row failed. This is the value-inference safety net beneath the schema-propagation fix above.
+
+### Tests
+
+- Extended `TestKafkaSinkWriteSendsEnvelopeAndRecordsMetrics`: record `ColumnTypes` round-trips through the kafka envelope.
+- Extended `TestKafkaHandlerEnvelopeRestoresCDCSemantics`: `column_types` in the envelope is restored into `Metadata.ColumnTypes`.
+- Extended `TestInferFromValues`: multi-sample hint safety (empty + junk -> String, empty + real timestamp -> DateTime, all-numeric -> Decimal).
+- `go test ./internal/etl/...` pass; `go vet` clean.
+
+### Evidence
+
+- Container-level two-stage pipeline (mysql:8.0 `snapshot_cdc` -> Redpanda -> ClickHouse 24.3): source `staff(work_time varchar(32))` carrying `""`, `"[1,2,3]"` and a real time range; kafka message verified to carry `column_types:{work_time:"varchar(32)",...}`; auto-created ClickHouse table is `work_time String, amount Decimal(18,2), created_at DateTime64(3), id Int32, name String`; all 3 rows write cleanly (empty created_at -> epoch), zero failed/DLQ.
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` exit 0 PASS (regression).
+
+### Residuals
+
+- `mysql_batch` string-PK cursor does not advance (BUG-1 in roadmap); unrelated to this fix.
+
 ## [v0.2.12-beta.10] — 2026-08-09 — ClickHouse string-safe temporal inference; empty-string DateTime coercion
 
 ### Fixed

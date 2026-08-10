@@ -88,6 +88,12 @@ func InferFromValue(dialect Dialect, columnName string, value any) string {
 // appropriate type. If all values are nil, returns the default string type.
 // Numeric sample values take priority over temporal name hints (same rule as
 // InferFromValue) so auto_create does not build DATETIME for soft-delete flags.
+//
+// Multi-sample safety: a column is a single DDL type, so if ANY non-empty
+// sample disproves a numeric/temporal name hint (e.g. work_time carries ” on
+// some rows but '[1,2,3]' on others), the whole column must fall back to
+// String. Relying only on the first sample would build DateTime64 from an
+// empty first row and then reject every subsequent '[1,2,3]' row.
 func InferFromValues(dialect Dialect, columnName string, values []any) string {
 	var nonNil []any
 	for _, v := range values {
@@ -101,7 +107,35 @@ func InferFromValues(dialect Dialect, columnName string, values []any) string {
 		}
 		return defaultStringType(dialect)
 	}
-	// Prefer the concrete sample over name-only guessing when available.
+	hint := nameHint(dialect, columnName)
+	// If any non-empty string sample disproves a numeric/temporal hint, the
+	// column cannot hold that hint type without rejecting some rows -> String.
+	if hint != "" && (isNumericDDL(hint) || isTimestampDDL(hint)) {
+		for _, v := range nonNil {
+			if s, ok := v.(string); ok {
+				t := strings.TrimSpace(s)
+				if t == "" {
+					continue
+				}
+				if isNumericDDL(hint) {
+					if _, err := strconv.ParseInt(t, 10, 64); err != nil {
+						if _, err := strconv.ParseFloat(t, 64); err != nil {
+							return defaultStringType(dialect)
+						}
+					}
+				} else { // isTimestampDDL(hint)
+					if !isTimestampString(t) {
+						return defaultStringType(dialect)
+					}
+				}
+			}
+		}
+	}
+	// No non-empty sample disproved the hint: keep it (empty samples coerce
+	// at write time). For non-hinted columns fall back to concrete inference.
+	if hint != "" {
+		return hint
+	}
 	return InferFromValue(dialect, columnName, nonNil[0])
 }
 
