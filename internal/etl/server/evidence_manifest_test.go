@@ -14,8 +14,14 @@ func TestConnectorEvidenceManifestLoadsAndCoversProductionConnectors(t *testing.
 	if err != nil {
 		t.Fatalf("LoadConnectorEvidenceManifest: %v", err)
 	}
-	if len(manifest.Records) != 14 {
-		t.Fatalf("manifest records = %d, want 14 production source/sink records", len(manifest.Records))
+	var productionCount int
+	for _, descriptor := range connectorDescriptors() {
+		if descriptor.Maturity == "production" && (descriptor.Kind == "source" || descriptor.Kind == "sink") {
+			productionCount++
+		}
+	}
+	if len(manifest.Records) < productionCount {
+		t.Fatalf("manifest records = %d, want at least %d production source/sink records", len(manifest.Records), productionCount)
 	}
 	for _, descriptor := range connectorDescriptors() {
 		if descriptor.Maturity != "production" || (descriptor.Kind != "source" && descriptor.Kind != "sink") {

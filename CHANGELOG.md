@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.10] — 2026-08-09 — ClickHouse string-safe temporal inference; empty-string DateTime coercion
+
+### Fixed
+
+- **Auto-create no longer builds DateTime columns for non-timestamp text**. Temporal column-name hints (`_at`/`_time`/`date`/`timestamp`/…) were applied to any string value, so a `work_time` column carrying `""`, `"[1,2,3]"` or other non-date text was built as `DateTime64(3)` and every write failed with `parsing time "[1,2,3]" as "2006-01-02 15:04:05…`: cannot parse`. `InferFromValue` now applies temporal hints only when the string parses as a timestamp (empty strings keep the hint, empty rows coerce at write time); hex/array/junk text falls back to String. Same rule as the numeric hint fix in beta.9, applied to `_at`/`_time`/`date`/`timestamp` families. Protects Kafka/envelope pipelines that carry no ColumnTypes.
+- **Empty-string writes to existing DateTime/DateTime64 columns no longer abort the batch**. `convertClickHouseValue` now maps empty/blank strings to `NULL` for `Nullable(DateTime*)` and to epoch `1970-01-01 00:00:00 UTC` for non-nullable `DateTime`/`DateTime64`, mirroring the numeric empty-string→0 rule. Non-empty unparseable strings (e.g. `"[1,2,3]"`) stay as-is so the driver fails loudly and the row lands in the DLQ (no silent data loss).
+- Fixed a fragile hardcoded assertion in `TestConnectorEvidenceManifestLoadsAndCoversProductionConnectors` (manifest record count is now compared against the live production connector set instead of a hardcoded 14).
+
+### Tests
+
+- New `TestInferFromValueTemporalHintRequiresParseableString` (typing): work_time `""` → DateTime64(3), `"[1,2,3]"`/`"hello"` → String, parseable timestamps keep the hint, across ClickHouse/MySQL dialects.
+- New `TestConvertClickHouseValueEmptyStringToDateTime` (sink): empty/blank → epoch for DateTime/DateTime64, → nil for Nullable(DateTime*), parseable strings still parse, junk text stays as-is.
+- `go test ./internal/etl/...` pass; `go vet ./internal/etl/sink/...` clean.
+
+### Evidence
+
+- Container-level (mysql:8.0 → ClickHouse 24.3, dev image): source `staff(work_time varchar)` carrying `''`, `'[1,2,3]'` and a real time string → auto-created `work_time String` + `created_at DateTime64(3)`; all 3 rows write cleanly (empty created_at → epoch), zero failed/DLQ.
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` exit 0 PASS (regression).
+
 ## [v0.2.12-beta.9] — 2026-08-09 — ClickHouse auto-create honors source metainfo; string-safe numeric type hints
 
 ### Fixed

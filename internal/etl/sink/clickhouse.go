@@ -1205,6 +1205,19 @@ func convertClickHouseValue(v any, typ string) any {
 		if t, ok := v.(time.Time); ok {
 			return t
 		}
+		// Empty/blank strings map to NULL for nullable columns and to epoch
+		// (1970-01-01 00:00:00) for non-nullable DateTime columns, mirroring
+		// the numeric empty-string->0 rule. This avoids a parse failure that
+		// would otherwise abort the whole batch when a source DATETIME column
+		// carries '' on some rows. Non-empty unparseable strings (e.g.
+		// work_time="[1,2,3]") fall through unchanged so the driver fails
+		// loudly and the row lands in the DLQ.
+		if strings.TrimSpace(s) == "" {
+			if strings.HasPrefix(typ, "Nullable(") {
+				return nil
+			}
+			return time.Unix(0, 0).UTC()
+		}
 		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02"} {
 			if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
 				return t

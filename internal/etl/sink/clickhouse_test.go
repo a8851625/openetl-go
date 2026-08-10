@@ -150,6 +150,45 @@ func TestConvertClickHouseValueEmptyStringToNumeric(t *testing.T) {
 	}
 }
 
+func TestConvertClickHouseValueEmptyStringToDateTime(t *testing.T) {
+	epoch := time.Unix(0, 0).UTC()
+	tests := []struct {
+		name string
+		typ  string
+		val  any
+		want any
+	}{
+		// Empty/blank -> epoch for non-nullable DateTime (avoids parse failure
+		// aborting the whole batch; mirrors numeric empty->0).
+		{name: "datetime_empty", typ: "DateTime", val: "", want: epoch},
+		{name: "datetime64_blank", typ: "DateTime64(3)", val: "   ", want: epoch},
+		// Nullable columns get NULL instead of epoch.
+		{name: "nullable_datetime_empty", typ: "Nullable(DateTime64(3))", val: "", want: nil},
+		// Parseable timestamp strings still parse normally.
+		{name: "datetime_parse", typ: "DateTime64(3)", val: "2026-06-01 08:00:00", want: time.Date(2026, 6, 1, 8, 0, 0, 0, time.Local)},
+		{name: "datetime_rfc3339", typ: "DateTime64(3)", val: "2026-05-31T21:23:39+08:00", want: time.Date(2026, 5, 31, 21, 23, 39, 0, time.FixedZone("CST", 8*3600))},
+		// Non-empty unparseable strings stay as-is so AppendRow fails loudly
+		// and the row lands in the DLQ (e.g. work_time="[1,2,3]").
+		{name: "datetime_junk", typ: "DateTime64(3)", val: "[1,2,3]", want: "[1,2,3]"},
+		{name: "datetime_text", typ: "DateTime", val: "hello", want: "hello"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertClickHouseValue(tt.val, tt.typ)
+			if twant, ok := tt.want.(time.Time); ok {
+				tgot, tok := got.(time.Time)
+				if !tok || !tgot.Equal(twant) {
+					t.Fatalf("convertClickHouseValue(%v, %s) = %v, want %v", tt.val, tt.typ, got, tt.want)
+				}
+				return
+			}
+			if got != tt.want {
+				t.Fatalf("convertClickHouseValue(%v, %s) = %v (%T), want %v (%T)", tt.val, tt.typ, got, got, tt.want, tt.want)
+			}
+		})
+	}
+}
+
 func TestInferClickHouseTypeDeclaredPriority(t *testing.T) {
 	tests := []struct {
 		name     string

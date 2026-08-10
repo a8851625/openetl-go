@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.10] — 2026-08-09 — ClickHouse 时间类型字符串安全推断;DateTime 空串兜底
+
+### 修复
+
+- **自动建表不再把非时间文本建成 DateTime 列**。时间类列名提示(`_at`/`_time`/`date`/`timestamp` 等)此前对任意字符串值生效,`work_time` 列若含 `""`、`"[1,2,3]"` 等非日期文本会被建成 `DateTime64(3)`,每条写入都报 `parsing time "[1,2,3]" as "2006-01-02 15:04:05…": cannot parse`。现在 `InferFromValue` 仅当字符串可解析为时间时才采用时间提示(空串保留提示,空行在写入时兜底);hex/数组/垃圾文本回退 String。与 beta.9 的数值提示规则一致,覆盖 `_at`/`_time`/`date`/`timestamp` 系列命名。同样保护不带 ColumnTypes 的 Kafka/envelope 管道。
+- **已有 DateTime/DateTime64 列写空串不再整批失败**。`convertClickHouseValue` 现在将空/空白字符串映射为 `Nullable(DateTime*)` 的 `NULL`、非 Nullable `DateTime`/`DateTime64` 的 epoch `1970-01-01 00:00:00 UTC`,与数值空串→0 规则一致。非空不可解析串(如 `"[1,2,3]"`)保持原样,驱动报错 → 进 DLQ(不静默丢数据)。
+- 修复 `TestConnectorEvidenceManifestLoadsAndCoversProductionConnectors` 中脆弱的硬编码断言(manifest 记录数改为与当前 production connector 集合比较,而非硬编码 14)。
+
+### Tests
+
+- 新增 `TestInferFromValueTemporalHintRequiresParseableString`(typing):work_time `""` → DateTime64(3)、`"[1,2,3]"`/`"hello"` → String、可解析时间串保留提示,覆盖 ClickHouse/MySQL 方言。
+- 新增 `TestConvertClickHouseValueEmptyStringToDateTime`(sink):空/空白 → epoch(DateTime/DateTime64)、→ nil(Nullable)、可解析串正常解析、垃圾串保持原样。
+- `go test ./internal/etl/...` 全部通过;`go vet ./internal/etl/sink/...` 干净。
+
+### Evidence
+
+- 容器级(mysql:8.0 → ClickHouse 24.3,dev 镜像):源 `staff(work_time varchar)` 含 `''`、`'[1,2,3]'` 和真实时间串 → 自动建表 `work_time String` + `created_at DateTime64(3)`;3 行全部正常写入(空 created_at → epoch),零失败零 DLQ。
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` 退出码 0 PASS(回归)。
+
 ## [v0.2.12-beta.9] — 2026-08-09 — ClickHouse 自动建表参考源表元数据;字符串值不再被数值列名提示强转
 
 ### 修复

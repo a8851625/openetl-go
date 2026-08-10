@@ -66,6 +66,19 @@ func InferFromValue(dialect Dialect, columnName string, value any) string {
 				}
 			}
 		}
+		// Temporal hints (DateTime64/DATETIME/TIMESTAMP) must only apply to
+		// strings that actually parse as a timestamp. An empty string or junk
+		// text (e.g. work_time="[1,2,3]" or "") would otherwise build a
+		// DateTime column that rejects every AppendRow, mirroring the
+		// numeric-hint problem with hex/uuid *_id columns.
+		if isTimestampDDL(hint) {
+			if s, ok := value.(string); ok {
+				t := strings.TrimSpace(s)
+				if t != "" && !isTimestampString(t) {
+					return defaultStringType(dialect)
+				}
+			}
+		}
 		return hint
 	}
 	return inferFromGoType(dialect, value)
@@ -97,6 +110,20 @@ func isNumericDDL(ddl string) bool {
 	return strings.Contains(u, "INT") || strings.Contains(u, "DECIMAL") ||
 		strings.Contains(u, "NUMERIC") || strings.Contains(u, "DOUBLE") ||
 		strings.Contains(u, "FLOAT") || strings.Contains(u, "BOOL")
+}
+
+// isTimestampDDL reports whether a DDL type string denotes a temporal type
+// (DATETIME/TIMESTAMP/DATE/DateTime/DateTime64). Used to guard temporal name
+// hints so they apply only to values that actually look like timestamps.
+func isTimestampDDL(ddl string) bool {
+	u := strings.ToUpper(ddl)
+	switch {
+	case strings.Contains(u, "DATETIME"), strings.Contains(u, "TIMESTAMP"):
+		return true
+	case strings.Contains(u, "DATE") && !strings.Contains(u, "UPDATE"):
+		return true
+	}
+	return false
 }
 
 // nameHint returns a DDL type based on column naming conventions, or empty

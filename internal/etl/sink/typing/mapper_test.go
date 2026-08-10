@@ -102,6 +102,44 @@ func TestIsTimestampString(t *testing.T) {
 	}
 }
 
+func TestInferFromValueTemporalHintRequiresParseableString(t *testing.T) {
+	tests := []struct {
+		name    string
+		dialect Dialect
+		col     string
+		val     any
+		want    string
+	}{
+		// Empty / junk strings in temporal name columns:
+		// - non-empty junk (e.g. work_time="[1,2,3]", created_at="hello")
+		//   must NOT build a DateTime column (would abort every AppendRow).
+		// - empty strings keep the hint (all-empty column -> DATETIME,
+		//   empty rows coerce to NULL/epoch at write time), mirroring the
+		//   numeric empty-string rule.
+		{name: "work_time_empty", dialect: DialectClickHouse, col: "work_time", val: "", want: "DateTime64(3)"},
+		{name: "work_time_junk", dialect: DialectClickHouse, col: "work_time", val: "[1,2,3]", want: "String"},
+		{name: "enabled_time_empty_mysql", dialect: DialectMySQL, col: "enabled_time", val: "", want: "DATETIME(3)"},
+		{name: "created_at_not_date", dialect: DialectClickHouse, col: "created_at", val: "hello", want: "String"},
+		// Parseable timestamp strings keep the temporal hint.
+		{name: "created_at_rfc3339", dialect: DialectClickHouse, col: "created_at", val: "2026-05-31T21:23:39+08:00", want: "DateTime64(3)"},
+		{name: "enabled_time_space", dialect: DialectClickHouse, col: "enabled_time", val: "2026-06-22 21:47:02", want: "DateTime64(3)"},
+		{name: "date_added_date", dialect: DialectMySQL, col: "date_added", val: "2024-09-12", want: "DATETIME(3)"},
+		// Empty string keeps the hint: an all-empty temporal column is
+		// still treated as DATETIME (empty rows coerce to NULL/epoch).
+		{name: "created_at_empty", dialect: DialectClickHouse, col: "created_at", val: "", want: "DateTime64(3)"},
+		// Real time.Time values keep the hint regardless of name.
+		{name: "created_at_timetime", dialect: DialectClickHouse, col: "created_at", val: time.Now(), want: "DateTime64(3)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := InferFromValue(tt.dialect, tt.col, tt.val)
+			if got != tt.want {
+				t.Fatalf("InferFromValue(%s, %s, %v) = %q, want %q", tt.dialect, tt.col, tt.val, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestInferFromValueNumericHintRequiresParseableString(t *testing.T) {
 	tests := []struct {
 		name    string
