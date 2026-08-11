@@ -333,42 +333,49 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 
 			switch {
 			case h.reader.source.format == "envelope":
-				// OpenETL kafkaEnvelope (as written by the kafka sink):
-				// {event_id, op, table, key, data, timestamp}. Restores the
-				// original operation/table/row so downstream sinks (e.g. Doris
-				// upsert+delete) behave exactly like a direct CDC consumer.
-				var env struct {
-					EventID     string            `json:"event_id"`
-					Op          string            `json:"op"`
-					Table       string            `json:"table"`
-					Key         string            `json:"key"`
-					Data        map[string]any    `json:"data"`
-					Timestamp   string            `json:"timestamp"`
-					ColumnTypes map[string]string `json:"column_types"`
-				}
-				if err := json.Unmarshal(msg.Value, &env); err == nil && env.Data != nil {
-					switch env.Op {
-					case "UPDATE":
-						rec.Operation = core.OpUpdate
-					case "DELETE":
-						rec.Operation = core.OpDelete
-					default:
-						rec.Operation = core.OpInsert
-					}
-					if env.Table != "" {
-						rec.Metadata.Table = env.Table
-					}
-					if env.Key != "" {
-						rec.Metadata.Key = env.Key
-					}
-					if len(env.ColumnTypes) > 0 {
-						rec.Metadata.ColumnTypes = env.ColumnTypes
-					}
-					for k, v := range env.Data {
-						data[k] = v
-					}
+				// Two envelope shapes are accepted:
+				//  1. Debezium-style (emitted by the kafka sink since the schema
+				//     propagation change): {payload:{before,after,source,op,ts_ms},
+				//     schema:{fields:[{field:after,fields:[{field:col,type:...}]}]}}.
+				//     Preferred: restores op/before/after and column types from schema.
+				//  2. Legacy OpenETL envelope: {event_id,op,table,key,data,timestamp,
+				//     column_types}.
+				if tryDebeziumEnvelope(msg.Value, &rec, data) {
+					// populated above
 				} else {
-					data["value"] = string(msg.Value)
+					var env struct {
+						EventID     string            `json:"event_id"`
+						Op          string            `json:"op"`
+						Table       string            `json:"table"`
+						Key         string            `json:"key"`
+						Data        map[string]any    `json:"data"`
+						Timestamp   string            `json:"timestamp"`
+						ColumnTypes map[string]string `json:"column_types"`
+					}
+					if err := json.Unmarshal(msg.Value, &env); err == nil && env.Data != nil {
+						switch env.Op {
+						case "UPDATE":
+							rec.Operation = core.OpUpdate
+						case "DELETE":
+							rec.Operation = core.OpDelete
+						default:
+							rec.Operation = core.OpInsert
+						}
+						if env.Table != "" {
+							rec.Metadata.Table = env.Table
+						}
+						if env.Key != "" {
+							rec.Metadata.Key = env.Key
+						}
+						if len(env.ColumnTypes) > 0 {
+							rec.Metadata.ColumnTypes = env.ColumnTypes
+						}
+						for k, v := range env.Data {
+							data[k] = v
+						}
+					} else {
+						data["value"] = string(msg.Value)
+					}
 				}
 			case h.reader.source.format == "json" && h.reader.source.valueColumn == "":
 				var parsed map[string]any
@@ -654,4 +661,123 @@ func (r *kafkaReader) Close() error {
 type kafkaPosition struct {
 	Topic   string          `json:"topic"`
 	Offsets map[int32]int64 `json:"offsets"`
+}
+
+// asMapKV is a local map[string]any type assertion helper.
+func asMapKV(v any) (map[string]any, bool) {
+	m, ok := v.(map[string]any)
+	return m, ok
+}
+
+// debeziumOp maps a Debezium op code to a core operation.
+func debeziumOp(v any) core.OpType {
+	s, _ := v.(string)
+	switch s {
+	case "u":
+		return core.OpUpdate
+	case "d":
+		return core.OpDelete
+	default: // c (create), r (read/snapshot), or anything else
+		return core.OpInsert
+	}
+}
+
+// columnTypesFromConnectSchemaKV mirrors the debezium_cdc transform: it walks
+// schema.fields[] for the named row field (after/before) and returns
+// field-name -> Connect primitive type, which downstream sinks pass to
+// MapSourceType to derive target DDL.
+func columnTypesFromConnectSchemaKV(schema map[string]any, rowField string) map[string]string {
+	fields, ok := schema["fields"].([]any)
+	if !ok {
+		return nil
+	}
+	for _, item := range fields {
+		fm, ok := asMapKV(item)
+		if !ok {
+			continue
+		}
+		name, _ := fm["field"].(string)
+		if name != rowField {
+			continue
+		}
+		nested, ok := fm["fields"].([]any)
+		if !ok {
+			continue
+		}
+		out := make(map[string]string, len(nested))
+		for _, nf := range nested {
+			nfm, ok := asMapKV(nf)
+			if !ok {
+				continue
+			}
+			fn, _ := nfm["field"].(string)
+			if fn == "" {
+				continue
+			}
+			typ, _ := nfm["type"].(string)
+			if logical, _ := nfm["name"].(string); logical != "" && logical != fn {
+				typ = logical
+			}
+			if typ != "" {
+				out[fn] = typ
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
+}
+
+// tryDebeziumEnvelope parses a Debezium-style envelope written by the kafka
+// sink. Returns true when it recognized and populated the record; false lets
+// the caller fall back to the legacy OpenETL envelope.
+func tryDebeziumEnvelope(raw []byte, rec *core.Record, data map[string]any) bool {
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return false
+	}
+	payload, ok := asMapKV(root["payload"])
+	if !ok {
+		return false
+	}
+	// Require the Debezium marker: payload must carry op (and usually after/before).
+	if _, ok := payload["op"]; !ok {
+		return false
+	}
+	rec.Operation = debeziumOp(payload["op"])
+	if after, ok := asMapKV(payload["after"]); ok {
+		for k, v := range after {
+			data[k] = v
+		}
+	}
+	if before, ok := asMapKV(payload["before"]); len(before) > 0 && ok {
+		rec.Before = before
+	}
+	if src, ok := asMapKV(payload["source"]); ok {
+		if db, ok := src["db"].(string); ok && db != "" {
+			rec.Metadata.Database = db
+		}
+		if tbl, ok := src["table"].(string); ok && tbl != "" {
+			rec.Metadata.Table = tbl
+		}
+		if eid, ok := src["event_id"].(string); ok && eid != "" {
+			rec.Metadata.Key = eid
+		}
+		if file, ok := src["file"].(string); ok && file != "" {
+			rec.Metadata.BinlogFile = file
+		}
+		if pos, ok := src["pos"].(float64); ok {
+			rec.Metadata.BinlogPos = uint32(pos)
+		}
+	}
+	if schema, ok := asMapKV(root["schema"]); ok {
+		if ct := columnTypesFromConnectSchemaKV(schema, "after"); len(ct) > 0 {
+			rec.Metadata.ColumnTypes = ct
+		}
+	}
+	if len(data) == 0 {
+		data["value"] = string(raw)
+	}
+	return true
 }

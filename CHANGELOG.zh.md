@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.12] — 2026-08-11 — Kafka sink 输出 Debezium 风格 envelope
+
+### 变更（envelope 格式）
+
+- **kafka sink 现在写 Debezium 风格 envelope**，取代旧的 `{event_id,op,table,key,data,timestamp,column_types}`。统一 CDC 数据契约，下游可复用已有的 `debezium_cdc` transform 或任意标准 Debezium 客户端，真实源 schema 经 Connect schema fields 贯通。新 envelope：
+  - `payload.before` / `payload.after`（行镜像；DELETE 带 `before`）
+  - `payload.source`（db/table/ts_ms/event_id/binlog file+pos/offset）
+  - `payload.op`（`c`=insert、`u`=update、`d`=delete）
+  - `schema.fields[after].fields` 携带每列原始 MySQL COLUMN_TYPE（如 `varchar(32)`/`datetime`/`decimal(10,2)`），kafka source 还原进 `Metadata.ColumnTypes`，sink 经 `MapSourceType` 映射。
+- **kafka source 解析新 Debezium envelope**（还原 op/before/after/source db·table·binlog 及 schema 中的列类型），同时仍接受旧 OpenETL envelope 作为回退，支持滚动升级。
+- `mysql_snapshot_cdc` snapshot 阶段按表附带 `Metadata.ColumnTypes`（一次 `information_schema.columns` 查询），使 CDC → kafka 链路端到端携带真实源 schema。
+
+### 修复
+
+- `InferFromValues` 检查所有样本（而非只看第一个）：任一非空样本证伪数值/时间提示会让整列回退 String，`work_time` 有的行 `""`、有的行 `"[1,2,3]"` 时建成 String 而非 DateTime64。
+
+### Tests
+
+- 扩展 `TestKafkaSinkWriteSendsEnvelopeAndRecordsMetrics`：断言 Debezium payload（op/after/source.event_id/ts_ms）及 schema after.fields 携带 MySQL 列类型。
+- 新增 `TestKafkaHandlerEnvelopeParsesDebeziumStyle`：从 schema 还原 op/db/table/binlog/列类型；旧 envelope 仍可解析。
+- 扩展 `TestInferFromValues`（多样本提示安全）。
+- `go test ./internal/etl/...` 全部通过；`go vet` 干净。
+
+### Evidence
+
+- 容器级两段式 `mysql:8.0 snapshot_cdc -> Redpanda -> ClickHouse 24.3`：源 `staff(work_time varchar(32))` 含 `""`、`"[1,2,3]"` 和真实时间范围；验证 kafka 消息为 Debezium 结构；自动建表 `work_time String, amount Decimal(18,2), created_at DateTime64(3), id Int32, name String`（全部来自源 schema，非值推断）；3 行正常写入，零失败零 DLQ。
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` 退出码 0 PASS（回归）。
+- `bash hack/check-release-assets.sh` 通过。
+
+### Residuals
+
+- `mysql_batch` 字符串主键游标（BUG-1）无关。
+
 ## [v0.2.12-beta.11] — 2026-08-10 — 源表 schema 经 kafka 贯通;多样本字符串安全推断
 
 ### 新增（kafka -> clickhouse 类型错误的根治）

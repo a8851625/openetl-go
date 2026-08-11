@@ -64,27 +64,38 @@ func TestKafkaSinkWriteSendsEnvelopeAndRecordsMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode value: %v", err)
 	}
-	var env kafkaEnvelope
+	// Debezium-style envelope: {payload:{before,after,source,op,ts_ms}, schema:{fields}}.
+	var env struct {
+		Payload map[string]any `json:"payload"`
+		Schema  map[string]any `json:"schema"`
+	}
 	if err := json.Unmarshal(value, &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
-	if env.EventID != deriveKafkaEventID(rec) {
-		t.Fatalf("event_id = %q, want %q", env.EventID, deriveKafkaEventID(rec))
+	payload := env.Payload
+	if payload["op"] != "c" {
+		t.Fatalf("payload.op = %#v, want `c` (create/insert)", payload["op"])
 	}
-	if env.Op != string(core.OpInsert) || env.Table != "raw_device_ods" || env.Key != "device-meta-key" {
-		t.Fatalf("unexpected envelope metadata: %#v", env)
+	after, _ := payload["after"].(map[string]any)
+	if after == nil || after["metric_type"] != "speed" {
+		t.Fatalf("payload.after.metric_type = %#v, want speed", after)
 	}
-	if env.Timestamp != ts.Format(time.RFC3339Nano) {
-		t.Fatalf("timestamp = %q, want %q", env.Timestamp, ts.Format(time.RFC3339Nano))
+	src, _ := payload["source"].(map[string]any)
+	if src == nil || src["table"] != "raw_device_ods" || src["db"] != "" {
+		t.Fatalf("payload.source = %#v, want table=raw_device_ods", src)
 	}
-	if env.Data["metric_type"] != "speed" {
-		t.Fatalf("data.metric_type = %#v", env.Data["metric_type"])
+	if src["event_id"] != deriveKafkaEventID(rec) {
+		t.Fatalf("source.event_id = %#v, want %q", src["event_id"], deriveKafkaEventID(rec))
 	}
-	// ColumnTypes must round-trip through the kafka envelope so a downstream
-	// consumer (kafka -> clickhouse) can auto-create target tables from the
-	// real source schema instead of guessing from sample values.
-	if env.ColumnTypes["event_id"] != "varchar(64)" || env.ColumnTypes["metric_value"] != "decimal(18,2)" {
-		t.Fatalf("column_types not serialized: %#v", env.ColumnTypes)
+	if payload["ts_ms"] != float64(ts.UnixMilli()) {
+		t.Fatalf("payload.ts_ms = %#v, want %d", payload["ts_ms"], ts.UnixMilli())
+	}
+	// Column types must be encoded in schema.fields[after].fields so the
+	// kafka source (or debezium_cdc transform) can recover the source schema
+	// and sinks auto-create target tables from it instead of guessing.
+	rowFields := destructureConnectFields(env.Schema, "after")
+	if rowFields["event_id"] != "varchar(64)" || rowFields["metric_value"] != "decimal(18,2)" {
+		t.Fatalf("schema after fields = %#v, want event_id=varchar(64) metric_value=decimal(18,2)", rowFields)
 	}
 
 	metrics := s.SinkMetrics()
@@ -208,4 +219,33 @@ func (p *captureKafkaProducer) SendMessages(msgs []*sarama.ProducerMessage) erro
 func (p *captureKafkaProducer) Close() error {
 	p.closed = true
 	return nil
+}
+
+// destructureConnectFields extracts field->type from schema.fields[rowField].fields
+// for test assertions.
+func destructureConnectFields(schema map[string]any, rowField string) map[string]string {
+	fields, ok := schema["fields"].([]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	for _, item := range fields {
+		fm, _ := item.(map[string]any)
+		if fm["field"] != rowField {
+			continue
+		}
+		nested, ok := fm["fields"].([]any)
+		if !ok {
+			continue
+		}
+		for _, nf := range nested {
+			nfm, _ := nf.(map[string]any)
+			fn, _ := nfm["field"].(string)
+			typ, _ := nfm["type"].(string)
+			if fn != "" && typ != "" {
+				out[fn] = typ
+			}
+		}
+	}
+	return out
 }

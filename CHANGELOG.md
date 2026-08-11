@@ -4,6 +4,60 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.12] — 2026-08-11 — Kafka sink emits Debezium-style envelopes
+
+### Changed (envelope format)
+
+- **The kafka sink now writes Debezium-style envelopes** instead of the legacy
+  `{event_id,op,table,key,data,timestamp,column_types}` shape. This unifies
+  the CDC contract so downstream consumers can use the existing
+  `debezium_cdc` transform or any standard Debezium client, and the real
+  source schema flows through via Connect schema fields. New envelope:
+  - `payload.before` / `payload.after` (row images; DELETE carries `before`)
+  - `payload.source` (db/table/ts_ms/event_id/binlog file+pos/offset)
+  - `payload.op` (`c`=insert, `u`=update, `d`=delete)
+  - `schema.fields[after].fields` carry each column's raw MySQL COLUMN_TYPE
+    (e.g. `varchar(32)`, `datetime`, `decimal(10,2)`), which the kafka source
+    restores into `Metadata.ColumnTypes` and sinks map via `MapSourceType`.
+- **The kafka source parses the new Debezium envelope** (restoring op, before,
+  after, source db/table/binlog, and column types from schema) and still
+  accepts the legacy OpenETL envelope as a fallback, so staged rollouts work.
+- `mysql_snapshot_cdc` snapshot phase attaches `Metadata.ColumnTypes` per table
+  (queried once from `information_schema.columns`), so the CDC → kafka hop now
+  carries the real source schema end to end.
+
+### Fixed
+
+- `InferFromValues` inspects ALL samples (not just the first): any non-empty
+  sample disproving a numeric/temporal hint downgrades the column to String,
+  so a `work_time` column carrying `""` on some rows and `"[1,2,3]"` on others
+  builds String instead of DateTime64.
+
+### Tests
+
+- Extended `TestKafkaSinkWriteSendsEnvelopeAndRecordsMetrics`: asserts the
+  Debezium payload (op=after=source.event_id=ts_ms) and schema after.fields
+  carry the MySQL column types.
+- New `TestKafkaHandlerEnvelopeParsesDebeziumStyle`: op/db/table/binlog and
+  column types recovered from schema; legacy envelope still parsed.
+- Extended `TestInferFromValues` (multi-sample hint safety).
+- `go test ./internal/etl/...` pass; `go vet` clean.
+
+### Evidence
+
+- Container-level two-stage `mysql:8.0 snapshot_cdc -> Redpanda -> ClickHouse
+  24.3`: source `staff(work_time varchar(32))` carrying `""`, `"[1,2,3]"` and a
+  real time range; kafka message verified to be the Debezium shape; auto-created
+  ClickHouse table `work_time String, amount Decimal(18,2), created_at
+  DateTime64(3), id Int32, name String` (all from source schema, not value
+  inference); 3 rows write cleanly, zero failed/DLQ.
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` exit 0 PASS (regression).
+- `bash hack/check-release-assets.sh` passed.
+
+### Residuals
+
+- `mysql_batch` string-PK cursor (BUG-1) unrelated.
+
 ## [v0.2.12-beta.11] — 2026-08-10 — Propagate source schema through kafka; string-safe multi-sample inference
 
 ### Added (root-cause fix for kafka -> clickhouse type errors)

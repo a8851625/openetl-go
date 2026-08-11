@@ -210,6 +210,89 @@ func TestKafkaHandlerEnvelopeRestoresCDCSemantics(t *testing.T) {
 	}
 }
 
+func TestKafkaHandlerEnvelopeParsesDebeziumStyle(t *testing.T) {
+	src := &KafkaSource{name: "kafka", topic: "cdc-events", format: "envelope"}
+	reader := &kafkaReader{
+		source:           src,
+		records:          make(chan core.Record, 8),
+		offsets:          make(map[int32]int64),
+		committedOffsets: make(map[int32]int64),
+		sessions:         make(map[int32]sarama.ConsumerGroupSession),
+	}
+	sess := newFakeSession()
+	defer sess.cancel()
+	handler := &kafkaHandler{reader: reader}
+
+	// Debezium-style envelope emitted by the kafka sink: payload (before/after/
+	// source/op/ts_ms) + schema (after.fields carry per-column Connect types).
+	envBytes, err := json.Marshal(map[string]any{
+		"payload": map[string]any{
+			"before": nil,
+			"after":  map[string]any{"order_id": float64(42), "work_time": "[1,2,3]"},
+			"source": map[string]any{
+				"connector": "openetl",
+				"db":        "snap_e2e",
+				"table":     "orders",
+				"ts_ms":     float64(1782468000000),
+				"event_id":  "evt-42",
+				"file":      "mysql-bin.000003",
+				"pos":       float64(26329394),
+			},
+			"op":    "c",
+			"ts_ms": float64(1782468000000),
+		},
+		"schema": map[string]any{
+			"type": "struct",
+			"fields": []any{
+				map[string]any{"field": "after", "type": "struct", "optional": true, "fields": []any{
+					map[string]any{"field": "order_id", "type": "int32", "optional": false},
+					map[string]any{"field": "work_time", "type": "string", "optional": true},
+				}},
+				map[string]any{"field": "source", "type": "struct", "optional": true, "fields": []any{}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	claim := &fakeConsumerGroupClaim{ch: make(chan *sarama.ConsumerMessage, 1)}
+	claim.ch <- &sarama.ConsumerMessage{Topic: "cdc-events", Partition: 0, Offset: 7, Value: envBytes}
+	close(claim.ch)
+
+	if err := handler.ConsumeClaim(sess, claim); err != nil {
+		t.Fatalf("ConsumeClaim: %v", err)
+	}
+
+	select {
+	case rec := <-reader.records:
+		if rec.Operation != core.OpInsert {
+			t.Errorf("operation = %q, want INSERT (op=c)", rec.Operation)
+		}
+		if rec.Metadata.Table != "orders" || rec.Metadata.Database != "snap_e2e" {
+			t.Errorf("metadata = db=%q table=%q, want snap_e2e/orders", rec.Metadata.Database, rec.Metadata.Table)
+		}
+		if rec.Metadata.Key != "evt-42" {
+			t.Errorf("metadata key = %q, want evt-42", rec.Metadata.Key)
+		}
+		if got, ok := rec.Data["order_id"].(float64); !ok || got != 42 {
+			t.Errorf("data.order_id = %#v, want 42", rec.Data["order_id"])
+		}
+		if rec.Data["work_time"] != "[1,2,3]" {
+			t.Errorf("data.work_time = %#v, want [1,2,3]", rec.Data["work_time"])
+		}
+		// Column types recovered from schema.fields[after].fields.
+		if rec.Metadata.ColumnTypes["order_id"] != "int32" || rec.Metadata.ColumnTypes["work_time"] != "string" {
+			t.Errorf("column_types = %#v, want order_id=int32 work_time=string", rec.Metadata.ColumnTypes)
+		}
+		if rec.Metadata.BinlogFile != "mysql-bin.000003" || rec.Metadata.BinlogPos != 26329394 {
+			t.Errorf("binlog = %s:%d, want mysql-bin.000003:26329394", rec.Metadata.BinlogFile, rec.Metadata.BinlogPos)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("debezium envelope record not delivered")
+	}
+}
+
 func TestKafkaHandlerEnvelopePreservesJSONKeyForMetadataDrivenUpsert(t *testing.T) {
 	src := &KafkaSource{name: "kafka", topic: "cdc-events", format: "envelope"}
 	reader := &kafkaReader{

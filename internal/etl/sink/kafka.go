@@ -65,6 +65,15 @@ type kafkaEnvelope struct {
 	ColumnTypes map[string]string `json:"column_types,omitempty"`
 }
 
+// debeziumField is a single Kafka Connect field schema entry. The kafka source
+// (and the debezium_cdc transform) walk schema.fields[after].fields to recover
+// per-column source types, which MapSourceType then maps to target DDL.
+type debeziumField struct {
+	Field  string          `json:"field"`
+	Type   string          `json:"type"`
+	Fields []debeziumField `json:"fields,omitempty"`
+}
+
 func NewKafkaSink(config map[string]any) (*KafkaSink, error) {
 	s := &KafkaSink{name: "kafka", compression: "none"}
 	if v, ok := config["name"]; ok {
@@ -272,14 +281,71 @@ func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error
 		if srcTS.IsZero() {
 			srcTS = time.Now()
 		}
-		env := kafkaEnvelope{
-			EventID:     eventID,
-			Op:          string(rec.Operation),
-			Table:       rec.Metadata.Table,
-			Key:         rec.Metadata.Key,
-			Data:        rec.Data,
-			Timestamp:   srcTS.Format(time.RFC3339Nano),
-			ColumnTypes: rec.Metadata.ColumnTypes,
+		// Build a Debezium-style envelope so downstream consumers (kafka source +
+		// debezium_cdc transform, or any standard Debezium client) receive the
+		// real source schema via schema.fields and uniform before/after/op/source
+		// semantics. op mapping: INSERT->c, UPDATE->u, DELETE->d.
+		op := "c"
+		switch rec.Operation {
+		case core.OpUpdate:
+			op = "u"
+		case core.OpDelete:
+			op = "d"
+		}
+		// Per-column field schemas embed the raw MySQL COLUMN_TYPE (e.g.
+		// "varchar(32)", "datetime", "decimal(10,2)"); downstream MapSourceType maps
+		// these with full fidelity (length/precision/datetime vs timestamp).
+		rowFields := make([]debeziumField, 0, len(rec.Data))
+		for name := range rec.Data {
+			ct := "string"
+			if rec.Metadata.ColumnTypes != nil {
+				if src, ok := rec.Metadata.ColumnTypes[name]; ok && src != "" {
+					ct = src
+				}
+			}
+			rowFields = append(rowFields, debeziumField{Field: name, Type: ct})
+		}
+		srcMeta := map[string]any{
+			"connector": "openetl",
+			"db":        rec.Metadata.Database,
+			"table":     rec.Metadata.Table,
+			"ts_ms":     srcTS.UnixMilli(),
+			"event_id":  eventID,
+		}
+		if rec.Metadata.BinlogFile != "" {
+			srcMeta["file"] = rec.Metadata.BinlogFile
+			srcMeta["pos"] = rec.Metadata.BinlogPos
+		}
+		if rec.Metadata.Offset > 0 {
+			srcMeta["offset"] = rec.Metadata.Offset
+		}
+		env := map[string]any{
+			"payload": map[string]any{
+				"before": rec.Before,
+				"after":  rec.Data,
+				"source": srcMeta,
+				"op":     op,
+				"ts_ms":  srcTS.UnixMilli(),
+			},
+			"schema": map[string]any{
+				"type": "struct",
+				"fields": []debeziumField{
+					{Field: "before", Type: "struct", Fields: rowFields},
+					{Field: "after", Type: "struct", Fields: rowFields},
+					{Field: "source", Type: "struct", Fields: []debeziumField{
+						{Field: "connector", Type: "string"},
+						{Field: "db", Type: "string"},
+						{Field: "table", Type: "string"},
+						{Field: "ts_ms", Type: "int64"},
+						{Field: "event_id", Type: "string"},
+						{Field: "file", Type: "string"},
+						{Field: "pos", Type: "int64"},
+						{Field: "offset", Type: "int64"},
+					}},
+					{Field: "op", Type: "string"},
+					{Field: "ts_ms", Type: "int64"},
+				},
+			},
 		}
 		value, err := json.Marshal(env)
 		if err != nil {
