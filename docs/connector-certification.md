@@ -65,7 +65,7 @@ connector, script, and workflow changes require a fresh certification run.
 Image binding is checked when the release environment supplies a certified
 image digest.
 
-Latest checked-in certification (2026-08-11 UTC, v0.2.12-beta.13 release cut):
+Latest checked-in certification (2026-08-11 UTC, v0.2.12-beta.14 release cut):
 
 - source commit: `a9d0003e75e31cad4ceaea2979fa03030e580e10`
 - image: `sha256:94e0936bf2e28391ae446eb0c2817ab950d896153de4807f0d50004ff43d1cb2`
