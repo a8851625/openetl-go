@@ -958,7 +958,7 @@ any/字符串游标）、checkpoint position 序列化与恢复兼容（旧数�
 
 ### BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复（2026-08-12 发现）
 
-状态：`active`
+状态：`delivered`（2026-08-12 · beta.13 · cdc_on_binlog_purged: fail/resume_from_current/resnapshot）
 
 **现象与根因**：当 MySQL binlog 被按保留期（`binlog_expire_logs_seconds`，云库
 常仅 1–3 天）自动清理，或被 `PURGE BINARY LOGS`/`RESET MASTER` 删除后，checkpoint
@@ -1006,7 +1006,7 @@ binlog，非通用）；跨实例 binlog 归档恢复；改变 at-least-once 语
 
 ### BUG-3：sqlite 单连接（MaxOpenConns(1)）导致 checkpoint 写入排队超时阻塞（2026-08-12 发现）
 
-状态：`queued`
+状态：`delivered`（2026-08-12 · beta.14 · 读写分离 + janitor 默认 TTL）
 
 **现象与根因**：sqlite 后端 `internal/etl/storage/sqlite/sqlite.go` 设
 `SetMaxOpenConns(1)`（单连接池），而 checkpoint、DLQ、audit、run_history、spec、
