@@ -1201,6 +1201,28 @@ func convertClickHouseValue(v any, typ string) any {
 		if err == nil {
 			return d
 		}
+	case innerType == "Date":
+		// Date columns only carry YYYY-MM-DD. Source pipelines that round-trip
+		// through kafka envelopes serialize MySQL DATE as RFC3339 ("2020-01-01T00:00:00+08:00");
+		// the clickhouse-go driver rejects that with 'extra text' when targeting a
+		// Date column, so truncate to the calendar date and let the driver parse it.
+		// Empty/blank strings map to NULL for Nullable(Date) and epoch day for Date,
+		// mirroring the DateTime empty-string rule. Non-date unparseable strings
+		// fall through unchanged so the driver fails loudly into the DLQ.
+		if t, ok := v.(time.Time); ok {
+			return t
+		}
+		if strings.TrimSpace(s) == "" {
+			if strings.HasPrefix(typ, "Nullable(") {
+				return nil
+			}
+			return time.Unix(0, 0).UTC()
+		}
+		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02"} {
+			if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+				return t
+			}
+		}
 	case innerType == "DateTime" || strings.HasPrefix(innerType, "DateTime64"):
 		if t, ok := v.(time.Time); ok {
 			return t

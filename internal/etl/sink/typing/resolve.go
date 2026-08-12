@@ -80,11 +80,26 @@ func MapSourceType(dialect Dialect, sourceType string) string {
 		return dateDDL(dialect)
 	case base == "time" || strings.HasPrefix(lower, "time(") || lower == "time":
 		return timeDDL(dialect)
+	case base == "year" || strings.HasPrefix(lower, "year"):
+		// MySQL YEAR (1900-2155) is a 2/4-digit year integer, not a timestamp.
+		// Mapping it to DateTime would force every value through timestamp
+		// parsing and fail (e.g. value 2026 is not a parseable datetime).
+		// UInt16 covers the full YEAR range and keeps numeric semantics.
+		switch dialect {
+		case DialectClickHouse:
+			return "UInt16"
+		case DialectMySQL, DialectDoris:
+			return "SMALLINT"
+		case DialectPostgreSQL:
+			return "SMALLINT"
+		default:
+			return "SMALLINT"
+		}
 	case base == "timestamp" || base == "datetime" ||
 		strings.HasPrefix(lower, "timestamp") || strings.HasPrefix(lower, "datetime") ||
 		// Debezium logical temporal type short names
 		base == "zonedtimestamp" || base == "microtimestamp" || base == "nanotimestamp" ||
-		base == "microtime" || base == "nanotime" || base == "year":
+		base == "microtime" || base == "nanotime":
 		if dialect == DialectMySQL && (strings.HasPrefix(lower, "datetime") || strings.HasPrefix(lower, "timestamp")) {
 			return raw
 		}

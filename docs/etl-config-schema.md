@@ -331,6 +331,7 @@ source:
 | `shard_index` | no | | Shard index for table partitioning. |
 | `shard_total` | no | | Total shard count for table partitioning. |
 | `start_from` | no | | CDC start point: `timestamp`, `binlog:<file>:<pos>`, or `gtid:<set>`. |
+| `cdc_on_binlog_purged` | no | `fail` | Recovery when the checkpointed binlog file no longer exists on MySQL (ERROR 1236 "Could not find first log file name in binary log index", typically after `binlog_expire_logs_seconds` purged it during a long pipeline stop). `fail` (default) stops the pipeline and surfaces a fatal error for manual checkpoint reset — no silent data loss. `resume_from_current` advances the CDC resume position to the current MySQL master position and continues; **all changes between the stale checkpoint and now are dropped** (explicit RPO loss, use only with another recovery source). `resnapshot` (`mysql_snapshot_cdc` only) falls back to the snapshot phase from the last per-table cursors and re-enters CDC at the new handoff. |
 
 Requires MySQL binlog `ROW` format and `FULL` row image.
 

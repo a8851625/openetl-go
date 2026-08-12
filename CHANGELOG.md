@@ -4,6 +4,75 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.13] — 2026-08-12 — CDC binlog-purge recovery + ClickHouse Date/YEAR fixes
+
+### Added (CDC robustness)
+
+- **mysql_cdc / mysql_snapshot_cdc now detect MySQL binlog-purge (ERROR 1236)
+  and recover per a configurable policy instead of looping forever.** When the
+  checkpointed binlog file no longer exists on the server (purged by
+  `binlog_expire_logs_seconds`, `PURGE BINARY LOGS`, or `RESET MASTER`), the
+  canal reconnect loop previously retried the same stale position forever
+  (`Read error (x13): canal disconnected: ERROR 1236 ...`). New
+  `cdc_on_binlog_purged` source config key:
+  - `fail` (default, fail-closed): stops the pipeline and surfaces the
+    `ErrBinlogPurged` sentinel error for manual checkpoint reset — no silent
+    data loss.
+  - `resume_from_current`: advances the CDC resume position to the current
+    MySQL master position and continues. **All changes between the stale
+    checkpoint and now are dropped** (explicit RPO loss).
+  - `resnapshot` (`mysql_snapshot_cdc` only): falls back to the snapshot phase
+    from the last per-table cursors and re-enters CDC at the new handoff.
+  Detection covers both the typed `*mysql.MyError{Code:1236}` and the
+  user-visible text variants ("Could not find first log file name in binary
+  log index", "Client requested source to start replication from position >
+  file size").
+
+### Fixed (ClickHouse type handling)
+
+- **`Date` columns** now accept RFC3339 / datetime source values
+  (`"2020-01-01T00:00:00+08:00"`) by truncating to the calendar date, instead
+  of failing with `parsing time "..." extra text: "T00:00:00+08:00"`. Source
+  pipelines that round-trip MySQL `DATE` through kafka envelopes serialize it
+  as RFC3339, which the clickhouse-go driver previously rejected for a `Date`
+  column. Empty strings map to NULL (Nullable) or epoch day.
+- **MySQL `YEAR` columns** now map to `UInt16` (ClickHouse) / `SMALLINT`
+  (MySQL/Postgres/Doris) instead of `DateTime64`. A `YEAR` value like `2026`
+  is not a parseable datetime, so the previous mapping crashed writes with
+  `converting float64 to Datetime64 is unsupported`.
+
+### Tests
+
+- `TestIsBinlogPurgedError`, `TestParseBinlogPurgedPolicy`,
+  `TestBinlogPurgedRecoveryResumeFromCurrent`, `TestBinlogPurgedRecoveryFail`,
+  `TestErrBinlogPurgedIsSentinel`.
+- `TestConvertClickHouseValueDateColumn` (RFC3339/plain/space-sep/empty/junk).
+- `TestConvertClickHouseValueEdgeTypes` (IPv4/IPv6/FixedString/Enum/LowCardinality).
+- `TestMapSourceTypeYear` (year/year(4) for all dialects).
+- `go test ./internal/etl/...` pass; `go vet` clean.
+
+### Evidence
+
+- Container-level binlog-purge e2e (`hack/e2e-binlog-purged.sh`): ran
+  mysql_snapshot_cdc to a real checkpoint (`mysql-bin.000001:1131`), stopped
+  it, ran `RESET MASTER` on the source, restarted; the `fail` policy detected
+  ERROR 1236 and stopped the pipeline with the sentinel error on the FIRST
+  retry (x1, not the previous x13 infinite loop).
+- Container-level snapshot_cdc -> Redpanda -> ClickHouse with YEAR/TIME/Date/
+  datetime/decimal/tinyint(1) source columns: all auto-created correctly
+  (`birth_year UInt16`, `work_time String`, `date_end Date`, `created_at
+  DateTime64(3)`, `score Decimal(18,2)`, `active UInt8`), 3 rows written with
+  zero failures/DLQ.
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` exit 0 PASS (regression).
+- `bash hack/check-release-assets.sh` passed.
+
+### Residuals
+
+- BUG-3 (sqlite `MaxOpenConns(1)` checkpoint contention) still queued; the
+  binlog-purge recovery reduces the blast radius of the checkpoint-blocked
+  condition but does not fix the underlying single-connection bottleneck.
+- BUG-1 (mysql_batch string-PK cursor) still queued.
+
 ## [v0.2.12-beta.12] — 2026-08-11 — Kafka sink emits Debezium-style envelopes
 
 ### Changed (envelope format)

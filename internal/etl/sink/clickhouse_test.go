@@ -189,6 +189,44 @@ func TestConvertClickHouseValueEmptyStringToDateTime(t *testing.T) {
 	}
 }
 
+func TestConvertClickHouseValueDateColumn(t *testing.T) {
+	epoch := time.Unix(0, 0).UTC()
+	tests := []struct {
+		name string
+		typ  string
+		val  any
+		want any
+	}{
+		// RFC3339 (the shape kafka envelopes serialize MySQL DATE as) must map
+		// to a Date-parseable value instead of failing with 'extra text'.
+		{name: "date_rfc3339", typ: "Date", val: "2020-01-01T00:00:00+08:00", want: time.Date(2020, 1, 1, 0, 0, 0, 0, time.FixedZone("CST", 8*3600))},
+		{name: "date_plain", typ: "Date", val: "2020-01-01", want: time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local)},
+		{name: "date_space_sep", typ: "Date", val: "2020-01-01 00:00:00", want: time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local)},
+		{name: "nullable_date_rfc3339", typ: "Nullable(Date)", val: "2020-01-01T00:00:00+08:00", want: time.Date(2020, 1, 1, 0, 0, 0, 0, time.FixedZone("CST", 8*3600))},
+		{name: "date_empty", typ: "Date", val: "", want: epoch},
+		{name: "nullable_date_empty", typ: "Nullable(Date)", val: "   ", want: nil},
+		// time.Time input passes through unchanged.
+		{name: "date_timetime", typ: "Date", val: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), want: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)},
+		// Non-date unparseable strings stay as-is so AppendRow fails loudly (DLQ).
+		{name: "date_junk", typ: "Date", val: "hello", want: "hello"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertClickHouseValue(tt.val, tt.typ)
+			if twant, ok := tt.want.(time.Time); ok {
+				tgot, tok := got.(time.Time)
+				if !tok || !tgot.Equal(twant) {
+					t.Fatalf("convertClickHouseValue(%v, %s) = %v, want %v", tt.val, tt.typ, got, tt.want)
+				}
+				return
+			}
+			if got != tt.want {
+				t.Fatalf("convertClickHouseValue(%v, %s) = %v (%T), want %v (%T)", tt.val, tt.typ, got, got, tt.want, tt.want)
+			}
+		})
+	}
+}
+
 func TestInferClickHouseTypeDeclaredPriority(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -217,6 +255,35 @@ func TestInferClickHouseTypeDeclaredPriority(t *testing.T) {
 			if got != tt.want {
 				t.Fatalf("inferClickHouseType(%s, %v, %q) = %q, want %q", tt.col, tt.val, tt.declared, got, tt.want)
 			}
+		})
+	}
+}
+
+func TestConvertClickHouseValueEdgeTypes(t *testing.T) {
+	// Covers types that fall through to default in convertClickHouseValue.
+	// These should either parse correctly or pass the value through so the
+	// driver handles it; none should panic.
+	tests := []struct {
+		name string
+		typ  string
+		val  any
+	}{
+		{name: "ipv4_string", typ: "IPv4", val: "192.168.1.1"},
+		{name: "ipv6_string", typ: "IPv6", val: "::1"},
+		{name: "fixedstring", typ: "FixedString(8)", val: "abcdefgh"},
+		{name: "enum", typ: "Enum8('a'=1,'b'=2)", val: "a"},
+		{name: "lowcard_string", typ: "LowCardinality(String)", val: "hello"},
+		{name: "nullable_string", typ: "Nullable(String)", val: ""},
+		{name: "decimal_precise", typ: "Decimal(10,4)", val: "12.3456"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("convertClickHouseValue(%v, %s) panicked: %v", tt.val, tt.typ, r)
+				}
+			}()
+			_ = convertClickHouseValue(tt.val, tt.typ)
 		})
 	}
 }

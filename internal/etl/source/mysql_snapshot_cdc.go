@@ -47,6 +47,9 @@ type MySQLSnapshotCDCSource struct {
 	shardTotal             int
 	serverIDBase           uint32
 	consistentSnapshotLock bool
+	// binlogPurgedPolicy controls recovery when the checkpointed binlog file
+	// no longer exists on the server (ERROR 1236). Default fail-closed.
+	binlogPurgedPolicy BinlogPurgedPolicy
 }
 
 // resolvedPK holds the per-table snapshot key decision made at Open time.
@@ -103,6 +106,10 @@ type snapshotCDCReader struct {
 	snapshotHandoffFile  string
 	snapshotHandoffPos   uint32
 	snapshotHandoffValid bool
+	// resnapshotRequested is set by the CDC reconnect loop when the binlog is
+	// purged (ERROR 1236) and the policy is resnapshot; the loop then breaks and
+	// the run() outer loop re-enters the snapshot phase from lastIDs/lastStrs.
+	resnapshotRequested bool
 
 	// resolvedPKs is the per-table snapshot key decision, populated at Open
 	// after the real table list is known. Tables with pkKindNone are skipped
@@ -211,6 +218,7 @@ func NewMySQLSnapshotCDCSource(config map[string]any) (*MySQLSnapshotCDCSource, 
 			s.consistentSnapshotLock = b
 		}
 	}
+	s.binlogPurgedPolicy = parseBinlogPurgedPolicy(config)
 	if v, ok := config["shard_index"]; ok {
 		switch si := v.(type) {
 		case int:
@@ -628,58 +636,134 @@ func (r *snapshotCDCReader) run(ctx context.Context) {
 	defer close(r.done)
 	defer r.closeCanal()
 
-	if r.getPhase() != "cdc" {
-		if err := r.runSnapshot(ctx); err != nil {
-			select {
-			case r.errors <- err:
-			case <-ctx.Done():
-			}
-			return
-		}
-		r.setPhase("cdc")
-	}
-	// The canal used to capture the snapshot handoff is no longer needed once
-	// the snapshot transaction has finished. Release it before opening the CDC
-	// stream; Close() is idempotent and also unblocks an in-flight RunFrom.
-	r.closeCanal()
-
-	curFile, curPos := r.getDurableBinlogPos()
-	if curFile == "" || curPos == 0 {
-		select {
-		case r.errors <- fmt.Errorf("mysql_snapshot_cdc has no durable CDC resume position"):
-		case <-ctx.Done():
-		}
-		return
-	}
-	pos := mysql.Position{Name: curFile, Pos: curPos}
-	g.Log().Infof(ctx, "Starting snapshot+CDC stream from %s:%d", pos.Name, pos.Pos)
-
-	// CDC reconnect loop with exponential backoff.
-	backoff := time.Second
-	const maxBackoff = 30 * time.Second
+	// Outer loop supports binlog-purged resnapshot recovery (BUG-2): when the
+	// CDC reconnect loop detects ERROR 1236 and the policy is resnapshot, it
+	// resets phase to "snapshot" and breaks; this loop re-enters runSnapshot
+	// from the last per-table cursors and then re-enters CDC at the new handoff.
 	for {
-		if ctx.Err() != nil {
-			return
+		if r.getPhase() != "cdc" {
+			if err := r.runSnapshot(ctx); err != nil {
+				select {
+				case r.errors <- err:
+				case <-ctx.Done():
+				}
+				return
+			}
+			r.setPhase("cdc")
 		}
-		// Reopen from the last acknowledged checkpoint. The handler's runtime
-		// position may be many events ahead of the sink and must never become a
-		// recovery boundary merely because canal disconnected.
+		// The canal used to capture the snapshot handoff is no longer needed once
+		// the snapshot transaction has finished. Release it before opening the CDC
+		// stream; Close() is idempotent and also unblocks an in-flight RunFrom.
+		r.closeCanal()
+
 		curFile, curPos := r.getDurableBinlogPos()
 		if curFile == "" || curPos == 0 {
 			select {
 			case r.errors <- fmt.Errorf("mysql_snapshot_cdc has no durable CDC resume position"):
 			case <-ctx.Done():
-				return
 			}
 			return
 		}
-		runPos := mysql.Position{Name: curFile, Pos: curPos}
-		c, err := r.source.newCanal(r)
-		if err != nil {
-			runErr := err
-			g.Log().Warningf(ctx, "mysql_snapshot_cdc canal create failed: %v; reconnecting in %s", runErr, backoff)
+		pos := mysql.Position{Name: curFile, Pos: curPos}
+		g.Log().Infof(ctx, "Starting snapshot+CDC stream from %s:%d", pos.Name, pos.Pos)
+
+		// CDC reconnect loop with exponential backoff. The cdcLoop label lets
+		// the binlog-purged resnapshot policy break out to re-enter snapshot.
+	cdcLoop:
+		for {
+			backoff := time.Second
+			const maxBackoff = 30 * time.Second
+			if ctx.Err() != nil {
+				return
+			}
+			// Reopen from the last acknowledged checkpoint. The handler's runtime
+			// position may be many events ahead of the sink and must never become a
+			// recovery boundary merely because canal disconnected.
+			curFile, curPos := r.getDurableBinlogPos()
+			if curFile == "" || curPos == 0 {
+				select {
+				case r.errors <- fmt.Errorf("mysql_snapshot_cdc has no durable CDC resume position"):
+				case <-ctx.Done():
+					return
+				}
+				return
+			}
+			runPos := mysql.Position{Name: curFile, Pos: curPos}
+			c, err := r.source.newCanal(r)
+			if err != nil {
+				runErr := err
+				g.Log().Warningf(ctx, "mysql_snapshot_cdc canal create failed: %v; reconnecting in %s", runErr, backoff)
+				select {
+				case r.errors <- fmt.Errorf("create canal: %w", runErr):
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < maxBackoff {
+					backoff *= 2
+					if backoff > maxBackoff {
+						backoff = maxBackoff
+					}
+				}
+				continue
+			}
+			r.setCanal(c)
+			runErr := c.RunFrom(runPos)
+			c.Close()
+			r.clearCanal(c)
+			if ctx.Err() != nil {
+				return
+			}
+			if runErr == nil {
+				// Canal exited cleanly.
+				return
+			}
+
+			// BUG-2: binlog purged / ERROR 1236 is not transient. The checkpointed
+			// file no longer exists; retrying it loops forever. Apply the policy.
+			if isBinlogPurgedError(runErr) {
+				staleFile, stalePos := runPos.Name, runPos.Pos
+				g.Log().Errorf(ctx, "mysql_snapshot_cdc binlog purged (ERROR 1236): checkpoint %s:%d no longer exists; policy=%s", staleFile, stalePos, r.source.binlogPurgedPolicy)
+				switch r.source.binlogPurgedPolicy {
+				case BinlogPurgedResnapshot:
+					// Fall back to snapshot: re-read each table from its last cursor.
+					// CDC events between the stale checkpoint and the new snapshot
+					// handoff are NOT captured (RPO gap); the snapshot catches the
+					// current full state. Break out of the CDC loop; the run() outer
+					// loop sees phase reset to "snapshot" and re-enters runSnapshot.
+					r.mu.Lock()
+					r.resnapshotRequested = true
+					r.phase = "snapshot"
+					r.mu.Unlock()
+					g.Log().Warningf(ctx, "mysql_snapshot_cdc binlog purged: falling back to snapshot phase from last cursors (RPO gap for changes since stale checkpoint)")
+					break cdcLoop
+				case BinlogPurgedResumeFromCurrent:
+					probe, perr := r.source.newCanal(r)
+					if perr == nil {
+						curPos, gerr := probe.GetMasterPos()
+						probe.Close()
+						if gerr == nil {
+							r.advanceResumePos(curPos.Name, uint32(curPos.Pos))
+							g.Log().Warningf(ctx, "mysql_snapshot_cdc resuming from current master pos %s:%d; changes between stale checkpoint and now are DROPPED", curPos.Name, curPos.Pos)
+							backoff = time.Second
+							continue
+						}
+						runErr = fmt.Errorf("binlog purged recovery: get master pos: %w", gerr)
+					} else {
+						runErr = fmt.Errorf("binlog purged recovery: create probe canal: %w", perr)
+					}
+				}
+				// fail (default) or probe failure: fatal.
+				select {
+				case r.errors <- fmt.Errorf("%w: %v", ErrBinlogPurged, runErr):
+				case <-ctx.Done():
+				}
+				return
+			}
+
+			g.Log().Warningf(ctx, "mysql_snapshot_cdc canal exited: %v; reconnecting in %s", runErr, backoff)
 			select {
-			case r.errors <- fmt.Errorf("create canal: %w", runErr):
+			case r.errors <- fmt.Errorf("canal disconnected: %w", runErr):
 			case <-ctx.Done():
 				return
 			case <-time.After(backoff):
@@ -690,32 +774,20 @@ func (r *snapshotCDCReader) run(ctx context.Context) {
 					backoff = maxBackoff
 				}
 			}
+		}
+		// Reached only on resnapshot break (the CDC loop's only non-return exit):
+		// re-enter the outer loop, which sees phase reset to "snapshot" and
+		// re-runs runSnapshot from last cursors.
+		r.mu.RLock()
+		wantResnap := r.resnapshotRequested
+		r.mu.RUnlock()
+		if wantResnap {
+			r.mu.Lock()
+			r.resnapshotRequested = false
+			r.mu.Unlock()
 			continue
 		}
-		r.setCanal(c)
-		runErr := c.RunFrom(runPos)
-		c.Close()
-		r.clearCanal(c)
-		if ctx.Err() != nil {
-			return
-		}
-		if runErr == nil {
-			// Canal exited cleanly.
-			return
-		}
-		g.Log().Warningf(ctx, "mysql_snapshot_cdc canal exited: %v; reconnecting in %s", runErr, backoff)
-		select {
-		case r.errors <- fmt.Errorf("canal disconnected: %w", runErr):
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-		if backoff < maxBackoff {
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-		}
+		return
 	}
 }
 
@@ -1404,6 +1476,20 @@ func (r *snapshotCDCReader) getDurableBinlogPos() (string, uint32) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.checkpointFile, r.checkpointPos
+}
+
+// advanceResumePos atomically moves both the durable checkpoint position and
+// the producer runtime cursor to a new binlog position. It is used by the
+// binlog-purged recovery path (resume_from_current / resnapshot handoff) so
+// the next canal.RunFrom starts from the advanced position instead of the
+// stale one that triggered ERROR 1236.
+func (r *snapshotCDCReader) advanceResumePos(file string, pos uint32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.checkpointFile = file
+	r.checkpointPos = pos
+	r.file = file
+	r.pos = pos
 }
 
 func (r *snapshotCDCReader) getCanal() *canal.Canal {

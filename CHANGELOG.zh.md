@@ -4,6 +4,41 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.13] — 2026-08-12 — CDC binlog 断裂恢复 + ClickHouse Date/YEAR 修复
+
+### 新增（CDC 健壮性）
+
+- **mysql_cdc / mysql_snapshot_cdc 现在检测 MySQL binlog 断裂（ERROR 1236）并按可配置策略恢复，不再无限重试。** 当 checkpoint 指向的 binlog 文件已不存在（被 `binlog_expire_logs_seconds` 清理、`PURGE BINARY LOGS` 或 `RESET MASTER`）时，canal 重连循环此前会对同一失效位点无限重试（`Read error (x13): canal disconnected: ERROR 1236 ...`）。新增 source 配置 `cdc_on_binlog_purged`：
+  - `fail`（默认，fail-closed）：停止管道并抛出 `ErrBinlogPurged` 哨兵错误，等待人工重置 checkpoint —— 不静默丢数据。
+  - `resume_from_current`：将 CDC 续读位点推进到 MySQL 当前 master 位点并继续。**失效 checkpoint 到现在之间的所有变更被丢弃**（显式 RPO 损失）。
+  - `resnapshot`（仅 `mysql_snapshot_cdc`）：回退到 snapshot 阶段，从各表最后游标续读全量后重新进入 CDC。
+  检测覆盖类型化 `*mysql.MyError{Code:1236}` 和用户可见文本变体（「Could not find first log file name in binary log index」、「Client requested source to start replication from position > file size」）。
+
+### 修复（ClickHouse 类型处理）
+
+- **`Date` 列**现在接受 RFC3339 / datetime 源值（`"2020-01-01T00:00:00+08:00"`），截断到日期部分，而非报 `parsing time "..." extra text: "T00:00:00+08:00"`。经 kafka envelope 往返的 MySQL `DATE` 被序列化成 RFC3339，clickhouse-go 驱动此前对 `Date` 列拒绝该格式。空串映射到 NULL（Nullable）或 epoch 日。
+- **MySQL `YEAR` 列**现在映射到 `UInt16`（ClickHouse）/ `SMALLINT`（MySQL/Postgres/Doris），而非 `DateTime64`。`YEAR` 值如 `2026` 不是可解析的 datetime，原映射导致写入崩溃 `converting float64 to Datetime64 is unsupported`。
+
+### Tests
+
+- `TestIsBinlogPurgedError`、`TestParseBinlogPurgedPolicy`、`TestBinlogPurgedRecoveryResumeFromCurrent`、`TestBinlogPurgedRecoveryFail`、`TestErrBinlogPurgedIsSentinel`。
+- `TestConvertClickHouseValueDateColumn`（RFC3339/纯日期/空格分隔/空串/垃圾串）。
+- `TestConvertClickHouseValueEdgeTypes`（IPv4/IPv6/FixedString/Enum/LowCardinality）。
+- `TestMapSourceTypeYear`（year/year(4) 全方言）。
+- `go test ./internal/etl/...` 全部通过；`go vet` 干净。
+
+### Evidence
+
+- 容器级 binlog 断裂 e2e（`hack/e2e-binlog-purged.sh`）：mysql_snapshot_cdc 跑到真实 checkpoint（`mysql-bin.000001:1131`），停止，源端 `RESET MASTER`，重启；`fail` 策略在第 1 次重试（x1）就检测到 ERROR 1236 并以哨兵错误停止管道（对比此前的 x13 无限循环）。
+- 容器级 snapshot_cdc -> Redpanda -> ClickHouse 含 YEAR/TIME/Date/datetime/decimal/tinyint(1) 源列：全部自动建表正确（`birth_year UInt16`、`work_time String`、`date_end Date`、`created_at DateTime64(3)`、`score Decimal(18,2)`、`active UInt8`），3 行写入零失败零 DLQ。
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` 退出码 0 PASS（回归）。
+- `bash hack/check-release-assets.sh` 通过。
+
+### Residuals
+
+- BUG-3（sqlite `MaxOpenConns(1)` checkpoint 争用）仍 queued；binlog 断裂恢复缩小了 checkpoint 阻塞的影响面，但未修复单连接瓶颈根因。
+- BUG-1（mysql_batch 字符串主键游标）仍 queued。
+
 ## [v0.2.12-beta.12] — 2026-08-11 — Kafka sink 输出 Debezium 风格 envelope
 
 ### 变更（envelope 格式）

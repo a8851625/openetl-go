@@ -1,0 +1,34 @@
+name: snapshot-cdc-binlog-purge-fail
+tags: [binlog, purge, fail]
+schedule:
+  type: streaming
+source:
+  type: mysql_snapshot_cdc
+  config:
+    host: etl-mysql-source
+    port: 3306
+    user: root
+    password: root123456
+    database: snap_e2e
+    tables: ["staff"]
+    pk_columns: ["id"]
+    server_id: 7777
+    # fail is the default; resnapshot / resume_from_current tested separately
+    cdc_on_binlog_purged: fail
+sink:
+  type: clickhouse
+  config:
+    host: etl-clickhouse
+    database: dzh3136_go
+    table: ods_binlog_purge
+    pk_columns: ["id"]
+    auto_create: true
+    password: dzh123456
+retry:
+  max_attempts: 3
+  initial_interval_ms: 1000
+  max_interval_ms: 5000
+batch_size: 100
+flush_interval_ms: 1000
+checkpoint_interval_sec: 5
+backpressure_buffer: 1000

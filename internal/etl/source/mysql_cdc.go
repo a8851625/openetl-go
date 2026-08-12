@@ -54,6 +54,9 @@ type MySQLCDCSource struct {
 	serverIDBase uint32
 	enableGTID   bool
 	startFrom    string // "timestamp" or "binlog:file:pos" or "gtid:..."
+	// binlogPurgedPolicy controls recovery when the checkpointed binlog file
+	// no longer exists on the server (ERROR 1236). Default fail-closed.
+	binlogPurgedPolicy BinlogPurgedPolicy
 }
 
 func NewMySQLCDCSource(config map[string]any) (*MySQLCDCSource, error) {
@@ -135,6 +138,7 @@ func NewMySQLCDCSource(config map[string]any) (*MySQLCDCSource, error) {
 	if v, ok := config["start_from"]; ok {
 		s.startFrom = v.(string)
 	}
+	s.binlogPurgedPolicy = parseBinlogPurgedPolicy(config)
 
 	// Default server_id: when sharding, base+shard; otherwise random per-instance
 	// to avoid collisions with multiple consumers on the same MySQL.
@@ -275,6 +279,44 @@ func (s *MySQLCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core.Re
 				return
 			}
 
+			// BUG-2: binlog purged / ERROR 1236 is not a transient disconnect.
+			// The checkpointed file no longer exists; retrying the same position
+			// loops forever. Apply the configured recovery policy instead.
+			if isBinlogPurgedError(runErr) {
+				staleFile := reader.lastPosName
+				stalePos := reader.lastPos
+				g.Log().Errorf(ctx, "mysql_cdc binlog purged (ERROR 1236): checkpoint %s:%d no longer exists on server; policy=%s", staleFile, stalePos, s.binlogPurgedPolicy)
+				switch s.binlogPurgedPolicy {
+				case BinlogPurgedResumeFromCurrent:
+					// Advance the resume position to the current master position.
+					// This silently drops every change between the stale checkpoint
+					// and now (explicit RPO loss); log it loudly.
+					probe, perr := canal.NewCanal(s.canalConfig())
+					if perr == nil {
+						curPos, gerr := probe.GetMasterPos()
+						probe.Close()
+						if gerr == nil {
+							reader.mu.Lock()
+							reader.lastPosName = curPos.Name
+							reader.lastPos = curPos.Pos
+							reader.mu.Unlock()
+							g.Log().Warningf(ctx, "mysql_cdc resuming from current master pos %s:%d; changes between stale checkpoint and now are DROPPED", curPos.Name, curPos.Pos)
+							backoff = time.Second // reset backoff after position advance
+							continue
+						}
+						runErr = fmt.Errorf("binlog purged recovery: get master pos: %w", gerr)
+					} else {
+						runErr = fmt.Errorf("binlog purged recovery: create probe canal: %w", perr)
+					}
+				}
+				// fail (default) or resnapshot (unsupported on plain mysql_cdc): fatal.
+				select {
+				case reader.errors <- fmt.Errorf("%w: %v", ErrBinlogPurged, runErr):
+				case <-ctx.Done():
+				}
+				return
+			}
+
 			// Report the error but do not terminate; we will retry.
 			g.Log().Warningf(ctx, "mysql_cdc canal exited: %v; reconnecting in %s", runErr, backoff)
 			select {
@@ -295,10 +337,9 @@ func (s *MySQLCDCSource) Open(ctx context.Context, cp *core.Checkpoint) (core.Re
 	return reader, nil
 }
 
-// startCanalOnce creates a fresh canal, attaches the event handler, and runs it
-// until it exits (error or context cancel). Returns the canal so the caller can
-// close it. The caller must NOT use the returned canal after Close.
-func (s *MySQLCDCSource) startCanalOnce(ctx context.Context, reader *mysqlCDCRecordReader) (*canal.Canal, error) {
+// canalConfig builds the canal configuration shared by the CDC loop and the
+// binlog-purged recovery probe (GetMasterPos needs a live canal).
+func (s *MySQLCDCSource) canalConfig() *canal.Config {
 	cfg := canal.NewDefaultConfig()
 	cfg.Addr = fmt.Sprintf("%s:%d", s.host, s.port)
 	cfg.User = s.user
@@ -306,7 +347,6 @@ func (s *MySQLCDCSource) startCanalOnce(ctx context.Context, reader *mysqlCDCRec
 	cfg.Flavor = "mysql"
 	cfg.ServerID = s.serverID
 	cfg.Dump.ExecutionPath = ""
-
 	for _, table := range s.tables {
 		if table == "*" {
 			cfg.IncludeTableRegex = append(cfg.IncludeTableRegex,
@@ -316,6 +356,14 @@ func (s *MySQLCDCSource) startCanalOnce(ctx context.Context, reader *mysqlCDCRec
 				fmt.Sprintf("%s\\.%s", s.database, regexp.QuoteMeta(table)))
 		}
 	}
+	return cfg
+}
+
+// startCanalOnce creates a fresh canal, attaches the event handler, and runs it
+// until it exits (error or context cancel). Returns the canal so the caller can
+// close it. The caller must NOT use the returned canal after Close.
+func (s *MySQLCDCSource) startCanalOnce(ctx context.Context, reader *mysqlCDCRecordReader) (*canal.Canal, error) {
+	cfg := s.canalConfig()
 
 	c, err := canal.NewCanal(cfg)
 	if err != nil {

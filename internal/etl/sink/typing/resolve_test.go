@@ -29,6 +29,27 @@ func TestResolveColumnDDLPriority(t *testing.T) {
 	}
 }
 
+func TestMapSourceTypeYear(t *testing.T) {
+	cases := []struct {
+		dialect Dialect
+		in      string
+		want    string
+	}{
+		{DialectClickHouse, "year", "UInt16"},
+		{DialectClickHouse, "year(4)", "UInt16"},
+		{DialectMySQL, "year", "SMALLINT"},
+		{DialectPostgreSQL, "year", "SMALLINT"},
+		{DialectDoris, "year", "SMALLINT"},
+	}
+	for _, tc := range cases {
+		got := MapSourceType(tc.dialect, tc.in)
+		if got != tc.want {
+			t.Errorf("MapSourceType(%v, %q) = %q, want %q", tc.dialect, tc.in, got, tc.want)
+		}
+	}
+}
+
+
 func TestMapSourceTypeDebeziumPrimitives(t *testing.T) {
 	cases := []struct {
 		in   string

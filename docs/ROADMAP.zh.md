@@ -956,6 +956,97 @@ any/字符串游标）、checkpoint position 序列化与恢复兼容（旧数�
 **证据**：ref — beta.9 周期容器验证日志（etl-mt-e2e，records_read 持续增长）；
 修复后在本条目更新验收矩阵。
 
+### BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复（2026-08-12 发现）
+
+状态：`active`
+
+**现象与根因**：当 MySQL binlog 被按保留期（`binlog_expire_logs_seconds`，云库
+常仅 1–3 天）自动清理，或被 `PURGE BINARY LOGS`/`RESET MASTER` 删除后，checkpoint
+里记录的 binlog 位点（如 `mysql-bin.000120:2789538`）对应的文件已不存在。
+`mysql_cdc` 与 `mysql_snapshot_cdc` 的 canal 重连循环（`internal/etl/source/mysql_cdc.go`
+255-285、`mysql_snapshot_cdc.go` 665-710）对该错误（MySQL ERROR 1236「Could not
+find first log file name in binary log index」）只做指数退避重试，且每次都用同一个
+失效位点 `c.RunFrom(pos)`，导致**永久卡死**，只能人工重置 checkpoint（丢弃中间变更或
+重做全量）。长时间停顿（如 sqlite checkpoint 阻塞，见 BUG-3）会放大为 binlog 过期，
+形成连锁故障。
+
+**复现**：用户生产环境（host 192.168.31.35）2026-08-12 报错 `Read error (x13):
+canal disconnected: ERROR 1236 (HY000): Could not find first log file name in
+binary log index file`，checkpoint 显示 `phase=cdc, file=mysql-bin.000120,
+pos=2789538`，而 MySQL 已无该 binlog。
+
+**范围**：
+1. `internal/etl/source/mysql_cdc.go`、`internal/etl/source/mysql_snapshot_cdc.go`：
+   检测 ERROR 1236（binlog purged/缺失），**终止无效重试**，发 `alert.LevelCritical`
+   告警（含失效位点、最早可用 binlog），并按可配置策略恢复：
+   - `cdc_on_binlog_purged: fail`（默认，fail-closed，停止管道并告警，等人工）；
+   - `cdc_on_binlog_purged: resume_from_current`（从 MySQL 当前 master 位点续 CDC，
+     丢弃中间变更，显式 RPO 声明）；
+   - `cdc_on_binlog_purged: resnapshot`（仅 snapshot_cdc：回退 snapshot 阶段从
+     `last_ids`/`last_strs` 续读全量后重新进 CDC）。
+2. 新增配置 key `cdc_on_binlog_purged`（source.config，默认 `fail`），文档化每个策略
+   的数据语义（RPO / 是否丢数据 / 是否重复）。
+3. 告警与日志区分「瞬时断连重试」与「binlog 永久丢失需干预」。
+
+**验收**：
+1. 模拟 binlog 缺失（checkpoint 指向已 purge 的文件）下，`fail` 策略停止管道并发
+   critical 告警，不再无限重试；
+2. `resume_from_current` 策略从当前 master 位点续 CDC，新变更正常写入，checkpoint
+   位点更新；
+3. `resnapshot`（snapshot_cdc）从 `last_ids` 续读后重新进 CDC，不重读已读行；
+4. 瞬时网络断连仍走原指数退避，不被误判为 binlog purged；
+5. 单测 + 容器级 e2e（手动 purge binlog 触发）证据。
+
+**Non-goals**：GTID-based 自动补齐已 purge 区间（需 MySQL GTID 模式且源端保留完整
+binlog，非通用）；跨实例 binlog 归档恢复；改变 at-least-once 语义（任一策略的丢/重
+边界必须在文档与告警中显式声明）。
+
+**证据**：ref — 用户生产报错日志（ERROR 1236, checkpoint mysql-bin.000120）；
+修复后在本条目更新验收矩阵。
+
+### BUG-3：sqlite 单连接（MaxOpenConns(1)）导致 checkpoint 写入排队超时阻塞（2026-08-12 发现）
+
+状态：`queued`
+
+**现象与根因**：sqlite 后端 `internal/etl/storage/sqlite/sqlite.go` 设
+`SetMaxOpenConns(1)`（单连接池），而 checkpoint、DLQ、audit、run_history、spec、
+health/metrics 查询**全部共用这一个连接**。2+ 个 streaming pipeline 高频 writeBatch
+（每批顺序执行 sink.Write → DLQ.WriteDLQ → checkpoint.Save）+ 每条 sink write 写一条
+audit，任一慢操作（大 DLQ 批、大 audit 写、慢盘 fsync）会让 checkpoint.Save 排队超过
+`writeBatch` 的 `commitCtx` 30s deadline，报 `context deadline exceeded` →
+`blockCheckpoint()` → 管道永久阻塞，只能重启容器。688MB 的 etl.db（audit/run_history
+无 TTL 无限堆积，因 janitor 默认未启用）+ 慢盘是放大器，不是主因；主因是连接串行化。
+
+**复现**：用户生产环境（host 192.168.31.35）2026-08-12 两个 streaming pipeline 同时
+报 `checkpoint blocked until restart: checkpoint save failed: context deadline
+exceeded`，etl.db 688MB、WAL 27MB、load 13.55、IO wait 36-64%、swap 耗尽；重启后
+缓解。MySQL/PostgreSQL 后端（`MaxOpenConns(20)`）不受影响。
+
+**范围**：
+1. `internal/etl/storage/sqlite/sqlite.go`：为 checkpoint/spec 这类控制面高频小事务
+   开独立连接（读连接池 + 单写连接分离，或 checkpoint 与 DLQ/audit 分库），避免被
+   audit/DLQ 大事务阻塞；
+2. `docker-compose.yml` / `docker-compose.distributed.yml`：补 `ETL_AUDIT_TTL`、
+   `ETL_RUN_HISTORY_TTL` 默认值（janitor 默认不启用是「静默膨胀」陷阱）；
+3. production checklist / quickstart：明确 sqlite 仅适合单 pipeline / 低频场景，
+   多 streaming pipeline 或慢盘生产环境推荐 MySQL/PostgreSQL storage 后端；
+4. 启动时若 audit/run_history 表过大且无 TTL，打 WARN 日志提示。
+
+**验收**：
+1. sqlite 后端下，控制面（checkpoint save / spec 查询）与数据面（DLQ/audit 写）
+   连接分离，checkpoint.Save 不被 DLQ/audit 大事务排队阻塞（单测 + 容器压测证据）；
+2. docker-compose 默认开启 audit/run_history TTL，etl.db 不再无限膨胀；
+3. production 文档明确 sqlite 适用边界与多 pipeline 推荐后端；
+4. 现有 sqlite e2e（`hack/e2e-storage-mysql.sh` 等）回归通过；
+5. targeted/package/race/vet + git diff --check 通过。
+
+**Non-goals**：sqlite 性能对标 MySQL/PostgreSQL（单机嵌入式数据库的固有上限）；
+改变默认 storage 后端（保持 sqlite 为开箱默认，只声明边界）；checkpoint 阻塞后的
+自动重试（属 BUG-2 的恢复策略范畴）。
+
+**证据**：ref — 用户生产报错日志（checkpoint blocked, context deadline exceeded,
+etl.db 688MB, load 13.55）；修复后在本条目更新验收矩阵。
+
 ## 有界后续
 
 这些事项只有在上方当前任务完成或被明确重新排序后才进入执行：
