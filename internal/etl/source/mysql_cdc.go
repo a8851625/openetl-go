@@ -510,6 +510,15 @@ func (h *mysqlCDCHandler) OnRow(e *canal.RowsEvent) error {
 		colTypes[col.Name] = raw
 	}
 
+	// Primary-key column names for this table (canal fills e.Table.PKColumns
+	// with column indexes from information_schema). Used to build a per-row
+	// JSON key object so downstream sinks with pk_columns_from_metadata can
+	// identify rows on DELETE/UPDATE events where Data may be sparse. Without
+	// this, CDC DELETE records reach the sink with an empty Metadata.Key and
+	// pk_columns_from_metadata falls back to the static pk_columns (often
+	// "id"), producing "delete record missing primary-key column" errors.
+	pkCols := pkColumnNames(e.Table)
+
 	h.reader.mu.RLock()
 	file := h.reader.lastPosName
 	pos := h.reader.lastPos
@@ -535,6 +544,7 @@ func (h *mysqlCDCHandler) OnRow(e *canal.RowsEvent) error {
 		case canal.InsertAction:
 			rec.Operation = core.OpInsert
 			rec.Data = rowToMap(e.Table.Columns, row)
+			rec.Metadata.Key = metadataKeyJSONMulti(pkCols, rec.Data)
 		case canal.UpdateAction:
 			rec.Operation = core.OpUpdate
 			if i%2 == 0 {
@@ -546,9 +556,17 @@ func (h *mysqlCDCHandler) OnRow(e *canal.RowsEvent) error {
 			} else {
 				rec.Data = rowToMap(e.Table.Columns, row)
 			}
+			// Prefer the before-image for the key (stable identity); fall back
+			// to the after-image when no before is present.
+			keyRow := rec.Before
+			if len(keyRow) == 0 {
+				keyRow = rec.Data
+			}
+			rec.Metadata.Key = metadataKeyJSONMulti(pkCols, keyRow)
 		case canal.DeleteAction:
 			rec.Operation = core.OpDelete
 			rec.Data = rowToMap(e.Table.Columns, row)
+			rec.Metadata.Key = metadataKeyJSONMulti(pkCols, rec.Data)
 		}
 
 		select {
@@ -708,4 +726,23 @@ func deriveServerID(name string) uint32 {
 		h = 1
 	}
 	return h
+}
+
+// pkColumnNames returns the primary-key column names for a canal table, derived
+// from the schema.Table.PKColumns index slice. Returns nil when the table has
+// no declared primary key (canal could not introspect one).
+func pkColumnNames(tbl *schema.Table) []string {
+	if tbl == nil || len(tbl.PKColumns) == 0 {
+		return nil
+	}
+	cols := make([]string, 0, len(tbl.PKColumns))
+	for _, idx := range tbl.PKColumns {
+		if idx >= 0 && idx < len(tbl.Columns) {
+			cols = append(cols, tbl.Columns[idx].Name)
+		}
+	}
+	if len(cols) == 0 {
+		return nil
+	}
+	return cols
 }

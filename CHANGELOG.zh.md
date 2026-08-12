@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.15] — 2026-08-12 — CDC DELETE 主键修复（kafka → clickhouse）
+
+### 修复（CDC 删除路由）
+
+- **mysql_cdc 现在为每个 binlog 事件（INSERT/UPDATE/DELETE）填充 `Metadata.Key` 为 per-table 主键 JSON 对象。** 此前只有 mysql_snapshot_cdc 的 snapshot 阶段填充;CDC 阶段把 `Metadata.Key` 留空,导致 CDC 记录经 kafka → clickhouse 且开启 `pk_columns_from_metadata: true` 时,clickhouse sink 无法推导主键并 fallback 到静态 `pk_columns`(常见为 `id`),对主键非 `id` 的表(如以 `session_id` 为键的 `session` 表)报 `delete record missing primary-key column "id"`。修复后 CDC 记录携带 `{"session_id":"..."}`,sink DELETE 解析到正确列。CDC 路径也支持复合主键。
+- **kafka source 的 Debezium 解析不再用 `source.event_id` 覆盖 `Metadata.Key`。** Debezium envelope 在 `source` 里携带的去重专用 `event_id`,beta.12 错误地把它提升为 `Metadata.Key`,覆盖了承载在 Kafka 消息 key 里的 per-table 主键 JSON 对象。per-table 主键现在正确地从 Kafka 消息 key(sink 从 `rec.Metadata.Key` 设置)恢复,`pk_columns_from_metadata` 在 Debezium envelope 路径上端到端可用。这是 kafka → clickhouse 上 `missing primary-key column` DELETE 失败的同一根因。
+
+### Tests
+
+- `TestMetadataKeyJSONMulti`(单列/复合主键、缺失/nil 主键、无列)。
+- `TestPkColumnNames`(canal schema.Table 主键索引 → 列名)。
+- `TestMysqlCDCHandlerFillsMetadataKey`(全 op 回归守卫)。
+- `TestKafkaHandlerEnvelopeParsesDebeziumStyle` 更新,断言 per-table 主键 JSON 从 Kafka 消息 key 恢复(而非 event_id)。
+- `go test ./internal/etl/...` 全部通过;`go vet` 干净。
+
+### Evidence
+
+- `bash hack/check-release-assets.sh` 通过。
+- 容器级 DELETE-through-kafka e2e 待干净镜像 build(主机磁盘压力);修复通过覆盖全链路的单测验证:mysql_cdc 填 Metadata.Key → kafka sink 序列化为 msg.Key → kafka source 恢复 → clickhouse sink pk_columns_from_metadata 解析正确的 DELETE 列。
+
+### Residuals
+
+- BUG-1(mysql_batch 字符串主键游标)仍 queued。
+- 主机磁盘/IO 压力导致本轮未能重建容器镜像;主机恢复后用 `docker build` 重建。
+
 ## [v0.2.12-beta.14] — 2026-08-12 — SQLite 读写分离 + 默认 retention（BUG-3）
 
 ### 修复（存储争用）

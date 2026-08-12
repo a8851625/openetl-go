@@ -1247,6 +1247,36 @@ func metadataKeyJSON(pkColumn string, data map[string]any) string {
 	return string(b)
 }
 
+// metadataKeyJSONMulti builds a per-table primary-key JSON object from the
+// given column names and row map, e.g. {"session_id":"abc"} or composite
+// {"tenant_id":3,"id":42}. Empty pkColumns or a row missing every PK column
+// yields "" (no key). Used by CDC sources (mysql_cdc, mysql_snapshot_cdc CDC
+// phase) so downstream sinks with pk_columns_from_metadata can identify rows
+// even on DELETE events where Data may be sparse.
+func metadataKeyJSONMulti(pkColumns []string, row map[string]any) string {
+	if len(pkColumns) == 0 {
+		return ""
+	}
+	obj := make(map[string]any, len(pkColumns))
+	haveAny := false
+	for _, col := range pkColumns {
+		v, ok := row[col]
+		if !ok || v == nil {
+			continue
+		}
+		obj[col] = v
+		haveAny = true
+	}
+	if !haveAny {
+		return ""
+	}
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 func (r *snapshotCDCReader) Read(ctx context.Context) (core.Record, error) {
 	records := r.records
 	errors := r.errors

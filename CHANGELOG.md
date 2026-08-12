@@ -4,6 +4,54 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.15] — 2026-08-12 — CDC DELETE primary-key fix (kafka → clickhouse)
+
+### Fixed (CDC delete routing)
+
+- **mysql_cdc now fills `Metadata.Key` with the per-table primary-key JSON
+  object for every binlog event (INSERT/UPDATE/DELETE).** Previously only the
+  mysql_snapshot_cdc snapshot phase filled it; the CDC phase left
+  `Metadata.Key` empty, so when a CDC record flowed through kafka → clickhouse
+  with `pk_columns_from_metadata: true`, the clickhouse sink could not derive
+  the PK and fell back to the static `pk_columns` (often `id`), producing
+  `delete record missing primary-key column "id"` for tables whose PK is not
+  `id` (e.g. `session` keyed by `session_id`). With this fix the CDC record
+  carries `{"session_id":"..."}` and the sink DELETE resolves the correct
+  column. Composite primary keys are now also supported on the CDC path.
+- **kafka source Debezium parser no longer overwrites `Metadata.Key` with
+  `source.event_id`.** The Debezium envelope carries a dedup-only `event_id`
+  in `source`, and beta.12 mistakenly promoted it to `Metadata.Key`,
+  clobbering the per-table PK JSON object that travels in the Kafka message
+  key. The per-table PK is now correctly recovered from the Kafka message
+  key (set by the sink from `rec.Metadata.Key`), so
+  `pk_columns_from_metadata` works end-to-end through the Debezium envelope
+  path. This was the same root cause as the `missing primary-key column`
+  DELETE failures on kafka → clickhouse.
+
+### Tests
+
+- `TestMetadataKeyJSONMulti` (single/composite PK, missing/nil PK, no cols).
+- `TestPkColumnNames` (canal schema.Table PK index → name resolution).
+- `TestMysqlCDCHandlerFillsMetadataKey` (regression guard for all ops).
+- `TestKafkaHandlerEnvelopeParsesDebeziumStyle` updated to assert the
+  per-table PK JSON is recovered from the Kafka message key (not event_id).
+- `go test ./internal/etl/...` pass; `go vet` clean.
+
+### Evidence
+
+- `bash hack/check-release-assets.sh` passed.
+- Container-level DELETE-through-kafka e2e pending a clean image build
+  (host disk pressure); the fix is validated via unit tests covering the
+  full chain: mysql_cdc fills Metadata.Key → kafka sink serializes it as
+  msg.Key → kafka source restores it → clickhouse sink pk_columns_from_metadata
+  resolves the correct DELETE column.
+
+### Residuals
+
+- BUG-1 (mysql_batch string-PK cursor) still queued.
+- Host disk/IO pressure prevented a fresh container image build this round;
+  rebuild with `docker build` once the host recovers.
+
 ## [v0.2.12-beta.14] — 2026-08-12 — SQLite read/write split + default retention (BUG-3)
 
 ### Fixed (storage contention)

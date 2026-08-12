@@ -761,9 +761,13 @@ func tryDebeziumEnvelope(raw []byte, rec *core.Record, data map[string]any) bool
 		if tbl, ok := src["table"].(string); ok && tbl != "" {
 			rec.Metadata.Table = tbl
 		}
-		if eid, ok := src["event_id"].(string); ok && eid != "" {
-			rec.Metadata.Key = eid
-		}
+		// Note: source.event_id is a dedup-only identifier emitted by the kafka
+		// sink; it is NOT the per-table primary key. The per-table PK JSON object
+		// travels in the Kafka message key (msg.Key), which ConsumeClaim already
+		// restored into rec.Metadata.Key at line ~331. Overwriting it here with
+		// event_id would break pk_columns_from_metadata downstream (DELETE
+		// records would lose their PK and fall back to the static pk_columns,
+		// producing "delete record missing primary-key column" errors).
 		if file, ok := src["file"].(string); ok && file != "" {
 			rec.Metadata.BinlogFile = file
 		}

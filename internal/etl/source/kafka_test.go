@@ -257,7 +257,10 @@ func TestKafkaHandlerEnvelopeParsesDebeziumStyle(t *testing.T) {
 	}
 
 	claim := &fakeConsumerGroupClaim{ch: make(chan *sarama.ConsumerMessage, 1)}
-	claim.ch <- &sarama.ConsumerMessage{Topic: "cdc-events", Partition: 0, Offset: 7, Value: envBytes}
+	// The Kafka message key carries the per-table primary-key JSON object
+	// (set by the kafka sink from rec.Metadata.Key). The Debezium parser must
+	// NOT overwrite rec.Metadata.Key with source.event_id (a dedup-only id).
+	claim.ch <- &sarama.ConsumerMessage{Topic: "cdc-events", Partition: 0, Offset: 7, Key: []byte(`{"order_id":42}`), Value: envBytes}
 	close(claim.ch)
 
 	if err := handler.ConsumeClaim(sess, claim); err != nil {
@@ -272,8 +275,8 @@ func TestKafkaHandlerEnvelopeParsesDebeziumStyle(t *testing.T) {
 		if rec.Metadata.Table != "orders" || rec.Metadata.Database != "snap_e2e" {
 			t.Errorf("metadata = db=%q table=%q, want snap_e2e/orders", rec.Metadata.Database, rec.Metadata.Table)
 		}
-		if rec.Metadata.Key != "evt-42" {
-			t.Errorf("metadata key = %q, want evt-42", rec.Metadata.Key)
+		if rec.Metadata.Key != `{"order_id":42}` {
+			t.Errorf("metadata key = %q, want per-table PK JSON from msg.Key", rec.Metadata.Key)
 		}
 		if got, ok := rec.Data["order_id"].(float64); !ok || got != 42 {
 			t.Errorf("data.order_id = %#v, want 42", rec.Data["order_id"])
