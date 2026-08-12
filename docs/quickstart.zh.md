@@ -189,6 +189,8 @@ curl http://localhost:8000/metrics
 - [ ] 配置 TLS（`ETL_TLS_CERT`、`ETL_TLS_KEY`），并把 `ETL_TLS_SERVER_NAME` 设为证书 SAN
 - [ ] 配置告警渠道（`ALERT_DINGTALK_WEBHOOK` / `ALERT_FEISHU_WEBHOOK` / `ALERT_SLACK_WEBHOOK`）
 - [ ] 设置 DLQ 过期（`ETL_DLQ_TTL=168h`）
+- [ ] 设置 audit / run-history 过期（`ETL_AUDIT_TTL=720h`、`ETL_RUN_HISTORY_TTL=168h`，否则控制面 sqlite 会无限膨胀）
+- [ ] **多 streaming pipeline 或慢盘生产环境，控制面 storage 后端用 MySQL/PostgreSQL 而非 sqlite**（sqlite 单写连接下，高频 DLQ/audit/checkpoint 争用会导致 checkpoint 写入排队超时阻塞；见 `docs/ROADMAP.zh.md` BUG-3）
 - [ ] 验证所有 CDC 管道使用幂等 sink（UPSERT 模式）
 - [ ] 数据库用户授予复制权限（`REPLICATION SLAVE`、`REPLICATION CLIENT`）
 - [ ] MySQL binlog 配置 `ROW` 格式 + `FULL` row image

@@ -35,6 +35,7 @@ type Dialect interface {
 // Store implements storage.Storage with one shared SQL code path.
 type Store struct {
 	db              *sql.DB
+	readDB          *sql.DB // optional read-only connection pool (WAL concurrent reads); falls back to db when nil
 	dialect         Dialect
 	failureMu       sync.RWMutex
 	failureInjector func(operation string) error
@@ -42,6 +43,15 @@ type Store struct {
 
 func New(db *sql.DB, dialect Dialect) *Store {
 	return &Store{db: db, dialect: dialect}
+}
+
+// SetReadDB attaches a separate read connection pool for SELECT queries.
+// SQLite WAL mode allows concurrent readers that do not block the single
+// writer; routing reads to readDB keeps checkpoint saves (writes) from
+// contending with API/metrics/list queries. When readDB is nil, all queries
+// fall back to db.
+func (s *Store) SetReadDB(readDB *sql.DB) {
+	s.readDB = readDB
 }
 
 func (s *Store) DB() *sql.DB {
@@ -90,14 +100,27 @@ func (s *Store) exec(ctx context.Context, query string, args ...any) (sql.Result
 }
 
 func (s *Store) query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return s.db.QueryContext(ctx, s.dialect.Bind(query), args...)
+	rdb := s.readDB
+	if rdb == nil {
+		rdb = s.db
+	}
+	return rdb.QueryContext(ctx, s.dialect.Bind(query), args...)
 }
 
 func (s *Store) queryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return s.db.QueryRowContext(ctx, s.dialect.Bind(query), args...)
+	rdb := s.readDB
+	if rdb == nil {
+		rdb = s.db
+	}
+	return rdb.QueryRowContext(ctx, s.dialect.Bind(query), args...)
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	if s.readDB != nil && s.readDB != s.db {
+		s.readDB.Close()
+	}
+	return s.db.Close()
+}
 
 func (s *Store) Ping() error {
 	var v int

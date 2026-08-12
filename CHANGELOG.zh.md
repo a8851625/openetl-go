@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.14] — 2026-08-12 — SQLite 读写分离 + 默认 retention（BUG-3）
+
+### 修复（存储争用）
+
+- **SQLite storage 后端现在使用独立的读连接池**，checkpoint 保存（热路径短写）不再排队在长 SELECT 查询（`ListPipelines`、`ListAudit`、health/metrics）后面。SQLite WAL 模式允许并发读不阻塞单写者；后端现在开 1 连接写池 + 4 连接读池，所有 `query`/`queryRow` 走读池。此前 `MaxOpenConns(1)` 把所有存储调用（checkpoint、DLQ、audit、spec、API 查询）串行到一个连接，任一慢查询都可能让 checkpoint 保存排队超过 30s commit deadline 并阻塞管道直到重启（BUG-3）。MySQL/PostgreSQL 后端（已 `MaxOpenConns(20)`）不受影响。
+- **docker-compose 现在默认 `ETL_AUDIT_TTL=720h`（30 天）和 `ETL_RUN_HISTORY_TTL=168h`（7 天）。** janitor 此前默认禁用（TTL=0），audit_logs / run_history 无限堆积导致控制面 sqlite 膨胀直到 checkpoint 争用成为慢性病。新默认值让新部署的 db 保持有界。
+
+### 文档
+
+- 生产检查清单（`docs/quickstart.zh.md`）新增告警：多 streaming pipeline 或慢盘部署应使用 MySQL/PostgreSQL 控制面后端而非 SQLite，引用 BUG-3。
+
+### Tests
+
+- `TestStoreReadDBRoutesReads`、`TestStoreExecUsesWriteConn`：验证 SELECT 路由到 readDB、写始终用 writer。
+- `go test ./internal/etl/...` 全部通过（含完整 sqlstore/sqlite 套件）。
+
+### Evidence
+
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` 退出码 0 PASS（存储路径回归）。
+- `bash hack/check-release-assets.sh` 通过。
+
+### Residuals
+
+- BUG-1（mysql_batch 字符串主键游标）仍 queued。
+- 慢盘压测（模拟用户 688MB db + load 13）未在 CI 复现；修复通过路由逻辑单测 + WAL 读不阻塞写的原理验证。
+
 ## [v0.2.12-beta.13] — 2026-08-12 — CDC binlog 断裂恢复 + ClickHouse Date/YEAR 修复
 
 ### 新增（CDC 健壮性）

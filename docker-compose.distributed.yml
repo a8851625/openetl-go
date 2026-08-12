@@ -98,6 +98,9 @@ services:
       ETL_AUDIT_ENABLED: "true"
       LOGGER_FORMAT: json
       ETL_DLQ_TTL: ${ETL_DLQ_TTL:-168h}
+      # Audit / run-history retention (BUG-3): default-enabled janitor.
+      ETL_AUDIT_TTL: ${ETL_AUDIT_TTL:-720h}
+      ETL_RUN_HISTORY_TTL: ${ETL_RUN_HISTORY_TTL:-168h}
       ETL_ROLE: master
       # Optional TLS for production-candidate deploys:
       # ETL_TLS_CERT: /certs/tls.crt

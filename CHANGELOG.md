@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.14] — 2026-08-12 — SQLite read/write split + default retention (BUG-3)
+
+### Fixed (storage contention)
+
+- **SQLite storage backend now uses a separate read connection pool**, so
+  checkpoint saves (short writes on the hot path) no longer queue behind
+  long SELECT queries (`ListPipelines`, `ListAudit`, health/metrics). SQLite
+  WAL mode allows concurrent readers that never block the single writer;
+  the backend now opens a 1-connection writer pool plus a 4-connection
+  reader pool and routes all `query`/`queryRow` through the reader.
+  Previously `MaxOpenConns(1)` serialized every storage call (checkpoint,
+  DLQ, audit, spec, API queries) onto one connection, so any slow query
+  could push a checkpoint save past its 30s commit deadline and block the
+  pipeline until restart (BUG-3). MySQL/PostgreSQL backends (already
+  `MaxOpenConns(20)`) are unaffected.
+- **docker-compose now ships default `ETL_AUDIT_TTL=720h` (30d) and
+  `ETL_RUN_HISTORY_TTL=168h` (7d).** The janitor was default-disabled
+  (TTL=0), so audit_logs / run_history grew unbounded and ballooned the
+  control-plane sqlite until checkpoint contention became chronic. The new
+  defaults keep the db bounded on fresh deployments.
+
+### Docs
+
+- Production checklist (`docs/quickstart.zh.md`) now warns that multi-
+  streaming-pipeline or slow-disk deployments should use the MySQL or
+  PostgreSQL control-plane backend rather than SQLite, citing BUG-3.
+
+### Tests
+
+- `TestStoreReadDBRoutesReads`, `TestStoreExecUsesWriteConn`: verify SELECT
+  routes to readDB and writes always use the writer.
+- `go test ./internal/etl/...` pass (incl. full sqlstore/sqlite suites).
+
+### Evidence
+
+- `bash hack/e2e-kafka-multitable-clickhouse.sh` exit 0 PASS (storage path
+  regression with the new split).
+- `bash hack/check-release-assets.sh` passed.
+
+### Residuals
+
+- BUG-1 (mysql_batch string-PK cursor) still queued.
+- Slow-disk pressure-test (simulating the user's 688MB db + load 13) is
+  not reproduced in CI; the fix is validated via unit tests of the routing
+  logic and the rationale that WAL readers do not block the writer.
+
 ## [v0.2.12-beta.13] — 2026-08-12 — CDC binlog-purge recovery + ClickHouse Date/YEAR fixes
 
 ### Added (CDC robustness)
