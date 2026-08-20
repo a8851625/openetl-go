@@ -4,6 +4,74 @@
 
 ## [Unreleased]
 
+
+## [v0.2.12-beta.16] — 2026-08-13 — Runner restart lifecycle fix + snapshot_cdc composite-PK keys
+
+### Fixed (BUG-4: runner restart reuses closed runtime)
+
+- **Runner now rebuilds lifecycle-closed runtime resources on Stop/Pause →
+  Start.** Previously `runLoop` teardown closed the reader, transform chain
+  and sink, but `Runner.Start` reused those closed instances. Production
+  symptom: `cdc-cct-2-kafka` with `rate_limiter(rps=5000, burst=2500)` wrote
+  exactly 2500 records after a Stop/Start cycle (the closed limiter had only
+  its prefilled burst tokens), then every subsequent record waited to the
+  30-second batch deadline and landed in the DLQ with
+  `context deadline exceeded`. Only `NewRunner`-built (managed) runners
+  rebuild source/transform chain/sink/hooks/circuit breaker from the spec;
+  hand-built runners with injected components keep caller-owned lifecycle.
+  Checkpoints, DLQ and spec identity are preserved — no reset required.
+- **Overlapping teardown is now a retryable error.** Starting a pipeline while
+  the prior generation is still stopping returns HTTP 409
+  `pipeline_stopping` (errors.Is-detectable `ErrRunnerStopping`); the
+  scheduler skips that trigger without marking the pipeline failed.
+- **ParallelRunner: per-generation done channel; Pause pauses running child
+  runners before cancelling the shared context** so a paused pipeline resumes
+  with rebuilt shard runtime instead of closed resources. Bounded inline
+  launching no longer starts new shards after Pause/teardown begins.
+- **DAG executor: runtime components (sources/transforms/sinks/breakers) are
+  reconstructed per run under a dedicated lock, and all metrics/routing/
+  checkpoint reads snapshot them safely**, fixing concurrent-map and
+  closed-component races when a DAG restarts while telemetry collects.
+  A DAG runner can now be started repeatedly without double-closing its done
+  channel.
+
+### Fixed (snapshot_cdc composite primary keys)
+
+- **mysql_snapshot_cdc CDC phase now fills `Metadata.Key` for composite-PK
+  tables.** Previously `snapshotCDCHandler.OnRow` only used canal PK columns
+  when the table had exactly one, so composite-PK tables (and tables skipped
+  during snapshot via `skip_no_pk_tables`) emitted records with an empty
+  `Metadata.Key`; the clickhouse sink with `pk_columns_from_metadata` then
+  rejected the whole batch with
+  `requires Metadata.Key to be a non-empty JSON object for table
+  "customer_close"`. The CDC phase now mirrors mysql_cdc: resolved snapshot
+  key first, then `pkColumnNames` composite fallback, key built with
+  `metadataKeyJSONMulti` (UPDATE prefers the before-image). Already-DLQed
+  records can be recovered with DLQ replay after deploying this version.
+
+### Tests
+
+- `TestRunnerStopStartRebuildsRateLimiterRuntime` (writes beyond burst after
+  Stop→Wait→Start, 0 failed/0 dlq).
+- `TestParallelRunnerCanStartTwiceAfterCompletion`,
+  `TestParallelRunnerPauseResumeRebuildsRuntime`.
+- `TestDAGRunnerWrapperCanStartTwiceAfterCompletion`,
+  `TestDAGRunnerMetricsSafeAcrossRestarts` (5 restarts + concurrent metrics
+  collection under `-race`).
+- `TestPipelineStartReturnsConflictWhilePreviousRunStops` (HTTP 409),
+  `TestTriggerPipelineSkipsRunnerStillStopping` (scheduler skip).
+- `TestSnapshotCDCCompositePKKeyDerivation`,
+  `TestSnapshotCDCResolvedPKWinsOverCanalFallback`.
+- `go test ./internal/etl/...` green; `go test -race` on
+  pipeline/orchestrator/server/source/sink green.
+
+### Evidence
+
+- Unit + race suites above; production recovery confirmed by recreating the
+  producer pipeline (fresh runner) with 0 failed/0 DLQ after the fix logic.
+- Residual: fresh-image container e2e rerun blocked by `go mod download`
+  network stall; evidence records reference the last built image digest.
+
 ## [v0.2.12-beta.15] — 2026-08-12 — CDC DELETE primary-key fix (kafka → clickhouse)
 
 ### Fixed (CDC delete routing)

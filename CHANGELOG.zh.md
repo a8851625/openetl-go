@@ -4,6 +4,66 @@
 
 ## [Unreleased]
 
+
+## [v0.2.12-beta.16] — 2026-08-13 — Runner 重启生命周期修复 + snapshot_cdc 复合主键
+
+### Fixed（BUG-4：Runner 重启复用已关闭运行时）
+
+- **Runner 在 Stop/Pause → Start 后重建被关闭的运行时资源。** 此前
+  `runLoop` teardown 会关闭 reader、transform chain 和 sink，但
+  `Runner.Start` 复用这些已关闭的实例。生产现象：`cdc-cct-2-kafka` 配置
+  `rate_limiter(rps=5000, burst=2500)`，Stop/Start 后恰好写入 2500 条（关闭的
+  限流器只剩预填的 burst token），之后每条记录等到 30 秒 batch deadline 并以
+  `context deadline exceeded` 进入 DLQ。现在只有 `NewRunner` 构建（managed）的
+  runner 会按 spec 重建 source/transform chain/sink/hooks/circuit breaker；
+  手工注入组件的 runner 保持调用方自有生命周期。checkpoint、DLQ 与 spec
+  身份保持不变，无需重置。
+- **teardown 重叠现在是可重试错误。** 上一代仍在停止时启动 pipeline 返回
+  HTTP 409 `pipeline_stopping`（errors.Is 可识别的 `ErrRunnerStopping`）；
+  scheduler 跳过该 trigger 且不把 pipeline 标记为 failed。
+- **ParallelRunner：每代独立 done channel；Pause 先暂停运行中的子 runner
+  再取消共享 context**，暂停的 pipeline 恢复时使用重建的 shard 运行时而非
+  已关闭资源。bounded 内联启动在 Pause/teardown 开始后不再发起新 shard。
+- **DAG executor：运行时组件（sources/transforms/sinks/breakers）每轮在
+  专用锁下重建，所有 metrics/routing/checkpoint 读取安全快照**，修复 DAG
+  重启与遥测采集并发时的 map 并发访问与已关闭组件竞态。DAG runner 现在
+  可以反复 Start 而不会二次关闭 done channel。
+
+### Fixed（snapshot_cdc 复合主键）
+
+- **mysql_snapshot_cdc CDC 阶段为复合主键表填充 `Metadata.Key`。** 此前
+  `snapshotCDCHandler.OnRow` 仅在表只有一列 PK 时才回退到 canal PK 列，因此
+  复合主键表（以及快照阶段经 `skip_no_pk_tables` 跳过、resolvedPKs 持有
+  pkKindNone 的表）发出的记录 `Metadata.Key` 为空；clickhouse sink 开启
+  `pk_columns_from_metadata` 时整批拒绝：
+  `requires Metadata.Key to be a non-empty JSON object for table
+  "customer_close"`。CDC 阶段现在与 mysql_cdc 对齐：优先用快照解析键，
+  再用 `pkColumnNames` 复合回退，键由 `metadataKeyJSONMulti` 构建（UPDATE
+  优先 before-image）。已进 DLQ 的记录部署后可通过 DLQ replay 恢复。
+
+### Tests
+
+- `TestRunnerStopStartRebuildsRateLimiterRuntime`（Stop→Wait→Start 后写入
+  超过 burst，0 failed/0 dlq）。
+- `TestParallelRunnerCanStartTwiceAfterCompletion`、
+  `TestParallelRunnerPauseResumeRebuildsRuntime`。
+- `TestDAGRunnerWrapperCanStartTwiceAfterCompletion`、
+  `TestDAGRunnerMetricsSafeAcrossRestarts`（`-race` 下 5 轮重启 + 并发
+  metrics 采集）。
+- `TestPipelineStartReturnsConflictWhilePreviousRunStops`（HTTP 409）、
+  `TestTriggerPipelineSkipsRunnerStillStopping`（scheduler 跳过）。
+- `TestSnapshotCDCCompositePKKeyDerivation`、
+  `TestSnapshotCDCResolvedPKWinsOverCanalFallback`。
+- `go test ./internal/etl/...` 全绿；pipeline/orchestrator/server/source/
+  sink 包 `-race` 全绿。
+
+### Evidence
+
+- 以上单元 + race 套件；生产环境通过重建 producer pipeline（全新 runner）
+  确认修复逻辑下 0 failed/0 DLQ。
+- 残留：全新镜像 container e2e 受 `go mod download` 网络停滞阻塞；证据记录
+  引用最后一次成功构建的镜像摘要。
+
 ## [v0.2.12-beta.15] — 2026-08-12 — CDC DELETE 主键修复（kafka → clickhouse）
 
 ### 修复（CDC 删除路由）
