@@ -1047,6 +1047,47 @@ exceeded`，etl.db 688MB、WAL 27MB、load 13.55、IO wait 36-64%、swap 耗尽�
 **证据**：ref — 用户生产报错日志（checkpoint blocked, context deadline exceeded,
 etl.db 688MB, load 13.55）；修复后在本条目更新验收矩阵。
 
+### BUG-4：停止后的 Runner 复用已关闭运行时资源（2026-08-13 发现）
+
+状态：`delivered`
+
+```text
+Round: 1/5
+Roadmap item: BUG-4
+Profile/path: standalone streaming pipeline（mysql_snapshot_cdc -> rate_limiter -> kafka）
+Objective: Stop/Pause 后保留 checkpoint 重启时重建 source/transform/sink 运行时资源，避免复用已关闭的限流器、连接或脚本运行时。
+Scope: internal/etl/pipeline、internal/etl/orchestrator、scheduler lifecycle 与对应 unit/integration tests。
+Non-goals: 修改用户本地 pipeline spec；重置 checkpoint；改变 at-least-once 语义；诊断或修改 Redpanda 集群。
+Acceptance: 1) 同一 Runner Stop -> Wait -> Start 后可超过 rate_limiter burst 持续写入；2) checkpoint 从原位置恢复；3) parallel/DAG/cron trigger 不会二次关闭 done 或假成功；4) 正在清理时明确可重试，scheduler 不标记 failed；5) targeted/race tests 与相关 e2e 通过。
+Evidence:
+  - TestRunnerStopStartRebuildsRateLimiterRuntime（线性 Stop->Wait->Start 后写入数超过 burst=2，0 failed/0 dlq）。
+  - TestParallelRunnerCanStartTwiceAfterCompletion / TestParallelRunnerPauseResumeRebuildsRuntime（parallel Stop/Pause->Wait->Resume 重建 shard 运行时，StatusPaused 与重启语义保持）。
+  - TestDAGRunnerWrapperCanStartTwiceAfterCompletion（DAG 二次 Start 不二次关闭 done channel）。
+  - TestDAGRunnerMetricsSafeAcrossRestarts（重启 5 轮 + 并发 SinkMetrics/TransformMetrics/StateMetrics/CircuitBreakerState，-race 通过）。
+  - TestPipelineStartReturnsConflictWhilePreviousRunStops（server 层返回 409 pipeline_stopping 可重试）。
+  - TestTriggerPipelineSkipsRunnerStillStopping（scheduler 跳过、不标记 failed）。
+  - go test -race ./internal/etl/pipeline/... ./internal/etl/orchestrator/... ./internal/etl/server/... 全部通过；go test ./internal/etl/... 全绿。
+  - 残留：container 级 e2e 镜像构建受 go mod download 网络停滞阻塞，未能完成全新镜像运行。
+Result: delivered（单元 + race 验证完整；container e2e 待镜像构建可用后补跑）
+Residual/follow-up: writeBatch 共享 commitCtx 导致单次超时可放大为整批 DLQ（独立缺口，非本项范围）；镜像构建恢复后重跑 kafka-multitable / crash-recovery 回归。
+```
+
+**现象与根因**：线性 `Runner.runLoop` 在每轮结束时关闭 reader、transform chain 和
+sink，但 `Runner.Start` 只重置统计与 done channel，仍复用同一个 source/transform/sink
+实例。生产 `rate_limiter(rps=5000, burst=2500)` 在 Stop 后其 refill goroutine 已退出，
+重启后只剩初始 2500 个 token；恰好写完 2500 条后，每个后续 record 等待到 30 秒 batch
+deadline 并以 `context deadline exceeded` 进入 DLQ。Kafka、ClickHouse、Lua、lookup 等
+有 Close 生命周期的组件也有同类风险。ParallelRunner 和 DAG executor 同时存在 done
+channel 复用或已关闭节点重启问题。
+
+**范围**：每一轮开始构建新的 source、transform、sink、hooks/circuit breaker 等运行时
+对象；checkpoint store、DLQ writer、spec 与 checkpoint 保持不变。上一轮 teardown 未完成
+时返回可识别的可重试错误；scheduler 跳过该 trigger，不把它持久化为 failed。
+
+**Non-goals**：不移除 Close、不保留已经关闭的连接、不通过删除/重建 pipeline 或 reset
+checkpoint 规避问题；不改变 sink acknowledgement 后才推进 checkpoint 的 at-least-once
+边界。
+
 ## 有界后续
 
 这些事项只有在上方当前任务完成或被明确重新排序后才进入执行：

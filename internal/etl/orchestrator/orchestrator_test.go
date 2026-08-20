@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -165,6 +166,156 @@ func TestConvertLinearSpec(t *testing.T) {
 		t.Fatalf("sinks = %d, want 1", len(sinks))
 	}
 }
+
+func TestDAGRunnerWrapperCanStartTwiceAfterCompletion(t *testing.T) {
+	const (
+		sourceName = "dag-restart-source"
+		sinkName   = "dag-restart-sink"
+	)
+	var writes atomic.Int64
+	registry.RegisterSource(sourceName, func(map[string]any) (core.Source, error) {
+		return &dagRestartSource{}, nil
+	})
+	registry.RegisterSink(sinkName, func(map[string]any) (core.Sink, error) {
+		return &dagRestartSink{writes: &writes}, nil
+	})
+
+	spec := &PipelineSpec{
+		Name: "dag-restart",
+		DAG: DAG{
+			Nodes: []*Node{
+				{ID: "source", Kind: KindSource, Plugin: sourceName},
+				{ID: "sink", Kind: KindSink, Plugin: sinkName},
+			},
+			Edges: []*Edge{{From: "source", To: "sink"}},
+		},
+		Execution: &ExecutionConfig{BatchSize: 1, BackpressureBuf: 4},
+	}
+	am := alert.NewManager()
+	t.Cleanup(am.Close)
+	exec, err := NewDAGExecutor(spec, nil, nil, am)
+	if err != nil {
+		t.Fatalf("NewDAGExecutor: %v", err)
+	}
+	runner := NewDAGRunnerWrapper(exec)
+	for run := 1; run <= 2; run++ {
+		if err := runner.Start(context.Background()); err != nil {
+			t.Fatalf("Start run %d: %v", run, err)
+		}
+		runner.Wait()
+		if got := runner.Status(); got != pipeline.StatusStopped {
+			t.Fatalf("run %d status = %s, want stopped", run, got)
+		}
+	}
+	if got := writes.Load(); got != 2 {
+		t.Fatalf("writes = %d, want 2 across two executions", got)
+	}
+}
+
+func TestDAGRunnerMetricsSafeAcrossRestarts(t *testing.T) {
+	const (
+		sourceName = "dag-metrics-race-source"
+		sinkName   = "dag-metrics-race-sink"
+	)
+	var writes atomic.Int64
+	registry.RegisterSource(sourceName, func(map[string]any) (core.Source, error) {
+		return &dagRestartSource{}, nil
+	})
+	registry.RegisterSink(sinkName, func(map[string]any) (core.Sink, error) {
+		return &dagRestartSink{writes: &writes}, nil
+	})
+
+	spec := &PipelineSpec{
+		Name: "dag-metrics-race",
+		DAG: DAG{
+			Nodes: []*Node{
+				{ID: "source", Kind: KindSource, Plugin: sourceName},
+				{ID: "sink", Kind: KindSink, Plugin: sinkName},
+			},
+			Edges: []*Edge{{From: "source", To: "sink"}},
+		},
+		Execution: &ExecutionConfig{BatchSize: 1, BackpressureBuf: 4},
+	}
+	am := alert.NewManager()
+	t.Cleanup(am.Close)
+	exec, err := NewDAGExecutor(spec, nil, nil, am)
+	if err != nil {
+		t.Fatalf("NewDAGExecutor: %v", err)
+	}
+	runner := NewDAGRunnerWrapper(exec)
+
+	// Hammer metrics collection while restarting. Under -race this catches the
+	// old code where closeRuntime closed a sink concurrently with SinkMetrics /
+	// TransformMetrics / StateMetrics iterating the maps.
+	var wg sync.WaitGroup
+	stopMetrics := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stopMetrics:
+				return
+			case <-time.After(time.Millisecond):
+			}
+			_ = runner.SinkMetrics()
+			_ = runner.TransformMetrics()
+			_ = runner.StateMetrics()
+			_ = runner.CircuitBreakerState()
+		}
+	}()
+
+	for run := 1; run <= 5; run++ {
+		if err := runner.Start(context.Background()); err != nil {
+			t.Fatalf("Start run %d: %v", run, err)
+		}
+		runner.Wait()
+	}
+	close(stopMetrics)
+	wg.Wait()
+
+	if got := writes.Load(); got != 5 {
+		t.Fatalf("writes = %d, want 5 across five executions", got)
+	}
+}
+
+type dagRestartSource struct{}
+
+func (*dagRestartSource) Name() string { return "dag-restart-source" }
+func (*dagRestartSource) Open(context.Context, *core.Checkpoint) (core.RecordReader, error) {
+	return &dagRestartReader{}, nil
+}
+
+type dagRestartReader struct{ read bool }
+
+func (r *dagRestartReader) Read(context.Context) (core.Record, error) {
+	if r.read {
+		return core.Record{}, io.EOF
+	}
+	r.read = true
+	return core.Record{Data: map[string]any{"id": 1}, Metadata: core.Metadata{Offset: 1}}, nil
+}
+func (r *dagRestartReader) ReadBatch(ctx context.Context, n int) ([]core.Record, error) {
+	rec, err := r.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return []core.Record{rec}, nil
+}
+func (*dagRestartReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{}, nil
+}
+func (*dagRestartReader) Close() error { return nil }
+
+type dagRestartSink struct{ writes *atomic.Int64 }
+
+func (*dagRestartSink) Name() string               { return "dag-restart-sink" }
+func (*dagRestartSink) Open(context.Context) error { return nil }
+func (s *dagRestartSink) Write(_ context.Context, records []core.Record) error {
+	s.writes.Add(int64(len(records)))
+	return nil
+}
+func (*dagRestartSink) Close() error { return nil }
 
 func TestMultiSinkDAG(t *testing.T) {
 	// A DAG with fan-out: src → tfm → snk1, src → tfm → snk2

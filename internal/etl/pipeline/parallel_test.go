@@ -174,6 +174,66 @@ func TestParallelRunnerSinkConcurrencyLimitsShardWrites(t *testing.T) {
 }
 
 // TestParallelRunnerLifecycle verifies Start/Stop work cleanly.
+func TestParallelRunnerCanStartTwiceAfterCompletion(t *testing.T) {
+	const (
+		sourceName = "parallel-restart-source"
+		sinkName   = "parallel-restart-sink"
+	)
+	var writes atomic.Int64
+	registry.RegisterSource(sourceName, func(map[string]any) (core.Source, error) {
+		return finiteOneRecordSource{}, nil
+	})
+	registry.RegisterSink(sinkName, func(map[string]any) (core.Sink, error) {
+		return &parallelRestartSink{writes: &writes}, nil
+	})
+
+	spec := &Spec{
+		Name:                  "parallel-restart",
+		Source:                SourceSpec{Type: sourceName, Config: map[string]any{}},
+		Sink:                  SinkSpec{Type: sinkName, Config: map[string]any{}},
+		BatchSize:             1,
+		CheckpointIntervalSec: 1,
+		Parallelism:           &ParallelismConfig{Count: 2},
+	}
+	am := alert.NewManager()
+	t.Cleanup(am.Close)
+	pr, err := NewParallelRunner(spec, newMemoryCPStore(), noopDLQ{}, am)
+	if err != nil {
+		t.Fatalf("NewParallelRunner: %v", err)
+	}
+	if err := pr.Start(context.Background()); err != nil {
+		t.Fatalf("Start run 1: %v", err)
+	}
+	pr.Wait()
+	if got := pr.Status(); got != StatusCompleted {
+		t.Fatalf("run 1 status = %s, want completed", got)
+	}
+	firstRunWrites := writes.Load()
+	if firstRunWrites == 0 {
+		t.Fatal("run 1 wrote no records")
+	}
+	if err := pr.Start(context.Background()); err != nil {
+		t.Fatalf("Start run 2: %v", err)
+	}
+	pr.Wait()
+	if got := pr.Status(); got != StatusCompleted {
+		t.Fatalf("run 2 status = %s, want completed", got)
+	}
+	if got := writes.Load(); got <= firstRunWrites {
+		t.Fatalf("writes after second run = %d, want > first-run %d", got, firstRunWrites)
+	}
+}
+
+type parallelRestartSink struct{ writes *atomic.Int64 }
+
+func (*parallelRestartSink) Name() string               { return "parallel-restart-sink" }
+func (*parallelRestartSink) Open(context.Context) error { return nil }
+func (s *parallelRestartSink) Write(_ context.Context, records []core.Record) error {
+	s.writes.Add(int64(len(records)))
+	return nil
+}
+func (*parallelRestartSink) Close() error { return nil }
+
 func TestParallelRunnerLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
 	spec := &Spec{
@@ -203,6 +263,57 @@ func TestParallelRunnerLifecycle(t *testing.T) {
 	select {
 	case <-pr.Done():
 	case <-time.After(time.Second):
+		t.Fatal("ParallelRunner did not finish after Stop")
+	}
+}
+
+func TestParallelRunnerPauseResumeRebuildsRuntime(t *testing.T) {
+	tmpDir := t.TempDir()
+	spec := &Spec{
+		Name:                  "pause-resume",
+		Source:                SourceSpec{Type: "demo", Config: map[string]any{"interval_ms": 10, "fields": []map[string]any{{"name": "v", "type": "counter"}}}},
+		Sink:                  SinkSpec{Type: "file_sink", Config: map[string]any{"path": tmpDir + "/out.jsonl", "format": "json"}},
+		BatchSize:             2,
+		CheckpointIntervalSec: 1,
+		Parallelism:           &ParallelismConfig{Count: 2},
+	}
+	pr, err := NewParallelRunner(spec, newMemoryCPStore(), noopDLQ{}, alert.NewManager())
+	if err != nil {
+		t.Fatalf("NewParallelRunner: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := pr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := pr.Status(); got != StatusRunning {
+		t.Fatalf("pre-pause status = %s, want running", got)
+	}
+	if err := pr.Pause(); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if got := pr.Status(); got != StatusPaused {
+		t.Fatalf("post-pause status = %s, want paused", got)
+	}
+	select {
+	case <-pr.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("ParallelRunner did not finish after Pause")
+	}
+	// Resume must rebuild shard runtime (each child Runner rebuilds its source/
+	// transform/sink) instead of resuming closed instances.
+	if err := pr.Resume(ctx); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got := pr.Status(); got != StatusRunning {
+		t.Fatalf("post-resume status = %s, want running", got)
+	}
+	time.Sleep(80 * time.Millisecond)
+	_ = pr.Stop()
+	select {
+	case <-pr.Done():
+	case <-time.After(2 * time.Second):
 		t.Fatal("ParallelRunner did not finish after Stop")
 	}
 }

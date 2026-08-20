@@ -3139,6 +3139,19 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	case "start":
 		if r.Method == http.MethodPost {
 			if err := runner.Start(s.ctx); err != nil {
+				// A previous generation may still be flushing its durable boundary.
+				// This is retryable, not a failed pipeline startup.
+				if errors.Is(err, pipeline.ErrRunnerStopping) {
+					w.WriteHeader(http.StatusConflict)
+					json.NewEncoder(w).Encode(map[string]any{
+						"error":       err.Error(),
+						"code":        "pipeline_stopping",
+						"remediation": "Wait for the previous stop to finish, then retry start. The checkpoint is preserved.",
+						"status":      runner.Status(),
+						"stats":       runner.Stats(),
+					})
+					return
+				}
 				// A failed source/checkpoint startup is an API failure, not a
 				// successful request carrying an error-shaped JSON body.  Preserve
 				// the runner's stable code/remediation so clients can show a safe
@@ -3208,6 +3221,16 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	case "resume":
 		if r.Method == http.MethodPost {
 			if err := runner.Resume(s.ctx); err != nil {
+				if errors.Is(err, pipeline.ErrRunnerStopping) {
+					w.WriteHeader(http.StatusConflict)
+					json.NewEncoder(w).Encode(map[string]any{
+						"error":       err.Error(),
+						"code":        "pipeline_stopping",
+						"remediation": "Wait for the previous stop to finish, then retry resume. The checkpoint is preserved.",
+					})
+					return
+				}
+				w.WriteHeader(http.StatusUnprocessableEntity)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}

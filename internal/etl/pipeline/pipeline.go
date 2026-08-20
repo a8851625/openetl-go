@@ -44,6 +44,11 @@ const (
 	StatusCompleted Status = "completed"
 )
 
+// ErrRunnerStopping means a previous run still owns its runtime resources.
+// Callers must wait for Done before starting another run so source/sink handles
+// and transform state are never used concurrently across generations.
+var ErrRunnerStopping = errors.New("pipeline runner is still stopping")
+
 type Stats struct {
 	RecordsRead    int64  `json:"records_read"`
 	RecordsWritten int64  `json:"records_written"`
@@ -91,7 +96,13 @@ type Runner struct {
 	// runActive is true after Start has reserved a runLoop slot and remains
 	// true until that runLoop has closed its own done channel.
 	runActive bool
-	reader    core.RecordReader
+	// managedRuntime is true for runners created through NewRunner. These
+	// runners rebuild source/transform/sink instances for each execution
+	// generation. Hand-built runners remain useful for focused unit tests and
+	// SDK injection, but callers own their component lifecycle.
+	managedRuntime      bool
+	runtimeNeedsRebuild bool
+	reader              core.RecordReader
 
 	hooks map[core.HookKind]core.LifecycleHook
 
@@ -217,26 +228,6 @@ func (t *inflightBatchTracker) wait(timeout time.Duration) bool {
 }
 
 func NewRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *alert.Manager) (*Runner, error) {
-	source, err := registry.BuildSource(spec.Source.Type, spec.Source.Config)
-	if err != nil {
-		return nil, fmt.Errorf("build source: %w", err)
-	}
-
-	var transforms core.TransformChain
-	for i, tc := range spec.Transforms {
-		config := InjectStateDefaults(spec.Name, TransformStateNodeID(i, tc.Type), tc.Config)
-		t, err := registry.BuildTransform(tc.Type, config)
-		if err != nil {
-			return nil, fmt.Errorf("build transform %s: %w", tc.Type, err)
-		}
-		transforms = append(transforms, t)
-	}
-
-	sink, err := registry.BuildSink(spec.Sink.Type, spec.Sink.Config)
-	if err != nil {
-		return nil, fmt.Errorf("build sink: %w", err)
-	}
-
 	cfg := retry.DefaultConfig()
 	if spec.Retry != nil {
 		cfg.MaxAttempts = spec.Retry.MaxAttempts
@@ -270,21 +261,12 @@ func NewRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *ale
 		transformWorkers = spec.Parallelism.TransformWorkerCount()
 	}
 
-	hooks := &MetricsHooks{}
-	lifecycleHooks := BuildHooks(spec.Name, spec.Hooks)
-	processors := BuildProcessors(spec)
-
 	r := &Runner{
 		spec:               spec,
-		source:             source,
-		transforms:         transforms,
-		processors:         processors,
-		sink:               &SinkWriteHook{Hooks: hooks, Sink: sink},
 		checkpointStore:    cpStore,
 		dlqWriter:          dlqW,
 		alertManager:       am,
 		retryConfig:        cfg,
-		metricsHooks:       hooks,
 		logBuf:             NewLogBuffer(500),
 		status:             StatusStopped,
 		stopCh:             make(chan struct{}),
@@ -294,16 +276,58 @@ func NewRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, am *ale
 		batchSize:          bs,
 		backpressureBuffer: bp,
 		transformWorkers:   transformWorkers,
-		hooks:              lifecycleHooks,
+		managedRuntime:     true,
 		inflightBatch:      newInflightBatchTracker(),
 	}
-	if spec.CircuitBreaker != nil {
-		r.circuitBreaker = NewCircuitBreaker(*spec.CircuitBreaker, am, spec.Name)
-	}
-	if spec.AlertRules != nil {
-		r.alertChecker = NewAlertRuleChecker(*spec.AlertRules, am, spec.Name)
+	if err := r.buildRuntime(); err != nil {
+		return nil, err
 	}
 	return r, nil
+}
+
+// buildRuntime creates the components owned by one execution generation. A
+// completed/stopped generation closes these components, so a later Start must
+// never reuse them. Checkpoint/DLQ stores and the immutable pipeline spec stay
+// shared, preserving the checkpointed at-least-once boundary across restarts.
+func (r *Runner) buildRuntime() error {
+	source, err := registry.BuildSource(r.spec.Source.Type, cloneConfig(r.spec.Source.Config))
+	if err != nil {
+		return fmt.Errorf("build source: %w", err)
+	}
+
+	var transforms core.TransformChain
+	for i, tc := range r.spec.Transforms {
+		config := InjectStateDefaults(r.spec.Name, TransformStateNodeID(i, tc.Type), tc.Config)
+		t, err := registry.BuildTransform(tc.Type, config)
+		if err != nil {
+			transforms.CloseChain()
+			return fmt.Errorf("build transform %s: %w", tc.Type, err)
+		}
+		transforms = append(transforms, t)
+	}
+
+	sink, err := registry.BuildSink(r.spec.Sink.Type, cloneConfig(r.spec.Sink.Config))
+	if err != nil {
+		transforms.CloseChain()
+		return fmt.Errorf("build sink: %w", err)
+	}
+
+	hooks := &MetricsHooks{}
+	r.source = source
+	r.transforms = transforms
+	r.processors = BuildProcessors(r.spec)
+	r.sink = &SinkWriteHook{Hooks: hooks, Sink: sink}
+	r.metricsHooks = hooks
+	r.hooks = BuildHooks(r.spec.Name, r.spec.Hooks)
+	r.circuitBreaker = nil
+	if r.spec.CircuitBreaker != nil {
+		r.circuitBreaker = NewCircuitBreaker(*r.spec.CircuitBreaker, r.alertManager, r.spec.Name)
+	}
+	r.alertChecker = nil
+	if r.spec.AlertRules != nil {
+		r.alertChecker = NewAlertRuleChecker(*r.spec.AlertRules, r.alertManager, r.spec.Name)
+	}
+	return nil
 }
 
 func (r *Runner) Status() Status {
@@ -517,7 +541,15 @@ func (r *Runner) Start(ctx context.Context) error {
 	}
 	if r.runActive {
 		r.mu.Unlock()
-		return fmt.Errorf("pipeline %s is still stopping", r.spec.Name)
+		return fmt.Errorf("pipeline %s: %w", r.spec.Name, ErrRunnerStopping)
+	}
+	if r.managedRuntime && r.runtimeNeedsRebuild {
+		if err := r.buildRuntime(); err != nil {
+			r.status = StatusFailed
+			r.mu.Unlock()
+			return err
+		}
+		r.runtimeNeedsRebuild = false
 	}
 	r.logBuf = NewLogBuffer(500)
 	r.status = StatusRunning
@@ -533,21 +565,24 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.done = make(chan struct{})
 	r.runActive = true
 	done := r.done
+	ctx, cancel := context.WithCancel(ctx)
+	r.cancel = cancel
 	r.mu.Unlock()
 
-	ctx, r.cancel = context.WithCancel(ctx)
 	markStartFailed := func() {
+		r.closeRuntime()
 		r.mu.Lock()
 		active := r.runActive
 		if active {
 			r.runActive = false
 		}
+		cancel := r.cancel
 		r.mu.Unlock()
 		if active {
 			close(done)
 		}
-		if r.cancel != nil {
-			r.cancel()
+		if cancel != nil {
+			cancel()
 		}
 	}
 
@@ -567,7 +602,6 @@ func (r *Runner) Start(ctx context.Context) error {
 		if err != nil {
 			r.setStatus(StatusFailed)
 			r.logError(fmt.Sprintf("Source schema description failed: %v", err))
-			_ = r.sink.Close()
 			markStartFailed()
 			return fmt.Errorf("describe source schema: %w", err)
 		}
@@ -580,7 +614,6 @@ func (r *Runner) Start(ctx context.Context) error {
 				if err := validator.ValidateSchema(ctx, schema); err != nil {
 					r.setStatus(StatusFailed)
 					r.logError(fmt.Sprintf("Schema validation failed: %v", err))
-					_ = r.sink.Close()
 					markStartFailed()
 					return fmt.Errorf("schema validation: %w", err)
 				}
@@ -596,7 +629,6 @@ func (r *Runner) Start(ctx context.Context) error {
 			r.setStatus(StatusFailed)
 			r.setCheckpointFailure("load checkpoint", err)
 			r.logError(fmt.Sprintf("Failed to load checkpoint: %v", err))
-			_ = r.sink.Close()
 			markStartFailed()
 			return fmt.Errorf("load checkpoint: %w", err)
 		}
@@ -606,7 +638,6 @@ func (r *Runner) Start(ctx context.Context) error {
 				r.setStatus(StatusFailed)
 				r.setCheckpointFailure("validate checkpoint", err)
 				r.logError(fmt.Sprintf("Invalid checkpoint: %v", err))
-				_ = r.sink.Close()
 				markStartFailed()
 				return fmt.Errorf("validate checkpoint: %w", err)
 			}
@@ -619,7 +650,6 @@ func (r *Runner) Start(ctx context.Context) error {
 			r.setStatus(StatusFailed)
 			r.setCheckpointFailure("validate source checkpoint", err)
 			r.logError(fmt.Sprintf("Invalid source checkpoint: %v", err))
-			_ = r.sink.Close()
 			markStartFailed()
 			return fmt.Errorf("validate source checkpoint: %w", err)
 		}
@@ -630,7 +660,6 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err != nil {
 		r.setStatus(StatusFailed)
 		r.logError(fmt.Sprintf("Failed to open source: %v", err))
-		_ = r.sink.Close()
 		markStartFailed()
 		return fmt.Errorf("open source: %w", err)
 	}
@@ -679,13 +708,14 @@ func (r *Runner) Stop() error {
 	}
 	r.freezeDurationLocked()
 	r.status = StatusStopped
+	cancel := r.cancel
 	r.mu.Unlock()
 
 	// Cancel the loop ctx so readLoop stops reading new records and
 	// writeLoop exits its select loop. Do NOT hold r.mu across the cancel
 	// — writeBatch/saveCommittedCheckpoint acquire r.mu internally.
-	if r.cancel != nil {
-		r.cancel()
+	if cancel != nil {
+		cancel()
 	}
 
 	// Wait for any in-flight batch commit to finish before returning so
@@ -738,6 +768,35 @@ func (r *Runner) setStatus(s Status) {
 	r.status = s
 }
 
+// closeRuntime releases components owned by the current execution generation.
+// It is called only after the reader/write loops are quiescent, or when Start
+// fails before they begin. The next managed Start builds fresh components while
+// retaining the existing checkpoint store and checkpoint key.
+func (r *Runner) closeRuntime() {
+	r.mu.Lock()
+	reader := r.reader
+	r.reader = nil
+	transforms := r.transforms
+	sink := r.sink
+	hooks := r.hooks
+	if r.managedRuntime {
+		r.runtimeNeedsRebuild = true
+	}
+	r.mu.Unlock()
+
+	if reader != nil {
+		_ = reader.Close()
+	}
+	transforms.CloseChain()
+	if sink != nil {
+		_ = sink.Close()
+	}
+	fireHook(context.Background(), hooks, core.HookOnShutdown, core.HookContext{
+		PipelineName: r.spec.Name,
+		Config:       r.spec.Hooks.getConfig(core.HookOnShutdown),
+	})
+}
+
 func (r *Runner) runLoop(ctx context.Context, done chan struct{}) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -748,17 +807,7 @@ func (r *Runner) runLoop(ctx context.Context, done chan struct{}) {
 			r.setStatus(StatusFailed)
 			r.logError(fmt.Sprintf("Pipeline panic: %v", rec))
 		}
-		if r.reader != nil {
-			r.reader.Close()
-		}
-		r.transforms.CloseChain()
-		r.sink.Close()
-
-		// Fire OnShutdown hook before final cleanup.
-		fireHook(context.Background(), r.hooks, core.HookOnShutdown, core.HookContext{
-			PipelineName: r.spec.Name,
-			Config:       r.spec.Hooks.getConfig(core.HookOnShutdown),
-		})
+		r.closeRuntime()
 
 		r.mu.Lock()
 		if r.status == StatusRunning {
@@ -767,14 +816,15 @@ func (r *Runner) runLoop(ctx context.Context, done chan struct{}) {
 		}
 		r.mu.Unlock()
 		r.logInfo(fmt.Sprintf("Pipeline finished. written=%d read=%d failed=%d", r.recordsWritten(), r.recordsRead(), r.recordsFailed()))
-		if r.cancel != nil {
-			r.cancel()
-		}
 		r.mu.Lock()
+		cancel := r.cancel
 		if r.done == done {
 			r.runActive = false
 		}
 		r.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 		close(done)
 	}()
 
@@ -841,10 +891,14 @@ func (r *Runner) runLoop(ctx context.Context, done chan struct{}) {
 }
 
 func (r *Runner) Wait() {
-	<-r.done
+	<-r.Done()
 }
 
-func (r *Runner) Done() <-chan struct{} { return r.done }
+func (r *Runner) Done() <-chan struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.done
+}
 
 func (r *Runner) readLoop(ctx context.Context, records chan<- core.Record) {
 	consecutiveErrors := 0

@@ -72,6 +72,7 @@ type ParallelRunner struct {
 	instances      []*Runner
 	cancel         context.CancelFunc
 	done           chan struct{}
+	runActive      bool
 	startedAt      time.Time
 	frozenDuration time.Duration
 }
@@ -174,9 +175,16 @@ func (pr *ParallelRunner) Start(ctx context.Context) error {
 		pr.mu.Unlock()
 		return fmt.Errorf("pipeline %s: already running", pr.spec.Name)
 	}
+	if pr.runActive {
+		pr.mu.Unlock()
+		return fmt.Errorf("pipeline %s: %w", pr.spec.Name, ErrRunnerStopping)
+	}
 	pr.status = StatusRunning
 	pr.frozenDuration = 0
 	pr.startedAt = time.Now()
+	pr.done = make(chan struct{})
+	pr.runActive = true
+	done := pr.done
 	// Assign pr.cancel while still holding pr.mu so a concurrent Stop() — which
 	// reads pr.cancel under the same lock — cannot observe a zeroed cancel
 	// (P5-4: previously this ran after Unlock, racing Start/Stop).
@@ -187,38 +195,33 @@ func (pr *ParallelRunner) Start(ctx context.Context) error {
 	// and wait for worker processes to execute them. The instances built in
 	// NewParallelRunner stay unstarted (cheap; no connections opened).
 	if pr.distributed && pr.dispatcher != nil {
-		return pr.startDistributed(ctx)
-	}
-
-	if pr.maxActiveShards > 0 && pr.maxActiveShards < len(pr.instances) {
-		pr.startInlineBounded(ctx)
+		if err := pr.startDistributed(ctx, done); err != nil {
+			pr.finishRun(done, StatusFailed)
+			return err
+		}
 		return nil
 	}
 
+	if pr.maxActiveShards > 0 && pr.maxActiveShards < len(pr.instances) {
+		pr.startInlineBounded(ctx, done)
+		return nil
+	}
+
+	started := make([]*Runner, 0, len(pr.instances))
 	for i, inst := range pr.instances {
 		if err := inst.Start(ctx); err != nil {
 			pr.stopAll()
+			go pr.waitForInstances(done, started, StatusFailed)
 			return fmt.Errorf("shard-%d start: %w", i, err)
 		}
+		started = append(started, inst)
 	}
 
-	go func() {
-		for _, inst := range pr.instances {
-			inst.Wait()
-		}
-		pr.mu.Lock()
-		if pr.status == StatusRunning {
-			pr.freezeDurationLocked()
-			pr.status = StatusCompleted
-		}
-		pr.mu.Unlock()
-		close(pr.done)
-	}()
-
+	go pr.waitForInstances(done, started, StatusCompleted)
 	return nil
 }
 
-func (pr *ParallelRunner) startInlineBounded(ctx context.Context) {
+func (pr *ParallelRunner) startInlineBounded(ctx context.Context, done chan struct{}) {
 	go func() {
 		sem := make(chan struct{}, pr.maxActiveShards)
 		var wg sync.WaitGroup
@@ -232,6 +235,13 @@ func (pr *ParallelRunner) startInlineBounded(ctx context.Context) {
 				break launchLoop
 			case sem <- struct{}{}:
 			}
+			pr.mu.RLock()
+			stillRunning := pr.status == StatusRunning && pr.runActive
+			pr.mu.RUnlock()
+			if !stillRunning {
+				<-sem
+				break launchLoop
+			}
 			wg.Add(1)
 			go func(idx int, runner *Runner) {
 				defer wg.Done()
@@ -241,8 +251,11 @@ func (pr *ParallelRunner) startInlineBounded(ctx context.Context) {
 					failed = true
 					failedMu.Unlock()
 					pr.logBuf.Errorf("shard-%d start: %v", idx, err)
-					if pr.cancel != nil {
-						pr.cancel()
+					pr.mu.RLock()
+					cancel := pr.cancel
+					pr.mu.RUnlock()
+					if cancel != nil {
+						cancel()
 					}
 					return
 				}
@@ -256,21 +269,43 @@ func (pr *ParallelRunner) startInlineBounded(ctx context.Context) {
 		}
 		wg.Wait()
 
-		pr.mu.Lock()
-		if pr.status == StatusRunning {
-			pr.freezeDurationLocked()
-			switch {
-			case ctx.Err() != nil:
-				pr.status = StatusStopped
-			case failed:
-				pr.status = StatusFailed
-			default:
-				pr.status = StatusCompleted
-			}
+		status := StatusCompleted
+		if ctx.Err() != nil {
+			status = StatusStopped
+		} else if failed {
+			status = StatusFailed
 		}
-		pr.mu.Unlock()
-		close(pr.done)
+		pr.finishRun(done, status)
 	}()
+}
+
+func (pr *ParallelRunner) waitForInstances(done chan struct{}, instances []*Runner, completed Status) {
+	for _, inst := range instances {
+		inst.Wait()
+	}
+	status := completed
+	pr.mu.RLock()
+	current := pr.status
+	pr.mu.RUnlock()
+	if current == StatusStopped {
+		status = StatusStopped
+	}
+	pr.finishRun(done, status)
+}
+
+func (pr *ParallelRunner) finishRun(done chan struct{}, terminal Status) {
+	pr.mu.Lock()
+	if pr.done != done || !pr.runActive {
+		pr.mu.Unlock()
+		return
+	}
+	if pr.status == StatusRunning {
+		pr.freezeDurationLocked()
+		pr.status = terminal
+	}
+	pr.runActive = false
+	pr.mu.Unlock()
+	close(done)
 }
 
 // startDistributed is the distributed-mode entry point (A11-redo). It creates
@@ -286,7 +321,7 @@ func (pr *ParallelRunner) startInlineBounded(ctx context.Context) {
 //   - ctx cancelled (Stop)            → StatusStopped (continuous/CDC normal)
 //   - any shard failed                → StatusFailed
 //   - all shards StatusCompleted      → StatusCompleted (batch normal)
-func (pr *ParallelRunner) startDistributed(ctx context.Context) error {
+func (pr *ParallelRunner) startDistributed(ctx context.Context, done chan struct{}) error {
 	// Carry the pipeline's worker_selector.match_labels onto each shard task
 	// so the dispatcher/poll only hands them to matching workers. Empty/nil
 	// means any worker may claim them (default pool).
@@ -317,29 +352,18 @@ func (pr *ParallelRunner) startDistributed(ctx context.Context) error {
 		}
 		wg.Wait()
 
-		pr.mu.Lock()
-		if pr.status == StatusRunning {
-			pr.freezeDurationLocked()
-			switch {
-			case ctx.Err() != nil:
-				pr.status = StatusStopped
-			default:
-				failed := false
-				for _, s := range statuses {
-					if s == StatusFailed {
-						failed = true
-						break
-					}
-				}
-				if failed {
-					pr.status = StatusFailed
-				} else {
-					pr.status = StatusCompleted
+		terminal := StatusCompleted
+		if ctx.Err() != nil {
+			terminal = StatusStopped
+		} else {
+			for _, s := range statuses {
+				if s == StatusFailed {
+					terminal = StatusFailed
+					break
 				}
 			}
 		}
-		pr.mu.Unlock()
-		close(pr.done)
+		pr.finishRun(done, terminal)
 	}()
 
 	return nil
@@ -366,8 +390,12 @@ func (pr *ParallelRunner) stopAll() {
 	}
 }
 
-func (pr *ParallelRunner) Wait()                    { <-pr.done }
-func (pr *ParallelRunner) Done() <-chan struct{}    { return pr.done }
+func (pr *ParallelRunner) Wait() { <-pr.Done() }
+func (pr *ParallelRunner) Done() <-chan struct{} {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	return pr.done
+}
 func (pr *ParallelRunner) Status() Status           { pr.mu.RLock(); defer pr.mu.RUnlock(); return pr.status }
 func (pr *ParallelRunner) InstanceCount() int       { return pr.logicalShards }
 func (pr *ParallelRunner) MaxActiveShardCount() int { return pr.maxActiveShards }

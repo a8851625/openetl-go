@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/a8851625/openetl-go/internal/etl/alert"
 	"github.com/a8851625/openetl-go/internal/etl/checkpoint"
 	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/a8851625/openetl-go/internal/etl/registry"
 
 	_ "github.com/a8851625/openetl-go/internal/etl/sink"
 	_ "github.com/a8851625/openetl-go/internal/etl/source"
@@ -957,6 +959,136 @@ func TestRunnerExternalAckFailureBlocksAndFailsAfterDurableSave(t *testing.T) {
 		t.Fatalf("durable checkpoint missing after ack failure: cp=%#v err=%v", cp, err)
 	}
 }
+
+func TestRunnerStopStartRebuildsRateLimiterRuntime(t *testing.T) {
+	const (
+		sourceName = "restart-rate-limiter-source"
+		sinkName   = "restart-rate-limiter-sink"
+	)
+
+	var opens atomic.Int32
+	var writes atomic.Int32
+	registry.RegisterSource(sourceName, func(map[string]any) (core.Source, error) {
+		return &restartRateLimiterSource{opens: &opens}, nil
+	})
+	registry.RegisterSink(sinkName, func(map[string]any) (core.Sink, error) {
+		return &restartRateLimiterSink{writes: &writes}, nil
+	})
+
+	spec := &Spec{
+		Name:   "restart-rate-limiter",
+		Source: SourceSpec{Type: sourceName, Config: map[string]any{}},
+		Transforms: []TransformSpec{{
+			Type: "rate_limiter", Config: map[string]any{"rps": 5000, "burst": 2},
+		}},
+		Sink:                  SinkSpec{Type: sinkName, Config: map[string]any{}},
+		BatchSize:             1,
+		FlushIntervalMs:       1,
+		CheckpointIntervalSec: 1,
+		BackpressureBuffer:    8,
+	}
+	store := newMemoryCPStore()
+	am := alert.NewManager()
+	t.Cleanup(am.Close)
+	runner, err := NewRunner(spec, store, noopDLQ{}, am)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	if err := runner.Start(context.Background()); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for writes.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if err := runner.Stop(); err != nil {
+		t.Fatalf("first Stop: %v", err)
+	}
+	runner.Wait()
+	if cp, err := store.Load(context.Background(), spec.Name); err != nil || cp == nil {
+		t.Fatalf("first checkpoint = %#v, err=%v; want durable checkpoint", cp, err)
+	}
+
+	beforeRestart := writes.Load()
+	if err := runner.Start(context.Background()); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for writes.Load() < beforeRestart+5 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if err := runner.Stop(); err != nil {
+		t.Fatalf("second Stop: %v", err)
+	}
+	runner.Wait()
+
+	if got := writes.Load() - beforeRestart; got < 5 {
+		t.Fatalf("records written after restart = %d, want >= 5 (must exceed burst=2)", got)
+	}
+	if got := opens.Load(); got != 2 {
+		t.Fatalf("source instances opened = %d, want 2 fresh generations", got)
+	}
+	if stats := runner.Stats(); stats.RecordsFailed != 0 || stats.RecordsDLQ != 0 {
+		t.Fatalf("second-run failures/dlq = %d/%d, want 0/0", stats.RecordsFailed, stats.RecordsDLQ)
+	}
+}
+
+type restartRateLimiterSource struct {
+	opens *atomic.Int32
+}
+
+func (*restartRateLimiterSource) Name() string { return "restart-rate-limiter-source" }
+func (s *restartRateLimiterSource) Open(_ context.Context, cp *core.Checkpoint) (core.RecordReader, error) {
+	s.opens.Add(1)
+	var offset int64
+	if cp != nil && len(cp.Position) > 0 {
+		if _, err := fmt.Sscan(string(cp.Position), &offset); err != nil {
+			return nil, err
+		}
+	}
+	return &restartRateLimiterReader{offset: offset}, nil
+}
+
+type restartRateLimiterReader struct{ offset int64 }
+
+func (r *restartRateLimiterReader) Read(ctx context.Context) (core.Record, error) {
+	select {
+	case <-ctx.Done():
+		return core.Record{}, ctx.Err()
+	default:
+	}
+	r.offset++
+	return core.Record{Data: map[string]any{"id": r.offset}, Metadata: core.Metadata{Offset: r.offset}}, nil
+}
+func (r *restartRateLimiterReader) ReadBatch(ctx context.Context, n int) ([]core.Record, error) {
+	out := make([]core.Record, 0, n)
+	for i := 0; i < n; i++ {
+		rec, err := r.Read(ctx)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, rec)
+	}
+	return out, nil
+}
+func (r *restartRateLimiterReader) Snapshot(context.Context) (core.Checkpoint, error) {
+	return core.Checkpoint{Source: "restart-rate-limiter-source", Position: []byte(fmt.Sprint(r.offset))}, nil
+}
+func (r *restartRateLimiterReader) CheckpointForRecord(_ context.Context, rec core.Record) (core.Checkpoint, error) {
+	return core.Checkpoint{Source: "restart-rate-limiter-source", Position: []byte(fmt.Sprint(rec.Metadata.Offset))}, nil
+}
+func (*restartRateLimiterReader) Close() error { return nil }
+
+type restartRateLimiterSink struct{ writes *atomic.Int32 }
+
+func (*restartRateLimiterSink) Name() string               { return "restart-rate-limiter-sink" }
+func (*restartRateLimiterSink) Open(context.Context) error { return nil }
+func (s *restartRateLimiterSink) Write(_ context.Context, records []core.Record) error {
+	s.writes.Add(int32(len(records)))
+	return nil
+}
+func (*restartRateLimiterSink) Close() error { return nil }
 
 func TestRunnerCanRestartAfterCompletedCheckpointReset(t *testing.T) {
 	spec, _ := makeRunnerSpec(t, 5)

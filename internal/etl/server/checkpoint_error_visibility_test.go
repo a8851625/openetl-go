@@ -102,6 +102,32 @@ func TestPipelineAPIAndHealthExposeCheckpointRemediation(t *testing.T) {
 	}
 }
 
+func TestPipelineStartReturnsConflictWhilePreviousRunStops(t *testing.T) {
+	s, _ := newTestHTTPServer(t)
+	runner := newCheckpointVisibilityRunner()
+	runner.status = pipeline.StatusStopped
+	runner.startErr = pipeline.ErrRunnerStopping
+	s.mu.Lock()
+	s.registerPipelineLocked("pipeline-stopping", "pipeline-stopping", runner, nil, nil)
+	s.mu.Unlock()
+
+	mux := http.NewServeMux()
+	s.RegisterHTTPRoutes(mux)
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pipelines/pipeline-stopping/start", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("start status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("start JSON: %v", err)
+	}
+	if body["code"] != "pipeline_stopping" || body["remediation"] == "" {
+		t.Fatalf("start response=%#v", body)
+	}
+}
+
 func TestPipelineStartReturnsNon2xxWithCheckpointRemediation(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()

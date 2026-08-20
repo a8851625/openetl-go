@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/alert"
@@ -99,17 +100,42 @@ func (pr *ParallelRunner) IncrementDLQDelete(n int64) {
 }
 
 func (pr *ParallelRunner) Pause() error {
-	for _, inst := range pr.instances {
-		_ = inst.Pause()
+	pr.mu.Lock()
+	if pr.status != StatusRunning {
+		pr.mu.Unlock()
+		return fmt.Errorf("pipeline %s is not running (status=%s)", pr.spec.Name, pr.status)
+	}
+	instances := append([]*Runner(nil), pr.instances...)
+	pr.mu.Unlock()
+
+	// Pause children before cancelling the shared parent context. Otherwise a
+	// child can observe cancellation, finish and close its runtime before its
+	// Pause call, turning a successful pause into a spurious stop error.
+	for _, inst := range instances {
+		status := inst.Status()
+		if status != StatusRunning {
+			continue
+		}
+		if err := inst.Pause(); err != nil {
+			return err
+		}
+	}
+
+	pr.mu.Lock()
+	if pr.status == StatusRunning {
+		pr.freezeDurationLocked()
+		pr.status = StatusPaused
+	}
+	cancel := pr.cancel
+	pr.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	return nil
 }
 
 func (pr *ParallelRunner) Resume(ctx context.Context) error {
-	for _, inst := range pr.instances {
-		_ = inst.Resume(ctx)
-	}
-	return nil
+	return pr.Start(ctx)
 }
 
 // CircuitBreakerState returns the worst breaker state across all instances.

@@ -95,6 +95,17 @@ func TestImmediateRegisterFailureLeavesNoRunnerEntry(t *testing.T) {
 	}
 }
 
+func TestTriggerPipelineSkipsRunnerStillStopping(t *testing.T) {
+	s := NewScheduler(nil)
+	s.SetContext(context.Background())
+	runner := &schedulerTestRunner{startErr: pipeline.ErrRunnerStopping}
+
+	s.triggerPipeline("still-stopping", runner)
+	if got := runner.starts.Load(); got != 0 {
+		t.Fatalf("successful starts = %d, want 0", got)
+	}
+}
+
 func TestPrepareExecutorInjectedFailureLeavesPreviousExecutor(t *testing.T) {
 	tests := []struct {
 		name string

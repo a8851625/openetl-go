@@ -93,13 +93,20 @@ type DAGExecutor struct {
 	// Per-sink circuit breakers to prevent cascading failures
 	breakers map[string]*pipeline.CircuitBreaker
 
-	status           string
-	mu               sync.RWMutex
-	cancel           context.CancelFunc
-	done             chan struct{}
-	stats            ExecutorStats
-	frozenDuration   time.Duration
-	checkpointBlocks map[string]string
+	status string
+	mu     sync.RWMutex
+	// runtimeMu protects component maps for one execution generation. Lifecycle
+	// code holds it while replacing or closing components; execution and metrics
+	// take an RLock while using a component from those maps.
+	runtimeMu           sync.RWMutex
+	cancel              context.CancelFunc
+	done                chan struct{}
+	runActive           bool
+	managedRuntime      bool
+	runtimeNeedsRebuild bool
+	stats               ExecutorStats
+	frozenDuration      time.Duration
+	checkpointBlocks    map[string]string
 }
 
 // ExecutorStats tracks per-pipeline execution metrics.
@@ -122,42 +129,16 @@ func NewDAGExecutor(spec *PipelineSpec, cpStore *storage.CheckpointStoreAdapter,
 
 	exec := &DAGExecutor{
 		spec:             spec,
-		sources:          map[string]core.Source{},
-		readers:          map[string]core.RecordReader{},
-		transforms:       map[string]core.Transform{},
-		sinks:            map[string]core.Sink{},
-		breakers:         map[string]*pipeline.CircuitBreaker{},
 		cpAdapter:        cpStore,
 		dlqWriter:        dlqW,
 		alertMgr:         am,
 		status:           "stopped",
 		done:             make(chan struct{}),
+		managedRuntime:   true,
 		checkpointBlocks: map[string]string{},
 	}
-
-	// Build plugins from registry
-	for _, node := range spec.DAG.Nodes {
-		var err error
-		switch node.Kind {
-		case KindSource:
-			exec.sources[node.ID], err = registry.BuildSource(node.Plugin, node.Config)
-			if err != nil {
-				return nil, fmt.Errorf("build source %s (%s): %w", node.ID, node.Plugin, err)
-			}
-		case KindTransform:
-			config := pipeline.InjectStateDefaults(spec.Name, node.ID, node.Config)
-			exec.transforms[node.ID], err = registry.BuildTransform(node.Plugin, config)
-			if err != nil {
-				return nil, fmt.Errorf("build transform %s (%s): %w", node.ID, node.Plugin, err)
-			}
-		case KindSink:
-			exec.sinks[node.ID], err = registry.BuildSink(node.Plugin, node.Config)
-			if err != nil {
-				return nil, fmt.Errorf("build sink %s (%s): %w", node.ID, node.Plugin, err)
-			}
-			// Create a circuit breaker for this sink
-			exec.breakers[node.ID] = pipeline.NewCircuitBreaker(pipeline.CircuitBreakerCfg{}, am, spec.Name)
-		}
+	if err := exec.buildRuntime(); err != nil {
+		return nil, err
 	}
 
 	// Apply defaults
@@ -184,6 +165,77 @@ func NewDAGExecutor(spec *PipelineSpec, cpStore *storage.CheckpointStoreAdapter,
 	}
 
 	return exec, nil
+}
+
+func cloneNodeConfig(config map[string]any) map[string]any {
+	if config == nil {
+		return nil
+	}
+	copy := make(map[string]any, len(config))
+	for key, value := range config {
+		copy[key] = value
+	}
+	return copy
+}
+
+// buildRuntime constructs nodes owned by one DAG execution generation. The
+// executor closes them after every run, so retrying from the checkpoint must
+// use fresh source, transform and sink instances.
+func (e *DAGExecutor) buildRuntime() error {
+	sources := map[string]core.Source{}
+	transforms := map[string]core.Transform{}
+	sinks := map[string]core.Sink{}
+	breakers := map[string]*pipeline.CircuitBreaker{}
+	closeTransforms := func() {
+		for _, transform := range transforms {
+			if closer, ok := transform.(core.TransformCloser); ok {
+				_ = closer.Close()
+			}
+		}
+	}
+	closeSinks := func() {
+		for _, sink := range sinks {
+			_ = sink.Close()
+		}
+	}
+
+	for _, node := range e.spec.DAG.Nodes {
+		var err error
+		switch node.Kind {
+		case KindSource:
+			sources[node.ID], err = registry.BuildSource(node.Plugin, cloneNodeConfig(node.Config))
+			if err != nil {
+				closeTransforms()
+				closeSinks()
+				return fmt.Errorf("build source %s (%s): %w", node.ID, node.Plugin, err)
+			}
+		case KindTransform:
+			config := pipeline.InjectStateDefaults(e.spec.Name, node.ID, node.Config)
+			transforms[node.ID], err = registry.BuildTransform(node.Plugin, config)
+			if err != nil {
+				closeTransforms()
+				closeSinks()
+				return fmt.Errorf("build transform %s (%s): %w", node.ID, node.Plugin, err)
+			}
+		case KindSink:
+			sinks[node.ID], err = registry.BuildSink(node.Plugin, cloneNodeConfig(node.Config))
+			if err != nil {
+				closeTransforms()
+				closeSinks()
+				return fmt.Errorf("build sink %s (%s): %w", node.ID, node.Plugin, err)
+			}
+			breakers[node.ID] = pipeline.NewCircuitBreaker(pipeline.CircuitBreakerCfg{}, e.alertMgr, e.spec.Name)
+		}
+	}
+
+	e.runtimeMu.Lock()
+	e.sources = sources
+	e.readers = map[string]core.RecordReader{}
+	e.transforms = transforms
+	e.sinks = sinks
+	e.breakers = breakers
+	e.runtimeMu.Unlock()
+	return nil
 }
 
 func (e *DAGExecutor) Status() string {
@@ -228,31 +280,60 @@ func (e *DAGExecutor) Start(ctx context.Context) error {
 		e.mu.Unlock()
 		return fmt.Errorf("pipeline %s is already running", e.spec.Name)
 	}
+	if e.runActive {
+		e.mu.Unlock()
+		return fmt.Errorf("pipeline %s: %w", e.spec.Name, pipeline.ErrRunnerStopping)
+	}
+	if e.managedRuntime && e.runtimeNeedsRebuild {
+		if err := e.buildRuntime(); err != nil {
+			e.status = "failed"
+			e.mu.Unlock()
+			return err
+		}
+		e.runtimeNeedsRebuild = false
+	}
 	e.status = "running"
 	e.frozenDuration = 0
 	now := time.Now()
 	e.stats = ExecutorStats{StartedAt: &now}
 	e.checkpointBlocks = map[string]string{}
+	e.done = make(chan struct{})
+	e.runActive = true
+	done := e.done
+	ctx, cancel := context.WithCancel(ctx)
+	e.cancel = cancel
 	e.mu.Unlock()
 
-	ctx, e.cancel = context.WithCancel(ctx)
-
-	// Open all sinks
+	e.runtimeMu.RLock()
+	sinks := make(map[string]core.Sink, len(e.sinks))
 	for id, sink := range e.sinks {
+		sinks[id] = sink
+	}
+	e.runtimeMu.RUnlock()
+	for id, sink := range sinks {
 		if err := sink.Open(ctx); err != nil {
 			e.setStatus("failed")
+			e.closeRuntime()
+			e.mu.Lock()
+			e.runActive = false
+			cancel := e.cancel
+			e.mu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+			close(done)
 			return fmt.Errorf("open sink %s: %w", id, err)
 		}
 	}
 
-	go e.runDAG(ctx)
+	go e.runDAG(ctx, done)
 	return nil
 }
 
 func (e *DAGExecutor) Stop() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.status != "running" {
+		e.mu.Unlock()
 		return nil
 	}
 	if e.stats.StartedAt != nil {
@@ -260,14 +341,19 @@ func (e *DAGExecutor) Stop() error {
 		e.stats.StartedAt = nil
 	}
 	e.status = "stopped"
-	if e.cancel != nil {
-		e.cancel()
+	cancel := e.cancel
+	e.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	return nil
 }
 
 func (e *DAGExecutor) Wait() {
-	<-e.done
+	e.mu.RLock()
+	done := e.done
+	e.mu.RUnlock()
+	<-done
 }
 
 func (e *DAGExecutor) setStatus(s string) {
@@ -278,8 +364,7 @@ func (e *DAGExecutor) setStatus(s string) {
 
 // runDAG is the main execution loop. It reads from all sources concurrently,
 // routes records through transforms based on edge conditions, and writes to sinks.
-func (e *DAGExecutor) runDAG(ctx context.Context) {
-	defer close(e.done)
+func (e *DAGExecutor) runDAG(ctx context.Context, done chan struct{}) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			g.Log().Errorf(ctx, "DAG pipeline %s panic: %v", e.spec.Name, rec)
@@ -294,17 +379,33 @@ func (e *DAGExecutor) runDAG(ctx context.Context) {
 			e.status = "stopped"
 		}
 		e.mu.Unlock()
-		for _, sink := range e.sinks {
-			sink.Close()
+		e.closeRuntime()
+		e.mu.Lock()
+		cancel := e.cancel
+		if e.done == done {
+			e.runActive = false
 		}
-		e.closeReaders()
+		e.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		close(done)
 	}()
 
 	records := make(chan recordMsg, e.backpressure)
 	var wg sync.WaitGroup
 
-	// Launch source readers
+	// Snapshot the current generation before launching readers. Runtime maps are
+	// replaced only between generations, but metrics/API calls may inspect them
+	// concurrently with a later Start.
+	e.runtimeMu.RLock()
+	sources := make(map[string]core.Source, len(e.sources))
 	for sourceID, src := range e.sources {
+		sources[sourceID] = src
+	}
+	e.runtimeMu.RUnlock()
+	// Launch source readers
+	for sourceID, src := range sources {
 		sourceID := sourceID
 		src := src
 		wg.Add(1)
@@ -345,6 +446,11 @@ func (e *DAGExecutor) runDAG(ctx context.Context) {
 	}()
 
 	<-writerDone
+	// On cancellation the writer can finish its terminal flush before every
+	// source goroutine observes ctx.Done. Wait for them before closing readers
+	// and publishing Done, otherwise a new generation could overlap an old
+	// reader still touching executor state.
+	wg.Wait()
 }
 
 // readSource continuously reads from a source and sends records to the channel.
@@ -377,9 +483,9 @@ func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID 
 		}
 	}
 
-	e.mu.Lock()
+	e.runtimeMu.Lock()
 	e.readers[sourceID] = reader
-	e.mu.Unlock()
+	e.runtimeMu.Unlock()
 
 	consecutiveErrors := 0
 	var seq int64
@@ -419,24 +525,70 @@ func (e *DAGExecutor) readSource(ctx context.Context, src core.Source, sourceID 
 	}
 }
 
-// closeReaders runs after the router has drained the records channel. A
-// source may reach EOF before the writer flushes its final sink batch; closing
-// and removing the reader in readSource would make that batch unable to build
-// or acknowledge its checkpoint. Keep the reader reachable until the whole
-// DAG execution has quiesced, then close all readers together.
-func (e *DAGExecutor) closeReaders() {
-	e.mu.Lock()
+// closeRuntime runs after the router has drained the records channel. A source
+// may reach EOF before the writer flushes its final sink batch; keep readers
+// reachable until the whole DAG execution has quiesced, then close every
+// resource owned by this generation. The next managed Start rebuilds nodes
+// while preserving source checkpoints.
+func (e *DAGExecutor) closeRuntime() {
+	// Keep runtimeMu locked until every owned component has been closed. This
+	// prevents a concurrent metrics request from invoking a provider while its
+	// sink or transform is being torn down, and blocks a new buildRuntime from
+	// publishing a replacement generation too early.
+	e.runtimeMu.Lock()
 	readers := make([]core.RecordReader, 0, len(e.readers))
 	for sourceID, reader := range e.readers {
 		readers = append(readers, reader)
 		delete(e.readers, sourceID)
 	}
-	e.mu.Unlock()
+	transforms := make([]core.Transform, 0, len(e.transforms))
+	for _, transform := range e.transforms {
+		transforms = append(transforms, transform)
+	}
+	sinks := make([]core.Sink, 0, len(e.sinks))
+	for _, sink := range e.sinks {
+		sinks = append(sinks, sink)
+	}
 	for _, reader := range readers {
 		if reader != nil {
 			_ = reader.Close()
 		}
 	}
+	for _, transform := range transforms {
+		if closer, ok := transform.(core.TransformCloser); ok {
+			_ = closer.Close()
+		}
+	}
+	for _, sink := range sinks {
+		if sink != nil {
+			_ = sink.Close()
+		}
+	}
+	e.runtimeMu.Unlock()
+
+	e.mu.Lock()
+	if e.managedRuntime {
+		e.runtimeNeedsRebuild = true
+	}
+	e.mu.Unlock()
+}
+
+// closeReaders remains for tests and direct callers that only need to release
+// readers. Runtime teardown must use closeRuntime so transforms and sinks are
+// not leaked across a later Start.
+func (e *DAGExecutor) closeReaders() {
+	e.runtimeMu.Lock()
+	readers := make([]core.RecordReader, 0, len(e.readers))
+	for sourceID, reader := range e.readers {
+		readers = append(readers, reader)
+		delete(e.readers, sourceID)
+	}
+	for _, reader := range readers {
+		if reader != nil {
+			_ = reader.Close()
+		}
+	}
+	e.runtimeMu.Unlock()
 }
 
 // routeAndWrite processes records from sources, routes them through the DAG
@@ -681,9 +833,12 @@ func (e *DAGExecutor) route(ctx context.Context, nodeID string, rec core.Record,
 		return true
 	}
 
-	// Apply transform if this is a transform node
+	// Apply transform if this is a transform node.
 	if node.Kind == KindTransform {
-		if t, ok := e.transforms[nodeID]; ok {
+		e.runtimeMu.RLock()
+		t, ok := e.transforms[nodeID]
+		e.runtimeMu.RUnlock()
+		if ok {
 			transformed, err := applyTransformSafely(ctx, t, rec)
 			if err != nil {
 				if err == core.ErrRecordFiltered {
@@ -728,13 +883,15 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 	if len(batch) == 0 {
 		return
 	}
+	e.runtimeMu.RLock()
 	sink, ok := e.sinks[sinkID]
+	breaker := e.breakers[sinkID]
+	e.runtimeMu.RUnlock()
 	if !ok {
 		return
 	}
 
 	// Circuit breaker check
-	breaker := e.breakers[sinkID]
 	if breaker != nil && !breaker.Allow() {
 		g.Log().Warningf(ctx, "Circuit breaker open for sink %s, waiting cooldown...", sinkID)
 		select {
@@ -932,8 +1089,8 @@ func (e *DAGExecutor) checkpointForRecord(ctx context.Context, sourceID string, 
 }
 
 func (e *DAGExecutor) readerForSource(sourceID string) core.RecordReader {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.runtimeMu.RLock()
+	defer e.runtimeMu.RUnlock()
 	return e.readers[sourceID]
 }
 
@@ -958,6 +1115,8 @@ func checkpointForReaders(ctx context.Context, reader core.RecordReader, sourceI
 }
 
 func (e *DAGExecutor) stateSnapshotVersions(ctx context.Context) (map[string]string, error) {
+	e.runtimeMu.RLock()
+	defer e.runtimeMu.RUnlock()
 	versions := make(map[string]string)
 	for _, t := range e.transforms {
 		snapper, ok := t.(core.StateSnapshotter)
@@ -979,6 +1138,8 @@ func (e *DAGExecutor) stateSnapshotVersions(ctx context.Context) (map[string]str
 }
 
 func (e *DAGExecutor) StateMetrics(ctx context.Context) []core.StateMetrics {
+	e.runtimeMu.RLock()
+	defer e.runtimeMu.RUnlock()
 	var metrics []core.StateMetrics
 	for _, t := range e.transforms {
 		provider, ok := t.(core.StateMetricsProvider)
@@ -998,6 +1159,8 @@ func (e *DAGExecutor) StateMetrics(ctx context.Context) []core.StateMetrics {
 }
 
 func (e *DAGExecutor) TransformMetrics() []core.TransformMetrics {
+	e.runtimeMu.RLock()
+	defer e.runtimeMu.RUnlock()
 	var metrics []core.TransformMetrics
 	for nodeID, t := range e.transforms {
 		provider, ok := t.(core.TransformMetricsProvider)
@@ -1021,7 +1184,10 @@ func (e *DAGExecutor) TransformMetrics() []core.TransformMetrics {
 func (e *DAGExecutor) handleCheckpointBoundaryError(ctx context.Context, sinkID string, errMsg string) {
 	g.Log().Errorf(ctx, "DAG pipeline %s: %s — checkpoint not saved", e.spec.Name, errMsg)
 	if sinkID != "" {
-		if breaker := e.breakers[sinkID]; breaker != nil {
+		e.runtimeMu.RLock()
+		breaker := e.breakers[sinkID]
+		e.runtimeMu.RUnlock()
+		if breaker != nil {
 			breaker.RecordFailure(ctx, fmt.Errorf("%s", errMsg))
 		}
 	}
@@ -1069,7 +1235,10 @@ func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err err
 		// per-sink circuit breaker so a persistently-down DLQ cools down the
 		// offending sink instead of burning through every record.
 		if dagNodeID != "" {
-			if b := e.breakers[dagNodeID]; b != nil {
+			e.runtimeMu.RLock()
+			b := e.breakers[dagNodeID]
+			e.runtimeMu.RUnlock()
+			if b != nil {
 				b.RecordFailure(ctx, dlqErr)
 			}
 		}

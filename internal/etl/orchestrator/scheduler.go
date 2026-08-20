@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -404,6 +405,10 @@ func (s *Scheduler) triggerPipeline(name string, runner pipeline.RunnerInterface
 
 	g.Log().Infof(s.ctx, "Triggering pipeline %s", name)
 	if err := runner.Start(s.ctx); err != nil {
+		if errors.Is(err, pipeline.ErrRunnerStopping) {
+			g.Log().Warningf(s.ctx, "Pipeline %s is still cleaning up its previous run; skipping trigger", name)
+			return
+		}
 		g.Log().Errorf(s.ctx, "Failed to start pipeline %s: %v", name, err)
 		_ = s.store.UpdatePipelineStatus(s.ctx, name, "failed")
 		return

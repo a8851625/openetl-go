@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,7 +21,7 @@ type DAGRunnerWrapper struct {
 
 	mu             sync.Mutex
 	done           chan struct{}
-	started        bool
+	runActive      bool
 	startedAt      time.Time
 	frozenDuration time.Duration
 }
@@ -35,20 +36,24 @@ func NewDAGRunnerWrapper(exec *DAGExecutor) *DAGRunnerWrapper {
 
 func (w *DAGRunnerWrapper) Start(ctx context.Context) error {
 	w.mu.Lock()
-	if w.started {
+	if w.runActive {
 		w.mu.Unlock()
-		return nil
+		return fmt.Errorf("pipeline %s: %w", w.exec.spec.Name, pipeline.ErrRunnerStopping)
 	}
 	w.done = make(chan struct{})
-	w.started = true
+	w.runActive = true
+	done := w.done
 	w.frozenDuration = 0
 	w.startedAt = time.Now()
 	w.mu.Unlock()
 
 	if err := w.exec.Start(ctx); err != nil {
 		w.mu.Lock()
-		w.started = false
+		if w.done == done {
+			w.runActive = false
+		}
 		w.mu.Unlock()
+		close(done)
 		w.logBuf.Errorf("Start failed: %v", err)
 		return err
 	}
@@ -61,9 +66,12 @@ func (w *DAGRunnerWrapper) Start(ctx context.Context) error {
 			w.frozenDuration += time.Since(w.startedAt)
 			w.startedAt = time.Time{}
 		}
+		if w.done == done {
+			w.runActive = false
+		}
 		w.mu.Unlock()
 		w.logBuf.Infof("Pipeline %s finished (DAG mode)", w.exec.spec.Name)
-		close(w.done)
+		close(done)
 	}()
 	return nil
 }
@@ -180,8 +188,14 @@ func (w *DAGRunnerWrapper) Resume(ctx context.Context) error {
 
 // CircuitBreakerState returns the worst breaker state across all DAG sinks.
 func (w *DAGRunnerWrapper) CircuitBreakerState() int {
-	worst := 0
+	w.exec.runtimeMu.RLock()
+	breakers := make([]*pipeline.CircuitBreaker, 0, len(w.exec.breakers))
 	for _, breaker := range w.exec.breakers {
+		breakers = append(breakers, breaker)
+	}
+	w.exec.runtimeMu.RUnlock()
+	worst := 0
+	for _, breaker := range breakers {
 		if s := breaker.StateCode(); s > worst {
 			worst = s
 		}
@@ -191,8 +205,14 @@ func (w *DAGRunnerWrapper) CircuitBreakerState() int {
 
 // SinkMetrics collects per-sink metrics from DAG sinks.
 func (w *DAGRunnerWrapper) SinkMetrics() []core.SinkMetrics {
-	var result []core.SinkMetrics
+	w.exec.runtimeMu.RLock()
+	sinks := make(map[string]core.Sink, len(w.exec.sinks))
 	for id, sink := range w.exec.sinks {
+		sinks[id] = sink
+	}
+	w.exec.runtimeMu.RUnlock()
+	var result []core.SinkMetrics
+	for id, sink := range sinks {
 		if provider, ok := sink.(core.SinkMetricsProvider); ok {
 			result = append(result, provider.SinkMetrics())
 		} else {
