@@ -1559,21 +1559,23 @@ type snapshotCDCHandler struct {
 
 func (h *snapshotCDCHandler) OnRow(e *canal.RowsEvent) error {
 	file, pos := h.reader.getBinlogPos()
-	// Resolve the snapshot PK column once per event; CDC rows carry the same
-	// key columns as the snapshot, so the resolvedPKs map (built at Open from
-	// information_schema / overrides) is authoritative. When a table has no
-	// resolved key (e.g. skipped during snapshot, or DDL added it after Open),
-	// fall back to the canal row event's own PK columns if available.
-	rpk, rpkOK := h.reader.resolvedPKs[e.Table.Name]
-	pkColumn := ""
-	if rpkOK {
-		pkColumn = rpk.column
-	} else if len(e.Table.PKColumns) == 1 {
-		// Canal reports PK column indices; resolve to the column name.
-		idx := e.Table.PKColumns[0]
-		if idx >= 0 && idx < len(e.Table.Columns) {
-			pkColumn = e.Table.Columns[idx].Name
-		}
+	// Derive primary-key column names for this CDC event so the per-row key
+	// JSON object can be built for downstream sinks using
+	// pk_columns_from_metadata. Priority:
+	//   1. the resolvedPKs map (built at Open from information_schema /
+	//      explicit overrides) — authoritative when the snapshot resolved a
+	//      non-empty key for this table;
+	//   2. the canal row event's own PK columns (handles composite keys and
+	//      tables that were skipped during snapshot, e.g. skip_no_pk_tables,
+	//      or added via DDL after Open).
+	// Canal reports composite PKs as a multi-element index slice, so use the
+	// multi-column helper rather than the old single-column fallback that
+	// silently dropped keys for any table whose PK was not a single column.
+	var pkCols []string
+	if rpk, ok := h.reader.resolvedPKs[e.Table.Name]; ok && rpk.column != "" {
+		pkCols = []string{rpk.column}
+	} else {
+		pkCols = pkColumnNames(e.Table)
 	}
 	for i := 0; i < len(e.Rows); i++ {
 		row := e.Rows[i]
@@ -1594,13 +1596,17 @@ func (h *snapshotCDCHandler) OnRow(e *canal.RowsEvent) error {
 			rec.Data = rowToMap(e.Table.Columns, row)
 		}
 		// Emit the primary key as a JSON object so downstream sinks reading
-		// this record via Kafka (doris/es with pk_columns_from_metadata) can
-		// derive the key columns without a static pk_columns config. Uses the
-		// after-image (rec.Data) which always carries the PK for insert/update;
-		// for delete, rec.Data is the deleted row which also carries the PK.
-		if pkColumn != "" {
-			rec.Metadata.Key = metadataKeyJSON(pkColumn, rec.Data)
+		// this record via Kafka (doris/clickhouse/es with
+		// pk_columns_from_metadata) can derive the key columns without a static
+		// pk_columns config. Uses the after-image (rec.Data) which always
+		// carries the PK for insert/update; for delete, rec.Data is the deleted
+		// row which also carries the PK. Prefer the before-image on update for
+		// stable identity when present.
+		keyRow := rec.Data
+		if rec.Operation == core.OpUpdate && len(rec.Before) > 0 {
+			keyRow = rec.Before
 		}
+		rec.Metadata.Key = metadataKeyJSONMulti(pkCols, keyRow)
 		select {
 		case h.reader.records <- rec:
 		case <-h.reader.done:

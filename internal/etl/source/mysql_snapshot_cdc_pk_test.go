@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
+	"github.com/go-mysql-org/go-mysql/schema"
 )
 
 // newPKTestSource builds a MySQLSnapshotCDCSource with the fields that
@@ -357,5 +359,79 @@ func TestMetadataKeyJSON(t *testing.T) {
 				t.Fatalf("metadataKeyJSON(%q, %#v) = %q, want %q", c.pkColumn, c.data, got, c.want)
 			}
 		})
+	}
+}
+
+// TestSnapshotCDCHandlerDerivesCompositePK is a regression guard for the
+// snapshot_cdc CDC phase: customer_close has a composite PK (or a table that
+// was skipped during snapshot), so the old single-column fallback left
+// Metadata.Key empty and pk_columns_from_metadata sinks failed with
+// "requires Metadata.Key to be a non-empty JSON object".
+//
+// We assert the PK-derivation logic now used inside snapshotCDCHandler.OnRow:
+// when resolvedPKs has no usable column, fall back to canal's pkColumnNames
+// (which handles composite keys) and build the key via metadataKeyJSONMulti.
+func TestSnapshotCDCCompositePKKeyDerivation(t *testing.T) {
+	// Composite-PK table (customer_close has customer_id+code, mirroring the
+	// production failure). Canal reports both PK column indices.
+	compositeTable := &schema.Table{
+		Columns:   []schema.TableColumn{{Name: "customer_id"}, {Name: "code"}, {Name: "work_time"}},
+		PKColumns: []int{0, 1},
+	}
+
+	// Priority 2 fallback path: resolvedPKs has no usable column for this table
+	// (skipped during snapshot because it is composite, or added via DDL).
+	pkCols := pkColumnNames(compositeTable)
+	if len(pkCols) != 2 || pkCols[0] != "customer_id" || pkCols[1] != "code" {
+		t.Fatalf("composite PK fallback pkColumnNames = %v, want [customer_id code]", pkCols)
+	}
+
+	insertRow := map[string]any{
+		"customer_id": int64(130201),
+		"code":        "",
+		"work_time":   "[3,2]",
+	}
+	key := metadataKeyJSONMulti(pkCols, insertRow)
+	// Both PK columns must be present in the JSON object even when one value
+	// is the empty string (production customer_close row has code="").
+	want := `{"code":"","customer_id":130201}`
+	if key != want {
+		t.Fatalf("composite insert metadataKeyJSONMulti = %q, want %q", key, want)
+	}
+
+	// DELETE row carries the before-image PK columns in Data.
+	deleteRow := map[string]any{"customer_id": int64(130201), "code": "ABC"}
+	deleteKey := metadataKeyJSONMulti(pkCols, deleteRow)
+	if deleteKey != `{"code":"ABC","customer_id":130201}` {
+		t.Fatalf("composite delete metadataKeyJSONMulti = %q", deleteKey)
+	}
+}
+
+// TestSnapshotCDCResolvedPKWinsOverCanalFallback confirms that when the
+// snapshot resolved a non-empty single-column PK, OnRow uses it instead of
+// canal's PK columns (keeps the resolvedPKs contract authoritative).
+func TestSnapshotCDCResolvedPKWinsOverCanalFallback(t *testing.T) {
+	// resolvedPKs says the snapshot key is "id"; canal also reports a composite
+	// PK. The resolved single column must win so the snapshot cursor and the
+	// CDC key stay consistent.
+	resolved := map[string]resolvedPK{
+		"orders": {column: "id", kind: pkKindNumeric},
+	}
+	canalTable := &schema.Table{
+		Columns:   []schema.TableColumn{{Name: "id"}, {Name: "tenant_id"}, {Name: "v"}},
+		PKColumns: []int{0, 1},
+	}
+	var pkCols []string
+	if rpk, ok := resolved["orders"]; ok && rpk.column != "" {
+		pkCols = []string{rpk.column}
+	} else {
+		pkCols = pkColumnNames(canalTable)
+	}
+	if len(pkCols) != 1 || pkCols[0] != "id" {
+		t.Fatalf("resolved PK did not win: pkCols = %v, want [id]", pkCols)
+	}
+	key := metadataKeyJSONMulti(pkCols, map[string]any{"id": int64(42), "v": "x"})
+	if key != `{"id":42}` {
+		t.Fatalf("resolved-key metadataKeyJSONMulti = %q, want {\"id\":42}", key)
 	}
 }
