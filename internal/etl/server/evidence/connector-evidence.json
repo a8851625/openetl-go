@@ -3,13 +3,13 @@
   "policy": {
     "max_age_hours": 720
   },
-  "certified_commit": "a14012935edf5091f54d175d533d567ad1715435",
+  "certified_commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
   "certified_image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
   "records": [
     {
       "kind": "source",
       "type": "file",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -31,7 +31,7 @@
     {
       "kind": "source",
       "type": "http",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -54,7 +54,7 @@
     {
       "kind": "source",
       "type": "kafka",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -81,7 +81,7 @@
     {
       "kind": "source",
       "type": "mysql_batch",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -107,7 +107,7 @@
     {
       "kind": "source",
       "type": "mysql_cdc",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -133,7 +133,7 @@
     {
       "kind": "source",
       "type": "mysql_snapshot_cdc",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -160,7 +160,7 @@
     {
       "kind": "sink",
       "type": "file_sink",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -182,7 +182,7 @@
     {
       "kind": "sink",
       "type": "s3",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -206,7 +206,7 @@
     {
       "kind": "sink",
       "type": "kafka",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -232,7 +232,7 @@
     {
       "kind": "sink",
       "type": "mysql",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -258,7 +258,7 @@
     {
       "kind": "sink",
       "type": "postgres",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -284,7 +284,7 @@
     {
       "kind": "sink",
       "type": "postgresql",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -310,7 +310,7 @@
     {
       "kind": "sink",
       "type": "clickhouse",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -336,7 +336,7 @@
     {
       "kind": "sink",
       "type": "doris",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
@@ -361,7 +361,7 @@
     {
       "kind": "sink",
       "type": "clickhouse_multi_table",
-      "commit": "a14012935edf5091f54d175d533d567ad1715435",
+      "commit": "fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd",
       "image": "sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb",
       "dependencies": {
         "go": "1.24.13",
