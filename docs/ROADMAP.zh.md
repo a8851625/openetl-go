@@ -1158,6 +1158,15 @@ Residual/follow-up: none
   11 例）。**残留**：name-hint 命中（mapper.go amount/price 等列名且无源声明类型）仍
   固定 Decimal(18,2)——该路径本就无源精度可查，by-design。
 
+## 待用户决策
+
+- **ClickHouse 写入吞吐性能分析是否立项**（2026-08-21 提出，未决）：正确性维度的
+  缺口清单已全部处理（BUG-1/5/6 + Decimal 直传；BUG-1/6 容器 e2e 待网络恢复）。
+  性能维度有两项此前未做、且属于单方面裁剪排除，现显式提交用户决定：
+  (1) ClickHouse 写入吞吐基准测试（batch 大小/flush 间隔/并发写入画像）；
+  (2) 异步 insert（async_insert）vs 当前同步批量 insert 的量化对比。
+  用户未答复前不立项、不启动。
+
 ## 有界后续
 
 这些事项只有在上方当前任务完成或被明确重新排序后才进入执行：
