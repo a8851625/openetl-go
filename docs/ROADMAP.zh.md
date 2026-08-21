@@ -964,7 +964,8 @@ any/字符串游标）、checkpoint position 序列化与恢复兼容（旧数�
 
 ### BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复（2026-08-12 发现）
 
-状态：`delivered`（2026-08-12 · beta.13 · cdc_on_binlog_purged: fail/resume_from_current/resnapshot）
+状态：`active`（fail 策略容器 e2e 已跑但证据未入验收矩阵；resume_from_current 有真机
+运行时验证 6a814fe；resnapshot 端到端与完整 e2e 记录待容器恢复后补跑再置 delivered）
 
 **现象与根因**：当 MySQL binlog 被按保留期（`binlog_expire_logs_seconds`，云库
 常仅 1–3 天）自动清理，或被 `PURGE BINARY LOGS`/`RESET MASTER` 删除后，checkpoint
@@ -1015,6 +1016,11 @@ binlog，非通用）；跨实例 binlog 归档恢复；改变 at-least-once 语
 旧坐标 RunFrom 报 1236 且被 `isBinlogPurgedError` 识别 → GetMasterPos 探测新坐标 →
 新坐标持续流式 3s 无 purge 错误；无 MySQL 时测试自动 skip。
 `resnapshot` 策略的端到端（快照重拉验证）仍待容器 e2e（随镜像构建恢复后补跑）。
+
+**状态修正**（2026-08-21 拷问审查）：fail 策略的容器 e2e 证据（hack/e2e-binlog-purged.sh，
+随 77052e9 提交，beta.13 镜像可用时真机跑过：RESET MASTER 模拟确认检测并 1 次重试后
+干净终止）当时未写入本验收矩阵，证据链断裂；且验收 2/3/5 未全部闭合。按"验收未全部
+闭合不得 delivered"的一致性原则，回退为 active。
 
 ### BUG-3：sqlite 单连接（MaxOpenConns(1)）导致 checkpoint 写入排队超时阻塞（2026-08-12 发现）
 
