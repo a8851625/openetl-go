@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+
+	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
 // parseMetadataKeyColumns extracts the column names from a JSON-object
@@ -65,4 +67,23 @@ func sameIdentifierSet(a, b []string) bool {
 		bm[id]--
 	}
 	return true
+}
+
+// derivePKFromMetadataShared derives the PK column list for a table from the
+// first record whose Metadata.Key parses as a JSON object (shared by the
+// mysql and postgres sinks' pk_columns_from_metadata support). Returns nil
+// when no usable key exists for the table.
+func derivePKFromMetadataShared(table string, records []core.Record) []string {
+	for _, rec := range records {
+		if rec.Metadata.Table != table && rec.Metadata.Table != "" {
+			continue
+		}
+		if rec.Metadata.Key == "" {
+			continue
+		}
+		if pk := parseMetadataKeyColumns(rec.Metadata.Key); len(pk) > 0 {
+			return pk
+		}
+	}
+	return nil
 }

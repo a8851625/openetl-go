@@ -712,7 +712,22 @@ func (s *ClickHouseSink) pkColumnsByTable(records []core.Record) (map[string][]s
 		}
 		pk := parseMetadataKeyColumns(rec.Metadata.Key)
 		if len(pk) == 0 {
-			return nil, fmt.Errorf("clickhouse sink: pk_columns_from_metadata requires Metadata.Key to be a non-empty JSON object for table %q; use pk_columns for scalar keys", targetTable)
+			// GAP-3 replay hardening: fall back to the static pk_columns (or
+			// the default) instead of failing the whole batch. Records with
+			// empty keys — DLQ replays produced before a metadata-key fix,
+			// sources that never fill Metadata.Key — still fail loudly at the
+			// delete/update key-resolution stage when the key column is
+			// genuinely missing from the row, so at-least-once semantics are
+			// preserved (a wrong-but-present static PK may mis-target rows;
+			// the fallback is therefore best-effort and logged).
+			if len(s.pkColumns) > 0 {
+				pk = append([]string(nil), s.pkColumns...)
+			} else {
+				pk = []string{"id"}
+			}
+			g.Log().Warningf(context.Background(),
+				"clickhouse sink: pk_columns_from_metadata found empty Metadata.Key for table %q; falling back to static pk %v (record offset=%d op=%v)",
+				targetTable, pk, rec.Metadata.Offset, rec.Operation)
 		}
 		for _, table := range []string{targetTable, rec.Metadata.Table} {
 			if table == "" {

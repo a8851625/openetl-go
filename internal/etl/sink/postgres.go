@@ -25,16 +25,21 @@ func init() {
 }
 
 type PostgresSink struct {
-	name                string
-	host                string
-	port                int
-	user                string
-	password            string
-	database            string
-	table               string
-	schema              string
-	sslmode             string
-	pkColumns           []string
+	name      string
+	host      string
+	port      int
+	user      string
+	password  string
+	database  string
+	table     string
+	schema    string
+	sslmode   string
+	pkColumns []string
+	// pkColumnsFromMetadata derives pk_columns per-table from JSON-object
+	// Metadata.Key records (multi-table fan-out support, GAP-3).
+	pkColumnsFromMetadata bool
+	// pkByTable caches per-table PK columns derived from Metadata.Key.
+	pkByTable           map[string][]string
 	batchMode           string
 	incrementColumns    map[string]string
 	pool                *pgxpool.Pool
@@ -93,6 +98,11 @@ func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
 		}
 	}
 	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
+	if v, ok := config["pk_columns_from_metadata"]; ok {
+		if b, ok := v.(bool); ok {
+			s.pkColumnsFromMetadata = b
+		}
+	}
 	if v, ok := config["batch_mode"]; ok {
 		s.batchMode = v.(string)
 	}
@@ -320,11 +330,32 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 
 	// Compact by (table, PK) in source order to preserve CDC semantics.
 	records = CompactRecordsByPK(records, func(table string) []string {
+		if s.pkColumnsFromMetadata {
+			if pk := derivePKFromMetadataShared(table, records); len(pk) > 0 {
+				return pk
+			}
+		}
 		if len(s.pkColumns) > 0 {
 			return s.pkColumns
 		}
 		return []string{"id"}
 	})
+	// Snapshot per-table PKs for the grouped writes below (upsert conflict
+	// targets must match the per-table key when pk_columns_from_metadata is on).
+	if s.pkColumnsFromMetadata {
+		s.pkByTable = make(map[string][]string)
+		for _, rec := range records {
+			if rec.Metadata.Table == "" {
+				continue
+			}
+			if _, ok := s.pkByTable[rec.Metadata.Table]; ok {
+				continue
+			}
+			if pk := derivePKFromMetadataShared(rec.Metadata.Table, records); len(pk) > 0 {
+				s.pkByTable[rec.Metadata.Table] = pk
+			}
+		}
+	}
 
 	// Group records by sorted-column signature to enable multi-row VALUES.
 	type groupKey struct {
@@ -415,6 +446,11 @@ func (s *PostgresSink) batchInsert(ctx context.Context, tx pgx.Tx, table string,
 	colList := strings.Join(quotedCols, ", ")
 
 	pkCols := s.pkColumns
+	if s.pkColumnsFromMetadata && s.pkByTable != nil {
+		if pks, ok := s.pkByTable[table]; ok && len(pks) > 0 {
+			pkCols = pks
+		}
+	}
 	if len(pkCols) == 0 {
 		pkCols = []string{"id"}
 	}
@@ -525,6 +561,11 @@ func (s *PostgresSink) batchInsert(ctx context.Context, tx pgx.Tx, table string,
 
 func (s *PostgresSink) batchDelete(ctx context.Context, tx pgx.Tx, table string, rows [][]any) error {
 	pkCols := s.pkColumns
+	if s.pkColumnsFromMetadata && s.pkByTable != nil {
+		if pks, ok := s.pkByTable[table]; ok && len(pks) > 0 {
+			pkCols = pks
+		}
+	}
 	if len(pkCols) == 0 {
 		pkCols = []string{"id"}
 	}
@@ -592,6 +633,15 @@ func (s *PostgresSink) batchDelete(ctx context.Context, tx pgx.Tx, table string,
 
 func (s *PostgresSink) deleteValues(cols []string, rec core.Record) ([]any, error) {
 	pkCols := s.pkColumns
+	if s.pkColumnsFromMetadata {
+		if pk := parseMetadataKeyColumns(rec.Metadata.Key); len(pk) > 0 {
+			pkCols = pk
+		} else if s.pkByTable != nil {
+			if pks, ok := s.pkByTable[rec.Metadata.Table]; ok && len(pks) > 0 {
+				pkCols = pks
+			}
+		}
+	}
 	if len(pkCols) == 0 {
 		pkCols = []string{"id"}
 	}

@@ -351,6 +351,7 @@ func sinkConfigSchemas() map[string][]ConfigField {
 			{Name: "table", Type: FieldString, Required: false, Description: "Target table name (empty = use source table name dynamically)"},
 			{Name: "batch_mode", Type: FieldString, Required: false, Default: "insert", Description: "Write mode", Enum: []string{"insert", "upsert", "increment"}},
 			{Name: "pk_columns", Type: FieldStringArray, Required: false, Description: "Primary key columns for upsert/increment mode"},
+			{Name: "pk_columns_from_metadata", Type: FieldBool, Required: false, Default: false, Description: "Derive per-table PK columns from JSON-object Metadata.Key (multi-table fan-out); falls back to pk_columns then id"},
 			{Name: "increment_columns", Type: FieldMap, Required: false, Description: "Map of target_col -> source_field for batch_mode=increment. Non-idempotent: replay re-adds."},
 			{Name: "auto_create", Type: FieldBool, Required: false, Default: false, Description: "Auto-create target table if missing. DDL types prefer column_types, then source/Debezium declared types, then sample inference."},
 			{Name: "column_types", Type: FieldMap, Required: false, Description: "Explicit target DDL overrides for auto_create/add_columns, e.g. {deleted: 'BOOLEAN', amount: 'NUMERIC(18,2)'}. Highest priority."},

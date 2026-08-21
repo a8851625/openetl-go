@@ -1196,13 +1196,22 @@ Residual/follow-up: none
   后缀）构建 colTypes 并填入每条 CDC 记录（mysql_cdc.go:501 起），与 BUG-6 的
   snapshot_cdc 修复同构。**无需开发**，本项关闭。
 
-### GAP-3：`postgres` sink 缺 `pk_columns_from_metadata`
+### GAP-3：`postgres` sink 缺 `pk_columns_from_metadata`（2026-08-21 已实现，e2e 待补）
 
 - **现状**：mysql sink 支持 per-table PK 派生（mysql.go:354），postgres sink 为 0。
 - **影响**：kafka 多表扇出→PG upsert 链路无法按表解析 PK，DELETE/UPDATE 失败。
 - **方案**：复用 metadata_pk.go 的 parseMetadataKeyColumns，镜像 mysql.go 的接入点。
 - **验收**：单测覆盖 JSON 对象 Key 解析、复合 PK、Key 缺失时报错；多表扇出→PG
   upsert 的 e2e（对标 e2e-kafka-multitable-clickhouse.sh 建脚本）。
+- **2026-08-21 实现记录**：derivePKFromMetadataShared 共享助手（metadata_pk.go）；
+  postgres sink 增加 pk_columns_from_metadata + pkByTable 快照，覆盖
+  CompactRecordsByPK/batchInsert ON CONFLICT/batchDelete/deleteValues 四条路径
+  （per-table conflict target）；UI schema 与文档已加字段。**附带**：ClickHouse sink
+  的 pkColumnsByTable 对空 Metadata.Key 从整批报错改为回退静态 pk_columns→id
+  （带警告日志）——修复 DLQ replay 存量记录（无 Key）永久无法重放的问题；旧行为
+  测试改为回退断言。测试：TestPostgresDerivePKFromMetadataShared、
+  TestPostgresPKFromMetadataConfig、TestClickHousePKColumnsByTableFallsBackToStatic；
+  sink+server 全量绿。**残留**：kafka→PG 多表扇出 e2e 待容器环境恢复后补。
 
 ### GAP-4：`elasticsearch` sink 缺 `schema_drift` 与 index 模板
 

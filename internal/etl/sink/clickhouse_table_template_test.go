@@ -180,19 +180,35 @@ func TestClickHousePKColumnsByTableRejectsKeyChange(t *testing.T) {
 	}
 }
 
-// TestClickHousePKColumnsByTableRequiresKey verifies pk_columns_from_metadata
-// rejects records without a JSON-object metadata key.
-func TestClickHousePKColumnsByTableRequiresKey(t *testing.T) {
-	s := &ClickHouseSink{name: "clickhouse", pkColumnsFromMetadata: true}
+// TestClickHousePKColumnsByTableFallsBackToStatic verifies pk_columns_from_metadata
+// falls back to the static pk_columns (then the id default) for records whose
+// Metadata.Key is empty — the DLQ-replay hardening path — instead of failing
+// the whole batch.
+func TestClickHousePKColumnsByTableFallsBackToStatic(t *testing.T) {
+	s := &ClickHouseSink{name: "clickhouse", pkColumnsFromMetadata: true, pkColumns: []string{"strategy_id", "service_city_id"}}
 	records := []core.Record{
 		{
 			Operation: core.OpInsert,
-			Data:      map[string]any{"id": int64(1)},
-			Metadata:  core.Metadata{Table: "orders"},
+			Data:      map[string]any{"strategy_id": int64(24), "service_city_id": int64(2)},
+			Metadata:  core.Metadata{Table: "surcharge"},
 		},
 	}
-	if _, err := s.pkColumnsByTable(records); err == nil {
-		t.Fatal("expected error for missing metadata key")
+	pk, err := s.pkColumnsByTable(records)
+	if err != nil {
+		t.Fatalf("fallback must not error: %v", err)
+	}
+	if len(pk["surcharge"]) != 2 || pk["surcharge"][0] != "strategy_id" {
+		t.Fatalf("fallback pk = %v", pk["surcharge"])
+	}
+
+	// No static pk_columns configured either: default id.
+	s2 := &ClickHouseSink{name: "clickhouse", pkColumnsFromMetadata: true}
+	pk2, err := s2.pkColumnsByTable(records)
+	if err != nil {
+		t.Fatalf("default fallback must not error: %v", err)
+	}
+	if len(pk2["surcharge"]) != 1 || pk2["surcharge"][0] != "id" {
+		t.Fatalf("default pk = %v", pk2["surcharge"])
 	}
 }
 
