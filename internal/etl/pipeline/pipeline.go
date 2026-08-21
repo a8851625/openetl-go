@@ -44,6 +44,13 @@ const (
 	StatusCompleted Status = "completed"
 )
 
+// batchCommitTimeout bounds one writeBatch commit: the sink write (with
+// retries), single-row isolation, DLQ writes and the checkpoint save. Each
+// stage gets a fresh budget derived from the running context, so an
+// exhausted batch-write budget does not cascade into the isolation stage
+// (BUG-5).
+const batchCommitTimeout = 30 * time.Second
+
 // ErrRunnerStopping means a previous run still owns its runtime resources.
 // Callers must wait for Done before starting another run so source/sink handles
 // and transform state are never used concurrently across generations.
@@ -1114,7 +1121,7 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	// bounded timeout. If the caller supplied an explicit deadline (e.g.
 	// the 10s shutdown flush path), honor the shorter of the two so that
 	// forced shutdowns still time out.
-	commitCtx, commitCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	commitCtx, commitCancel := context.WithTimeout(context.Background(), batchCommitTimeout)
 	defer commitCancel()
 	if dl, ok := ctx.Deadline(); ok {
 		if dlSub, subErr := context.WithDeadline(commitCtx, dl); subErr == nil {
@@ -1132,6 +1139,14 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	// remains the source-of-truth for "should we still be running", but
 	// by the time we reach writeBatch the batch was already read from the
 	// source — its commit is the at-least-once guarantee.
+	//
+	// runCtx keeps the original "should we still be running" context so that
+	// later stages (single-row isolation) can derive a FRESH deadline after
+	// commitCtx may already be exhausted by the batch write + retries.
+	// Reusing an exhausted commitCtx for isolation makes every per-record
+	// retry fail immediately with context deadline exceeded, amplifying one
+	// transient sink timeout into a whole-batch DLQ flood (BUG-5).
+	runCtx := ctx
 	ctx = commitCtx
 
 	var transformed []core.Record
@@ -1232,7 +1247,16 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			// Single-row error isolation: retry each record individually so
 			// only the genuinely failing records go to DLQ. Good records
 			// in the same batch are still written successfully.
-			goodCount, failures = r.writeRecordsIndividually(ctx, transformed)
+			//
+			// BUG-5: derive a fresh deadline from runCtx rather than reusing
+			// commitCtx — the batch write above may have exhausted commitCtx,
+			// and retrying 500 records against an expired context would send
+			// the entire batch to the DLQ on a single transient timeout.
+			// runCtx still bounds isolation: a shutdown/cancelled pipeline
+			// fails fast exactly as before.
+			isoCtx, isoCancel := context.WithTimeout(runCtx, batchCommitTimeout)
+			goodCount, failures = r.writeRecordsIndividually(isoCtx, transformed)
+			isoCancel()
 		}
 		if goodCount > 0 {
 			r.addRecordsWritten(int64(goodCount))

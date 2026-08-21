@@ -1594,3 +1594,67 @@ func (d *slowCaptureDLQ) WriteDLQ(ctx context.Context, _ DLQEntry) error {
 	return nil
 }
 func (d *slowCaptureDLQ) Close() error { return nil }
+
+// batchDeadlineSink fails BATCH writes by draining the supplied context
+// (simulating a slow batch that exhausts the 30s commitCtx budget, BUG-5)
+// but succeeds on single-record writes, modelling a transient batch timeout
+// where individual records are actually writable.
+type batchDeadlineSink struct {
+	batchCalls int32
+	singleOK   int32
+}
+
+func (s *batchDeadlineSink) Name() string               { return "batch-deadline" }
+func (s *batchDeadlineSink) Open(context.Context) error { return nil }
+func (s *batchDeadlineSink) Write(ctx context.Context, recs []core.Record) error {
+	if len(recs) > 1 {
+		atomic.AddInt32(&s.batchCalls, 1)
+		<-ctx.Done() // drain the commit budget like a hung/slow sink
+		return ctx.Err()
+	}
+	atomic.AddInt32(&s.singleOK, 1)
+	return nil
+}
+func (s *batchDeadlineSink) Close() error { return nil }
+
+// TestRunnerIsolationUsesFreshContextAfterCommitBudgetExhausted is the BUG-5
+// regression: when the batch write exhausts the commitCtx budget while the
+// runner itself is still running (runCtx has no deadline), single-row
+// isolation must derive a FRESH deadline and recover the writable records
+// instead of failing every record against the expired commitCtx and flooding
+// the DLQ.
+func TestRunnerIsolationUsesFreshContextAfterCommitBudgetExhausted(t *testing.T) {
+	store := newMemoryCPStore()
+	dlq := &captureDLQ{}
+	sink := &batchDeadlineSink{}
+	r := newCheckpointWriteBatchRunner(t, nil, store, dlq)
+	r.sink = sink
+	r.retryConfig.MaxAttempts = 1
+
+	// No deadline on the runner context: the pipeline is alive; only the
+	// per-batch commit budget should expire inside writeBatch.
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	if got := atomic.LoadInt32(&sink.batchCalls); got < 1 {
+		t.Fatalf("batch sink calls = %d, want >= 1", got)
+	}
+	if int(atomic.LoadInt32(&sink.singleOK)) != len(checkpointTestBatch()) {
+		t.Fatalf("single-record writes = %d, want %d (isolation must recover records with a fresh deadline)", atomic.LoadInt32(&sink.singleOK), len(checkpointTestBatch()))
+	}
+	stats := r.Stats()
+	if stats.RecordsWritten != int64(len(checkpointTestBatch())) || stats.RecordsFailed != 0 || stats.RecordsDLQ != 0 {
+		t.Fatalf("stats written/failed/dlq = %d/%d/%d, want %d/0/0", stats.RecordsWritten, stats.RecordsFailed, stats.RecordsDLQ, len(checkpointTestBatch()))
+	}
+	dlq.mu.Lock()
+	defer dlq.mu.Unlock()
+	if len(dlq.entries) != 0 {
+		t.Fatalf("DLQ entries = %d, want 0 (transient batch timeout must not flood the DLQ)", len(dlq.entries))
+	}
+	// Checkpoint intentionally does NOT advance on a failed batch write
+	// (at-least-once: the source range replays on restart and the idempotent
+	// sink absorbs it), so only assert it was not saved — same contract as
+	// TestRunnerWritesDLQAfterSinkContextDeadline.
+	if checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint advanced after a failed batch write (isolation recovery does not checkpoint; replay absorbs duplicates)")
+	}
+}

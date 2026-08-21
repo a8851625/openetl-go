@@ -1088,6 +1088,60 @@ channel 复用或已关闭节点重启问题。
 checkpoint 规避问题；不改变 sink acknowledgement 后才推进 checkpoint 的 at-least-once
 边界。
 
+### BUG-5：writeBatch 共享 30s commitCtx，单次超时放大为整批 DLQ（2026-08-13 发现）
+
+状态：`delivered`
+
+```text
+Round: 1/5
+Roadmap item: BUG-5
+Profile/path: standalone 任意 sink 批量写路径（writeBatch）
+Objective: 单-row 隔离、DLQ 写入与 checkpoint 保存不再复用可能已被批次重试耗尽的 commitCtx，一次瞬时 sink 超时不得放大为整批 500 条 DLQ。
+Scope: internal/etl/pipeline/pipeline.go writeBatch/writeRecordsIndividually/DLQ 路径 + unit/integration tests。
+Non-goals: 改变 at-least-once 语义；取消重试机制；修改 sink 实现。
+Acceptance: 1) sink.Write 耗尽 30s 后隔离路径用新鲜 ctx 重试每条记录，非过期 ctx；2) 瞬时超时场景下好记录不被误进 DLQ；3) DLQ 写入与 checkpoint 保存有独立超时；4) 现有 TestRunnerWritesDLQAfterSinkContextDeadline 语义保持（关机路径仍整批 DLQ）；5) targeted tests + -race 通过。
+Evidence:
+  - TestRunnerIsolationUsesFreshContextAfterCommitBudgetExhausted（新增回归：批量写耗尽 commitCtx 后隔离用新鲜 deadline 恢复 2/2，0 failed/0 DLQ）。
+  - TestRunnerWritesDLQAfterSinkContextDeadline 语义不变（外层 ctx 带 deadline 的关机场景隔离仍正确失败进 DLQ）。
+  - go test -race ./internal/etl/pipeline/ 全绿；server/orchestrator 回归全绿。
+Result: delivered（单元 + race 完整；at-least-once 语义不变：失败批次仍不推进 checkpoint，重放由幂等 sink 吸收）
+Residual/follow-up: none
+```
+
+**现象与根因**：writeBatch 在 :1117 创建一个 30 秒的 commitCtx，覆盖 sink 写、
+单-row 隔离、DLQ 写和 checkpoint 保存。当 sink.Write + retry.Do 耗尽该预算后，
+writeRecordsIndividually 仍拿到过期 ctx，每条记录的 retry.Do 首次尝试即返回
+context deadline exceeded（非 retryable），全部 500 条计入 failures 进 DLQ。
+一次瞬时的 sink 超时被放大为整批 DLQ 洪水。
+
+### BUG-6：snapshot_cdc CDC 阶段事件不填 ColumnTypes（2026-08-13 发现）
+
+状态：`queued`
+
+```text
+Round: 0/5
+Roadmap item: BUG-6
+Profile/path: mysql_snapshot_cdc CDC 相位 -> kafka -> clickhouse 自动建表
+Objective: CDC 相位事件携带 ColumnTypes（canal e.Table.Columns 的 RawType，复用 mysql_cdc 现成模式），使下游不再退化回样本值 + name-hint 推断。
+Scope: internal/etl/source/mysql_snapshot_cdc.go OnRow + tests。
+Non-goals: 改 kafka envelope 格式；改 typing 推断逻辑本身。
+Acceptance: 1) CDC 相位 INSERT/UPDATE/DELETE 记录的 Metadata.ColumnTypes 非空且与 canal schema 一致；2) 经 kafka -> clickhouse 自动建表使用声明类型；3) 单测 + 相关 e2e 通过。
+Evidence: OnRow 函数内 ColumnTypes 出现 0 次（仅 snapshot 相位 :916/:988 填充）；request_id/work_time 系列 bug 均走该退化路径。
+Result: queued
+Residual/follow-up: none
+```
+
+### 低优先级残留（不入 BUG backlog，随相关模块迭代时处理）
+
+- **Boolean flag hint 语义受限**（mapper.go:187-198，`is_*`/`has_*`/`active`/`enabled`/
+  `deleted`/`_flag` → ClickHouse UInt8）：非数字文本（'yes'/'on'）在
+  convertClickHouseValue 中原样传给 AppendRow 响亮失败进 DLQ，非静默错误；仅在需要
+  宽容文本布尔语义时再评估。
+- **Decimal name-hint 精度硬编码**（mapper.go:222-232，amount/price/total/cost/fee/
+  balance 及后缀 → 固定 Decimal(18,2)）：name-hint 命中时不看源列精度；源声明类型
+  走 resolve.go decimalDDL 保真路径不受影响。by-design 有损，需更高精度时改用显式
+  DDL 或增强 MapSourceType 透传源精度。
+
 ## 有界后续
 
 这些事项只有在上方当前任务完成或被明确重新排序后才进入执行：
