@@ -211,11 +211,78 @@ type pgCDCReader struct {
 	sendStandbyStatusUpdate func(context.Context, pglogrepl.StandbyStatusUpdate) error
 }
 
-// pgCatalog holds relation metadata learned from RELATION messages.
+// pgCatalog holds relation metadata learned from RELATION messages plus
+// per-table primary-key columns loaded from pg_index (pgoutput RELATION
+// messages carry column types but not PK membership — GAP-1).
 type pgCatalog struct {
 	mu       sync.RWMutex
 	rel2name map[uint32]string
 	rel2cols map[uint32][]pgColumnInfo
+	// tablePKs caches PK column names per qualified table name.
+	tablePKs map[string][]string
+}
+
+// pgTypeName maps common built-in type OIDs to textual type names. These use
+// MySQL-flavoured names where they coincide (int/bigint/varchar/datetime)
+// because typing.MapSourceType consumes that dialect; PG-native types keep
+// their PG names.
+func pgTypeName(oid uint32) string {
+	switch oid {
+	case 16:
+		return "boolean"
+	case 17:
+		return "bytea"
+	case 18:
+		return "char"
+	case 19:
+		return "name"
+	case 20:
+		return "bigint"
+	case 21:
+		return "smallint"
+	case 23:
+		return "int"
+	case 24:
+		return "regproc"
+	case 25:
+		return "text"
+	case 26:
+		return "oid"
+	case 700:
+		return "float4"
+	case 701:
+		return "float8"
+	case 1042:
+		return "varchar"
+	case 1043:
+		return "varchar"
+	case 1082:
+		return "date"
+	case 1083:
+		return "time"
+	case 1114:
+		return "timestamp"
+	case 1184:
+		return "timestamptz"
+	case 1186:
+		return "interval"
+	case 1700:
+		return "numeric"
+	case 2950:
+		return "uuid"
+	case 3802:
+		return "jsonb"
+	case 114:
+		return "json"
+	case 1560:
+		return "bit"
+	case 1562:
+		return "varbit"
+	case 2278:
+		return "void"
+	default:
+		return fmt.Sprintf("oid_%d", oid)
+	}
 }
 
 type pgColumnInfo struct {
@@ -227,6 +294,7 @@ func newPGCatalog() *pgCatalog {
 	return &pgCatalog{
 		rel2name: map[uint32]string{},
 		rel2cols: map[uint32][]pgColumnInfo{},
+		tablePKs: map[string][]string{},
 	}
 }
 
@@ -235,6 +303,36 @@ func (c *pgCatalog) setRelation(relID uint32, tableName string, cols []pgColumnI
 	defer c.mu.Unlock()
 	c.rel2name[relID] = tableName
 	c.rel2cols[relID] = cols
+}
+
+// setTablePKs caches the PK column list for a table.
+func (c *pgCatalog) setTablePKs(table string, pks []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tablePKs[table] = pks
+}
+
+// primaryKeys returns the cached PK columns for a table (nil if unknown).
+func (c *pgCatalog) primaryKeys(table string) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tablePKs[table]
+}
+
+// columnTypes returns column->type-name mapping for a relation (GAP-1:
+// Metadata.ColumnTypes contract matching mysql_batch/mysql_cdc).
+func (c *pgCatalog) columnTypes(relID uint32) map[string]string {
+	c.mu.RLock()
+	cols := c.rel2cols[relID]
+	c.mu.RUnlock()
+	if len(cols) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(cols))
+	for _, col := range cols {
+		m[col.Name] = pgTypeName(col.TypeOID)
+	}
+	return m
 }
 
 func (c *pgCatalog) tableName(relID uint32) string {
@@ -298,6 +396,10 @@ func (r *pgCDCReader) run(ctx context.Context) {
 		r.errors <- fmt.Errorf("setup slot: %w", err)
 		return
 	}
+	// GAP-1: preload PK columns per configured table so CDC records can carry
+	// a Metadata.Key JSON object. Best-effort: PK lookup failure degrades to
+	// empty keys (pre-existing behavior) rather than failing the stream.
+	r.loadTablePKs(ctx, setupConn)
 
 	// Resume from the last externally acknowledged/durable LSN. `r.lsn` is a
 	// read-ahead cursor and may point past records that have not reached the
@@ -433,6 +535,53 @@ func (r *pgCDCReader) closeDone() {
 	r.doneOnce.Do(func() {
 		close(r.done)
 	})
+}
+
+// loadTablePKs queries pg_index for the primary-key columns of each
+// configured table (or every published table when tables is empty) and
+// caches them for record key derivation. Best-effort: failures log and leave
+// the cache empty.
+func (r *pgCDCReader) loadTablePKs(ctx context.Context, conn *pgconn.PgConn) {
+	query := `SELECT rc.relname AS table_name,
+		i.relname AS index_name,
+		a.attname AS column_name
+	FROM pg_index x
+	JOIN pg_class c ON c.oid = x.indrelid
+	JOIN pg_namespace n ON n.oid = c.relnamespace
+	JOIN pg_class i ON i.oid = x.indexrelid
+	JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(x.indkey)
+	WHERE x.indisprimary`
+	var args []any
+	if len(r.source.tables) > 0 {
+		placeholders := make([]string, 0, len(r.source.tables))
+		for _, t := range r.source.tables {
+			// Allow schema-qualified input; default schema public.
+			parts := strings.SplitN(t, ".", 2)
+			schema, table := "public", parts[0]
+			if len(parts) == 2 {
+				schema, table = parts[0], parts[1]
+			}
+			placeholders = append(placeholders, fmt.Sprintf("($%d::text, $%d::text)", len(args)+1, len(args)+2))
+			args = append(args, schema, table)
+		}
+		query += " AND n.nspname || '.' || c.relname IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+	query += " ORDER BY c.relname, array_position(x.indkey, a.attnum)"
+	paramBytes := make([][]byte, 0, len(args))
+	for _, a := range args {
+		paramBytes = append(paramBytes, []byte(fmt.Sprintf("%v", a)))
+	}
+	result := conn.ExecParams(ctx, query, paramBytes, nil, nil, nil)
+	defer result.Close()
+	pending := map[string][]string{}
+	for result.NextRow() {
+		tableName := string(result.Values()[0])
+		colName := string(result.Values()[2])
+		pending[tableName] = append(pending[tableName], colName)
+	}
+	for tbl, pks := range pending {
+		r.catalog.setTablePKs(tbl, pks)
+	}
 }
 
 func (r *pgCDCReader) setupPublication(ctx context.Context, conn *pgconn.PgConn) error {
@@ -717,10 +866,12 @@ func (r *pgCDCReader) parseInsertMsg(data []byte, lsn string) []byte {
 		Operation: core.OpInsert,
 		Data:      dataMap,
 		Metadata: core.Metadata{
-			Source:    r.source.name,
-			Table:     tableName,
-			Timestamp: time.Now(),
-			LSN:       lsn,
+			Source:      r.source.name,
+			Table:       tableName,
+			Timestamp:   time.Now(),
+			LSN:         lsn,
+			Key:         r.recordKey(tableName, dataMap, nil),
+			ColumnTypes: r.catalog.columnTypes(relID),
 		},
 	})
 	return data[pos:]
@@ -740,6 +891,22 @@ func (r *pgCDCReader) sendRecord(rec core.Record) {
 	case <-r.done:
 	case <-r.ctx.Done():
 	}
+}
+
+// recordKey builds the per-table PK JSON object (GAP-1). UPDATE prefers the
+// before-image when present, mirroring the mysql_cdc contract; nil beforeMap
+// falls back to data.
+func (r *pgCDCReader) recordKey(tableName string, data map[string]any, before map[string]any) string {
+	pks := r.catalog.primaryKeys(tableName)
+	if len(pks) == 0 {
+		return ""
+	}
+	if before != nil {
+		if key := metadataKeyJSONMulti(pks, before); key != "" {
+			return key
+		}
+	}
+	return metadataKeyJSONMulti(pks, data)
 }
 
 func (r *pgCDCReader) parseUpdateMsg(data []byte, lsn string) []byte {
@@ -805,7 +972,14 @@ func (r *pgCDCReader) parseUpdateMsg(data []byte, lsn string) []byte {
 		Operation: core.OpUpdate,
 		Data:      dataMap,
 		Before:    beforeMap,
-		Metadata:  core.Metadata{Source: r.source.name, Table: tableName, Timestamp: time.Now(), LSN: lsn},
+		Metadata: core.Metadata{
+			Source:      r.source.name,
+			Table:       tableName,
+			Timestamp:   time.Now(),
+			LSN:         lsn,
+			Key:         r.recordKey(tableName, dataMap, beforeMap),
+			ColumnTypes: r.catalog.columnTypes(relID),
+		},
 	}
 	r.sendRecord(rec)
 	return data[pos:]
@@ -839,7 +1013,14 @@ func (r *pgCDCReader) parseDeleteMsg(data []byte, lsn string) []byte {
 	r.sendRecord(core.Record{
 		Operation: core.OpDelete,
 		Data:      dataMap,
-		Metadata:  core.Metadata{Source: r.source.name, Table: tableName, Timestamp: time.Now(), LSN: lsn},
+		Metadata: core.Metadata{
+			Source:      r.source.name,
+			Table:       tableName,
+			Timestamp:   time.Now(),
+			LSN:         lsn,
+			Key:         r.recordKey(tableName, dataMap, nil),
+			ColumnTypes: r.catalog.columnTypes(relID),
+		},
 	})
 	return data[pos:]
 }

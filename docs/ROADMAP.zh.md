@@ -1171,7 +1171,7 @@ Residual/follow-up: none
 实现（grep + 代码走读，非运行时验证）。发现的缺口按生产影响排队如下，逐项做到
 与基线同等成熟度后再关项。
 
-### GAP-1：`postgres_cdc` 三个 Metadata 契约全缺（优先级最高）
+### GAP-1：`postgres_cdc` 三个 Metadata 契约全缺（2026-08-21 已实现，待 PG 实例 e2e）
 
 - **现状**：postgres_cdc 的 INSERT/UPDATE/DELETE 记录（postgres_cdc.go:716/804/839）
   只填 Source/Table/Timestamp/LSN，完全不填 `Metadata.Key`、`Metadata.ColumnTypes`。
@@ -1181,6 +1181,13 @@ Residual/follow-up: none
   元数据填充 Key（含复合 PK，对标 metadataKeyJSONMulti）与 ColumnTypes（OID→文本类型）。
 - **验收**：单测覆盖 INSERT/UPDATE/DELETE 的 Key JSON 与 ColumnTypes（含复合 PK）；
   `go test ./internal/etl/...` 全绿；有界后续补 PG 真实例 e2e。
+- **2026-08-21 实现记录**：pgCatalog 增加 tablePKs 缓存与 columnTypes()（OID→文本
+  类型，pgTypeName）；启动时 loadTablePKs 经 replConn 查 pg_index（复合 PK 按
+  indkey 顺序，tables 为空时全量 indisprimary，best-effort 非致命）；三个
+  parse*Msg 填 Key（recordKey：UPDATE 优先 before-image，镜像 mysql_cdc 契约）
+  与 ColumnTypes。测试：TestPGCatalogRecordKeyComposite、
+  TestPGCatalogColumnTypes；source 全量与 -race 绿。**残留**：PG 实例 e2e（真实
+  pgoutput 流含 Key/ColumnTypes 断言）待容器环境恢复后补。
 
 ### GAP-2：`mysql_cdc` 缺 `Metadata.ColumnTypes`（BUG-6 漏掉的孪生路径）
 
