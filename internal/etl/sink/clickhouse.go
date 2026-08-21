@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -82,6 +84,12 @@ type ClickHouseSink struct {
 	sourceDialect string
 	// httpConn is used when protocol is "http"
 	httpConn *sql.DB
+	// httpHosts is the failover list for protocol=http: host[:port] entries
+	// tried round-robin after the first failure. Empty means single-host via
+	// s.host/s.port (pre-existing behavior).
+	httpHosts []string
+	// httpHostIdx is the round-robin cursor for httpHosts failover.
+	httpHostIdx atomic.Int32
 	// optimizeCancel cancels the optimize loop goroutine on Close
 	optimizeCancel context.CancelFunc
 	// Metrics
@@ -89,6 +97,10 @@ type ClickHouseSink struct {
 	batchesSent    int64
 	writeLatencyNs int64
 	writeErrors    int64
+	// tableRowsWritten / tableWriteLatencyNs / tableBatches give per-table
+	// write metrics (P3: which target table drags a multi-table batch).
+	tableMetricsMu sync.RWMutex
+	tableMetrics   map[string]*tableWriteMetrics
 	// versionCounter ensures monotonic _version values even with clock drift.
 	versionCounter atomic.Int64
 }
@@ -113,6 +125,7 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 		compressionMethod:  "LZ4",
 		asyncInsertWait:    true,
 		maxInsertBlockSize: 1048576, // CH default max_insert_block_size
+		tableMetrics:       make(map[string]*tableWriteMetrics),
 	}
 	if v, ok := config["name"]; ok {
 		s.name = v.(string)
@@ -230,6 +243,22 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 	if v, ok := config["ttl"]; ok {
 		s.ttlExpr = v.(string)
 	}
+	// HTTP failover hosts: host or host:port entries tried round-robin after
+	// the first connection failure. Only meaningful with protocol=http; the
+	// native protocol ignores it (clickhouse-go manages its own addressing).
+	if raw, ok := config["hosts"].([]any); ok {
+		for _, h := range raw {
+			if hs, ok := h.(string); ok && hs != "" {
+				s.httpHosts = append(s.httpHosts, hs)
+			}
+		}
+	} else if hs, ok := config["hosts"].(string); ok && hs != "" {
+		for _, h := range strings.Split(hs, ",") {
+			if h = strings.TrimSpace(h); h != "" {
+				s.httpHosts = append(s.httpHosts, h)
+			}
+		}
+	}
 	return s, nil
 }
 
@@ -248,6 +277,63 @@ func (s *ClickHouseSink) SinkMetrics() core.SinkMetrics {
 		WriteLatency: wl,
 		Errors:       atomic.LoadInt64(&s.writeErrors),
 	}
+}
+
+// tableWriteMetrics tracks per-target-table write counters so multi-table
+// fan-out pipelines can see which table drags a batch (P3).
+type tableWriteMetrics struct {
+	rowsWritten    int64
+	batchesSent    int64
+	writeLatencyNs int64
+	writeErrors    int64
+}
+
+// recordTableMetrics updates the per-table counters.
+func (s *ClickHouseSink) recordTableMetrics(table string, rows int, latency time.Duration, failed bool) {
+	s.tableMetricsMu.Lock()
+	m, ok := s.tableMetrics[table]
+	if !ok {
+		m = &tableWriteMetrics{}
+		s.tableMetrics[table] = m
+	}
+	s.tableMetricsMu.Unlock()
+	atomic.AddInt64(&m.rowsWritten, int64(rows))
+	atomic.AddInt64(&m.batchesSent, 1)
+	atomic.AddInt64(&m.writeLatencyNs, latency.Nanoseconds())
+	if failed {
+		atomic.AddInt64(&m.writeErrors, 1)
+	}
+}
+
+// TableWriteStats is a snapshot of per-table write metrics.
+type TableWriteStats struct {
+	Table          string  `json:"table"`
+	RowsWritten    int64   `json:"rows_written"`
+	BatchesSent    int64   `json:"batches_sent"`
+	WriteLatencyMs float64 `json:"write_latency_ms"`
+	Errors         int64   `json:"errors"`
+}
+
+// TableWriteStats returns per-table write counters (multi-table fan-out
+// observability; exposed for API/logging consumers).
+func (s *ClickHouseSink) TableWriteStats() []TableWriteStats {
+	s.tableMetricsMu.RLock()
+	defer s.tableMetricsMu.RUnlock()
+	out := make([]TableWriteStats, 0, len(s.tableMetrics))
+	for tbl, m := range s.tableMetrics {
+		wl := float64(0)
+		if b := atomic.LoadInt64(&m.batchesSent); b > 0 {
+			wl = float64(atomic.LoadInt64(&m.writeLatencyNs)) / float64(b) / 1e6
+		}
+		out = append(out, TableWriteStats{
+			Table:          tbl,
+			RowsWritten:    atomic.LoadInt64(&m.rowsWritten),
+			BatchesSent:    atomic.LoadInt64(&m.batchesSent),
+			WriteLatencyMs: wl,
+			Errors:         atomic.LoadInt64(&m.writeErrors),
+		})
+	}
+	return out
 }
 
 func (s *ClickHouseSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) error {
@@ -523,23 +609,31 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 	}
 
 	for tableName, tb := range batches {
+		start := time.Now()
+		failed := false
+		rows := len(tb.inserts) + len(tb.updates) + len(tb.deletes)
+		defer func() { s.recordTableMetrics(tableName, rows, time.Since(start), failed) }()
 		// Check for non-writable table engines (Iceberg, Parquet, View, etc.)
 		if err := s.checkWritableEngine(ctx, tableName); err != nil {
+			failed = true
 			return err
 		}
 
 		if len(tb.inserts) > 0 {
 			if err := s.writeInsert(ctx, tableName, tb.inserts); err != nil {
+				failed = true
 				return err
 			}
 		}
 		if len(tb.updates) > 0 {
 			if err := s.writeUpdates(ctx, tableName, tb.updates); err != nil {
+				failed = true
 				return err
 			}
 		}
 		if len(tb.deletes) > 0 {
 			if err := s.writeDeletes(ctx, tableName, tb.deletes); err != nil {
+				failed = true
 				return err
 			}
 		}
@@ -866,37 +960,59 @@ func (s *ClickHouseSink) writeInsertHTTP(ctx context.Context, tableName string, 
 	if s.tls {
 		scheme = "https"
 	}
-	url := fmt.Sprintf("%s://%s:%d/?query=%s", scheme, s.host, s.port,
-		"INSERT+INTO+"+s.database+"."+tableName+"+FORMAT+JSONEachRow")
-	if s.asyncInsert {
-		url += "&async_insert=1"
+	buildURL := func(addr string) string {
+		host, port := addr, fmt.Sprintf("%d", s.port)
+		if h, p, err := net.SplitHostPort(addr); err == nil {
+			host, port = h, p
+		}
+		url := fmt.Sprintf("%s://%s:%s/?query=%s", scheme, host, port,
+			"INSERT+INTO+"+s.database+"."+tableName+"+FORMAT+JSONEachRow")
+		if s.asyncInsert {
+			url += "&async_insert=1"
+		}
+		return url
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(buf.String()))
-	if err != nil {
-		return fmt.Errorf("create http insert request: %w", err)
+	// Failover list: the primary host plus configured httpHosts entries.
+	// Each candidate is tried once; connection errors move to the next host
+	// (round-robin start so traffic spreads after recovery), while HTTP error
+	// responses are server-side failures and are returned immediately.
+	addresses := []string{fmt.Sprintf("%s:%d", s.host, s.port)}
+	addresses = append(addresses, s.httpHosts...)
+	first := int(s.httpHostIdx.Add(1)-1) % len(addresses)
+	if first < 0 {
+		first += len(addresses)
 	}
-	if s.user != "" {
-		req.Header.Set("X-ClickHouse-User", s.user)
-	}
-	if s.password != "" {
-		req.Header.Set("X-ClickHouse-Key", s.password)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("http insert: %w", err)
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for i := 0; i < len(addresses); i++ {
+		addr := addresses[(first+i)%len(addresses)]
+		req, err := http.NewRequestWithContext(ctx, "POST", buildURL(addr), strings.NewReader(buf.String()))
+		if err != nil {
+			return fmt.Errorf("create http insert request: %w", err)
+		}
+		if s.user != "" {
+			req.Header.Set("X-ClickHouse-User", s.user)
+		}
+		if s.password != "" {
+			req.Header.Set("X-ClickHouse-Key", s.password)
+		}
+		req.Header.Set("Content-Type", "application/json")
 
-	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("clickhouse http insert %d: %s", resp.StatusCode, string(body))
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("http insert via %s: %w", addr, err)
+			continue // connection-level failure: try next host
+		}
+		if resp.StatusCode >= 300 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return fmt.Errorf("clickhouse http insert %d: %s", resp.StatusCode, string(body))
+		}
+		resp.Body.Close()
+		return nil
 	}
-
-	return nil
+	return lastErr
 }
 
 // recordMetrics updates write counters and latency.

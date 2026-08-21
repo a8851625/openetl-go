@@ -342,6 +342,10 @@ source:
 | `key_column` | 否 | | 消息 key 的列名。 |
 | `value_column` | 否 | | 原始消息 value 的列名。 |
 | `initial_offset` | 否 | `newest` | 无已提交 offset 时的初始消费位置：`oldest` 或 `newest`。 |
+| `format` | 否 | `json` | 消息格式：`json`（平铺对象）、`envelope`（Debezium 或旧版 OpenETL）、`canal_json`（Alibaba canal 扁平消息，支持 INSERT/UPDATE/DELETE，mysqlType 转 ColumnTypes，pkNames 生成 Metadata.Key）。 |
+| `on_parse_error` | 否 | `raw` | 解析失败策略：`raw`（载荷存入 value 列，旧行为）、`skip`（丢弃）、`dlq`（进入错误通道带上下文）。 |
+| `tombstone_policy` | 否 | `delete` | 空值消息（log-compaction tombstone）：`delete`（产出 OpDelete）或 `skip`。 |
+| `expand_key_json` | 否 | `false` | 将 JSON 对象形式的消息 key 展开为 `__key_<列>` 虚拟列。 |
 | `sasl_user` | 否 | | SASL 用户名。 |
 | `sasl_password` | 否 | | SASL 密码（**密钥**）。 |
 | `sasl_mechanism` | 否 | `PLAIN` | SASL 机制：`PLAIN`、`SCRAM-SHA-256` 或 `SCRAM-SHA-512`。 |
@@ -503,6 +507,7 @@ sink:
 | `tls` | 否 | `false` | 启用 ClickHouse TLS 连接。 |
 | `tls_skip_verify` | 否 | `false` | 跳过 TLS 证书校验。 |
 | `compression` | 否 | `LZ4` | `LZ4` 或 `ZSTD`。 |
+| `hosts` | 否 | | `protocol: http` 的故障转移主机列表（`host:port`，数组或逗号分隔字符串）；连接级失败时轮询下一节点，HTTP 错误响应立即返回。native 协议忽略。 |
 | `async_insert` | 否 | `false` | 启用 ClickHouse `async_insert`。 |
 | `async_insert_wait` | 否 | `true` | 等待异步写入完成。 |
 | `ttl` | 否 | | 自动建表时使用的 TTL 表达式。 |

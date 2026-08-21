@@ -408,6 +408,10 @@ source:
 | `key_column` | no | | Column name for message key. |
 | `value_column` | no | | Column name for raw message value. |
 | `initial_offset` | no | `newest` | Initial consumer offset when no committed offset exists: `oldest` or `newest`. |
+| `format` | no | `json` | Message format: `json` (flat object), `envelope` (Debezium or legacy OpenETL), `canal_json` (Alibaba canal flat message; INSERT/UPDATE/DELETE, mysqlType to ColumnTypes, pkNames to Metadata.Key). |
+| `on_parse_error` | no | `raw` | Parse-failure policy: `raw` (payload under value, pre-existing), `skip` (drop), `dlq` (error channel with context). |
+| `tombstone_policy` | no | `delete` | Nil-value (log-compaction tombstone): `delete` (emit OpDelete) or `skip`. |
+| `expand_key_json` | no | `false` | Unfold a JSON-object message key into `__key_<col>` virtual columns. |
 | `sasl_user` | no | | SASL username. |
 | `sasl_password` | no | | SASL password (**secret**). |
 | `sasl_mechanism` | no | `PLAIN` | SASL mechanism: `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`. |
@@ -581,6 +585,7 @@ sink:
 | `tls` | no | `false` | Enable TLS for ClickHouse connection. |
 | `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
 | `compression` | no | `LZ4` | `LZ4` or `ZSTD`. |
+| `hosts` | no | | Failover host list for `protocol: http` (`host:port`, array or comma string); connection-level failures round-robin to the next host; HTTP error responses return immediately. Ignored by native protocol. |
 | `async_insert` | no | `false` | Enable ClickHouse `async_insert`. |
 | `async_insert_wait` | no | `true` | Wait for async insert completion. |
 | `ttl` | no | | TTL expression for auto-created tables. |

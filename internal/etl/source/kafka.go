@@ -34,6 +34,19 @@ type KafkaSource struct {
 	valueColumn   string
 	initialOffset string
 
+	// onParseError controls what happens when a message fails to parse in the
+	// configured format: "raw" (default, pre-existing: fall back to storing the
+	// raw payload under data["value"]), "skip" (drop the message), or "dlq"
+	// (route to the pipeline DLQ via the error channel so it lands in the DLQ
+	// store with full context).
+	onParseError string
+	// expandKeyJSON unfolds a JSON-object message key into virtual __key_<col>
+	// columns (e.g. the per-table PK JSON emitted by OpenETL CDC sinks).
+	expandKeyJSON bool
+	// tombstonePolicy controls records with a nil message value: "delete"
+	// (treat as OpDelete; kafka log-compaction semantics) or "skip" (drop).
+	tombstonePolicy string
+
 	// Consumer fetch / throughput knobs (mapped to sarama.Config).
 	fetchMinBytes       int // Consumer.Fetch.Min
 	fetchMaxBytes       int // Consumer.Fetch.Default
@@ -84,6 +97,31 @@ func NewKafkaSource(config map[string]any) (*KafkaSource, error) {
 	}
 	if v, ok := config["initial_offset"].(string); ok && (v == "oldest" || v == "newest") {
 		s.initialOffset = v
+	}
+	if v, ok := config["on_parse_error"].(string); ok {
+		switch v {
+		case "raw", "skip", "dlq":
+			s.onParseError = v
+		default:
+			return nil, fmt.Errorf("kafka on_parse_error must be raw, skip or dlq, got %q", v)
+		}
+	}
+	if s.onParseError == "" {
+		s.onParseError = "raw"
+	}
+	if v, ok := config["expand_key_json"].(bool); ok {
+		s.expandKeyJSON = v
+	}
+	if v, ok := config["tombstone_policy"].(string); ok {
+		switch v {
+		case "delete", "skip":
+			s.tombstonePolicy = v
+		default:
+			return nil, fmt.Errorf("kafka tombstone_policy must be delete or skip, got %q", v)
+		}
+	}
+	if s.tombstonePolicy == "" {
+		s.tombstonePolicy = "delete"
 	}
 	if v, ok := config["sasl_user"].(string); ok {
 		s.saslUser = v
@@ -331,7 +369,32 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 				rec.Metadata.Key = string(msg.Key)
 			}
 
+			if msg.Value == nil {
+				// Tombstone (log-compaction delete marker).
+				if h.reader.source.tombstonePolicy == "skip" {
+					continue
+				}
+				rec.Operation = core.OpDelete
+				rec.Data = map[string]any{"__tombstone": true}
+				h.reader.mu.Lock()
+				if current, ok := h.reader.offsets[msg.Partition]; !ok || msg.Offset > current {
+					h.reader.offsets[msg.Partition] = msg.Offset
+				}
+				h.reader.mu.Unlock()
+				select {
+				case h.reader.records <- rec:
+				case <-session.Context().Done():
+					return nil
+				case <-h.reader.done:
+					return nil
+				}
+				continue
+			}
+
+			parseOK := true
 			switch {
+			case h.reader.source.format == "canal_json":
+				parseOK = tryCanalJSON(msg.Value, &rec, data)
 			case h.reader.source.format == "envelope":
 				// Two envelope shapes are accepted:
 				//  1. Debezium-style (emitted by the kafka sink since the schema
@@ -384,12 +447,40 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 						data[k] = v
 					}
 				} else {
-					data["value"] = string(msg.Value)
+					parseOK = false
 				}
 			case h.reader.source.valueColumn != "":
 				data[h.reader.source.valueColumn] = string(msg.Value)
 			default:
 				data["value"] = string(msg.Value)
+			}
+
+			if !parseOK {
+				switch h.reader.source.onParseError {
+				case "skip":
+					continue
+				case "dlq":
+					err := fmt.Errorf("kafka message parse failed (format %s, topic %s partition %d offset %d): rerun with on_parse_error=raw to pass the raw payload through, or fix the producer format", h.reader.source.format, msg.Topic, msg.Partition, msg.Offset)
+					select {
+					case h.reader.errors <- err:
+					case <-session.Context().Done():
+					case <-h.reader.done:
+					}
+					continue
+				default: // raw: pre-existing behavior
+					data["value"] = string(msg.Value)
+				}
+			}
+
+			// Optional: expand a JSON-object message key into virtual __key_<col>
+			// columns (e.g. the per-table PK JSON emitted by OpenETL CDC sinks).
+			if h.reader.source.expandKeyJSON && msg.Key != nil {
+				var keyObj map[string]any
+				if err := json.Unmarshal(msg.Key, &keyObj); err == nil {
+					for k, v := range keyObj {
+						data["__key_"+k] = v
+					}
+				}
 			}
 
 			rec.Data = data
@@ -727,6 +818,89 @@ func columnTypesFromConnectSchemaKV(schema map[string]any, rowField string) map[
 		}
 	}
 	return nil
+}
+
+// tryCanalJSON parses an Alibaba canal JSON flat message
+// (https://github.com/alibaba/canal, the canal server's MQ producer mode):
+//
+//	{"type":"INSERT","database":"db","table":"t","ts":...,"es":...,
+//	 "sqlType":{...},"mysqlType":{...},"data":[{...}],"old":[{...}]}
+//
+// Each data element becomes one record. Canal flat messages are
+// single-event, so this parser handles the common per-message single row;
+// multi-row array messages are unsupported (canal server emits one message
+// per row in flat mode by default). DDL/query messages return false so the
+// caller's on_parse_error policy applies (or a downstream DDL-aware
+// transform sees the raw payload).
+func tryCanalJSON(raw []byte, rec *core.Record, data map[string]any) bool {
+	var env struct {
+		Type      string            `json:"type"`
+		Database  string            `json:"database"`
+		Table     string            `json:"table"`
+		SQL       string            `json:"sql"`
+		IsDDL     bool              `json:"isDdl"`
+		PKs       []string          `json:"pkNames"`
+		SQLType   map[string]int32  `json:"sqlType"`
+		MySQLType map[string]string `json:"mysqlType"`
+		Data      []map[string]any  `json:"data"`
+		Old       []map[string]any  `json:"old"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return false
+	}
+	switch env.Type {
+	case "INSERT":
+		rec.Operation = core.OpInsert
+	case "UPDATE":
+		rec.Operation = core.OpUpdate
+	case "DELETE":
+		rec.Operation = core.OpDelete
+	case "TRUNCATE", "REPLACE", "ALTER", "CREATE", "ERASE", "QUERY", "DDL":
+		// DDL and non-DML messages: let the caller's policy decide.
+		return false
+	default:
+		return false
+	}
+	if len(env.Data) == 0 {
+		return false
+	}
+	// Single-row messages only: multi-row arrays would need batch emission
+	// which ConsumeClaim's single-record shape cannot express here.
+	if len(env.Data) > 1 {
+		return false
+	}
+	for k, v := range env.Data[0] {
+		data[k] = v
+	}
+	if env.Database != "" {
+		rec.Metadata.Database = env.Database
+	}
+	if env.Table != "" {
+		rec.Metadata.Table = env.Table
+	}
+	if rec.Operation == core.OpUpdate && len(env.Old) > 0 {
+		rec.Before = env.Old[0]
+	}
+	// mysqlType carries declared column types (e.g. "bigint", "varchar(32)") —
+	// the same ColumnTypes contract mysql_batch/canal-driven sources fill, so
+	// auto_create sinks resolve real source types instead of name hints.
+	if len(env.MySQLType) > 0 {
+		rec.Metadata.ColumnTypes = env.MySQLType
+	}
+	if len(env.PKs) > 0 {
+		key := make(map[string]any, len(env.PKs))
+		for _, pk := range env.PKs {
+			if v, ok := data[pk]; ok {
+				key[pk] = v
+			}
+		}
+		if len(key) > 0 {
+			if b, err := json.Marshal(key); err == nil {
+				rec.Metadata.Key = string(b)
+			}
+		}
+	}
+	return true
 }
 
 // tryDebeziumEnvelope parses a Debezium-style envelope written by the kafka
