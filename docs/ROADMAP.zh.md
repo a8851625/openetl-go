@@ -928,7 +928,8 @@ P4.2a follow-up 验收矩阵（Round 2/5）：
 
 ### BUG-1：`mysql_batch` 字符串主键游标不推进（2026-08-09 发现）
 
-状态：`delivered`（2026-08-21 · lastCursor any 游标 + last_cursor 双格式 checkpoint）
+状态：`active`（代码完成 + 单测闭合；验收 4 容器级 e2e 未跑——镜像构建被
+go mod download 网络阻塞，恢复后补跑再置 delivered）
 
 **现象与根因**：`mysql_batch` 源的 `updateLastID` 只处理 int/int64/float64，
 字符串主键（如 `request_id`）作为 `pk_column` 时游标从不推进，每次轮询
@@ -959,7 +960,7 @@ any/字符串游标）、checkpoint position 序列化与恢复兼容（旧数�
 - `TestMySQLBatchLegacyNumericCheckpointRestores`：旧 {"last_id":42} checkpoint 恢复为
   数值游标；新数值 checkpoint 保持 last_id 字节兼容。
 - go test ./internal/etl/... 全绿；source 包 -race 绿。
-- 残留：容器级 varchar PK e2e（验收 4）随镜像构建恢复后随下个 beta 补跑。
+- **未闭合**：容器级 varchar PK e2e（验收 4）被镜像构建网络阻塞，未跑；据此状态为 active 而非 delivered。
 
 ### BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复（2026-08-12 发现）
 
@@ -1127,7 +1128,7 @@ context deadline exceeded（非 retryable），全部 500 条计入 failures 进
 
 ### BUG-6：snapshot_cdc CDC 阶段事件不填 ColumnTypes（2026-08-13 发现）
 
-状态：`delivered`
+状态：`active`
 
 ```text
 Round: 0/5
@@ -1141,7 +1142,7 @@ Evidence:
   - TestSnapshotCDCHandlerFillsColumnTypes（新增回归：canal schema 列类型含 unsigned 限定符正确构建；request_id/work_time 经 MapSourceType 解析为 String 而非 Int64/DateTime64；空 RawType 跳过；decimal 源精度直传已另行修复，见下方 Decimal 残留条目）。
   - kafka sink Debezium envelope 已序列化 column_types（sink/kafka.go:65 + schema.fields），链路复用 beta.12 既有路径，无需改动。
   - go test ./internal/etl/... 全绿；source 包 -race 绿。
-Result: delivered（与 mysql_cdc OnRow 模式对齐；container e2e 随镜像构建恢复后随下个 beta 补跑）
+Result: active（代码完成 + 单测闭合；验收含"相关 e2e 通过"但 e2e 未跑——镜像构建被网络阻塞，恢复后补跑再置 delivered）
 Residual/follow-up: none
 ```
 
