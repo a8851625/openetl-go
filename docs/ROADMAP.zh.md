@@ -1009,6 +1009,12 @@ binlog，非通用）；跨实例 binlog 归档恢复；改变 at-least-once 语
 **证据**：ref — 用户生产报错日志（ERROR 1236, checkpoint mysql-bin.000120）；
 修复后在本条目更新验收矩阵。
 
+**残留收口**（2026-08-21，Round 5/5）：`resume_from_current` 策略完成真机运行时验证
+（`TestBinlogPurgeRuntimeDetectionResumeFromCurrent`，真 MySQL 8.0 + RESET MASTER）：
+旧坐标 RunFrom 报 1236 且被 `isBinlogPurgedError` 识别 → GetMasterPos 探测新坐标 →
+新坐标持续流式 3s 无 purge 错误；无 MySQL 时测试自动 skip。
+`resnapshot` 策略的端到端（快照重拉验证）仍待容器 e2e（随镜像构建恢复后补跑）。
+
 ### BUG-3：sqlite 单连接（MaxOpenConns(1)）导致 checkpoint 写入排队超时阻塞（2026-08-12 发现）
 
 状态：`delivered`（2026-08-12 · beta.14 · 读写分离 + janitor 默认 TTL）
