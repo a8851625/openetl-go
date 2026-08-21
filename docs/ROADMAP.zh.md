@@ -1164,6 +1164,72 @@ Residual/follow-up: none
   11 例）。**残留**：name-hint 命中（mapper.go amount/price 等列名且无源声明类型）仍
   固定 Decimal(18,2)——该路径本就无源精度可查，by-design。
 
+## Connector 成熟度对齐（对标 ClickHouse/Doris 基线，2026-08-21 审计）
+
+审计方法：以本轮 ClickHouse/Doris 补齐的能力（多表扇出、metadata PK、schema drift、
+错误分类、per-table 指标、ColumnTypes 元数据）为基线，逐一核对其余 source/sink 的
+实现（grep + 代码走读，非运行时验证）。发现的缺口按生产影响排队如下，逐项做到
+与基线同等成熟度后再关项。
+
+### GAP-1：`postgres_cdc` 三个 Metadata 契约全缺（优先级最高）
+
+- **现状**：postgres_cdc 的 INSERT/UPDATE/DELETE 记录（postgres_cdc.go:716/804/839）
+  只填 Source/Table/Timestamp/LSN，完全不填 `Metadata.Key`、`Metadata.ColumnTypes`。
+- **影响**：DELETE 下游无法定位主键（与 mysql_cdc beta.15 修的同构 bug）；auto_create
+  退化为 value+name-hint 推断（request_id/work_time 同类 bug 在 PG 链路复发）。
+- **方案**：pgoutput 的 Relation message 携带列名/类型 OID 与 PK 标记——解析 relation
+  元数据填充 Key（含复合 PK，对标 metadataKeyJSONMulti）与 ColumnTypes（OID→文本类型）。
+- **验收**：单测覆盖 INSERT/UPDATE/DELETE 的 Key JSON 与 ColumnTypes（含复合 PK）；
+  `go test ./internal/etl/...` 全绿；有界后续补 PG 真实例 e2e。
+
+### GAP-2：`mysql_cdc` 缺 `Metadata.ColumnTypes`（BUG-6 漏掉的孪生路径）
+
+- **现状**：BUG-6 只修了 snapshot_cdc 的 CDC 阶段；纯 `mysql_cdc` 管道（不经 kafka）
+  的记录仍无 ColumnTypes（mysql_cdc.go:531 起 OnRow 只填 Key）。
+- **方案**：镜像 snapshot_cdc 修复——从 canal `e.Table.Columns` 的 RawType（含
+  unsigned 后缀）构建 per-table 类型表，挂到每条 CDC 记录。
+- **验收**：对标 TestSnapshotCDCHandlerFillsColumnTypes 的新单测；全量测试绿。
+
+### GAP-3：`postgres` sink 缺 `pk_columns_from_metadata`
+
+- **现状**：mysql sink 支持 per-table PK 派生（mysql.go:354），postgres sink 为 0。
+- **影响**：kafka 多表扇出→PG upsert 链路无法按表解析 PK，DELETE/UPDATE 失败。
+- **方案**：复用 metadata_pk.go 的 parseMetadataKeyColumns，镜像 mysql.go 的接入点。
+- **验收**：单测覆盖 JSON 对象 Key 解析、复合 PK、Key 缺失时报错；多表扇出→PG
+  upsert 的 e2e（对标 e2e-kafka-multitable-clickhouse.sh 建脚本）。
+
+### GAP-4：`elasticsearch` sink 缺 `schema_drift` 与 index 模板
+
+- **现状**：ES 无 schema_drift（mapping 冲突目前靠 item-level DLQ 兜底）；index 名只做
+  `Metadata.Table` 小写直用（elasticsearch.go:369），无 `{table}` 模板。
+- **方案**：(1) `index_template`（如 `ods_{table}`）对齐 table_template 语义；
+  (2) schema_drift 先做 add_field（ES mapping 动态性天然支持），mapping conflict
+  策略留有界后续。
+- **验收**：单测覆盖模板替换与缺 metadata 报错；e2e 用 MinIO/ES 容器验证模板扇出。
+
+### GAP-5：sink 错误分类对齐（mysql/postgres/clickhouse/kafka/jdbc 缺 ClassifiedError）
+
+- **现状**：主动标注 `core.ClassifiedError` 的只有 doris/elasticsearch/maxcompute；
+  其余 sink 依赖全局 ClassifyError 字符串兜底（可用但不够精确）。
+- **影响**：DLQ 按 error_class 过滤/重放策略在这些 sink 上精度下降。
+- **方案**：各 sink 的写失败路径在错误已知类别（约束冲突→Data、连接类→Transient、
+  schema 不匹配→Schema）时包 ClassifiedError；不做穷举，只标高频路径。
+- **验收**：每个 sink 至少 3 类分类单测；DLQ entry 的 ErrorClass 字段单测断言。
+
+### GAP-6：per-table 写入指标对齐（本轮 ClickHouse 新增能力的推广）
+
+- **现状**：仅 ClickHouse sink 有 TableWriteStats()（2026-08-21 新增）。
+- **方案**：mysql/postgres/doris sink 接入同构 per-table 计数（复用 tableWriteMetrics
+  模式）；kafka sink 按 topic 计数（topicTemplate 扇出场景）。
+- **验收**：各 sink 指标快照单测；纳入 SinkMetricsProvider 快照或 API 暴露方案
+  （与 P5 可观测性对齐，具体暴露方式在实现时定）。
+
+### 执行顺序
+
+GAP-1 → GAP-2 → GAP-3 → GAP-4 → GAP-5 → GAP-6（按生产影响排序；GAP-1/2 是数据
+正确性问题优先，GAP-3/4 是链路能力缺失，GAP-5/6 是运维体验）。每项独立成 commit、
+独立验收；与 BUG backlog 的容器 e2e 欠账（BUG-1/2/6）同批补齐时优先 e2e。
+
 ## 待用户决策
 
 - **ClickHouse 写入吞吐性能分析是否立项**（2026-08-21 提出，未决）：正确性维度的
