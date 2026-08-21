@@ -114,6 +114,7 @@ func sourceConfigSchemas() map[string][]ConfigField {
 			{Name: "shard_index", Type: FieldInt, Required: false, Description: "Shard index for table partitioning"},
 			{Name: "shard_total", Type: FieldInt, Required: false, Description: "Total shard count for table partitioning"},
 			{Name: "start_from", Type: FieldString, Required: false, Description: "CDC start point: timestamp, binlog:file:pos, or gtid:..."},
+			{Name: "cdc_on_binlog_purged", Type: FieldString, Required: false, Default: "fail", Enum: []string{"fail", "resume_from_current"}, Description: "Recovery when the checkpointed binlog file no longer exists (ERROR 1236): fail (stop, manual recovery, no silent loss), resume_from_current (skip to current master pos; changes in between are DROPPED)"},
 		},
 		"mysql_snapshot_cdc": {
 			{Name: "host", Type: FieldString, Required: true, Description: "MySQL host"},
@@ -132,6 +133,7 @@ func sourceConfigSchemas() map[string][]ConfigField {
 			{Name: "consistent_snapshot_lock", Type: FieldBool, Required: false, Default: true, Description: "Use table locks for consistent snapshot capture"},
 			{Name: "shard_index", Type: FieldInt, Required: false, Description: "Shard index for snapshot partitioning"},
 			{Name: "shard_total", Type: FieldInt, Required: false, Description: "Total shard count for snapshot partitioning"},
+			{Name: "cdc_on_binlog_purged", Type: FieldString, Required: false, Default: "fail", Enum: []string{"fail", "resume_from_current", "resnapshot"}, Description: "Recovery when the checkpointed binlog file no longer exists (ERROR 1236): fail (stop, manual recovery, no silent loss), resume_from_current (skip to current master pos; changes in between are DROPPED), resnapshot (re-run snapshot phase from last per-table cursors, then re-enter CDC)"},
 		},
 		"kafka": {
 			{Name: "brokers", Type: FieldStringArray, Required: true, Description: "Kafka broker addresses", Example: []string{"localhost:9092"}},
