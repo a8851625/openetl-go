@@ -477,7 +477,7 @@ func (s *MySQLSink) batchInsert(ctx context.Context, tx *sql.Tx, table string, c
 			args = append(args, row...)
 		}
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("batch insert %s (rows=%d): %w", table, len(chunk), err)
+			return fmt.Errorf("batch insert %s (rows=%d): %w", table, len(chunk), classifySQLError(err))
 		}
 	}
 	return nil
@@ -603,7 +603,7 @@ func (s *MySQLSink) batchDelete(ctx context.Context, tx *sql.Tx, table string, p
 			args = append(args, row...)
 		}
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("batch delete %s (rows=%d): %w", table, len(chunk), err)
+			return fmt.Errorf("batch delete %s (rows=%d): %w", table, len(chunk), classifySQLError(err))
 		}
 	}
 	return nil

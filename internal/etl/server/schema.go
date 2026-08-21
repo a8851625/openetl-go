@@ -380,6 +380,7 @@ func sinkConfigSchemas() map[string][]ConfigField {
 			{Name: "username", Type: FieldString, Required: false, Description: "ES username", Secret: true},
 			{Name: "password", Type: FieldString, Required: false, Description: "ES password", Secret: true},
 			{Name: "index", Type: FieldString, Required: true, Description: "Target index name"},
+			{Name: "index_template", Type: FieldString, Required: false, Description: "Per-record index via {table}/{db} substitution (multi-table fan-out), e.g. ods_{table}; overrides index when set"},
 			{Name: "id_column", Type: FieldString, Required: false, Default: "id", Description: "Column for document ID (enables upsert)"},
 			{Name: "mappings", Type: FieldMap, Required: false, Description: "Optional Elasticsearch mapping used by preflight schema validation"},
 			{Name: "properties", Type: FieldMap, Required: false, Description: "Optional mapping properties shorthand, e.g. {id: {type: long}}"},

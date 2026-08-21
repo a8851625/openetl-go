@@ -325,7 +325,7 @@ func (s *JDBCSink) batchInsert(ctx context.Context, tx *sql.Tx, table string, co
 			args = append(args, row...)
 		}
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("batch insert %s (rows=%d): %w", table, len(chunk), err)
+			return fmt.Errorf("batch insert %s (rows=%d): %w", table, len(chunk), classifySQLError(err))
 		}
 	}
 	return nil

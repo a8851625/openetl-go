@@ -553,7 +553,7 @@ func (s *PostgresSink) batchInsert(ctx context.Context, tx pgx.Tx, table string,
 		}
 
 		if _, err := tx.Exec(ctx, b.String(), args...); err != nil {
-			return fmt.Errorf("batch insert %s (rows=%d): %w", table, len(chunk), err)
+			return fmt.Errorf("batch insert %s (rows=%d): %w", table, len(chunk), classifySQLError(err))
 		}
 	}
 	return nil
@@ -597,7 +597,7 @@ func (s *PostgresSink) batchDelete(ctx context.Context, tx pgx.Tx, table string,
 			}
 			b.WriteString(")")
 			if _, err := tx.Exec(ctx, b.String(), args...); err != nil {
-				return fmt.Errorf("batch delete %s (rows=%d): %w", table, len(chunk), err)
+				return fmt.Errorf("batch delete %s (rows=%d): %w", table, len(chunk), classifySQLError(err))
 			}
 			continue
 		}
@@ -625,7 +625,7 @@ func (s *PostgresSink) batchDelete(ctx context.Context, tx pgx.Tx, table string,
 			args = append(args, row...)
 		}
 		if _, err := tx.Exec(ctx, b.String(), args...); err != nil {
-			return fmt.Errorf("batch delete %s (rows=%d): %w", table, len(chunk), err)
+			return fmt.Errorf("batch delete %s (rows=%d): %w", table, len(chunk), classifySQLError(err))
 		}
 	}
 	return nil

@@ -1213,7 +1213,7 @@ Residual/follow-up: none
   TestPostgresPKFromMetadataConfig、TestClickHousePKColumnsByTableFallsBackToStatic；
   sink+server 全量绿。**残留**：kafka→PG 多表扇出 e2e 待容器环境恢复后补。
 
-### GAP-4：`elasticsearch` sink 缺 `schema_drift` 与 index 模板
+### GAP-4：`elasticsearch` sink 缺 `schema_drift` 与 index 模板（2026-08-21 index_template 已实现；schema_drift 收敛为 mapping-conflict 策略，留有界后续）
 
 - **现状**：ES 无 schema_drift（mapping 冲突目前靠 item-level DLQ 兜底）；index 名只做
   `Metadata.Table` 小写直用（elasticsearch.go:369），无 `{table}` 模板。
@@ -1221,8 +1221,14 @@ Residual/follow-up: none
   (2) schema_drift 先做 add_field（ES mapping 动态性天然支持），mapping conflict
   策略留有界后续。
 - **验收**：单测覆盖模板替换与缺 metadata 报错；e2e 用 MinIO/ES 容器验证模板扇出。
+- **2026-08-21 实现记录**：index_template（{table}/{db} 替换，缺 table metadata 响亮
+  报错，resolveIndex 提取函数，模板优先于静态 index，未配置时行为不变）；
+  TestElasticsearchResolveIndexTemplate。schema_drift 评估：ES mapping 动态加字段天然
+  支持（无需 add_field 逻辑），真正缺口是 mapping conflict 的显式策略——归入有界后续
+  （当前靠 item-level DLQ 兜底，可用）。UI schema 已加 index_template。**残留**：
+  ES 容器 e2e 模板扇出验证待容器环境。
 
-### GAP-5：sink 错误分类对齐（mysql/postgres/clickhouse/kafka/jdbc 缺 ClassifiedError）
+### GAP-5：sink 错误分类对齐（2026-08-21 已实现 mysql/postgres/jdbc 高频路径）
 
 - **现状**：主动标注 `core.ClassifiedError` 的只有 doris/elasticsearch/maxcompute；
   其余 sink 依赖全局 ClassifyError 字符串兜底（可用但不够精确）。
@@ -1230,6 +1236,13 @@ Residual/follow-up: none
 - **方案**：各 sink 的写失败路径在错误已知类别（约束冲突→Data、连接类→Transient、
   schema 不匹配→Schema）时包 ClassifiedError；不做穷举，只标高频路径。
 - **验收**：每个 sink 至少 3 类分类单测；DLQ entry 的 ErrorClass 字段单测断言。
+- **2026-08-21 实现记录**：classifySQLError 共享助手（error_classify.go）——go-sql-driver
+  错误码（1062/1452 dup/FK→Data，1054/1146→Schema，1045→Auth，1213/2013→Transient）
+  与 pgx PgError 码（23505/23503→Data，42703/42P01→Schema，28P01→Auth，40001/40P01→
+  Transient），未知错误原样透传保留全局 ClassifyError 兜底；接入 mysql/postgres/jdbc
+  sink 的批量 insert/delete 错误包装。kafka sink 走 sarama 错误（无错误码体系），
+  维持全局兜底。测试：TestClassifyMySQLSQLErrors、TestClassifyPgSQLErrors、
+  TestClassifySQLPassthrough（含 errors.As 透传断言）。
 
 ### GAP-6：per-table 写入指标对齐（本轮 ClickHouse 新增能力的推广）
 

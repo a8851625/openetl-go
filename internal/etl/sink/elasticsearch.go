@@ -30,12 +30,15 @@ func init() {
 }
 
 type ElasticsearchSink struct {
-	name          string
-	hosts         []string
-	username      string
-	password      string
-	index         string
-	idColumn      string
+	name     string
+	hosts    []string
+	username string
+	password string
+	index    string
+	idColumn string
+	// indexTemplate routes records to per-table indices via {table}/{db}
+	// substitution (multi-table fan-out, GAP-4). Empty = pre-existing behavior.
+	indexTemplate string
 	mappingTypes  map[string]string
 	maxRetries    int
 	retryBaseMs   int
@@ -86,6 +89,11 @@ func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
 	if v, ok := config["index"]; ok {
 		if vs, ok := v.(string); ok {
 			s.index = strings.TrimSpace(vs)
+		}
+	}
+	if v, ok := config["index_template"]; ok {
+		if vs, ok := v.(string); ok {
+			s.indexTemplate = strings.TrimSpace(vs)
 		}
 	}
 	if v, ok := config["id_column"]; ok {
@@ -344,6 +352,29 @@ func esTypeCompatible(sourceType, targetType string) bool {
 	}
 }
 
+// resolveESIndex determines the target index for a record (GAP-4). With
+// index_template set, {table}/{db} substitute from record metadata — missing
+// table metadata fails loudly rather than writing to a literal "{table}"
+// index. Otherwise the pre-existing behavior applies: static index, then
+// lowercased table name, then the sink name.
+func (s *ElasticsearchSink) resolveIndex(rec core.Record) (string, error) {
+	if s.indexTemplate != "" {
+		if rec.Metadata.Table == "" {
+			return "", fmt.Errorf("elasticsearch index_template %q requires record table metadata", s.indexTemplate)
+		}
+		return strings.ReplaceAll(
+			strings.ReplaceAll(s.indexTemplate, "{table}", rec.Metadata.Table),
+			"{db}", rec.Metadata.Database), nil
+	}
+	if s.index != "" {
+		return s.index, nil
+	}
+	if rec.Metadata.Table != "" {
+		return strings.ToLower(rec.Metadata.Table), nil
+	}
+	return strings.ToLower(s.name), nil
+}
+
 func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (err error) {
 	defer func() {
 		if err != nil {
@@ -365,9 +396,9 @@ func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (e
 
 		var buf bytes.Buffer
 		for _, rec := range chunk {
-			indexName := s.index
-			if indexName == "" && rec.Metadata.Table != "" {
-				indexName = strings.ToLower(rec.Metadata.Table)
+			indexName, err := s.resolveIndex(rec)
+			if err != nil {
+				return err
 			}
 			if indexName == "" {
 				indexName = strings.ToLower(s.name)
