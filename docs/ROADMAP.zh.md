@@ -1189,13 +1189,12 @@ Residual/follow-up: none
   TestPGCatalogColumnTypes；source 全量与 -race 绿。**残留**：PG 实例 e2e（真实
   pgoutput 流含 Key/ColumnTypes 断言）待容器环境恢复后补。
 
-### GAP-2：`mysql_cdc` 缺 `Metadata.ColumnTypes`（BUG-6 漏掉的孪生路径）
+### GAP-2：`mysql_cdc` 缺 `Metadata.ColumnTypes`（2026-08-21 复核：审计误报，已存在）
 
-- **现状**：BUG-6 只修了 snapshot_cdc 的 CDC 阶段；纯 `mysql_cdc` 管道（不经 kafka）
-  的记录仍无 ColumnTypes（mysql_cdc.go:531 起 OnRow 只填 Key）。
-- **方案**：镜像 snapshot_cdc 修复——从 canal `e.Table.Columns` 的 RawType（含
-  unsigned 后缀）构建 per-table 类型表，挂到每条 CDC 记录。
-- **验收**：对标 TestSnapshotCDCHandlerFillsColumnTypes 的新单测；全量测试绿。
+- **更正**：2026-08-21 审计 grep 模式（`Metadata.ColumnTypes` 全串）误报此缺口；
+  复核代码确认 mysql_cdc OnRow 已从 canal `e.Table.Columns` RawType（含 unsigned
+  后缀）构建 colTypes 并填入每条 CDC 记录（mysql_cdc.go:501 起），与 BUG-6 的
+  snapshot_cdc 修复同构。**无需开发**，本项关闭。
 
 ### GAP-3：`postgres` sink 缺 `pk_columns_from_metadata`
 
