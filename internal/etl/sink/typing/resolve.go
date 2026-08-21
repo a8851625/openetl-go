@@ -1,6 +1,8 @@
 package typing
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -75,7 +77,7 @@ func MapSourceType(dialect Dialect, sourceType string) string {
 		if dialect == DialectMySQL && (strings.HasPrefix(lower, "decimal") || strings.HasPrefix(lower, "numeric")) {
 			return raw
 		}
-		return decimalDDL(dialect)
+		return decimalDDL(dialect, raw)
 	case base == "date":
 		return dateDDL(dialect)
 	case base == "time" || strings.HasPrefix(lower, "time(") || lower == "time":
@@ -247,17 +249,76 @@ func stringDDL(d Dialect, raw string) string {
 	}
 }
 
-func decimalDDL(d Dialect) string {
+// decimalDDL preserves source precision/scale when the raw source type
+// carries a (precision, scale) suffix — decimal(5,2) maps to Decimal(5,2)
+// instead of the hard-coded Decimal(18,2) default (precision-loss residual
+// fix). Unparseable or unsuffixed types keep the 18,2 default.
+func decimalDDL(d Dialect, raw ...string) string {
+	defaultDDL := func() string {
+		switch d {
+		case DialectMySQL, DialectDoris:
+			return "DECIMAL(18,2)"
+		case DialectPostgreSQL:
+			return "NUMERIC(18,2)"
+		case DialectClickHouse:
+			return "Decimal(18, 2)"
+		default:
+			return "DECIMAL(18,2)"
+		}
+	}
+	if len(raw) == 0 || raw[0] == "" {
+		return defaultDDL()
+	}
+	p, s, ok := parsePrecisionScale(raw[0])
+	if !ok {
+		return defaultDDL()
+	}
+	// Sanity bounds: ClickHouse max Decimal precision is 76, MySQL/PG 65.
+	// Scale cannot exceed precision. Clamp out-of-range values to the default
+	// rather than emitting invalid DDL.
+	if p < 1 || p > 65 || s > p {
+		return defaultDDL()
+	}
 	switch d {
 	case DialectMySQL, DialectDoris:
-		return "DECIMAL(18,2)"
+		return fmt.Sprintf("DECIMAL(%d,%d)", p, s)
 	case DialectPostgreSQL:
-		return "NUMERIC(18,2)"
+		return fmt.Sprintf("NUMERIC(%d,%d)", p, s)
 	case DialectClickHouse:
-		return "Decimal(18, 2)"
+		if p > 76 {
+			return defaultDDL()
+		}
+		return fmt.Sprintf("Decimal(%d, %d)", p, s)
 	default:
-		return "DECIMAL(18,2)"
+		return fmt.Sprintf("DECIMAL(%d,%d)", p, s)
 	}
+}
+
+// parsePrecisionScale extracts (precision, scale) from a raw source type
+// like "decimal(10,2)" or "numeric(8, 0)" (optionally signed).
+func parsePrecisionScale(raw string) (precision, scale int, ok bool) {
+	open := strings.Index(raw, "(")
+	closeIdx := strings.Index(raw, ")")
+	if open < 0 || closeIdx <= open+1 {
+		return 0, 0, false
+	}
+	inner := raw[open+1 : closeIdx]
+	parts := strings.Split(inner, ",")
+	trimmed := make([]int, 0, 2)
+	for _, part := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil {
+			return 0, 0, false
+		}
+		trimmed = append(trimmed, n)
+	}
+	if len(trimmed) == 1 {
+		return trimmed[0], 0, true // decimal(10) == decimal(10,0)
+	}
+	if len(trimmed) != 2 {
+		return 0, 0, false
+	}
+	return trimmed[0], trimmed[1], true
 }
 
 func dateDDL(d Dialect) string {

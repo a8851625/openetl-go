@@ -1132,7 +1132,7 @@ Scope: internal/etl/source/mysql_snapshot_cdc.go OnRow + tests。
 Non-goals: 改 kafka envelope 格式；改 typing 推断逻辑本身。
 Acceptance: 1) CDC 相位 INSERT/UPDATE/DELETE 记录的 Metadata.ColumnTypes 非空且与 canal schema 一致；2) 经 kafka -> clickhouse 自动建表使用声明类型；3) 单测 + 相关 e2e 通过。
 Evidence:
-  - TestSnapshotCDCHandlerFillsColumnTypes（新增回归：canal schema 列类型含 unsigned 限定符正确构建；request_id/work_time 经 MapSourceType 解析为 String 而非 Int64/DateTime64；空 RawType 跳过；decimal 源精度直传为已知残留 Decimal(18,2)）。
+  - TestSnapshotCDCHandlerFillsColumnTypes（新增回归：canal schema 列类型含 unsigned 限定符正确构建；request_id/work_time 经 MapSourceType 解析为 String 而非 Int64/DateTime64；空 RawType 跳过；decimal 源精度直传已另行修复，见下方 Decimal 残留条目）。
   - kafka sink Debezium envelope 已序列化 column_types（sink/kafka.go:65 + schema.fields），链路复用 beta.12 既有路径，无需改动。
   - go test ./internal/etl/... 全绿；source 包 -race 绿。
 Result: delivered（与 mysql_cdc OnRow 模式对齐；container e2e 随镜像构建恢复后随下个 beta 补跑）
@@ -1145,10 +1145,11 @@ Residual/follow-up: none
   `deleted`/`_flag` → ClickHouse UInt8）：非数字文本（'yes'/'on'）在
   convertClickHouseValue 中原样传给 AppendRow 响亮失败进 DLQ，非静默错误；仅在需要
   宽容文本布尔语义时再评估。
-- **Decimal name-hint 精度硬编码**（mapper.go:222-232，amount/price/total/cost/fee/
-  balance 及后缀 → 固定 Decimal(18,2)）：name-hint 命中时不看源列精度；源声明类型
-  走 resolve.go decimalDDL 保真路径不受影响。by-design 有损，需更高精度时改用显式
-  DDL 或增强 MapSourceType 透传源精度。
+- **Decimal 源精度直传**（2026-08-21 修复）：resolve.go decimalDDL 现在解析源类型
+  （p,s）后缀并直传（decimal(5,2) → Decimal(5,2)），越界/畸形回退 18,2 默认；MySQL
+  方言 raw 直传不变。测试 TestDecimalSourcePrecisionPassthrough（4 方言 + 边界钳制
+  11 例）。**残留**：name-hint 命中（mapper.go amount/price 等列名且无源声明类型）仍
+  固定 Decimal(18,2)——该路径本就无源精度可查，by-design。
 
 ## 有界后续
 

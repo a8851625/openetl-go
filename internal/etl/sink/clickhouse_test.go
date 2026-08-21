@@ -239,7 +239,7 @@ func TestInferClickHouseTypeDeclaredPriority(t *testing.T) {
 		{name: "varchar_declared", col: "request_id", val: "33b6338a2c78d0c7", declared: "varchar(255)", want: "String"},
 		{name: "bigint_declared", col: "request_id", val: "33b6338a2c78d0c7", declared: "bigint unsigned", want: "Int64"},
 		{name: "int_declared", col: "user_id", val: "7", declared: "int", want: "Int32"},
-		{name: "decimal_declared", col: "amount", val: "12.50", declared: "decimal(10,2)", want: "Decimal(18, 2)"},
+		{name: "decimal_declared", col: "amount", val: "12.50", declared: "decimal(10,2)", want: "Decimal(10, 2)"}, // source precision passthrough (2026-08-21 fix)
 		{name: "datetime_declared", col: "created_at", val: "2026-05-31 21:23:39", declared: "datetime", want: "DateTime64(3)"},
 		{name: "enum_declared", col: "status", val: "1", declared: "enum('0','1')", want: "String"},
 		{name: "json_declared", col: "custom_field", val: "[]", declared: "json", want: "String"},

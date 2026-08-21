@@ -49,7 +49,6 @@ func TestMapSourceTypeYear(t *testing.T) {
 	}
 }
 
-
 func TestMapSourceTypeDebeziumPrimitives(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -69,6 +68,34 @@ func TestMapSourceTypeDebeziumPrimitives(t *testing.T) {
 		got := MapSourceType(DialectMySQL, tc.in)
 		if got != tc.want {
 			t.Errorf("MapSourceType(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestDecimalSourcePrecisionPassthrough verifies MapSourceType preserves the
+// source decimal precision/scale for every dialect instead of collapsing to
+// the hard-coded (18,2) default (precision-loss residual fix, 2026-08-21).
+func TestDecimalSourcePrecisionPassthrough(t *testing.T) {
+	cases := []struct {
+		raw     string
+		dialect Dialect
+		want    string
+	}{
+		{"decimal(5,2)", DialectClickHouse, "Decimal(5, 2)"},
+		{"decimal(10,2)", DialectMySQL, "decimal(10,2)"}, // MySQL dialect passthrough preserves raw (pre-existing)
+		{"DECIMAL(8,3)", DialectPostgreSQL, "NUMERIC(8,3)"},
+		{"decimal(5,2)", DialectDoris, "DECIMAL(5,2)"},
+		{"decimal(10)", DialectClickHouse, "Decimal(10, 0)"}, // scale defaults to 0
+		{"numeric(12,4)", DialectClickHouse, "Decimal(12, 4)"},
+		{"decimal unsigned", DialectClickHouse, "Decimal(18, 2)"}, // no (p,s) suffix -> default
+		{"decimal(0,0)", DialectClickHouse, "Decimal(18, 2)"},     // p<1 -> clamped to default
+		{"decimal(70,2)", DialectMySQL, "decimal(70,2)"},          // MySQL passthrough: server validates at DDL time
+		{"decimal(70,2)", DialectClickHouse, "Decimal(18, 2)"},    // CH clamp via p>65 gate
+		{"decimal(2,5)", DialectClickHouse, "Decimal(18, 2)"},     // scale>precision -> default
+	}
+	for _, c := range cases {
+		if got := MapSourceType(c.dialect, c.raw); got != c.want {
+			t.Errorf("MapSourceType(%v, %q) = %q, want %q", c.dialect, c.raw, got, c.want)
 		}
 	}
 }
