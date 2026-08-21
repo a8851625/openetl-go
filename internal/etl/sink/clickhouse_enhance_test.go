@@ -48,9 +48,9 @@ func TestClickHouseTableWriteStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sink: %v", err)
 	}
-	s.recordTableMetrics("ods_orders", 10, 5_000_000, false)
-	s.recordTableMetrics("ods_orders", 5, 3_000_000, true)
-	s.recordTableMetrics("ods_users", 2, 1_000_000, false)
+	s.tableMetricsImpl.record("ods_orders", 10, 5_000_000, false)
+	s.tableMetricsImpl.record("ods_orders", 5, 3_000_000, true)
+	s.tableMetricsImpl.record("ods_users", 2, 1_000_000, false)
 
 	stats := s.TableWriteStats()
 	byTable := map[string]TableWriteStats{}

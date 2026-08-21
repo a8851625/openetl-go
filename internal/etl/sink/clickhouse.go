@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -97,10 +96,9 @@ type ClickHouseSink struct {
 	batchesSent    int64
 	writeLatencyNs int64
 	writeErrors    int64
-	// tableRowsWritten / tableWriteLatencyNs / tableBatches give per-table
-	// write metrics (P3: which target table drags a multi-table batch).
-	tableMetricsMu sync.RWMutex
-	tableMetrics   map[string]*tableWriteMetrics
+	// tableMetricsImpl gives per-table write metrics (GAP-6: which target
+	// table drags a multi-table batch).
+	tableMetricsImpl *tableMetricsSet
 	// versionCounter ensures monotonic _version values even with clock drift.
 	versionCounter atomic.Int64
 }
@@ -121,11 +119,11 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 		schemas:            make(map[string][]clickhouseColumn),
 		engineCache:        make(map[string]string),
 		localTableCache:    make(map[string]string),
+		tableMetricsImpl:   newTableMetricsSet(),
 		protocol:           "native",
 		compressionMethod:  "LZ4",
 		asyncInsertWait:    true,
 		maxInsertBlockSize: 1048576, // CH default max_insert_block_size
-		tableMetrics:       make(map[string]*tableWriteMetrics),
 	}
 	if v, ok := config["name"]; ok {
 		s.name = v.(string)
@@ -279,62 +277,13 @@ func (s *ClickHouseSink) SinkMetrics() core.SinkMetrics {
 	}
 }
 
-// tableWriteMetrics tracks per-target-table write counters so multi-table
-// fan-out pipelines can see which table drags a batch (P3).
-type tableWriteMetrics struct {
-	rowsWritten    int64
-	batchesSent    int64
-	writeLatencyNs int64
-	writeErrors    int64
-}
-
-// recordTableMetrics updates the per-table counters.
-func (s *ClickHouseSink) recordTableMetrics(table string, rows int, latency time.Duration, failed bool) {
-	s.tableMetricsMu.Lock()
-	m, ok := s.tableMetrics[table]
-	if !ok {
-		m = &tableWriteMetrics{}
-		s.tableMetrics[table] = m
-	}
-	s.tableMetricsMu.Unlock()
-	atomic.AddInt64(&m.rowsWritten, int64(rows))
-	atomic.AddInt64(&m.batchesSent, 1)
-	atomic.AddInt64(&m.writeLatencyNs, latency.Nanoseconds())
-	if failed {
-		atomic.AddInt64(&m.writeErrors, 1)
-	}
-}
-
-// TableWriteStats is a snapshot of per-table write metrics.
-type TableWriteStats struct {
-	Table          string  `json:"table"`
-	RowsWritten    int64   `json:"rows_written"`
-	BatchesSent    int64   `json:"batches_sent"`
-	WriteLatencyMs float64 `json:"write_latency_ms"`
-	Errors         int64   `json:"errors"`
-}
+// tableMetrics records per-target-table write counters (GAP-6, shared
+// tableMetricsSet).
+func (s *ClickHouseSink) tableMetrics() *tableMetricsSet { return s.tableMetricsImpl }
 
 // TableWriteStats returns per-table write counters (multi-table fan-out
 // observability; exposed for API/logging consumers).
-func (s *ClickHouseSink) TableWriteStats() []TableWriteStats {
-	s.tableMetricsMu.RLock()
-	defer s.tableMetricsMu.RUnlock()
-	out := make([]TableWriteStats, 0, len(s.tableMetrics))
-	for tbl, m := range s.tableMetrics {
-		wl := float64(0)
-		if b := atomic.LoadInt64(&m.batchesSent); b > 0 {
-			wl = float64(atomic.LoadInt64(&m.writeLatencyNs)) / float64(b) / 1e6
-		}
-		out = append(out, TableWriteStats{
-			Table:          tbl,
-			RowsWritten:    atomic.LoadInt64(&m.rowsWritten),
-			BatchesSent:    atomic.LoadInt64(&m.batchesSent),
-			WriteLatencyMs: wl,
-			Errors:         atomic.LoadInt64(&m.writeErrors),
-		})
-	}
-	return out
-}
+func (s *ClickHouseSink) TableWriteStats() []TableWriteStats { return s.tableMetricsImpl.snapshot() }
 
 func (s *ClickHouseSink) ValidateSchema(ctx context.Context, schema core.SchemaInfo) error {
 	if len(schema.Columns) == 0 || s.table == "" {
@@ -612,7 +561,7 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 		start := time.Now()
 		failed := false
 		rows := len(tb.inserts) + len(tb.updates) + len(tb.deletes)
-		defer func() { s.recordTableMetrics(tableName, rows, time.Since(start), failed) }()
+		defer func() { s.tableMetricsImpl.record(tableName, rows, time.Since(start), failed) }()
 		// Check for non-writable table engines (Iceberg, Parquet, View, etc.)
 		if err := s.checkWritableEngine(ctx, tableName); err != nil {
 			failed = true

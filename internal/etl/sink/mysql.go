@@ -64,7 +64,8 @@ type MySQLSink struct {
 	// schemaCache avoids repeated information_schema queries.
 	schemaCache  *core.SchemaCache
 	preWrite     *PreWriteConfig
-	sinkCounters // P4-20: per-sink write metrics (SK-4)
+	sinkCounters                  // P4-20: per-sink write metrics (SK-4)
+	tableMetrics *tableMetricsSet // GAP-6: per-table write stats
 }
 
 func NewMySQLSink(config map[string]any) (*MySQLSink, error) {
@@ -74,6 +75,7 @@ func NewMySQLSink(config map[string]any) (*MySQLSink, error) {
 		batchMode:       "insert",
 		insertChunkSize: 500,
 	}
+	s.tableMetrics = newTableMetricsSet()
 	if v, ok := config["name"]; ok {
 		s.name = v.(string)
 	}
@@ -426,6 +428,10 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 
 	for _, key := range groupOrder {
 		g := groups[key]
+		tStart := time.Now()
+		tFailed := false
+		tRows := len(g.rows) + len(g.deleteRows)
+		defer func() { s.tableMetrics.record(key.table, tRows, time.Since(tStart), tFailed) }()
 		if len(g.rows) > 0 {
 			mode := s.batchMode
 			// If any op is Update we must use upsert, unless mode is increment
@@ -440,11 +446,13 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 				}
 			}
 			if err := s.batchInsert(ctx, tx, key.table, g.cols, g.rows, mode); err != nil {
+				tFailed = true
 				return err
 			}
 		}
 		if len(g.deleteRows) > 0 {
 			if err := s.batchDelete(ctx, tx, key.table, g.pkCols, g.deleteRows); err != nil {
+				tFailed = true
 				return err
 			}
 		}

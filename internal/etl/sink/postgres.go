@@ -51,7 +51,8 @@ type PostgresSink struct {
 	sourceSchemaColumns map[string]string
 	schemaCache         *core.SchemaCache
 	preWrite            *PreWriteConfig
-	sinkCounters        // P4-20: per-sink write metrics (SK-4)
+	sinkCounters                         // P4-20: per-sink write metrics (SK-4)
+	tableMetrics        *tableMetricsSet // GAP-6: per-table write stats
 }
 
 func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
@@ -63,6 +64,7 @@ func NewPostgresSink(config map[string]any) (*PostgresSink, error) {
 		sslmode:         "prefer",
 		insertChunkSize: 500,
 	}
+	s.tableMetrics = newTableMetricsSet()
 	if v, ok := config["name"]; ok {
 		s.name = v.(string)
 	}
@@ -411,6 +413,10 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 
 	for _, key := range groupOrder {
 		g := groups[key]
+		tStart := time.Now()
+		tFailed := false
+		tRows := len(g.rows) + len(g.deleteRows)
+		defer func() { s.tableMetrics.record(key.table, tRows, time.Since(tStart), tFailed) }()
 		if len(g.rows) > 0 {
 			mode := s.batchMode
 			for _, op := range g.ops {
@@ -420,11 +426,13 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 				}
 			}
 			if err := s.batchInsert(ctx, tx, key.table, g.cols, g.rows, mode); err != nil {
+				tFailed = true
 				return err
 			}
 		}
 		if len(g.deleteRows) > 0 {
 			if err := s.batchDelete(ctx, tx, key.table, g.deleteRows); err != nil {
+				tFailed = true
 				return err
 			}
 		}

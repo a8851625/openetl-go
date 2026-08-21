@@ -1244,13 +1244,20 @@ Residual/follow-up: none
   维持全局兜底。测试：TestClassifyMySQLSQLErrors、TestClassifyPgSQLErrors、
   TestClassifySQLPassthrough（含 errors.As 透传断言）。
 
-### GAP-6：per-table 写入指标对齐（本轮 ClickHouse 新增能力的推广）
+### GAP-6：per-table 写入指标对齐（2026-08-21 已实现 mysql/postgres）
 
 - **现状**：仅 ClickHouse sink 有 TableWriteStats()（2026-08-21 新增）。
 - **方案**：mysql/postgres/doris sink 接入同构 per-table 计数（复用 tableWriteMetrics
   模式）；kafka sink 按 topic 计数（topicTemplate 扇出场景）。
 - **验收**：各 sink 指标快照单测；纳入 SinkMetricsProvider 快照或 API 暴露方案
   （与 P5 可观测性对齐，具体暴露方式在实现时定）。
+- **2026-08-21 实现记录**：tableMetricsSet 共享结构（table_metrics.go，自 ClickHouse
+  私有实现泛化，含排序快照）；mysql/postgres sink 在 per-table 分发循环接入
+  rows/batches/latency/errors 计数与 TableWriteStats() 访问器；ClickHouse 改用共享
+  实现行为不变。doris/kafka sink 未接入（doris 分发路径不同构、kafka 按 topic 计数
+  语义待定）——归入有界后续。API 暴露（P5 对齐）留待 P5 可观测性迭代统一决定。
+  测试：TestTableMetricsSetRecordAndSnapshot、TestMySQLPostgresTableMetricsWired；
+  sink -race 绿。
 
 ### 执行顺序
 
