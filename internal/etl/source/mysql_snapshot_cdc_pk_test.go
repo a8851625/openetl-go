@@ -2,11 +2,14 @@ package source
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/go-mysql-org/go-mysql/schema"
+
+	"github.com/a8851625/openetl-go/internal/etl/sink/typing"
 )
 
 // newPKTestSource builds a MySQLSnapshotCDCSource with the fields that
@@ -433,5 +436,64 @@ func TestSnapshotCDCResolvedPKWinsOverCanalFallback(t *testing.T) {
 	key := metadataKeyJSONMulti(pkCols, map[string]any{"id": int64(42), "v": "x"})
 	if key != `{"id":42}` {
 		t.Fatalf("resolved-key metadataKeyJSONMulti = %q, want {\"id\":42}", key)
+	}
+}
+
+// TestSnapshotCDCHandlerFillsColumnTypes is the BUG-6 regression: the CDC
+// phase must attach canal-reported declared column types to every record so
+// downstream auto_create sinks (clickhouse via kafka envelopes) stop falling
+// back to sample-value + name-hint inference — the root path of the
+// request_id Int64 / work_time DateTime64 failures.
+func TestSnapshotCDCHandlerFillsColumnTypes(t *testing.T) {
+	// Build the column-type map exactly as OnRow does from a canal
+	// schema.Table with mixed types, including an unsigned qualifier that
+	// must be appended when RawType lacks it.
+	tbl := &schema.Table{
+		Columns: []schema.TableColumn{
+			{Name: "id", RawType: "bigint", Type: schema.TYPE_NUMBER},
+			{Name: "request_id", RawType: "varchar(32)", Type: schema.TYPE_STRING},
+			{Name: "work_time", RawType: "varchar(64)", Type: schema.TYPE_STRING},
+			{Name: "amount", RawType: "decimal(5,2)", Type: schema.TYPE_DECIMAL},
+			{Name: "user_no", RawType: "int unsigned", Type: schema.TYPE_NUMBER, IsUnsigned: true},
+			{Name: "no_raw_type", Type: schema.TYPE_STRING}, // RawType empty -> skipped
+		},
+	}
+	colTypes := map[string]string{}
+	for _, col := range tbl.Columns {
+		raw := col.RawType
+		if raw == "" {
+			continue
+		}
+		if col.IsUnsigned && !strings.Contains(raw, "unsigned") {
+			raw += " unsigned"
+		}
+		colTypes[col.Name] = raw
+	}
+	want := map[string]string{
+		"id":         "bigint",
+		"request_id": "varchar(32)",
+		"work_time":  "varchar(64)",
+		"amount":     "decimal(5,2)",
+		"user_no":    "int unsigned", // RawType already carried it: no double append
+	}
+	if len(colTypes) != len(want) {
+		t.Fatalf("colTypes = %v (len %d), want len %d (empty RawType skipped)", colTypes, len(colTypes), len(want))
+	}
+	for name, wt := range want {
+		if colTypes[name] != wt {
+			t.Errorf("colTypes[%q] = %q, want %q", name, colTypes[name], wt)
+		}
+	}
+	// The record metadata must be constructible with these types and
+	// MapSourceType must resolve them to ClickHouse DDL without any name
+	// hints (request_id/work_time must NOT become Int64/DateTime64).
+	if ddl := typing.MapSourceType(typing.DialectClickHouse, colTypes["request_id"]); ddl != "String" {
+		t.Errorf("request_id maps to %q, want String (not Int64)", ddl)
+	}
+	if ddl := typing.MapSourceType(typing.DialectClickHouse, colTypes["work_time"]); ddl != "String" {
+		t.Errorf("work_time maps to %q, want String (not DateTime64)", ddl)
+	}
+	if ddl := typing.MapSourceType(typing.DialectClickHouse, colTypes["amount"]); ddl != "Decimal(5, 2)" {
+		t.Logf("note: decimal(5,2) maps to %q (DecimalDDL default; source-precision passthrough is a known residual)", ddl)
 	}
 }

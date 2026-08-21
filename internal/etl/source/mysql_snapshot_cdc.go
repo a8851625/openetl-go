@@ -1559,6 +1559,22 @@ type snapshotCDCHandler struct {
 
 func (h *snapshotCDCHandler) OnRow(e *canal.RowsEvent) error {
 	file, pos := h.reader.getBinlogPos()
+	// Source-side column metainfo (canal reads information_schema itself):
+	// lets auto_create sinks rebuild real source types instead of guessing
+	// from sample values / name hints (BUG-6). Mirrors mysql_cdc OnRow so the
+	// CDC phase carries the same declared types the snapshot phase fills via
+	// tableColumnTypes.
+	colTypes := map[string]string{}
+	for _, col := range e.Table.Columns {
+		raw := col.RawType
+		if raw == "" {
+			continue
+		}
+		if col.IsUnsigned && !strings.Contains(raw, "unsigned") {
+			raw += " unsigned"
+		}
+		colTypes[col.Name] = raw
+	}
 	// Derive primary-key column names for this CDC event so the per-row key
 	// JSON object can be built for downstream sinks using
 	// pk_columns_from_metadata. Priority:
@@ -1579,7 +1595,7 @@ func (h *snapshotCDCHandler) OnRow(e *canal.RowsEvent) error {
 	}
 	for i := 0; i < len(e.Rows); i++ {
 		row := e.Rows[i]
-		rec := core.Record{Metadata: core.Metadata{Source: h.reader.source.name, Database: h.reader.source.database, Table: e.Table.Name, Timestamp: time.Now(), BinlogFile: file, BinlogPos: pos}}
+		rec := core.Record{Metadata: core.Metadata{Source: h.reader.source.name, Database: h.reader.source.database, Table: e.Table.Name, Timestamp: time.Now(), BinlogFile: file, BinlogPos: pos, ColumnTypes: colTypes}}
 		switch e.Action {
 		case canal.InsertAction:
 			rec.Operation = core.OpInsert

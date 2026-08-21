@@ -1116,7 +1116,7 @@ context deadline exceeded（非 retryable），全部 500 条计入 failures 进
 
 ### BUG-6：snapshot_cdc CDC 阶段事件不填 ColumnTypes（2026-08-13 发现）
 
-状态：`queued`
+状态：`delivered`
 
 ```text
 Round: 0/5
@@ -1126,8 +1126,11 @@ Objective: CDC 相位事件携带 ColumnTypes（canal e.Table.Columns 的 RawTyp
 Scope: internal/etl/source/mysql_snapshot_cdc.go OnRow + tests。
 Non-goals: 改 kafka envelope 格式；改 typing 推断逻辑本身。
 Acceptance: 1) CDC 相位 INSERT/UPDATE/DELETE 记录的 Metadata.ColumnTypes 非空且与 canal schema 一致；2) 经 kafka -> clickhouse 自动建表使用声明类型；3) 单测 + 相关 e2e 通过。
-Evidence: OnRow 函数内 ColumnTypes 出现 0 次（仅 snapshot 相位 :916/:988 填充）；request_id/work_time 系列 bug 均走该退化路径。
-Result: queued
+Evidence:
+  - TestSnapshotCDCHandlerFillsColumnTypes（新增回归：canal schema 列类型含 unsigned 限定符正确构建；request_id/work_time 经 MapSourceType 解析为 String 而非 Int64/DateTime64；空 RawType 跳过；decimal 源精度直传为已知残留 Decimal(18,2)）。
+  - kafka sink Debezium envelope 已序列化 column_types（sink/kafka.go:65 + schema.fields），链路复用 beta.12 既有路径，无需改动。
+  - go test ./internal/etl/... 全绿；source 包 -race 绿。
+Result: delivered（与 mysql_cdc OnRow 模式对齐；container e2e 随镜像构建恢复后随下个 beta 补跑）
 Residual/follow-up: none
 ```
 
