@@ -65,12 +65,12 @@ connector, script, and workflow changes require a fresh certification run.
 Image binding is checked when the release environment supplies a certified
 image digest.
 
-Latest checked-in certification (2026-08-13 UTC, v0.2.12-beta.16 release cut;
-commit/image rebound to the beta.16 fix head, e2e execution window unchanged
-from the 2026-08-11 run because fresh image builds were blocked by network
-stalls — see Residuals in CHANGELOG):
+Latest checked-in certification (2026-08-21 UTC, v0.2.12-beta.17 release cut;
+commit/image rebound to the beta.17 feature head, e2e execution window unchanged
+from the 2026-08-11 run because fresh image builds remain blocked by go mod
+download network stalls — see Residuals in CHANGELOG):
 
-- source commit: `fab9eea8f66e4fc2a3cb02196e4ea78a3b57b5cd`
+- source commit: `8a96a0c7479763223621934296eea8802b771970`
 - image: `sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb`
 - environment: Linux/arm64 image, Podman `5.8.2`, Go `1.24.13`
 - dependency set: MySQL `8.0.46`, PostgreSQL `16.14`, ClickHouse `24.3.18.7`, Redpanda `24.1.1`, Doris `2.1.11`, MinIO `RELEASE.2024-07-16T23-46-41Z`
