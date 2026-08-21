@@ -4,6 +4,63 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.17] — 2026-08-21 — Connector maturity alignment (GAP-1..6) + kafka preprocessing
+
+### Added
+
+- **`postgres_cdc` now fills `Metadata.Key` and `Metadata.ColumnTypes` (GAP-1).**
+  pgoutput records previously carried only Source/Table/Timestamp/LSN: DELETE
+  events could not be located downstream by PK and auto_create degraded to
+  name-hint type inference. PK columns load from `pg_index` at startup
+  (composite keys in indkey order, best-effort); column types map
+  RELATION-learned OIDs to textual names. UPDATE prefers the before-image
+  key, mirroring the mysql_cdc contract.
+- **`postgres` sink: `pk_columns_from_metadata`** for kafka multi-table
+  fan-out → PG upsert/delete with per-table ON CONFLICT targets (GAP-3);
+  falls back to static `pk_columns` then `id`.
+- **`elasticsearch` sink: `index_template`** (`{table}`/`{db}` substitution)
+  for multi-table fan-out routing; missing table metadata fails loudly (GAP-4).
+- **SQL error classification (GAP-5):** mysql/postgres/jdbc batch write
+  errors wrap driver error codes into `core.ClassifiedError`
+  (duplicate/FK→data, unknown column/table→schema, access denied→auth,
+  deadlock/server-gone→transient) so DLQ entries carry a precise
+  `error_class` for filter/replay decisions.
+- **Per-table write metrics (GAP-6):** shared `tableMetricsSet` with
+  `TableWriteStats()` on clickhouse/mysql/postgres sinks — which target
+  table drags a multi-table batch.
+- **Kafka source preprocessing:** `format: canal_json` (Alibaba canal flat
+  messages: data→Data, old→Before, mysqlType→ColumnTypes, pkNames→Key JSON);
+  `on_parse_error: raw|skip|dlq`; `tombstone_policy: delete|skip`;
+  `expand_key_json`.
+- **ClickHouse sink: `hosts` HTTP failover list** (connection failures
+  round-robin to the next host; HTTP error responses return immediately).
+
+### Fixed
+
+- **ClickHouse `pk_columns_from_metadata` empty-key fallback (GAP-3):**
+  records with empty `Metadata.Key` (e.g. DLQ entries produced before the
+  beta.16 composite-PK fix) now fall back to static `pk_columns`→`id` with a
+  warning instead of failing the whole batch — previously such DLQ records
+  could never replay.
+- **`cdc_on_binlog_purged` exposed in the connector form schema** (was
+  backend-only; the UI form could not show it).
+- mysql_batch string-PK cursor (BUG-1), writeBatch fresh isolation context
+  (BUG-5), snapshot_cdc CDC ColumnTypes (BUG-6), decimal source precision
+  passthrough — unit-closed in beta.16/17 working tree, container e2e still
+  pending (image builds network-blocked).
+
+### Residuals
+
+- Container e2e for BUG-1/BUG-2 (resume_from_current/resnapshot live replay)
+  and BUG-6, plus kafka→PG/ES multi-table fan-out e2e, remain pending —
+  image builds are still blocked by go mod download network stalls; evidence
+  keeps the stale sha256:4824b260 image accordingly.
+- GAP-2 (mysql_cdc ColumnTypes) was an audit false positive — already
+  implemented; closed with no work.
+- ES mapping-conflict policy, doris/kafka per-table metrics, Avro/Protobuf
+  formats: bounded follow-ups in ROADMAP.
+
+
 
 ## [v0.2.12-beta.16] — 2026-08-13 — Runner restart lifecycle fix + snapshot_cdc composite-PK keys
 

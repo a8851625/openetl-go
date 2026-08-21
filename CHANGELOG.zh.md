@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.17] — 2026-08-21 — Connector 成熟度对齐（GAP-1..6）+ Kafka 预处理
+
+### 新增
+
+- **`postgres_cdc` 填充 `Metadata.Key` 与 `Metadata.ColumnTypes`（GAP-1）**：
+  pgoutput 记录此前只带 Source/Table/Timestamp/LSN——DELETE 事件下游无法按 PK 定位，
+  auto_create 退化为 name-hint 类型推断。启动时从 `pg_index` 载入 PK 列（复合 PK 按
+  indkey 顺序，best-effort）；列类型由 RELATION 学到的 OID 映射为文本类型；UPDATE
+  优先 before-image key，镜像 mysql_cdc 契约。
+- **`postgres` sink 支持 `pk_columns_from_metadata`**（GAP-3）：kafka 多表扇出→PG
+  upsert/delete 的 per-table ON CONFLICT 目标；回退静态 `pk_columns`→`id`。
+- **`elasticsearch` sink 支持 `index_template`**（`{table}`/`{db}` 替换）多表扇出
+  路由（GAP-4）；缺 table metadata 响亮报错。
+- **SQL 错误分类（GAP-5）**：mysql/postgres/jdbc 批量写错误按驱动错误码包
+  `core.ClassifiedError`（重复/FK→data、未知列/表→schema、拒绝访问→auth、
+  死锁/断连→transient），DLQ 记录携带精确 `error_class` 供过滤/重放决策。
+- **per-table 写入指标（GAP-6）**：共享 `tableMetricsSet` 与
+  clickhouse/mysql/postgres 的 `TableWriteStats()`——定位多表扇出中拖慢整批的表。
+- **Kafka source 预处理**：`format: canal_json`（canal 扁平消息：data→Data、
+  old→Before、mysqlType→ColumnTypes、pkNames→Key JSON）；`on_parse_error:
+  raw|skip|dlq`；`tombstone_policy: delete|skip`；`expand_key_json`。
+- **ClickHouse sink `hosts` HTTP 故障转移列表**：连接级失败轮询下一节点，HTTP 错误
+  响应立即返回。
+
+### 修复
+
+- **ClickHouse `pk_columns_from_metadata` 空 Key 回退（GAP-3）**：空 `Metadata.Key`
+  记录（如 beta.16 复合 PK 修复前进 DLQ 的存量）回退静态 `pk_columns`→`id` 并告警，
+  不再整批失败——此前这类 DLQ 记录永远无法重放。
+- **`cdc_on_binlog_purged` 暴露到 connector 表单 schema**（此前只有后端支持，
+  UI 表单不显示）。
+- mysql_batch 字符串 PK 游标（BUG-1）、writeBatch 隔离上下文（BUG-5）、snapshot_cdc
+  CDC ColumnTypes（BUG-6）、Decimal 源精度直传——单测收口；容器 e2e 仍欠
+  （镜像构建网络受阻）。
+
+### 残留
+
+- BUG-1/BUG-2（resume_from_current/resnapshot 实机重放）与 BUG-6 的容器 e2e、
+  kafka→PG/ES 多表扇出 e2e 仍待补——镜像构建被 go mod download 网络阻塞，
+  evidence 相应保留旧 image sha256:4824b260。
+- GAP-2（mysql_cdc ColumnTypes）为审计误报——已存在，无工作关项。
+- ES mapping-conflict 策略、doris/kafka per-table 指标、Avro/Protobuf 格式：
+  ROADMAP 有界后续。
+
+
 
 ## [v0.2.12-beta.16] — 2026-08-13 — Runner 重启生命周期修复 + snapshot_cdc 复合主键
 
