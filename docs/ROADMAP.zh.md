@@ -928,7 +928,7 @@ P4.2a follow-up 验收矩阵（Round 2/5）：
 
 ### BUG-1：`mysql_batch` 字符串主键游标不推进（2026-08-09 发现）
 
-状态：`queued`
+状态：`delivered`（2026-08-21 · lastCursor any 游标 + last_cursor 双格式 checkpoint）
 
 **现象与根因**：`mysql_batch` 源的 `updateLastID` 只处理 int/int64/float64，
 字符串主键（如 `request_id`）作为 `pk_column` 时游标从不推进，每次轮询
@@ -953,8 +953,13 @@ any/字符串游标）、checkpoint position 序列化与恢复兼容（旧数�
 **Non-goals**：数值字符串的 MySQL 隐式转换兼容（如 `'001'` 与 `1` 比较）、
 自然排序等多级键语义；这些按源语义文档化即可。
 
-**证据**：ref — beta.9 周期容器验证日志（etl-mt-e2e，records_read 持续增长）；
-修复后在本条目更新验收矩阵。
+**证据**（2026-08-21 修复）：
+- `TestMySQLBatchStringPKCursorAdvances`：varchar PK 第一批参数 int64(0) -> 第二批参数
+  "b-2"（游标推进）、空集后 done（不再死循环）、Snapshot 序列化为 last_cursor 新格式。
+- `TestMySQLBatchLegacyNumericCheckpointRestores`：旧 {"last_id":42} checkpoint 恢复为
+  数值游标；新数值 checkpoint 保持 last_id 字节兼容。
+- go test ./internal/etl/... 全绿；source 包 -race 绿。
+- 残留：容器级 varchar PK e2e（验收 4）随镜像构建恢复后随下个 beta 补跑。
 
 ### BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复（2026-08-12 发现）
 

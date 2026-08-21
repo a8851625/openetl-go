@@ -22,12 +22,17 @@ func init() {
 }
 
 type mysqlBatchReader struct {
-	db           *sql.DB
-	database     string
-	table        string
-	columns      []string
-	pkCol        string
-	lastID       int64
+	db       *sql.DB
+	database string
+	table    string
+	columns  []string
+	pkCol    string
+	// lastCursor is the current cursor value: int64 for numeric PKs,
+	// string for string/varchar PKs (BUG-1). Kept as any so the same
+	// parameterized `WHERE pk > ?` query works for both; comparison itself
+	// happens in MySQL under the column's collation, which is exactly the
+	// alignment the roadmap requires.
+	lastCursor   any
 	limit        int
 	done         bool
 	customQuery  string
@@ -180,11 +185,17 @@ func (s *MySQLBatchSource) Open(ctx context.Context, cp *core.Checkpoint) (core.
 		return nil, fmt.Errorf("ping mysql: %w", err)
 	}
 
-	var lastID int64
+	var lastCursor any
 	if cp != nil {
 		var pos mysqlBatchPosition
 		if json.Unmarshal(cp.Position, &pos) == nil {
-			lastID = pos.LastID
+			// Prefer the explicit string cursor (new format); fall back to the
+			// legacy numeric last_id so old checkpoints restore unchanged.
+			if pos.LastCursor != nil {
+				lastCursor = *pos.LastCursor
+			} else if pos.LastID != 0 {
+				lastCursor = pos.LastID
+			}
 		}
 	}
 
@@ -194,7 +205,7 @@ func (s *MySQLBatchSource) Open(ctx context.Context, cp *core.Checkpoint) (core.
 		table:        s.table,
 		columns:      s.columns,
 		pkCol:        s.pkCol,
-		lastID:       lastID,
+		lastCursor:   lastCursor,
 		limit:        s.limit,
 		customQuery:  s.customQuery,
 		cursorCol:    s.cursorCol,
@@ -206,6 +217,10 @@ func (s *MySQLBatchSource) Open(ctx context.Context, cp *core.Checkpoint) (core.
 
 type mysqlBatchPosition struct {
 	LastID int64 `json:"last_id"`
+	// LastCursor carries string cursors for string PKs (BUG-1). Pointer so
+	// nil distinguishes "no string cursor" from an empty-string cursor,
+	// which is a legitimate position for some collations.
+	LastCursor *string `json:"last_cursor,omitempty"`
 }
 
 func (r *mysqlBatchReader) Read(ctx context.Context) (core.Record, error) {
@@ -242,7 +257,7 @@ func (r *mysqlBatchReader) ReadBatch(ctx context.Context, n int) ([]core.Record,
 			query = fmt.Sprintf("SELECT * FROM (%s) AS stable_query WHERE `%s` > ? AND MOD(`%s`, %d) = %d ORDER BY `%s` LIMIT %d",
 				r.customQuery, r.cursorCol, r.cursorCol, r.shardTotal, r.shardIndex, r.cursorCol, limit)
 		}
-		rows, err = r.db.QueryContext(ctx, query, r.lastID)
+		rows, err = r.db.QueryContext(ctx, query, r.cursorValue())
 		if err != nil {
 			return nil, fmt.Errorf("custom query: %w", err)
 		}
@@ -262,7 +277,7 @@ func (r *mysqlBatchReader) ReadBatch(ctx context.Context, n int) ([]core.Record,
 			query += fmt.Sprintf(" AND MOD(`%s`, %d) = %d", r.pkCol, r.shardTotal, r.shardIndex)
 		}
 		query += fmt.Sprintf(" ORDER BY %s LIMIT %d", r.pkCol, limit)
-		rows, err = r.db.QueryContext(ctx, query, r.lastID)
+		rows, err = r.db.QueryContext(ctx, query, r.cursorValue())
 		if err != nil {
 			return nil, fmt.Errorf("query: %w", err)
 		}
@@ -299,12 +314,12 @@ func (r *mysqlBatchReader) ReadBatch(ctx context.Context, n int) ([]core.Record,
 
 		if r.customQuery != "" {
 			if id, ok := data[r.cursorCol]; ok {
-				r.updateLastID(id)
+				r.updateCursor(id)
 			} else {
 				return nil, fmt.Errorf("custom query result missing cursor_column %q", r.cursorCol)
 			}
 		} else if id, ok := data[r.pkCol]; ok {
-			r.updateLastID(id)
+			r.updateCursor(id)
 		}
 
 		tableName := r.table
@@ -335,25 +350,44 @@ func (r *mysqlBatchReader) ReadBatch(ctx context.Context, n int) ([]core.Record,
 	return records, nil
 }
 
-func (r *mysqlBatchReader) updateLastID(id any) {
+// updateCursor advances the batch cursor from a scanned row value.
+// Numeric PKs keep the int64 fast path (unchanged behavior); string PKs now
+// advance a string cursor so `WHERE pk > ?` progresses instead of re-reading
+// the whole table forever (BUG-1). Comparison happens in MySQL under the
+// column's collation, matching source semantics.
+func (r *mysqlBatchReader) updateCursor(id any) {
 	switch v := id.(type) {
 	case int:
-		if int64(v) > r.lastID {
-			r.lastID = int64(v)
-		}
+		r.lastCursor = int64(v)
+	case int32:
+		r.lastCursor = int64(v)
 	case int64:
-		if v > r.lastID {
-			r.lastID = v
-		}
+		r.lastCursor = v
 	case float64:
-		if int64(v) > r.lastID {
-			r.lastID = int64(v)
-		}
+		r.lastCursor = int64(v)
+	case string:
+		r.lastCursor = v
+	case []byte:
+		r.lastCursor = string(v)
+	default:
+		// Unsupported cursor type: leave the cursor unchanged. The batch will
+		// re-read and the mismatch stays observable via records_read growth
+		// rather than silently skipping data.
 	}
 }
 
+// cursorValue returns the current cursor as a query parameter. A nil cursor
+// (first run) uses 0 for numeric-compatible plans; string cursors pass
+// through as-is so MySQL compares under the column collation.
+func (r *mysqlBatchReader) cursorValue() any {
+	if r.lastCursor == nil {
+		return int64(0)
+	}
+	return r.lastCursor
+}
+
 func (r *mysqlBatchReader) Snapshot(ctx context.Context) (core.Checkpoint, error) {
-	pos := mysqlBatchPosition{LastID: r.lastID}
+	pos := r.position()
 	data, _ := json.Marshal(pos)
 	return core.Checkpoint{
 		Source:    "mysql_batch",
@@ -362,23 +396,30 @@ func (r *mysqlBatchReader) Snapshot(ctx context.Context) (core.Checkpoint, error
 	}, nil
 }
 
+// position serializes the cursor: string cursors go to last_cursor (new
+// format), numeric cursors to last_id (legacy format, byte-compatible with
+// old checkpoints so numeric-PK restore is unchanged).
+func (r *mysqlBatchReader) position() mysqlBatchPosition {
+	switch v := r.lastCursor.(type) {
+	case string:
+		return mysqlBatchPosition{LastCursor: &v}
+	case int64:
+		return mysqlBatchPosition{LastID: v}
+	case int:
+		return mysqlBatchPosition{LastID: int64(v)}
+	case float64:
+		return mysqlBatchPosition{LastID: int64(v)}
+	default:
+		return mysqlBatchPosition{}
+	}
+}
+
 func (r *mysqlBatchReader) CheckpointForRecord(ctx context.Context, rec core.Record) (core.Checkpoint, error) {
-	lastID := r.lastID
-	cursorCol := r.pkCol
-	if r.customQuery != "" {
-		cursorCol = r.cursorCol
-	}
-	if id, ok := rec.Data[cursorCol]; ok {
-		switch v := id.(type) {
-		case int64:
-			lastID = v
-		case int:
-			lastID = int64(v)
-		case float64:
-			lastID = int64(v)
-		}
-	}
-	pos := mysqlBatchPosition{LastID: lastID}
+	// The reader cursor already advanced past every scanned row of this
+	// batch (updateCursor runs during scan), so snapshotting the reader state
+	// yields the position after this record for both numeric and string
+	// cursors. Mutating reader state here would race the scan loop.
+	pos := r.position()
 	data, _ := json.Marshal(pos)
 	return core.Checkpoint{Source: "mysql_batch", Position: data, Timestamp: time.Now()}, nil
 }
