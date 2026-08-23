@@ -65,13 +65,15 @@ connector, script, and workflow changes require a fresh certification run.
 Image binding is checked when the release environment supplies a certified
 image digest.
 
-Latest checked-in certification (2026-08-21 UTC, v0.2.12-beta.17 release cut;
-commit/image rebound to the beta.17 feature head, e2e execution window unchanged
-from the 2026-08-11 run because fresh image builds remain blocked by go mod
-download network stalls — see Residuals in CHANGELOG):
+Latest checked-in certification (2026-08-23 UTC, post-beta.17 evidence rebind;
+image builds recovered via goproxy.cn + host module cache — fresh image
+`sha256:9b887beb` ran container e2e on 2026-08-23:
+e2e-kafka-multitable-clickhouse, e2e-snapshot-cdc-clickhouse and the new
+e2e-bug1-varchar-pk all PASS; historical record e2e execution window remains
+the 2026-08-11 run):
 
-- source commit: `8a96a0c7479763223621934296eea8802b771970`
-- image: `sha256:4824b260cdc9b439137f04b72e349fad71ebc58e5443f1284f4822f2124ceafb`
+- source commit: `d75600bea140b7a7e46b10ce39c48cbb84173ee9`
+- image: `sha256:9b887beb2ed3d4f26aea3833478981f540151f3ab82943eef7e119928cfee2b5`
 - environment: Linux/arm64 image, Podman `5.8.2`, Go `1.24.13`
 - dependency set: MySQL `8.0.46`, PostgreSQL `16.14`, ClickHouse `24.3.18.7`, Redpanda `24.1.1`, Doris `2.1.11`, MinIO `RELEASE.2024-07-16T23-46-41Z`
 - result: 13 unique scripts passed; all 14 production source/sink records are verified through their per-record `expires_at`
