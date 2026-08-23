@@ -377,11 +377,15 @@ func (r *mysqlBatchReader) updateCursor(id any) {
 }
 
 // cursorValue returns the current cursor as a query parameter. A nil cursor
-// (first run) uses 0 for numeric-compatible plans; string cursors pass
-// through as-is so MySQL compares under the column collation.
+// (first run) passes the empty string: MySQL coerces it to 0 for numeric
+// columns (id > ” is id > 0, all positive rows match) while string columns
+// compare lexically (” sorts below every non-empty value). The previous
+// int64(0) first-run parameter silently matched zero rows for varchar PK
+// columns because MySQL casts the string column to a number ('b-1' -> 0,
+// 0 > 0 is false) — caught by the BUG-1 container e2e.
 func (r *mysqlBatchReader) cursorValue() any {
 	if r.lastCursor == nil {
-		return int64(0)
+		return ""
 	}
 	return r.lastCursor
 }

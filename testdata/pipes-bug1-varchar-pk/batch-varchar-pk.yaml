@@ -1,0 +1,21 @@
+name: bug1-varchar-pk-batch
+source:
+  type: mysql_batch
+  config:
+    host: etl-mysql-source
+    port: 3306
+    user: sync_user
+    password: sync_password_123
+    database: bug1
+    table: varchar_pk_t
+    pk_column: code
+    columns: [code, name]
+sink:
+  type: file_sink
+  config:
+    path: /app/data/output/varchar-pk.jsonl
+    format: jsonl
+schedule:
+  type: once
+checkpoint_interval_sec: 5
+backpressure_buffer: 100

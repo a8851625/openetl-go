@@ -60,7 +60,7 @@ func TestMySQLBatchReaderFillsDatabaseMetadata(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "name"}).
 		AddRow(1, "a")
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM orders WHERE id > ? ORDER BY id LIMIT 1")).
-		WithArgs(int64(0)).
+		WithArgs("").
 		WillReturnRows(rows)
 
 	r := &mysqlBatchReader{
@@ -118,7 +118,7 @@ func TestMySQLBatchStringPKCursorAdvances(t *testing.T) {
 
 	// First batch: two varchar rows, ascending. Second batch: empty -> done.
 	q := regexp.QuoteMeta("SELECT * FROM orders WHERE request_id > ? ORDER BY request_id LIMIT 2")
-	mock.ExpectQuery(q).WithArgs(int64(0)).
+	mock.ExpectQuery(q).WithArgs("").
 		WillReturnRows(sqlmock.NewRows([]string{"request_id", "v"}).
 			AddRow("a-1", "x").AddRow("b-2", "y"))
 	mock.ExpectQuery(q).WithArgs("b-2").

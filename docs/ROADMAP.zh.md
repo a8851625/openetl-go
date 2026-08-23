@@ -926,7 +926,7 @@ P4.2a follow-up 验收矩阵（Round 2/5）：
 
 ## 已知缺陷（BUG backlog）
 
-### BUG-1：`mysql_batch` 字符串主键游标不推进（2026-08-09 发现）
+### BUG-1：`mysql_batch` 字符串主键游标不推进（2026-08-09 发现；2026-08-23 delivered）
 
 状态：`active`（代码完成 + 单测闭合；验收 4 容器级 e2e 未跑——镜像构建被
 go mod download 网络阻塞，恢复后补跑再置 delivered）
@@ -961,6 +961,11 @@ any/字符串游标）、checkpoint position 序列化与恢复兼容（旧数�
   数值游标；新数值 checkpoint 保持 last_id 字节兼容。
 - go test ./internal/etl/... 全绿；source 包 -race 绿。
 - **未闭合**：容器级 varchar PK e2e（验收 4）被镜像构建网络阻塞，未跑；据此状态为 active 而非 delivered。
+- **2026-08-23 收口**：容器 e2e hack/e2e-bug1-varchar-pk.sh（goproxy.cn 代理重建镜像
+  9b887beb）通过——varchar PK once 管道 completed 且 written=6；e2e 同时抓出并修复了
+  首查参数缺陷：nil 游标原传 int64(0)，MySQL 将 varchar 列隐式转数字（'b-1'→0，
+  0>0 为假）导致首查 0 行、Source exhausted；现改为传空串（数值列隐式转 0、字符串列
+  字典序最小，两类列均正确），mock 测试断言同步更新。
 
 ### BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复（2026-08-12 发现）
 
