@@ -143,7 +143,13 @@ func allowedEvidenceDescendantPath(path string) bool {
 	switch filepath.ToSlash(strings.TrimSpace(path)) {
 	case "internal/etl/server/evidence/connector-evidence.json",
 		"docs/ROADMAP.zh.md",
-		"docs/connector-certification.md":
+		"docs/connector-certification.md",
+		// Release-cut commits may only touch release bookkeeping: the
+		// changelogs and the production-profile image reference. No runtime,
+		// script, workflow, or connector code is allowed through this path.
+		"CHANGELOG.md",
+		"CHANGELOG.zh.md",
+		"hack/e2e-production-profile.sh":
 		return true
 	default:
 		return false
