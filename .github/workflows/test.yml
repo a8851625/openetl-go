@@ -1,5 +1,9 @@
 name: Test
 
+# Thin caller (IT-1/T1.1, roadmap RA-4): the gate jobs live in _gate.yml so
+# release workflows can run the exact same set synchronously on a tag commit.
+# push/pull_request behavior is unchanged apart from the check-run grouping.
+
 on:
   push:
     branches: [main]
@@ -7,149 +11,7 @@ on:
     branches: [main]
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: go vet
-        run: go vet ./...
-
-  connector-evidence:
-    name: Connector Evidence Manifest
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Structural evidence check
-        run: bash ./hack/check-connector-evidence.sh
-      - name: Strict evidence gate on main
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: bash ./hack/check-connector-evidence.sh -strict -commit "$(git rev-parse HEAD)"
-
-  unit-test:
-    name: Unit Tests (-race)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Run unit tests
-        run: go test -race -count=1 ./internal/etl/... ./internal/logic/...
-
-  # P5: production checklist gate — release assets, profile smoke, health unit
-  # coverage, and storage matrix with explicit SKIP (never silent green).
-  production-gate:
-    name: Production Gate (P5)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Business health + alert drop unit tests
-        run: go test -race -count=1 ./internal/etl/telemetry/... ./internal/etl/alert/...
-      - name: Release asset scan
-        run: bash ./hack/check-release-assets.sh
-      - name: Production profile smoke
-        run: bash ./hack/e2e-production-profile.sh
-      - name: Runtime smoke
-        run: bash ./hack/e2e-runtime-smoke.sh
-      - name: SQLite backup/retention smoke
-        run: bash ./hack/e2e-backup-restore-sqlite.sh
-
-  storage-mysql:
-    name: Storage MySQL (P5 matrix)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: MySQL storage e2e (self-contained container)
-        run: bash ./hack/e2e-storage-mysql.sh
-
-  storage-postgres:
-    name: Storage Postgres (P5 matrix)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Postgres storage e2e (self-contained container)
-        run: bash ./hack/e2e-storage-postgres.sh
-
-  integration-test:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: root123456
-          MYSQL_DATABASE: dzh3136_go
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h localhost"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      clickhouse:
-        image: clickhouse/clickhouse-server:24.3-alpine
-        env:
-          CLICKHOUSE_USER: default
-          CLICKHOUSE_PASSWORD: dzh123456
-          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
-        ports:
-          - 8123:8123
-          - 9000:9000
-        options: >-
-          --ulimit nofile=262144:262144
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Wait for ClickHouse
-        run: |
-          for i in $(seq 1 180); do
-            if curl -fsS http://127.0.0.1:8123/ping >/dev/null 2>&1 || \
-               curl -fsS http://default:dzh123456@127.0.0.1:8123/ping >/dev/null 2>&1; then
-              curl -fsS http://default:dzh123456@127.0.0.1:8123/ \
-                --data-binary 'CREATE DATABASE IF NOT EXISTS dzh3136_go'
-              exit 0
-            fi
-            sleep 1
-          done
-
-          . ./hack/container-cli.sh
-          detect_container_cli
-          "$CONTAINER_CLI" ps -a
-          cid="$("$CONTAINER_CLI" ps -aq --filter ancestor=clickhouse/clickhouse-server:24.3-alpine | head -n 1)"
-          if [ -n "$cid" ]; then
-            "$CONTAINER_CLI" logs "$cid" || true
-            "$CONTAINER_CLI" exec "$cid" sh -c 'tail -200 /var/log/clickhouse-server/clickhouse-server.err.log 2>/dev/null || true'
-          fi
-          exit 1
-      - name: Run integration tests
-        env:
-          MYSQL_HOST: 127.0.0.1
-          MYSQL_PORT: 3306
-          MYSQL_USER: root
-          MYSQL_PASSWORD: root123456
-          MYSQL_DATABASE: dzh3136_go
-          CLICKHOUSE_HOST: 127.0.0.1
-          CLICKHOUSE_PORT: 9000
-          CLICKHOUSE_USER: default
-          CLICKHOUSE_PASSWORD: dzh123456
-        run: go test -race -count=1 -tags=integration ./internal/etl/...
+  gate:
+    name: Gate
+    uses: ./.github/workflows/_gate.yml
+    secrets: inherit
