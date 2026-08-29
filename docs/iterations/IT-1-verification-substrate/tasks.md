@@ -18,8 +18,8 @@
 
 | ID | 任务 | 依赖 | 状态 | 证据落点 |
 | --- | --- | --- | --- | --- |
-| T1.1 | 抽出 `_gate.yml` reusable workflow + `gate-passed` 聚合断言 | — | `todo` | workflow 文件、故意失败的 run URL |
-| T1.2 | release / release-beta-container 接入门禁 | T1.1 | `todo` | 失败 tag 与正常 tag 两次 run URL |
+| T1.1 | 抽出 `_gate.yml` reusable workflow + `gate-passed` 聚合断言 | — | `active` | workflow 文件、故意失败的 run URL |
+| T1.2 | release / release-beta-container 接入门禁 | T1.1 | `active` | 失败 tag 与正常 tag 两次 run URL |
 | T1.3 | e2e harness 骨架（容器、子进程、命名空间、skip 语义） | — | `todo` | `internal/etl/e2e/harness/` + harness 单测 |
 | T1.4 | 迁移两条主推荐路径并接入 CI | T1.3 | `todo` | `connector-e2e` job run URL |
 | T1.5 | 结构化证据产出 + commit 绑定校验 + `LastCertified` | T1.4 | `todo` | `docs/evidence/*.json`、篡改证据的失败 run |
@@ -175,6 +175,70 @@
 5. `docs/iterations/README.md` 状态看板更新。
 
 **证据落点**：时长记录；ROADMAP diff；README 看板。
+
+## 领取记录
+
+### Round 1/5 —— RA-4（T1.1 + T1.2），2026-08-29 领取
+
+```text
+Round: 1/5
+Roadmap item: RA-4 (IT-1/T1.1 + T1.2)
+Profile/path: standalone（CI 发布流水线）
+Objective: 未通过 _gate.yml 聚合门禁的 commit/tag 不能产出 Release 或 GHCR 镜像；skip 不计为 pass
+Scope: .github/workflows/_gate.yml(新增)、test.yml、release.yml、release-beta-container.yml、docs/release-checklist.md
+Non-goals: 不迁移 e2e 路径（T1.3/T1.4 属 Round 2）；不删改 hack/*.sh；不改 goreleaser 矩阵；不改测试断言语义
+Acceptance: T1.1 验收 1-4；T1.2 验收 1-5（见上方任务明细）
+Evidence: workflow 文件 diff；CI run URL（skip 场景 / 失败 tag / 正常 tag）——实现与本地校验在本 round 完成，run URL 证据需 push 后构造，记 pending
+Result: active
+Residual/follow-up: push 后补齐 3 次 run URL（构造方法见下）
+```
+
+### Round 1/5 实施证据（2026-08-29，本地阶段）
+
+**T1.1**：
+
+- 验收 1 ✅ `.github/workflows/_gate.yml` 新增，`on: workflow_call`，承载原 `test.yml`
+  全部 7 个 job + `gate-passed` 聚合 job；支持可选 `ref` 输入（tag 绑定用）。
+- 验收 2 ✅ `gate-passed`（`if: always()`）用 `toJSON(needs)` + `jq -e` 显式断言
+  每个 job `result == "success"`；豁免经 `GATE_ALLOWLIST` 显式表达（默认空），
+  豁免必须记入 `release-checklist.md` §1b。
+- 验收 3 ◐ 逻辑已验证：gojq（jq 兼容实现，宿主 go1.26.5 + goproxy.cn）实跑 6 场景
+  6/6 —— all success→true、unit-test skipped→false、failure→false、cancelled→false、
+  storage-mysql skipped + allowlist→true、allowlist 带空格→trim 后豁免生效。
+  **run URL pending**（构造方法见下）。`jq -e` 表达式已在 CI runner 的 jq 1.7 上复核语义
+  （`. as $entry` 绑定避开 `index(.key)` 的数组索引错误）。
+- 验收 4 ✅ `test.yml` 改为 `uses: ./.github/workflows/_gate.yml` 薄调用；
+  结构等价校验（ruby/YAML）7/7 job 与原 `test.yml` 深比对通过，唯一差异为
+  checkout 增加 `ref: ${{ inputs.ref }}`（空值时行为与原 checkout 相同）；
+  push/PR 实际 run 待下次推送观察（行为等价的最终证据）。
+
+**T1.2**：
+
+- 验收 1 ✅ `release.yml` / `release-beta-container.yml` 均新增 `gate` job
+  （`uses: ./.github/workflows/_gate.yml`，`secrets: inherit`），发布 job 加
+  `needs: gate`；beta 的 `workflow_dispatch` 路径通过 `with.ref = inputs.tag || github.ref_name`
+  把门禁钉到目标 tag（否则 dispatch 时门禁会落在默认分支 commit 上）。
+- 验收 2 ◐ pending：失败 tag run URL（构造方法 2）。
+- 验收 3 ◐ pending：正常 tag run URL（构造方法 3）。
+- 验收 4 ✅(机制) 门禁为同步 `workflow_call`，运行在调用方事件 ref（= tag commit）上，
+  不受分支后续提交影响；beta dispatch 由 `ref` 输入显式钉住。run URL 复验 pending。
+- 验收 5 ✅ `docs/release-checklist.md` §1 改写为「流水线强制项」，新增 §1a 聚合判定
+  （skip≠pass）与 §1b 豁免清单（默认空，逐条理由 + re-review date）。
+
+**本地校验环境记录**：无 `jq`/`actionlint`/pyyaml，apk 网络不通；以宿主 go1.26.5 +
+gojq v0.12.16（goproxy.cn）替代 jq 实测断言逻辑，ruby/YAML 做结构与等价校验。
+CI run（ubuntu-latest 的 jq 1.7）为最终证据。
+
+**run URL 证据构造方法**（push 后执行，逐条回填）：
+
+1. **T1.1 验收 3（skip → 门禁失败）**：临时分支在 `unit-test` job 加 `if: false()`
+   （其余 job 正常），触发 push → 预期 `gate-passed` 失败，`needs` JSON 中
+   `unit-test.result == "skipped"` 被显式断言捕获。留存 run URL 后删除分支。
+2. **T1.2 验收 2（失败 tag）**：在临时 commit 上故意破坏一个单测 → 打
+   `v0.0.0-gate-proof-fail` tag → 预期 release workflow 在 `gate` job 失败，
+   无 Release/GHCR 产出。留存 run URL 后删除 tag。
+3. **T1.2 验收 3（正常 tag）**：正常打下一个 beta tag → release / release-beta-container
+   全流程通过，产物与改造前一致。
 
 ## 领取记录模板
 

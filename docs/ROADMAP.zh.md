@@ -1573,7 +1573,14 @@ distributed fencing（属 PR-D1）。
 
 ### RA-4：release 流水线不依赖任何测试门禁
 
-状态：`queued`
+状态：`active`
+
+> 领取记录（2026-08-29，IT-1 Round 1/5 = T1.1 + T1.2）：目标 = 未过 `_gate.yml`
+> 聚合门禁的 tag 不能产出 Release/GHCR 镜像，skip 不计为 pass。范围 =
+> `.github/workflows/{_gate,test,release,release-beta-container}.yml` +
+> `docs/release-checklist.md`。非目标 = 不迁移 e2e 路径（T1.3/T1.4 属 Round 2+）、
+> 不改 goreleaser 产物矩阵、不把 `hack/*.sh` 全量接入 CI。验收 = 本条目验收 1-4 +
+> `docs/iterations/IT-1-verification-substrate/tasks.md` T1.1/T1.2 验收。
 
 **追溯依据**：
 
@@ -1603,6 +1610,15 @@ distributed fencing（属 PR-D1）。
 2. 构造 storage matrix 中一个 backend skip 的场景，门禁判定为失败而非通过。
 3. 正常 tag 的 release 全流程通过，产物与当前一致。
 4. 门禁结果与 tag commit 严格绑定，不受分支后续提交影响。
+
+**Round 1/5 实施记录（2026-08-29）**：`_gate.yml` reusable workflow + `gate-passed`
+显式断言已落地，`test.yml` 改薄调用、两个 release workflow 接 `needs: gate`
+（beta dispatch 经 `ref` 输入钉住 tag commit），`release-checklist.md` §1 改为
+流水线强制项 + §1b 豁免清单。本地证据：结构等价校验 7/7（ruby/YAML 深比对）、
+断言逻辑 gojq 6/6 场景（skip/failure/cancelled→失败；allowlist 豁免→通过）。
+pending：3 次 run URL（skip 场景 / 失败 tag / 正常 tag，构造方法见
+`docs/iterations/IT-1-verification-substrate/tasks.md` 领取记录）——push 后补齐，
+补齐前 RA-4 保持 `active` 不得置 `delivered`。
 
 **Non-goals**：不在本项把 69 个 `hack/*.sh` 全量接入 CI（属 RA-7）；不改变 goreleaser 产物矩阵。
 
