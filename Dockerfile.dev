@@ -1,7 +1,24 @@
-FROM golang:1.24-alpine
+# Temporary local-build Dockerfile: same runtime stage as Dockerfile but the
+# frontend stage is skipped (resource/public is committed) and go mod runs
+# through goproxy.cn + the host module cache because proxy.golang.org direct
+# connections time out in this environment.
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache git ca-certificates tzdata
+ENV GOPROXY=https://goproxy.cn,direct
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /app/main .
 
-RUN apk add --no-cache git ca-certificates tzdata bash curl make gcc musl-dev
-
-WORKDIR /workspace
-
-CMD ["sleep", "infinity"]
+FROM alpine:3.19
+WORKDIR /app
+RUN apk add --no-cache ca-certificates tzdata
+RUN addgroup -g 1001 etl && adduser -D -u 1001 -G etl etl
+COPY --from=builder /app/main .
+COPY --from=builder /app/resource ./resource
+COPY --from=builder /app/manifest ./manifest
+RUN mkdir -p pipes data/checkpoint data/dlq data/output && chown -R etl:etl /app
+USER etl
+EXPOSE 8000 8001
+CMD ["./main"]
