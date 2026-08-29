@@ -30,6 +30,13 @@ sync current state -> claim one roadmap item -> split bounded increments
 
 The loop is a delivery rule, not a suggestion. Do not start coding from a stale summary, an untracked idea, or a test failure without first mapping it to a roadmap item or an explicitly authorized bounded follow-up.
 
+Unimplemented roadmap items are additionally organized into iterations under
+[`docs/iterations/`](docs/iterations/README.md). Each iteration ships a `spec.md` (WHAT/WHY,
+acceptance, delivery constraints), a `plan.md` (technical approach, allowed files, data
+semantics, rollback), and a `tasks.md` (claimable increments grouped into rounds, with a
+ready-to-copy claim record). Use them as the input to steps 2-4 of this loop. They do not
+replace `docs/ROADMAP.zh.md`: when the two disagree, the roadmap's acceptance criteria win.
+
 ### 1. Sync before claiming
 
 - Read the current `docs/ROADMAP.zh.md`, the relevant component/reliability documents, and the working tree status before selecting work. Treat the current files and commands as authoritative; previous conversation summaries are navigation hints only.

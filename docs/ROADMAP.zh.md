@@ -3,6 +3,14 @@
 > 当前审计基线：`cfbd496`（v0.2.11-beta.3 后续开发，2026-07-24）
 >
 > 最后核对：2026-07-24
+>
+> 复审基线：`c2ac396`（v0.2.12-beta.17，2026-08-29）—— 代码级重新核对结果见
+> [Production Ready 复审缺口（RA）](#production-ready-复审缺口ra2026-08-29-代码核对)。
+> 该复审只登记当前代码实测仍打开的缺口，不改变 P0 与既有 backlog 的优先级。
+>
+> 迭代编排：全部未实现条目已按依赖与伤害组织为 IT-1..IT-4 主线迭代与 PT-A 并行轨，
+> 见 [docs/iterations/](./iterations/README.md)。该目录提供 spec/plan/tasks 三件套与
+> 技术方案、交付约束，**不改变本文的验收标准**；两者冲突时以本文为准。
 
 本文只维护尚未完成、可以验收的产品和工程工作。已经交付的功能、测试命令和版本说明进入 [CHANGELOG.zh.md](../CHANGELOG.zh.md)；本文末尾只保留必要的证据索引，不再重复完整实现日志。
 
@@ -1163,6 +1171,10 @@ Residual/follow-up: none
   `deleted`/`_flag` → ClickHouse UInt8）：非数字文本（'yes'/'on'）在
   convertClickHouseValue 中原样传给 AppendRow 响亮失败进 DLQ，非静默错误；仅在需要
   宽容文本布尔语义时再评估。
+- **仓库工作区卫生**（2026-08-29 复审提出）：根目录存在 30+ 个 `data-*` 测试产物目录、
+  `logs/`、`.tmp-go-cache/` 以及一个 90MB 的 `openetl-go` 构建产物。即便已被 `.gitignore`
+  覆盖，仍影响开源项目的首次浏览印象与新贡献者的目录理解成本。建议在 RA-7 迁移 e2e 时
+  统一收敛到单个 `.e2e-workdir/` 前缀，并在 CONTRIBUTING 说明产物位置。
 - **Decimal 源精度直传**（2026-08-21 修复）：resolve.go decimalDDL 现在解析源类型
   （p,s）后缀并直传（decimal(5,2) → Decimal(5,2)），越界/畸形回退 18,2 默认；MySQL
   方言 raw 直传不变。测试 TestDecimalSourcePrecisionPassthrough（4 方言 + 边界钳制
@@ -1264,13 +1276,536 @@ Residual/follow-up: none
   测试：TestTableMetricsSetRecordAndSnapshot、TestMySQLPostgresTableMetricsWired；
   sink -race 绿。
 
+### GAP-7：身份元数据完整性与受控 DLQ 回放契约（待领取）
+
+状态：`queued`
+
+本项把 ClickHouse 多表写入中暴露的身份风险收敛为 source、传输、DLQ/replay 和启用
+metadata PK 的 sink 共同遵守的契约。它不改变 P0 MaxCompute 的最高优先级，不替代
+BUG-1/2/6、GAP-1/3/4 的既有 e2e 欠账，也不得在未显式领取前标为 `active`。
+
+**Profile/path**：identity-aware CDC/消息 source → Kafka/内部 envelope →
+`pk_columns_from_metadata` 或等价按业务键写入的 sink。只约束需要按身份执行
+UPDATE、DELETE、upsert 或去重的 DML 路径；file/HTTP 等无法提供行身份的 append-only
+source 不被要求虚构主键，但 preflight 必须拒绝其进入依赖 metadata PK 的 DML 写模式。
+
+**追溯依据**：
+
+- `internal/etl/sink/clickhouse.go` 的 `pkColumnsByTable` 将非空 JSON
+  `Metadata.Key` 用作逐表主键列，并把空 Key 静态回退明确标为 legacy DLQ replay 的
+  best-effort 兼容，警告错误但存在的静态键可能误定位行。
+- `internal/etl/source/kafka.go` 的 `tryCanalJSON` 从 `pkNames` 和 `data` 组装 Key，
+  当前“任意一列存在即非空”的行为可产生部分复合 Key；UPDATE 的 `old` 单独进入
+  `Before`。
+- GAP-1/GAP-3 已证明缺少 `Metadata.Key` 或按表解析 Key 会使 DELETE/UPDATE、
+  多表 fan-out 和 auto-create 退化；GAP-5 的 `error_class`、GAP-6 的逐目标指标是
+  该契约发生故障时的诊断基线。
+- [CHANGELOG.zh.md](../CHANGELOG.zh.md) `v0.2.12-beta.15` 与 `beta.17` 记录了
+  MySQL CDC、Kafka 和 ClickHouse 空 Key replay 的同构问题及临时兼容措施。
+
+**目标**：正常生产流不再把空 Key 或部分 Key 交给 identity-aware sink；历史 DLQ
+记录只有在身份语义可证明时才能回放；所有拒绝、修复、重放和目标表写入均保持
+checkpointed at-least-once 边界和可审计证据。
+
+**统一数据契约**：
+
+1. 需要身份写入的正常 DML 必须提供覆盖全部声明主键列的非空 JSON `Metadata.Key`；
+   部分 Key 与空 Key 都不是有效身份。UPDATE 的 Key 表达 before-image 旧行身份，
+   `Data` 保持 after-image。
+2. 仅在 source 格式的已登记语义明确“`Before` 缺列表示该列未变更”时，才能用
+   `Data` 补齐缺失的旧键分量。无上游版本字段的格式由 source 配置固定一个已登记的
+   format-contract ID，并在 DLQ 入库时冻结；未知 ID、未知 `old` 状态或未登记语义
+   一律不得推断旧键。
+3. 主键无法完整验证的正常 DML 必须成为带原因的 DLQ 事件，不得作为 raw、空 Key 或
+   部分 Key 的普通 `Record` 流向 sink。DLQ 持久化失败不得推进该事件的 checkpoint。
+4. 重放优先从原始事件重建完整 `Metadata.Key` 后复用普通 sink 路径。静态
+   `pk_columns`/`id` 回退只允许处理带明确 legacy-replay 来源的记录，且原始声明
+   `pkNames` 与目标静态键集合精确一致、所有键值存在；主键变更 UPDATE 必须重建
+   Before Key，不得走静态回退。
+5. DLQ/replay 必须保留原始 payload、声明 `pkNames`、缺失键原因、冻结的
+   format-contract ID、原始 `old` 状态分类、目标表/数据库和 replay provenance。
+   无法证明身份的条目只能受控修复或隔离，不能因重放而变成普通写入。
+
+**非目标**：不为所有 source 强加主键；不把 ClickHouse 的 ReplacingMergeTree、
+mutation、native/HTTP 协议或 `async_insert` 推广为通用实现；不承诺跨 sink exactly-once；
+不以静态 PK fallback 替代 source 身份契约；不在本项顺带实施 ClickHouse 吞吐基准。
+
+**依赖与领取约束**：复用现有 `core.Record`/`Metadata`、DLQ、checkpoint、
+`metadata_pk.go`、source descriptor/schema 和 connector certification 基础设施。领取
+前必须重新核对当前 P0、所有 `active` 项及 GAP-1/3 的 PG/Kafka 多表 e2e 残留；本项
+不能借用 ClickHouse 单测或一个 sink 的证据宣称全连接器成熟。
+
+#### GAP-7.1：正常 DML 完整 Key 产出与组合预检
+
+状态：`queued`
+
+**可观察结果**：以 Kafka `canal_json` 为首个适配器，声明复合 `pkNames` 的正常
+INSERT/UPDATE/DELETE 只会产出完整 Key，或进入结构化身份错误/DLQ 路径；配置了
+metadata PK 写模式的 pipeline 在启动前能拒绝不具备身份能力的 source 组合。
+
+**范围**：`internal/etl/source/kafka.go`、共享 Key/identity conformance helper、
+source/sink descriptor 或 spec validation、对应单测和 `docs/etl-config-schema.md`。
+
+**非目标**：不在该切片改造全部 source；不实现历史 replay envelope；不改变 append-only
+路径的正常写入语义。
+
+**验收**：
+
+1. 单列与复合 `pkNames` 的 INSERT/UPDATE/DELETE 都产出完整 JSON Key；复合键缺列时
+   不得再因“至少一列存在”而生成部分 Key。
+2. 主键变更 UPDATE 使用完整 Before Key；只有登记的缺列语义允许以 Data 补齐，未登记、
+   `old` 缺失或冲突的输入进入身份错误/DLQ。
+3. identity-aware sink 配置与无身份 source 的组合在 validate/preflight 阶段给出具体
+   field issue；正常 Record 不得抵达 sink 写入路径。
+4. 失败事件的 DLQ 持久化与 checkpoint 边界符合既有 at-least-once 约定；DLQ 失败时
+   不得确认或静默跳过 source 位置。
+
+**证据**：新增 source/key conformance 单测、server validate/preflight 单测、Kafka
+解析错误与 checkpoint/DLQ 单测；至少一条 `canal_json` → metadata-PK sink focused e2e。
+
+#### GAP-7.2：DLQ 身份上下文与受控重放门禁
+
+状态：`queued`
+
+**可观察结果**：DLQ 条目能完整说明为什么不能构造身份；replay 处理器可基于冻结的
+格式语义重建 Key，或以可审计原因拒绝/隔离，而不会由当前配置猜测历史事件身份。
+
+**范围**：DLQ entry/storage、replay API/worker、format-contract registry 或等价配置
+解析、审计/错误展示、对应文档与测试。
+
+**非目标**：不批量自动修复历史 DLQ；不允许普通流通过 replay provenance 绕过完整 Key；
+不将 replay 变为 exactly-once 事务。
+
+**验收**：
+
+1. 新 DLQ 条目持久化完整身份上下文，重启、备份/恢复和 API 查询后信息不丢失。
+2. 可重建的历史记录在 replay 前生成完整 Key，并按普通 sink 路径执行；键值真正缺失、
+   契约未知或 `old` 状态不支持推断的记录明确保持 repair/quarantine 状态。
+3. 静态 PK 兼容只接受带 legacy provenance 的记录，且校验原始 `pkNames`、目标静态键
+   集合和全部值；任何不匹配、部分键或主键变更 UPDATE 都被拒绝并留在 DLQ。
+4. replay、sink acknowledgement、checkpoint 和 DLQ 删除顺序具有 crash/restart 测试，
+   重放可重复但不会造成静默错行定位。
+
+**证据**：DLQ storage migration/conformance、replay API/worker 单测、crash/restart
+故障注入，以及 legacy 空 Key、复合键、主键变更、unknown contract 的 replay matrix e2e。
+
+#### GAP-7.3：metadata-PK sink 一致性与跨路径认证
+
+状态：`queued`
+
+**可观察结果**：ClickHouse、MySQL/PostgreSQL 及后续声明支持 metadata PK 的 sink 对
+正常空/部分 Key、完整 Key、Before Key 和受控 legacy replay 给出一致的拒绝或执行语义；
+用户可从 per-target 指标、`error_class`、DLQ 和 preflight 看见结果。
+
+**范围**：现有 metadata-PK sink 接入点、shared conformance fixture、connector schema/
+preflight、per-target metrics/error classification、跨路径 e2e 和组件文档。
+
+**非目标**：不要求 Kafka、S3/file 等不以行主键写入的 sink 伪装为 metadata-PK sink；
+不重写各 sink 的原生幂等、schema 或批处理策略。
+
+**验收**：
+
+1. 共享 conformance 覆盖单键/复合键、INSERT/UPDATE/DELETE、主键变更、跨表 fan-out、
+   正常空/部分 Key 拒绝和合格 legacy replay；每个已声明支持 metadata PK 的 sink 都通过。
+2. preflight 对缺少 `Table`/`Database`、身份能力或目标 PK 配置的组合给出可操作错误；
+   自动建表优先消费 `Metadata.ColumnTypes`，不以样本值推断替代可用的声明类型。
+3. Kafka → ClickHouse 与 Kafka → PostgreSQL 多表路径完成真实容器 e2e，含 checkpoint
+   reset/replay、sink outage → DLQ → replay、复合键和 key-changing UPDATE；ES 模板
+   fan-out 认证继续按其 index/mapping 语义单独记录，不能复用关系型证据。
+4. 每条认证路径记录实际命令、镜像/依赖版本、执行日期、passed/failed/skipped/blocker；
+   缺容器、DSN 或服务只能保留 `queued`/`active` 或 `blocked_external`，不得标
+   `delivered`。
+
+**交付与回滚边界**：任何切片只能在其验收全部通过后置 `delivered`。上线前必须先识别
+现有空 Key DLQ；普通流切换为 fail-closed 后仍保留原始事件和 checkpoint，回滚不得删除
+DLQ 或把已拒绝事件静默确认。静态 fallback 的兼容范围必须有日志、指标和可撤销配置，
+但关闭兼容不能使正常流重新接受无身份 DML。
+
 ### 执行顺序
 
-GAP-1 → GAP-2 → GAP-3 → GAP-4 → GAP-5 → GAP-6（按生产影响排序；GAP-1/2 是数据
-正确性问题优先，GAP-3/4 是链路能力缺失，GAP-5/6 是运维体验）。每项独立成 commit、
-独立验收；与 BUG backlog 的容器 e2e 欠账（BUG-1/2/6）同批补齐时优先 e2e。
+GAP-1 → GAP-2 → GAP-3 → GAP-4 → GAP-5 → GAP-6 → GAP-7（按生产影响排序；GAP-1/2
+是数据正确性问题优先，GAP-3/4 是链路能力缺失，GAP-5/6 是运维体验，GAP-7 收敛跨
+source/sink 的身份与 replay 安全契约）。每项独立成 commit、独立验收；与 BUG backlog
+的容器 e2e 欠账（BUG-1/2/6）同批补齐时优先 e2e。GAP-7 只能经显式优先级决定后领取，
+不得以此跳过已有残留认证。
+
+## Production Ready 复审缺口（RA，2026-08-29 代码核对）
+
+审计方法：以 [PRODUCTION-READINESS-AUDIT-2026-07-26.zh.md](./PRODUCTION-READINESS-AUDIT-2026-07-26.zh.md)
+的结论为起点，在 HEAD `c2ac396`（v0.2.12-beta.17）逐条重新走读源码，**只保留当前代码实测仍然打开**
+的缺口。原审计中已修复的条目不再列入，例如 `asyncInsertWait` 零值缺陷已关闭
+（`internal/etl/sink/clickhouse.go:125` 现为 `asyncInsertWait: true`，与 descriptor 默认值一致）。
+该基线 `go build ./...` 通过。
+
+本节**不改变** P0 MaxCompute 的最高优先级，也不替代 BUG-1/2/6 与 GAP-1..7 的既有容器 e2e 欠账。
+所有 RA 项在显式领取前保持 `queued`，不得因"已写入 roadmap"被视为进行中。RA-1 的优先级提议
+见「待用户决策」，用户答复前不得据此重排执行顺序。
+
+### RA-1：ClickHouse `_version` 使用写入时钟序而非源事件序
+
+状态：`queued`
+
+**追溯依据**：
+
+- `internal/etl/sink/clickhouse.go:1210` `nextVersion()` 返回
+  `(time.Now().UnixMilli() << 20) | (counter & 0xFFFFF)`；调用点为 `:879`（native 协议 values）
+  与 `:911`（HTTP 协议 row）。
+- 原审计 P0#6，验收矩阵「ClickHouse replay ordering」判定 `fail`，至今未关闭。
+
+**现象与根因**：`nextVersion()` 相比原实现（纯进程内计数器）增加了毫秒时间戳高位，跨进程重启
+保持单调，但**版本语义未变**：它表达「何时被写入 ClickHouse」，不是「源库何时发生」。因此 DLQ
+replay 或 checkpoint reset 重放一条较旧的 UPDATE 时，该记录取得高于现存新行的 `_version`，
+ReplacingMergeTree 合并后**旧值胜出**；DELETE 走物理 mutation 时，旧 INSERT 重放还可能重新
+生成已删除的行。
+
+这是当前缺口清单中唯一产生**静默错值**的一项。丢数据和重复数据可由行数/主键对账发现，被旧值
+覆盖的行在计数和主键维度上都表现正常，只有逐字段比对才能发现。
+
+**范围**：
+
+1. 从 `core.Record.Metadata` 派生稳定可比较的源序版本（binlog `file:pos`、PostgreSQL LSN、
+   Kafka `partition/offset`、snapshot 阶段游标），映射为单调 int64 或改用 ClickHouse 支持的
+   多列版本表达；`internal/etl/sink/clickhouse.go` 版本列写入路径与 `metadata_pk.go` 身份契约对齐。
+2. 源无法提供全序时（file/HTTP 等 append-only、或 metadata 缺失）**显式阻断**进入依赖版本语义的
+   写入模式，preflight 给出可操作错误，不静默回退到时钟序。
+3. `docs/components/sink-clickhouse.md`、[etl-idempotency.md](./etl-idempotency.md) 记录无法建立
+   全序时的 duplicate/reconciliation 边界。
+
+**验收**：
+
+1. 旧 UPDATE 晚于新 UPDATE 到达（DLQ replay 与 checkpoint reset 两条路径）时，`FINAL` 查询结果
+   保持新值；旧 INSERT 晚于 DELETE 不重新生成已删除行。
+2. 复合主键、主键变更 UPDATE、多表 fan-out 下版本派生一致。
+3. 无源序能力的组合在 validate/preflight 阶段被拒绝，且错误指明缺失的 metadata 字段。
+4. 时钟回拨或多写入进程并发时不产生版本倒挂（单测 + 并发 race）。
+5. 容器级 e2e：MySQL snapshot+CDC → ClickHouse 与 Kafka → ClickHouse 各跑一次乱序 replay 矩阵，
+   记录命令、镜像版本、执行日期与 passed/failed。
+
+**Non-goals**：不实现跨 sink exactly-once；不为 append-only source 虚构版本；不在本项顺带做
+ClickHouse 吞吐基准（见「待用户决策」）；不改变 at-least-once 语义。
+
+**证据**：`internal/etl/sink/clickhouse_version_test.go`（新增）、preflight 单测、
+`hack/e2e-clickhouse-replay-ordering.sh`（新增），并更新
+[reliability-certification.md](./reliability-certification.md) 与
+[path-contract.md](./path-contract.md) 对应路径的 replay 列。
+
+### RA-2：`RestoreFromDB` 静默跳过 pipeline，重启后从 API/health 消失
+
+状态：`queued`
+
+**追溯依据**：`internal/etl/server/server.go:474-572`，DAG 与线性两条分支共 11 处 `continue`
+搭配 `g.Log().Warningf`，覆盖 YAML 解析失败（`:499`/`:535`）、connection 解析失败（`:513`/`:541`）、
+`NewDAGExecutor` 失败（`:519`）、`ValidateSpec` 失败（`:546`）、`newRunner` 失败（`:559`）。
+原审计 P0#3，原样存在。
+
+**现象与根因**：上述任一失败后该 pipeline 不进入 `s.pipelines`，因而不进入 API 列表、health 汇总
+和 scheduler，而 `RestoreFromDB` 仍返回 `nil`、服务启动成功。DB 中该行仍在，但运行时对用户完全
+不可见。用户观察到的现象是「任务没了」，而不是「任务失败了」——这与 PR-0 建立的
+「不能把丢任务隐藏在成功状态后面」原则直接冲突。
+
+**范围**：
+
+1. 每条跳过原因持久化为 `restore_failed` 状态并保留结构化错误（阶段、错误码、可操作修复建议），
+   在 `GET /api/v2/pipelines`、`/api/v2/health` 和 Web UI 中可见。
+2. production profile 下提供 strict 开关：`restore_failed` 数量非零时启动失败（fail-closed），
+   development 保持当前宽松行为。
+3. 该状态不得被后续 `StartAll` 或 reconciler 静默改写为 `stopped`/`failed` 而丢失原因。
+
+**验收**：
+
+1. 六类失败（DAG yaml、线性 yaml、DAG connection、线性 connection、validate、newRunner）各有
+   注入测试，重启后 pipeline 仍出现在 API 与 health 中，状态为 `restore_failed` 且错误可读。
+2. strict 模式下启动返回非零退出码并打印全部失败清单；非 strict 模式启动成功但 health 为
+   `degraded`。
+3. 修复底层问题（补 connection / 修 YAML）后重启，pipeline 正常恢复为原有 desired state。
+4. 现有 `hack/e2e-control-plane-persistence.sh` 回归通过。
+
+**Non-goals**：不自动修复 spec；不在 restore 阶段改写用户 YAML；不改变 DB 为唯一真值源的模型。
+
+**证据**：`internal/etl/server/restore_visibility_test.go`（新增）、health 单测、
+`hack/e2e-control-plane-persistence.sh` 扩展用例，并更新 [runtime-modes.md](./runtime-modes.md)。
+
+### RA-3：`StartAll` 无视持久化 desired state，停止的 pipeline 重启后自行运行
+
+状态：`queued`
+
+**追溯依据**：
+
+- `internal/etl/server/server.go:734-795`：循环对所有非 deferred pipeline 无条件调用
+  `runner.Start(ctx)`，全程**只写不读**状态 —— `UpdatePipelineStatus` 出现 4 次
+  （`failed`/`scheduled`/`failed`/`running`），无任何一处读取 `row.Status` 作为门禁。
+- `RestoreFromDB` 同样不按状态过滤，`row.Status` 仅在 `:488` `SaveCurrentWithID` 补写生成 ID 时透传。
+- 原审计 P1「生命周期 desired state 与 checkpoint reset 缺少 fencing」，原样存在。
+
+**现象与根因**：用户显式 stop 或 pause 的 pipeline，在进程重启（含容器重调度、升级、崩溃拉起）
+后会重新启动。对 CDC 链路这是「以为停了、其实在持续写目标库」，且用户没有任何信号。同时
+checkpoint reset/set 可对运行中 pipeline 调用，in-flight checkpoint 可能立即覆盖 reset 结果。
+
+**范围**：
+
+1. 持久化 desired state（`running`/`stopped`/`paused`）与 observed state 分离；`StartAll` 只启动
+   desired 为 `running` 的 pipeline，其余保持并在 API 显示原因。
+2. start/stop/pause/resume 的 storage 写入失败必须返回非 2xx，不得被忽略。
+3. checkpoint reset/set 要求 pipeline 处于 stopped/paused，或引入 generation fencing 使旧
+   generation 的 in-flight checkpoint 写入被拒绝。
+4. 各 source 的 reset 语义按源类型分别声明（Kafka 受 broker consumer-group offset 约束、
+   MySQL CDC 默认从当前 master position、PostgreSQL 受 replication slot 已确认位置约束），
+   API 与 OpenAPI 不再笼统声称「从头开始」。
+
+**验收**：
+
+1. stop 后重启进程，pipeline 保持 stopped 且不产生任何 source 读取或 sink 写入；pause 同理。
+2. desired state 持久化失败时 API 返回非 2xx，内存状态回到最后成功值。
+3. 对运行中 pipeline 调用 reset 返回明确冲突错误；fencing 路径下旧 generation 的 checkpoint
+   写入被拒绝且可观测。
+4. 每类 source 的 reset 语义有对应测试与文档条目，实际行为与 OpenAPI 描述一致。
+5. 容器级 e2e：stop → 重启容器 → 确认无写入 → start → 从原 checkpoint 续跑。
+
+**Non-goals**：不实现多活 HA 的 leader election；不改变 at-least-once 语义；不在本项引入
+distributed fencing（属 PR-D1）。
+
+**参考实现**：Debezium 的 signal table（在线触发 incremental snapshot / re-snapshot）可作为
+第 4 项 source-specific reset 与 BUG-2 `resnapshot` 策略的共同设计参考。
+
+**证据**：`internal/etl/server/lifecycle_desired_state_test.go`（新增）、fencing 单测、
+`hack/e2e-lifecycle-desired-state.sh`（新增），并更新 [etl-api.md](./etl-api.md)、
+`docs/openapi.yaml` 的 reset 语义描述。
+
+### RA-4：release 流水线不依赖任何测试门禁
+
+状态：`queued`
+
+**追溯依据**：
+
+- `.github/workflows/release.yml`：tag 触发后仅执行 checkout → setup-go →
+  `hack/check-connector-evidence.sh -strict` → GHCR login → goreleaser，**无任何测试步骤**。
+- `.github/workflows/test.yml`：`lint`、`connector-evidence`、`unit-test`、`production-gate`、
+  `storage-mysql`、`storage-postgres`、`integration-test` 七个 job **彼此无 `needs:` 串联**，
+  且没有任何一个被 release 引用。
+- `.github/workflows/release-beta-container.yml` 同样只有 evidence gate。
+- 原审计 P1「release gate、deployment profile 与证据治理不一致」，原样存在。
+
+**现象与根因**：单测全红的 commit 打上 tag 即可产出 GitHub Release 与 GHCR 镜像。
+这使「发布资产 = 已验证版本」的假设不成立，也让所有 PR-0..PR-2 的门槛在发布环节失效。
+本项是当前缺口中改动量最小、风险最低的一条。
+
+**范围**：
+
+1. `test.yml` 内部建立 `needs:` 拓扑，暴露单一聚合 job（如 `gate-passed`）。
+2. `release.yml` 与 `release-beta-container.yml` 在 goreleaser/镜像推送前，通过
+   `workflow_run` 或复用 workflow 依赖该聚合结果；tag 对应 commit 未通过门禁时发布失败。
+3. skipped job 不得计为 pass；矩阵中被跳过的 storage backend 必须显式失败或明确降级声明。
+4. [release-checklist.md](./release-checklist.md) 更新为流水线强制项，而非人工检查项。
+
+**验收**：
+
+1. 构造一个单测失败的 tag，release 工作流失败且不产生 Release/镜像。
+2. 构造 storage matrix 中一个 backend skip 的场景，门禁判定为失败而非通过。
+3. 正常 tag 的 release 全流程通过，产物与当前一致。
+4. 门禁结果与 tag commit 严格绑定，不受分支后续提交影响。
+
+**Non-goals**：不在本项把 69 个 `hack/*.sh` 全量接入 CI（属 RA-7）；不改变 goreleaser 产物矩阵。
+
+**证据**：workflow 文件 diff、一次故意失败的 tag 运行记录（run URL）、一次正常 tag 运行记录，
+写入 [release-checklist.md](./release-checklist.md)。
+
+### RA-5：secret 加密与 API masking 使用两套互不相通的真值来源
+
+状态：`queued`
+
+**追溯依据**：
+
+- **落盘加密**走字段名子串匹配：`internal/etl/storage/secret_fields.go:10-12`
+  `secretFieldPatterns = {"password","passwd","secret","token","api_key","apikey","credential","private_key"}`，
+  消费点 `secret_fields.go:65/114/185`、`adapters.go:705`、`server.go:5186/5220`。**列表中没有 `dsn`。**
+- **API masking / AI context**走 descriptor 元数据：`connector_descriptor.go:452` `secretFields()`
+  读 `field.Secret`；`ai_context.go:329/333` 同理。
+- 两者不交叉。后果：`internal/etl/server/schema.go:417`（jdbc）与 `:650`（dbt）的 `dsn` 虽标了
+  `Secret: true`，**在 API 被 mask，但落盘时因字段名不匹配而不加密**；`:568`（enricher mode=sql）
+  与 `:582`（lookup 维表）的 `dsn` 连 `Secret: true` 都没有，两侧都不保护。
+- 原审计 P0#5，descriptor 侧部分修复，根因（两套真值）未修。
+
+**现象与根因**：含用户名密码的 JDBC/维表 DSN 以明文写入 storage row，并随之出现在 SQL dump、
+portable backup 产物和 DB 备份中。UI 上显示为已掩码，进一步掩盖了该风险。
+
+**范围**：
+
+1. 统一以 descriptor `ConfigField.Secret` 作为保存、加密、mask、导出、轮换的唯一真值来源；
+   字段名模式匹配降级为无 descriptor 时的兜底，并记录 WARN。
+2. 补齐 descriptor：`:568` enricher、`:582` lookup 的 `dsn` 标 `Secret: true`；全量扫描
+   `schema.go` 中 `dsn`/`url`/`uri`/`conn`/`endpoint` 类字段的凭据承载可能性。
+3. 存量明文迁移：启动时检测未加密的 secret 字段，提供一次性重新加密路径并在日志/health 中可见。
+4. 与 RA-6 协同：backup 导出前校验产物中不含明文 secret。
+
+**验收**：
+
+1. 任一标记 `Secret: true` 的字段，其值在 storage row 中为密文；未标记但命中兜底模式的字段
+   同样加密并产生 WARN。
+2. jdbc、dbt、enricher(mode=sql)、lookup 四条路径的 DSN 保存后，直接查询 DB 表得到密文。
+3. 存量明文行在升级后被识别并可重新加密，过程可重复执行且幂等。
+4. 新增安全测试：扫描 portable backup 产物与 SQL dump，断言不含已知明文口令。
+5. key rotation 后旧密文仍可读，新写入使用新 key（复用 PR-0.1 既有语义）。
+
+**Non-goals**：不引入外部 KMS/Vault 依赖；不改变现有 envelope 格式版本语义；不在本项实现
+字段级审计。
+
+**证据**：`internal/etl/storage/secret_fields_test.go` 扩展、
+`internal/etl/server/schema_secret_conformance_test.go`（新增，遍历全部 descriptor）、
+`hack/check-plaintext-secrets.sh`（新增，接入 RA-4 门禁）。
+
+### RA-6：portable backup 对 DLQ/audit/run_history 硬截断 100000 行
+
+状态：`queued`
+
+**追溯依据**：`internal/etl/storage/backup/backup.go:114`（`ListDeadLetters` `Limit: 100000`）、
+`:131`（`ListAudit`）、`:146`（`ListRunHistory`）。原审计 P1「Backup/restore 完整性不足」，
+原样存在。
+
+**现象与根因**：超出 10 万行的部分被静默丢弃，backup 仍报告成功并写出 `Counts`。
+该缺陷只在真正需要恢复的那天暴露 —— 而 BUG-3 已证明 audit/run_history 在无 TTL 时会膨胀到
+数十万行量级（用户环境 etl.db 达 688MB）。
+
+**范围**：
+
+1. 三处改为游标分页全量导出，或显式声明导出上限并在 `Snapshot` 元数据中记录截断事实与真实总数。
+2. 导出后校验：`Counts` 与实际导出行数一致；不一致则 backup 失败而非成功。
+3. 与 PR-1.3 的 backup/restore conformance 合并验收，覆盖 SQLite/MySQL/PostgreSQL 三 backend。
+
+**验收**：
+
+1. 构造 >100000 行 DLQ / audit / run_history 的数据集，导出→恢复后行数与内容完全一致。
+2. 若保留上限策略，则 backup 在触达上限时失败或在产物与 CLI 输出中显著标注截断，不得报成功。
+3. 三 backend conformance 通过；`hack/e2e-backup-restore-sqlite.sh`、
+   `hack/e2e-backup-restore-mysql.sh`、`hack/e2e-backup-restore-postgres.sh` 既有 smoke 回归通过。
+4. 大数据集导出的内存占用有实测记录，不因全量加载而 OOM。
+
+**Non-goals**：不在本项解决 backup 非原子 restore、pipeline version/ID 保真、plugin WASM
+artifact 复制、Redis state 纳入等其余 PR-1.3 残留（单独排队）。
+
+**证据**：`internal/etl/storage/backup/backup_large_test.go`（新增）、三 backend conformance
+用例、更新 [ops-runbook.md](./ops-runbook.md) 的 backup 容量说明。
+
+### RA-7：e2e 证据自动化 —— 从人工 shell 迁移到 CI 内可复现集成测试
+
+状态：`queued`
+
+**追溯依据**：
+
+- 仓库现有 69 个 `hack/*.sh`，而 `.github/workflows/test.yml` 只覆盖 `storage-mysql`、
+  `storage-postgres`、`integration-test`（ClickHouse）三类容器场景。
+- 证据漂移已在本文档内自我记录两次：BUG-2「fail 策略容器 e2e 已跑但证据未入验收矩阵，
+  证据链断裂」→ 回退为 `active`；原审计记录「UI 文档记录 108 passed，审计时实际
+  91 passed / 17 failed」。
+- BUG-1/BUG-2/BUG-6 三项当前为 `active` 的唯一原因均是「容器 e2e 未跑（镜像构建被
+  go mod download 网络阻塞）」。
+
+**现象与根因**：认证证据由人工在本机执行脚本、再手工誊写进 markdown 产生。这条链路有三个
+结构性问题：证据与 commit 不自动绑定（漂移）、单点环境依赖（网络/镜像不可用即全面停摆）、
+维护成本随 connector 数量线性增长。**这是当前对 production ready 杠杆最大的一项** —— 它同时
+闭合 BUG-1/2/6 的欠账，并让 RA-1/2/3 的验收可持续复现。
+
+**范围**：
+
+1. 引入 Testcontainers-for-Go，把核心路径 e2e 表达为带 build tag 的 `go test`
+   （MySQL CDC → MySQL upsert、MySQL snapshot+CDC → ClickHouse、Kafka → ClickHouse、
+   Debezium Kafka → MySQL、PostgreSQL CDC、DLQ replay、crash/restart、checkpoint reset，
+   约 8-10 条）。
+2. CI 增加 `connector-e2e` job 并接入 RA-4 的聚合门禁；本地保留 `make e2e` 入口。
+3. 认证证据由测试运行产出机器可读结果（JSON），`check-connector-evidence.sh` 校验其与
+   当前 commit 绑定，替代人工誊写。`PathContract.LastCertified` 由该结果自动填充。
+4. 保留但收敛 `hack/*.sh`：已迁移路径的脚本改为薄封装或标注为已由 Go e2e 覆盖。
+
+**验收**：
+
+1. 至少 8 条核心路径在 CI 中以容器方式实跑通过，单次全量运行有明确时长记录。
+2. 证据文件由测试产出并与 commit hash 绑定；人工修改证据而未重跑测试时门禁失败。
+3. BUG-1、BUG-2（含 `resnapshot`）、BUG-6 的容器级验收项由该框架闭合，三项转 `delivered`。
+4. 无网络/无镜像环境下测试明确 skip 并在报告中标注，**skip 不得计为 pass**。
+5. `PathContract.LastCertified` 在 CI 运行后自动更新，不再依赖手工填写。
+
+**Non-goals**：不追求 69 个脚本全量迁移；不引入 Kubernetes 或外部 CI 基础设施；不改变
+既有认证矩阵的语义门槛，只改变证据生产方式。
+
+**参考实现**：Apache SeaTunnel 的 `connector-e2e` 模块（每个 connector 的 e2e 作为构建的一
+部分在 CI 跑）；Airbyte 的 connector 分级用可计算指标（成功率、SLA）而非文字描述作为门槛，
+可用于第 3 项的证据结构设计。
+
+**证据**：`internal/etl/e2e/`（新增，build tag 隔离）、`.github/workflows/test.yml` 新 job、
+`hack/check-connector-evidence.sh` 改造，并更新
+[connector-certification.md](./connector-certification.md) 的证据生产流程说明。
+
+### RA-8：实测 resource baseline 与容量边界
+
+状态：`queued`
+
+**追溯依据**：原审计记录「resource baseline 多为估算或目标值，不是当前 release 的实测记录」；
+[resource-baseline.md](./resource-baseline.md) 现状未随版本重新测定。BUG-3 已证明 sqlite
+后端在多 streaming pipeline 下存在硬容量边界，但该边界目前只有文字描述，无量化拐点。
+
+**现象与根因**：选择「轻量自托管」的用户通常没有 SRE 兜底，最需要的恰恰是「单实例能扛多少」
+的确定答案。当前无法回答：单进程支持多少并发 pipeline、每类 storage backend 的 TPS 拐点、
+稳态内存与 checkpoint 延迟分布。这也使发布说明中的 RPO/RTO 声明缺少实测支撑。
+
+**范围**：
+
+1. 固定硬件画像下测定：单 pipeline 吞吐（按 source/sink 类型分组）、并发 pipeline 数上限、
+   稳态/峰值内存、启动耗时、checkpoint 延迟分布、镜像与二进制大小。
+2. 明确各 storage backend 的容量拐点，特别是 sqlite 在 N 个 streaming pipeline 下 checkpoint
+   排队开始劣化的量化阈值（对应 BUG-3 的边界声明）。
+3. 结果写入 [resource-baseline.md](./resource-baseline.md) 并标注测定日期、commit、镜像 digest
+   与硬件规格；发布说明引用该基线。
+4. 在 RA-7 框架内建立回归阈值，显著劣化时门禁失败。
+
+**验收**：
+
+1. 每项指标有可重复的测定脚本与原始输出，非估算值。
+2. sqlite 容量拐点有实测曲线，production 文档的「多 pipeline 推荐 MySQL/PostgreSQL」结论由
+   数据支撑而非经验判断。
+3. 基线与具体 commit/镜像 digest 绑定，跨版本可比较。
+4. 回归阈值接入 CI，可触发失败（允许先以 warning 模式运行一个版本周期）。
+
+**Non-goals**：不做与 Flink/SeaTunnel 的横向性能对比；不在本项做 ClickHouse 写入吞吐专项
+（见「待用户决策」，两者可合并立项）。
+
+**证据**：`hack/bench-baseline.sh`（新增）、原始输出归档、
+[resource-baseline.md](./resource-baseline.md) 重写。
+
+### RA 执行顺序
+
+按「可造成的伤害」而非发现顺序排列：
+
+```text
+RA-4  （发布安全，改动最小，建议先行）
+  -> RA-2 -> RA-3        （控制面可见性与 desired state，同属生命周期语义）
+  -> RA-5 -> RA-6        （secret 与 backup 完整性，RA-5 的验收 4 依赖 RA-6）
+  -> RA-7                （证据自动化；闭合 BUG-1/2/6，并使 RA-1 验收可复现）
+  -> RA-1                （源序版本；建议在 RA-7 之后领取，以便乱序 replay 矩阵自动化）
+  -> RA-8                （容量基线）
+```
+
+领取约束：
+
+- 每项独立成 commit、独立验收，遵循「同一时间只推进一个 `active` 主任务」。
+- RA-1 若按「待用户决策」的提议提前，则其容器 e2e 需以现有 `hack/*.sh` 方式一次性人工闭合，
+  并在证据中显式标注该例外及后续由 RA-7 接管。
+- 任一 RA 项的验收未全部闭合不得置 `delivered`（沿用 BUG-2 的一致性原则）。
+- 本节不得借用 PR-0..PR-2 的既有证据宣称已关闭；RA 项均为原审计中**未随 PR-* 交付而关闭**的残留。
 
 ## 待用户决策
+
+- **RA-1（ClickHouse 源序版本）是否提升至当前最高优先级**（2026-08-29 提出，未决）：
+  按 [执行规则](#执行规则)「后续项不能静默改变当前最高优先级」，此处显式提交决策。
+  提议理由：RA-1 是当前全部已知缺口中唯一会产生**静默错值**的一项（旧值覆盖新值，行数与主键
+  对账均无法发现），而现 P0 MaxCompute 为 `blocked_external`（缺外部凭据），已长期无法推进。
+  可选项：(a) 保持现状，RA-1 按上方执行顺序排在 RA-7 之后；(b) RA-1 提升为 `active` 主任务，
+  MaxCompute 保持 `blocked_external` 不变；(c) 仅将 RA-1 的范围第 2 项（无源序能力时 preflight
+  阻断）作为止血切片提前，完整源序派生仍按原顺序。用户未答复前按 (a) 执行。
+
+- **schema evolution 立场是否需要显式决议**（2026-08-29 提出，未决）：当前 `ddl_guard` 的语义是
+  **拒绝**源端 DDL 变更，而 Flink CDC 等对标实现是自动传播到 sink。这两者都是合理选择，但目前
+  文档未明确声明这是有意边界还是未实现的能力，用户无法据此判断适用性。可选项：(a) 明确写入
+  「明确暂缓或不做」并在 positioning/README 声明为边界；(b) 立项做受限的 schema evolution
+  （仅 additive 列变更，破坏性变更仍拒绝）。本项只需决定立场，不改变当前排序。
 
 - **ClickHouse 写入吞吐性能分析是否立项**（2026-08-21 提出，未决）：正确性维度的
   缺口清单已全部处理（BUG-1/5/6 + Decimal 直传；BUG-1/6 容器 e2e 待网络恢复）。
@@ -1278,6 +1813,8 @@ GAP-1 → GAP-2 → GAP-3 → GAP-4 → GAP-5 → GAP-6（按生产影响排序�
   (1) ClickHouse 写入吞吐基准测试（batch 大小/flush 间隔/并发写入画像）；
   (2) 异步 insert（async_insert）vs 当前同步批量 insert 的量化对比。
   用户未答复前不立项、不启动。
+  **2026-08-29 补充**：本项与 RA-8（实测 resource baseline）范围相邻，若立项建议合并为一次
+  测定，共用 `hack/bench-baseline.sh` 与同一硬件画像，避免两套互不可比的性能数据。
 
 ## 有界后续
 
