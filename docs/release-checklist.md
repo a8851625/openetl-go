@@ -3,19 +3,46 @@
 Use this checklist before cutting a release candidate or production tag.
 It binds CI evidence, resource baseline, storage matrix, and residual risks.
 
-## 1. Code gates (must be green)
+## 1. Code gates (pipeline-enforced — not manual checks)
 
-| Gate | Command | Pass criteria |
+Since IT-1/T1.1 + T1.2 (roadmap RA-4) these gates run inside the reusable
+workflow `.github/workflows/_gate.yml`; the aggregated `gate-passed` job is the
+single verdict. `release.yml` and `release-beta-container.yml` both declare
+`needs: gate`, so a red **or skipped** gate job blocks GitHub Release / GHCR
+publishing. The table below documents what the pipeline runs — it must not be
+checked by hand.
+
+| Gate job | What the pipeline runs | Pass criteria |
 | --- | --- | --- |
-| Vet | `go vet ./internal/etl/... ./internal/logic/... ./internal/cmd/...` | exit 0 |
-| Unit + race | `go test -race -count=1 ./internal/etl/... ./internal/logic/...` | exit 0 |
-| Business health | `go test ./internal/etl/telemetry ./internal/etl/alert -count=1` | health/label/alert-drop tests pass |
-| Production profile | `./hack/e2e-production-profile.sh` | missing secrets rejected; no `change-me` / `:latest` in rendered compose |
-| Release assets | `./hack/check-release-assets.sh` | production compose/deploy pin image; no empty token defaults |
-| P5 CI gate | `./hack/e2e-production-gate.sh` | FAIL=0; SKIP only when external backend absent |
+| lint | `go vet ./...` | exit 0 |
+| connector-evidence | `hack/check-connector-evidence.sh` (+ `-strict` on main push) | exit 0 |
+| unit-test | `go test -race -count=1 ./internal/etl/... ./internal/logic/...` | exit 0 |
+| production-gate | telemetry/alert unit tests, release asset scan, production profile / runtime / SQLite backup smokes | exit 0 |
+| storage-mysql | `hack/e2e-storage-mysql.sh` | exit 0 |
+| storage-postgres | `hack/e2e-storage-postgres.sh` | exit 0 |
+| integration-test | `go test -race -tags=integration ./internal/etl/...` (MySQL + ClickHouse services) | exit 0 |
 
-CI workflow (`.github/workflows/test.yml`) runs unit/race, production gate, and
-records storage backend coverage as **pass / skip / fail** (never silent skip-as-green).
+### 1a. Aggregated verdict (skip is never pass)
+
+`gate-passed` re-asserts `toJSON(needs)` with jq: **every** gate job must have
+`result == "success"`. GitHub Actions does not fail a `needs` chain when an
+upstream job is skipped, so skipped/cancelled jobs are counted as gate failures
+here (IT-1 spec 交付约束 1). Callers: `test.yml` (push/PR), `release.yml` and
+`release-beta-container.yml` (tag push; the beta workflow pins the gate to the
+requested tag via the `ref` input, so the verdict binds to the tag commit).
+
+### 1b. Exemption allowlist (empty by default)
+
+`GATE_ALLOWLIST` in the `gate-passed` job is empty by default. An exemption may
+be added only when a job cannot run for a concrete, time-bounded reason, and
+must be recorded here with a re-review date:
+
+| Job | Reason | Owner | Re-review date |
+| --- | --- | --- | --- |
+| (none) | — | — | — |
+
+An allowlist entry without a row in this table is an undocumented silent skip
+and must be reverted.
 
 ## 2. Storage / upgrade / backup matrix
 

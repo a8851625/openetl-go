@@ -16,8 +16,19 @@ permissions:
   packages: write
 
 jobs:
+  # IT-1/T1.2 (roadmap RA-4): gate the requested tag, not the dispatch branch.
+  # Tag push -> github.ref_name is the tag; workflow_dispatch -> inputs.tag.
+  # Without `ref` the gate would certify the wrong commit on the dispatch path.
+  gate:
+    name: Test Gate
+    uses: ./.github/workflows/_gate.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+    secrets: inherit
+
   publish:
     name: Publish beta container
+    needs: gate
     runs-on: ubuntu-latest
 
     steps:

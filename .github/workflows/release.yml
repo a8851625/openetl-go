@@ -13,8 +13,17 @@ env:
   GO_VERSION: "1.24"
 
 jobs:
+  # IT-1/T1.2 (roadmap RA-4): the gate runs synchronously on the tag commit
+  # before any release artifact is produced. A failing or skipped gate job
+  # fails the run here — no Release and no GHCR image can be published.
+  gate:
+    name: Test Gate
+    uses: ./.github/workflows/_gate.yml
+    secrets: inherit
+
   release:
     name: Release
+    needs: gate
     runs-on: ubuntu-latest
     permissions:
       contents: write       # create GitHub Release + upload assets
