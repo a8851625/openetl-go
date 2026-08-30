@@ -1573,7 +1573,7 @@ distributed fencing（属 PR-D1）。
 
 ### RA-4：release 流水线不依赖任何测试门禁
 
-状态：`active`
+状态：`blocked_external`
 
 > 领取记录（2026-08-29，IT-1 Round 1/5 = T1.1 + T1.2）：目标 = 未过 `_gate.yml`
 > 聚合门禁的 tag 不能产出 Release/GHCR 镜像，skip 不计为 pass。范围 =
@@ -1581,6 +1581,12 @@ distributed fencing（属 PR-D1）。
 > `docs/release-checklist.md`。非目标 = 不迁移 e2e 路径（T1.3/T1.4 属 Round 2+）、
 > 不改 goreleaser 产物矩阵、不把 `hack/*.sh` 全量接入 CI。验收 = 本条目验收 1-4 +
 > `docs/iterations/IT-1-verification-substrate/tasks.md` T1.1/T1.2 验收。
+>
+> Round 1/5 收口（2026-08-29）：实现与本地证据齐备（结构等价 7/7、gojq 断言 6/6），
+> 置 `blocked_external` —— 剩余 3 次 run URL 证据（skip 场景 / 失败 tag / 正常 tag）
+> 需要人工授权 push 到 GitHub 后在 Actions 内构造。**缺失输入**：push 授权；
+> **owner**：仓库用户；**unblock 测试**：按 IT-1 tasks.md「run URL 证据构造方法」
+> 逐条执行并回填，全部通过后 RA-4 置 `delivered`。
 
 **追溯依据**：
 
@@ -1703,7 +1709,23 @@ artifact 复制、Redis state 纳入等其余 PR-1.3 残留（单独排队）。
 
 ### RA-7：e2e 证据自动化 —— 从人工 shell 迁移到 CI 内可复现集成测试
 
-状态：`queued`
+状态：`active`
+
+> 领取记录（2026-08-29，IT-1 Round 2/5 = T1.3 + T1.4，承接 RA-4 的
+> `blocked_external` 释放出的 active 名额）：目标 = `internal/etl/e2e/harness`
+> 骨架可用（容器懒启动复用、子进程被测二进制、命名空间隔离、strict skip 语义），
+> 两条主推荐路径（mysql_cdc→mysql upsert、mysql snapshot_cdc→clickhouse）以 Go e2e
+> 迁移并接入 `_gate.yml` 的 `connector-e2e` job。范围 = `internal/etl/e2e/**`、
+> `go.mod/go.sum`（testcontainers 仅进 e2e tag）、`.github/workflows/_gate.yml`
+> 新增一个 job。非目标 = 不迁移其余路径（T1.9-T1.11）、不改运行时语义、
+> 不放宽既有 shell 断言。
+>
+> Round 2/5 实施记录（2026-08-29/30）：T1.3 置 `done`（隔离检查
+> `go list -deps ./...` 含 testcontainers 计数 0；harness 单测 `-race` 绿）。
+> T1.4 验收 1-3 本地闭合：两条路径以 podman machine socket + testcontainers
+> 实跑全绿（全量套件 59.0s，2/2 PASS，断言比对表见 IT-1 tasks.md，无放宽）。
+> T1.4 验收 4（`connector-e2e` 在 CI 内实跑 run URL）pending push，任务置
+> `blocked`；RA-7 保持 `active` 至 run URL 补齐并完成 T1.5。
 
 **追溯依据**：
 

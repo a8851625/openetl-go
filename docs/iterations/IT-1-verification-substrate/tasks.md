@@ -18,10 +18,10 @@
 
 | ID | 任务 | 依赖 | 状态 | 证据落点 |
 | --- | --- | --- | --- | --- |
-| T1.1 | 抽出 `_gate.yml` reusable workflow + `gate-passed` 聚合断言 | — | `active` | workflow 文件、故意失败的 run URL |
-| T1.2 | release / release-beta-container 接入门禁 | T1.1 | `active` | 失败 tag 与正常 tag 两次 run URL |
-| T1.3 | e2e harness 骨架（容器、子进程、命名空间、skip 语义） | — | `todo` | `internal/etl/e2e/harness/` + harness 单测 |
-| T1.4 | 迁移两条主推荐路径并接入 CI | T1.3 | `todo` | `connector-e2e` job run URL |
+| T1.1 | 抽出 `_gate.yml` reusable workflow + `gate-passed` 聚合断言 | — | `blocked` | workflow 文件、故意失败的 run URL |
+| T1.2 | release / release-beta-container 接入门禁 | T1.1 | `blocked` | 失败 tag 与正常 tag 两次 run URL |
+| T1.3 | e2e harness 骨架（容器、子进程、命名空间、skip 语义） | — | `done` | `internal/etl/e2e/harness/` + harness 单测 |
+| T1.4 | 迁移两条主推荐路径并接入 CI | T1.3 | `blocked` | `connector-e2e` job run URL |
 | T1.5 | 结构化证据产出 + commit 绑定校验 + `LastCertified` | T1.4 | `todo` | `docs/evidence/*.json`、篡改证据的失败 run |
 | T1.6 | BUG-1 状态与证据一致性核对与订正 | T1.3 | `todo` | ROADMAP BUG-1 验收矩阵 |
 | T1.7 | BUG-2 三策略容器级闭合 | T1.3 | `todo` | ROADMAP BUG-2 验收矩阵 |
@@ -229,6 +229,69 @@ Residual/follow-up: push 后补齐 3 次 run URL（构造方法见下）
 gojq v0.12.16（goproxy.cn）替代 jq 实测断言逻辑，ruby/YAML 做结构与等价校验。
 CI run（ubuntu-latest 的 jq 1.7）为最终证据。
 
+### Round 2/5 实施证据（2026-08-29/30，本地阶段）
+
+**T1.3 —— 全部验收闭合，置 `done`**：
+
+- 验收 1 ✅ `harness/`：`containers.go`（MySQL/ClickHouse `sync.Once` 懒启动 + 跨测试复用、
+  TCP + sync_user 身份就绪探活、`stdcopy` 解帧 exec 输出）；`server.go`（被测二进制
+  一次性 `go build`、Start/Stop/Kill/Restart、`/api/v2/health` 探活、日志尾部诊断、
+  clean cwd 防 repo 配置泄漏）；`namespace.go`（按 `t.Name()` 派生库/前缀名，
+  截断 + FNV 消歧）；`skip.go`（结构化 skip 记录 + strict 语义）。
+- 验收 2 ✅ `-e2e.strict`（`skipFatal` 决策单测覆盖）；不带该标志时本地正常 skip。
+- 验收 3 ✅ podman rootless 已文档化（`doc.go` + `PodmanHint` + `runtimeHint`），
+  且**实际以 podman machine API socket 跑通全流程**（testcontainers "Connected to
+  docker: Server Version 5.8.4"）。
+- 验收 4 ✅ `go list -deps ./... | grep -c testcontainers` = **0**；
+  `-tags=e2e` 时 = 7（隔离生效）。
+- 验收 5 ✅ `namespace_test.go`（5 组：净化/截断消歧/确定性/subtest/DB 前缀）+
+  `skip_test.go`（3 组：记录、skip 结束测试、strict 决策与默认值）；
+  `go test -race ./internal/etl/e2e/harness/` 绿。
+
+**T1.4 —— 验收 1-3 本地闭合，验收 4 待 CI run URL，置 `blocked`**：
+
+- 验收 1 ✅ `path_mysql_cdc_mysql_test.go`：happy（3 行 + update 落库）、
+  crash_restart（SIGKILL → 续跑 → 无丢失）、checkpoint_reset（upsert 吸收回放）、
+  sink_outage_dlq_replay（DLQ error_class=schema → replay:1 → 条目删除 → 5 行对账）
+  全部通过（本地 29.6s）。
+- 验收 2 ✅ `path_mysql_snapcdc_clickhouse_test.go`：snapshot 5 行 FINAL、
+  CDC update/insert/delete、schema_drift add-column（system.columns + FINAL 断言）、
+  restart_recovery（停机期写入行恢复）、checkpoint_reset（FINAL=7 且 RMT 吸收，
+  raw 重复仅 note，同脚本语义）、CH outage DLQ（error_class=transient, connection
+  refused）→ replay:1 → 条目删除（本地 17.2s）。双测试共宿主 MySQL 容器全量跑 59.0s。
+- 验收 3 ✅ 断言比对（无放宽）：
+
+  | # | shell 断言（脚本行） | Go 断言 | 一致 |
+  | --- | --- | --- | --- |
+  | P1-1 | `wait_mysql_value COUNT IN(9101..9103)=3`（L216） | 同 SQL + `WaitValue` | ✓ |
+  | P1-2 | update 后 `amount=11.11 AND status='vip'`（L218） | 同 | ✓ |
+  | P1-3 | kill → INSERT 9104 → COUNT=1 + 总 4 行（L227-229） | `srv.Kill/Restart` + 同 | ✓ |
+  | P1-4 | stop/reset/start → COUNT=4 + 9101=11.11（L234-240） | 同（start 见差异 3） | ✓ |
+  | P1-5 | RENAME 目标表 → DLQ contains 9201（L246-262） | RENAME + `pollDLQ("9201")` | ✓ |
+  | P1-6 | replay → `"replayed":1` → 行在 → DLQ id 删除 → 总 5 行（L267-277） | 同 | ✓ |
+  | P2-1 | 快照 FINAL=5（L158） | 同 | ✓ |
+  | P2-2 | UPDATE/DELETE/INSERT 三断言 + phase=cdc（L166-173） | 同 | ✓ |
+  | P2-3 | add loyalty → system.columns=1 → FINAL id7 gold（L176-182） | 同 | ✓ |
+  | P2-4 | kill → INSERT id8 → 续跑 → FINAL + phase=cdc（L184-192） | 同 | ✓ |
+  | P2-5 | reset → FINAL=7 / id=1 唯一 / id8 在；raw 重复 note-only（L194-220） | 同（数值比较） | ✓ |
+  | P2-6 | UPDATE id1 → FINAL=111.11 → phase=cdc（L223-227） | 同 | ✓ |
+  | P2-7 | 停 CH → DLQ contains 9001 + 错误关键词（L229-248） | 同关键词集合 | ✓ |
+  | P2-8 | 起 CH → replay:1 → FINAL 9001 → DLQ 删除（L250-262） | 同 | ✓ |
+
+  **差异说明（非放宽）**：① 被测形态容器镜像 → 子进程二进制（plan.md 路线 B，
+  崩溃恢复需真实进程生命周期）；② 依赖服务 compose → testcontainers（同一镜像、
+  相同 mysqld flags：ROW/GTID/FULL/native_password）；③ `POST /start` 对
+  409 `pipeline_stopping` 做有界重试 —— stop 为异步、API remediation 明示重试，
+  shell 版靠进程间延迟偶然规避，非断言变更。
+
+- 验收 4 ◐ `connector-e2e` job 已接入 `_gate.yml`（job + `gate-passed` needs 共 8 项），
+  **CI 内实跑 run URL pending push**。
+
+**实现调试记录**（供后续迁移参考）：testcontainers `Exec` 返回 docker attach
+多路复用流，须 `stdcopy.StdCopy` 解帧否则帧头混入查询结果；MySQL entrypoint
+初始化期有临时 server（skip-networking），socket 探活会误判 ready，须 TCP +
+sync_user 探活后再授权。
+
 **run URL 证据构造方法**（push 后执行，逐条回填）：
 
 1. **T1.1 验收 3（skip → 门禁失败）**：临时分支在 `unit-test` job 加 `if: false()`
@@ -239,6 +302,22 @@ CI run（ubuntu-latest 的 jq 1.7）为最终证据。
    无 Release/GHCR 产出。留存 run URL 后删除 tag。
 3. **T1.2 验收 3（正常 tag）**：正常打下一个 beta tag → release / release-beta-container
    全流程通过，产物与改造前一致。
+
+### Round 2/5 —— RA-7（T1.3 + T1.4），2026-08-29 领取
+
+```text
+Round: 1/5（新窗口，对应 IT-1 Round 2/5）
+Roadmap item: RA-7 (IT-1/T1.3 + T1.4)；承接 RA-4 blocked_external 释放的 active 名额
+Profile/path: standalone（两条主推荐路径：mysql_cdc→mysql upsert、mysql_snapshot_cdc→clickhouse）
+Objective: e2e harness 骨架可用（容器懒启动复用、子进程被测二进制、命名空间隔离、skip≠pass），
+  两条主推荐路径迁移为 Go e2e 并接入 _gate.yml 的 connector-e2e job
+Scope: internal/etl/e2e/**、go.mod/go.sum（testcontainers 仅进 e2e tag）、.github/workflows/_gate.yml 新增一个 job
+Non-goals: 不迁移其余路径（T1.5/T1.9-T1.11）；不改运行时语义；不放宽既有 shell 断言；不删 hack/*.sh
+Acceptance: T1.3 验收 1-5；T1.4 验收 1-4（见任务明细）
+Evidence: harness 单测、go vet、go list -deps 无 testcontainers、断言比对表、本地容器实跑输出（podman 可用时）、CI run URL pending push
+Result: active
+Residual/follow-up: connector-e2e 在 CI 内实跑的 run URL 证据 pending push；T1.5 证据产出属下一 round
+```
 
 ## 领取记录模板
 

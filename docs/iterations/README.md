@@ -140,7 +140,7 @@ AGENTS.md 默认一次执行请求上限 **5 rounds**。每个迭代的 `tasks.m
 
 | 迭代 | Round 1 | Round 2 | Round 3 | Round 4 | Round 5 | 迭代状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| IT-1 | 进行中（T1.1/T1.2 已实现，run URL 证据待 push） | — | — | — | — | `active` |
+| IT-1 | 完成（run URL 证据待 push） | 完成（T1.3 done、T1.4 3/4，CI run 待 push） | — | — | — | `active` |
 | IT-2 | — | — | — | — | — | `queued` |
 | IT-3 | — | — | — | — | — | `queued` |
 | IT-4 | — | — | — | — | — | `queued` |
