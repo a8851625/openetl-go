@@ -186,7 +186,26 @@ jobs:
           CLICKHOUSE_PASSWORD: dzh123456
         run: go test -race -count=1 -tags=integration ./internal/etl/...
 
-  # IT-1/T1.4 will add `connector-e2e` to _gate.yml and to this needs list.
+  # IT-1/T1.4 (RA-7): the migrated primary connector paths run as Go tests
+  # with testcontainers; -e2e.strict makes any skip a hard failure.
+  connector-e2e:
+    name: Connector E2E (Go, tagged paths)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Vet e2e packages (tagged)
+        run: go vet -tags=e2e ./internal/etl/e2e/...
+      - name: Run connector e2e paths
+        run: go test -tags=e2e -count=1 -timeout 40m ./internal/etl/e2e/... -e2e.strict -v
+
   gate-passed:
     name: Gate Passed (aggregated)
     needs:
@@ -197,6 +216,7 @@ jobs:
       - storage-mysql
       - storage-postgres
       - integration-test
+      - connector-e2e
     if: always()
     runs-on: ubuntu-latest
     steps:
