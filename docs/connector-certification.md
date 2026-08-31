@@ -65,6 +65,40 @@ connector, script, and workflow changes require a fresh certification run.
 Image binding is checked when the release environment supplies a certified
 image digest.
 
+## Per-Path Evidence Artifacts (IT-1/T1.5)
+
+The migrated primary-path e2e tests (`internal/etl/e2e/path_*.go`, tag `e2e`)
+write a structured, committed artifact per path:
+
+```sh
+docs/evidence/<path_id>.json   # e.g. mysql_cdc__mysql_upsert.json
+```
+
+Each artifact carries `path_id`, the exact source `commit` the run happened
+on, `run_started_at`, `runner`, dependency versions, one `checks[]` entry per
+case assertion, and a derived total `result` (`passed` only when every check
+passed; any skip or failure leaves the path uncertified). Skipped path tests
+never produce a `passed` artifact.
+
+`check-connector-evidence.sh` validates every committed artifact against the
+current revision:
+
+- the evidence `commit` must resolve and be an ancestor (or equal) of the
+  current HEAD — regenerating evidence necessarily creates a descendant;
+- the evidence must not be older than the newest commit touching the path's
+  related source surface (`internal/etl/source`, `internal/etl/sink`,
+  `internal/etl/core`, `internal/etl/transform`, `internal/etl/checkpoint`,
+  `internal/etl/pipeline`, `internal/etl/server`, `internal/etl/e2e`,
+  `internal/logic`, `manifest/config`, plus path-specific extras) — editing a
+  connector and committing evidence without re-running the path test fails;
+- the check list must be non-empty and fully passed, and the total `result`
+  must agree — hand-editing a failed/skipped run into a pass fails.
+
+The web/API path contracts serve `last_certified` derived from these
+artifacts (`PathContract.LastCertified`), so CI runs automatically update it
+to the run timestamp + source commit. No `last_certified` is ever filled
+from hand-maintained metadata.
+
 Latest checked-in certification (2026-08-23 UTC, post-beta.17 evidence rebind;
 image builds recovered via goproxy.cn + host module cache — fresh image
 `sha256:9b887beb` ran container e2e on 2026-08-23:

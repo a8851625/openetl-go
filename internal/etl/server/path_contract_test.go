@@ -138,6 +138,39 @@ func TestPathContractByID(t *testing.T) {
 	}
 }
 
+func TestApplyPathEvidenceLastCertified(t *testing.T) {
+	dir := t.TempDir()
+	writeEvidenceForTest(t, filepath.Join(dir, "mysql_cdc__mysql_upsert.json"),
+		`{"path_id":"mysql_cdc__mysql_upsert","commit":"0123456789abcdef0123456789abcdef01234567","run_started_at":"2026-08-30T10:00:00Z","runner":"local","checks":[{"name":"happy_path","result":"passed"}],"result":"passed"}`)
+	writeEvidenceForTest(t, filepath.Join(dir, "mysql_snap_cdc__ch_rmt.json"),
+		`{"path_id":"mysql_snap_cdc__ch_rmt","commit":"abcdef0123456789abcdef0123456789abcdef01","run_started_at":"2026-08-31T09:00:00Z","runner":"local","checks":[{"name":"snapshot_initial","result":"failed"}],"result":"failed"}`)
+
+	out := applyPathEvidenceLastCertified(productionPathContracts(), dir)
+	byID := map[string]PathContract{}
+	for _, c := range out {
+		byID[c.PathID] = c
+	}
+	cert := byID["mysql_cdc__mysql_upsert"]
+	if cert.LastCertified != "2026-08-30T10:00:00Z @01234567" {
+		t.Fatalf("certified LastCertified = %q", cert.LastCertified)
+	}
+	uncert := byID["mysql_snap_cdc__ch_rmt"]
+	if uncert.LastCertified != "" {
+		t.Fatalf("failed evidence must not certify, got %q", uncert.LastCertified)
+	}
+	// Missing evidence => empty.
+	if got := byID["does-not-exist-missing"]; got.LastCertified != "" {
+		t.Fatalf("missing evidence LastCertified = %q", got.LastCertified)
+	}
+}
+
+func writeEvidenceForTest(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func containsString(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {

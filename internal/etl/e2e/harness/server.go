@@ -19,8 +19,9 @@ import (
 	"time"
 )
 
-// RepoRoot walks up from the current directory until it finds go.mod.
-func RepoRoot() (string, error) {
+// repoRoot walks up from the current directory until it finds go.mod.
+// Unexported: evidence.go owns the exported RepoRoot (untagged builds).
+func repoRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
@@ -50,7 +51,7 @@ var (
 // BUG-1/2/6 (plan.md route B).
 func BuildBinary(ctx context.Context) (string, error) {
 	buildOnce.Do(func() {
-		root, err := RepoRoot()
+		root, err := repoRoot()
 		if err != nil {
 			buildErr = err
 			return

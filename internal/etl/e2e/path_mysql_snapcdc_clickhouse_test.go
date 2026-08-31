@@ -51,6 +51,13 @@ func TestPathMySQLSnapshotCDCToClickHouse(t *testing.T) {
 	table := "snap_cdc_clickhouse"
 	pipeline := "e2e-" + ns
 
+	// Evidence recorder (IT-1/T1.5): certifies this run on cleanup, bound to
+	// the exact source revision and per-case checks.
+	rec := harness.NewEvidenceRecorder(t, "mysql_snap_cdc__ch_rmt")
+	rec.AddDep("mysql", harness.MySQLImage)
+	rec.AddDep("clickhouse", harness.ClickHouseImage)
+	rec.AddDep("harness", "e2e")
+
 	// Prepare MySQL source table + snapshot rows (script lines 124-139).
 	mustExec(t, my.Exec, fmt.Sprintf(`
 CREATE DATABASE IF NOT EXISTS %[1]s;
@@ -167,6 +174,7 @@ dlq:
 	// actual CDC record is sink-acknowledged (script lines 157-162).
 	waitCH(fmt.Sprintf("SELECT count() FROM %s.%s FINAL", chDB, table), "5")
 	t.Logf("case snapshot OK: 5 rows via FINAL")
+	rec.AddCheck("snapshot_initial", "passed", "")
 
 	// Case cdc_update_insert_delete.
 	mustExec(t, my.Exec, fmt.Sprintf(
@@ -179,6 +187,7 @@ dlq:
 	waitCH(fmt.Sprintf("SELECT count() FROM %s.%s FINAL WHERE id = 6 AND amount = 66.66", chDB, table), "1")
 	waitCheckpointCDC()
 	t.Logf("case cdc_update_insert_delete OK")
+	rec.AddCheck("cdc_update_insert_delete", "passed", "")
 
 	// Case schema_drift: add-column propagates (script lines 175-182).
 	mustExec(t, my.Exec, fmt.Sprintf(
@@ -190,6 +199,7 @@ dlq:
 	waitCH(fmt.Sprintf("SELECT count() FROM %s.%s FINAL WHERE id = 7 AND loyalty = 'gold'", chDB, table), "1")
 	waitCheckpointCDC()
 	t.Logf("case schema_drift OK: loyalty add-column propagated")
+	rec.AddCheck("schema_drift_add_column", "passed", "")
 
 	// Case restart_recovery from checkpoint (script lines 184-192).
 	if err := srv.Kill(); err != nil {
@@ -207,6 +217,7 @@ dlq:
 	waitCH(fmt.Sprintf("SELECT count() FROM %s.%s FINAL WHERE id = 8 AND loyalty = 'silver'", chDB, table), "1")
 	waitCheckpointCDC()
 	t.Logf("case restart_recovery OK: id=8 resumed from checkpoint")
+	rec.AddCheck("process_restart_recovery", "passed", "")
 
 	// Case checkpoint_reset: replay absorbed by ReplacingMergeTree
 	// (script lines 194-227).
@@ -257,6 +268,7 @@ dlq:
 	waitCH(fmt.Sprintf("SELECT count() FROM %s.%s FINAL WHERE id = 1 AND amount = 111.11", chDB, table), "1")
 	waitCheckpointCDC()
 	t.Logf("case checkpoint_reset OK: FINAL absorbed replay, advanced to durable CDC")
+	rec.AddCheck("checkpoint_reset_rmt_absorption", "passed", "")
 
 	// Case clickhouse_outage_dlq_replay (script lines 229-262).
 	if err := ch.Container.Stop(ctx, nil); err != nil {
@@ -290,6 +302,7 @@ dlq:
 	waitCH(fmt.Sprintf("SELECT count() FROM %s.%s FINAL WHERE id = 9001 AND loyalty = 'replay'", chDB, table), "1")
 	assertDLQEntryGone(t, srv, pipeline, dlqID, "9001")
 	t.Logf("case clickhouse_outage_dlq_replay OK")
+	rec.AddCheck("sink_outage_dlq_replay", "passed", "")
 
 	// Reconciliation: the pipeline is still registered and visible.
 	if _, err := srv.Get("/api/v2/pipelines"); err != nil {

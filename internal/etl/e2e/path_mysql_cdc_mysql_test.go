@@ -31,6 +31,12 @@ func TestPathMySQLCDCMySQLUpsert(t *testing.T) {
 	table := "path_matrix_customers"
 	pipeline := "e2e-" + ns
 
+	// Evidence recorder (IT-1/T1.5): certifies this run on cleanup, bound to
+	// the exact source revision and per-case checks.
+	rec := harness.NewEvidenceRecorder(t, "mysql_cdc__mysql_upsert")
+	rec.AddDep("mysql", harness.MySQLImage)
+	rec.AddDep("harness", "e2e")
+
 	// Prepare source/target tables (script lines 134-148).
 	mustExec(t, my.Exec, fmt.Sprintf(`
 CREATE DATABASE IF NOT EXISTS %[1]s;
@@ -129,6 +135,7 @@ dlq:
 	mustExec(t, my.Exec, fmt.Sprintf("UPDATE %s.%s SET amount=11.11, status='vip' WHERE id=9101;", srcDB, table))
 	wait(fmt.Sprintf("SELECT COUNT(*) FROM %s.%s WHERE id=9101 AND amount=11.11 AND status='vip'", tgtDB, table), "1")
 	t.Logf("case happy OK: source_count=3 sink_count=3 silent_loss=0")
+	rec.AddCheck("happy_path", "passed", "")
 
 	// Case crash_restart: SIGKILL after sink ack, resume from checkpoint.
 	if err := srv.Kill(); err != nil {
@@ -147,6 +154,7 @@ dlq:
 	// prior rows still present (no silent loss)
 	wait(fmt.Sprintf("SELECT COUNT(*) FROM %s.%s WHERE id IN (9101,9102,9103,9104)", tgtDB, table), "4")
 	t.Logf("case crash_restart OK: replay_duplicates_absorbed=true silent_loss=0")
+	rec.AddCheck("crash_restart_recovery", "passed", "")
 
 	// Case checkpoint_reset: full replay absorbed by upsert.
 	if _, err := srv.Post("/api/v2/pipelines/" + pipeline + "/stop"); err != nil {
@@ -163,6 +171,7 @@ dlq:
 	wait(fmt.Sprintf("SELECT COUNT(*) FROM %s.%s WHERE id IN (9101,9102,9103,9104)", tgtDB, table), "4")
 	wait(fmt.Sprintf("SELECT COUNT(*) FROM %s.%s WHERE id=9101 AND amount=11.11", tgtDB, table), "1")
 	t.Logf("case checkpoint_reset OK: replay_duplicates_absorbed=true silent_loss=0")
+	rec.AddCheck("checkpoint_reset_absorption", "passed", "")
 
 	// Case sink_outage_dlq_replay: simulate outage by renaming the target table.
 	mustExec(t, my.Exec, fmt.Sprintf("RENAME TABLE %s.%s TO %s.%s_outage_backup;", tgtDB, table, tgtDB, table))
@@ -188,6 +197,7 @@ dlq:
 	// full business key set still consistent
 	wait(fmt.Sprintf("SELECT COUNT(*) FROM %s.%s WHERE id IN (9101,9102,9103,9104,9201)", tgtDB, table), "5")
 	t.Logf("case sink_outage_dlq_replay OK: silent_loss=0")
+	rec.AddCheck("sink_outage_dlq_replay", "passed", "")
 
 	// Reconciliation: the pipeline is still registered and visible.
 	if _, err := srv.Get("/api/v2/pipelines"); err != nil {

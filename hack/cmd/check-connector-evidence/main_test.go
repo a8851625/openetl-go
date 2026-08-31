@@ -62,6 +62,89 @@ func TestCheckCommitBindingRejectsNonAncestor(t *testing.T) {
 	}
 }
 
+func TestCheckPathEvidenceAcceptsFreshPassed(t *testing.T) {
+	root := initEvidenceGitRepo(t)
+	writeEvidenceTestFile(t, root, "internal/etl/source/mysql_cdc.go", "source")
+	commitEvidenceTest(t, root, "source baseline")
+	commit := mustGitOutput(t, root, "rev-parse", "HEAD")
+
+	writeEvidenceTestFile(t, root, "docs/evidence/mysql_cdc__mysql_upsert.json", pathEvidenceJSON("mysql_cdc__mysql_upsert", commit, `{"name":"happy_path","result":"passed"}`))
+	commitEvidenceTest(t, root, "add path evidence")
+	current := mustGitOutput(t, root, "rev-parse", "HEAD")
+
+	if err := checkPathEvidenceFile(root, current, filepath.Join(root, "docs/evidence/mysql_cdc__mysql_upsert.json")); err != nil {
+		t.Fatalf("fresh passed evidence rejected: %v", err)
+	}
+}
+
+func TestCheckPathEvidenceRejectsStaleAfterSourceChange(t *testing.T) {
+	root := initEvidenceGitRepo(t)
+	writeEvidenceTestFile(t, root, "internal/etl/source/mysql_cdc.go", "v1")
+	commitEvidenceTest(t, root, "source v1")
+	sourceCommit := mustGitOutput(t, root, "rev-parse", "HEAD")
+
+	writeEvidenceTestFile(t, root, "docs/evidence/mysql_cdc__mysql_upsert.json", pathEvidenceJSON("mysql_cdc__mysql_upsert", sourceCommit, `{"name":"happy_path","result":"passed"}`))
+	commitEvidenceTest(t, root, "evidence at source v1")
+	current := mustGitOutput(t, root, "rev-parse", "HEAD")
+
+	// Accept while sources are unchanged.
+	if err := checkPathEvidenceFile(root, current, filepath.Join(root, "docs/evidence/mysql_cdc__mysql_upsert.json")); err != nil {
+		t.Fatalf("evidence fresh before change rejected: %v", err)
+	}
+
+	// Source changes after the evidence commit => stale.
+	writeEvidenceTestFile(t, root, "internal/etl/sink/mysql.go", "v2")
+	commitEvidenceTest(t, root, "sink v2")
+	current = mustGitOutput(t, root, "rev-parse", "HEAD")
+	err := checkPathEvidenceFile(root, current, filepath.Join(root, "docs/evidence/mysql_cdc__mysql_upsert.json"))
+	if err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("stale error = %v, want stale", err)
+	}
+}
+
+func TestCheckPathEvidenceRejectsTamper(t *testing.T) {
+	cases := []struct {
+		name string
+		body func(commit string) string
+	}{
+		{"flipped check", func(c string) string {
+			return pathEvidenceJSON("mysql_cdc__mysql_upsert", c, `{"name":"happy_path","result":"failed"}`)
+		}},
+		{"empty checks", func(c string) string {
+			return pathEvidenceJSON("mysql_cdc__mysql_upsert", c, ``)
+		}},
+		{"bad result", func(c string) string {
+			return `{"path_id":"mysql_cdc__mysql_upsert","commit":"` + c + `","checks":[{"name":"happy_path","result":"passed"}],"result":"failed"}`
+		}},
+		{"wrong id", func(c string) string {
+			return `{"path_id":"other","commit":"` + c + `","checks":[{"name":"happy_path","result":"passed"}],"result":"passed"}`
+		}},
+		{"unbound commit", func(c string) string {
+			return `{"path_id":"mysql_cdc__mysql_upsert","commit":"deadbeef00000000000000000000000000000000","checks":[{"name":"happy_path","result":"passed"}],"result":"passed"}`
+		}},
+		{"skipped check", func(c string) string {
+			return pathEvidenceJSON("mysql_cdc__mysql_upsert", c, `{"name":"happy_path","result":"skipped","reason":"no container"}`)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sub := initEvidenceGitRepo(t)
+			writeEvidenceTestFile(t, sub, "internal/etl/source/mysql_cdc.go", "source")
+			commitEvidenceTest(t, sub, "baseline")
+			current := mustGitOutput(t, sub, "rev-parse", "HEAD")
+			writeEvidenceTestFile(t, sub, "docs/evidence/mysql_cdc__mysql_upsert.json", tc.body(current))
+			commitEvidenceTest(t, sub, "tamper")
+			if err := checkPathEvidenceFile(sub, current, filepath.Join(sub, "docs/evidence/mysql_cdc__mysql_upsert.json")); err == nil {
+				t.Fatalf("tampered evidence accepted")
+			}
+		})
+	}
+}
+
+func pathEvidenceJSON(pathID, commit, checksJSON string) string {
+	return `{"path_id":"` + pathID + `","commit":"` + commit + `","run_started_at":"2026-08-30T10:00:00Z","runner":"local","checks":[` + checksJSON + `],"result":"passed"}`
+}
+
 func initEvidenceGitRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

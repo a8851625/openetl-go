@@ -3,7 +3,10 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"sort"
+
+	"github.com/a8851625/openetl-go/internal/etl/e2e/harness"
 )
 
 // PathContract is the machine-readable production path contract (PR-2.1).
@@ -235,7 +238,7 @@ func (s *Server) handlePathContracts(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "method not allowed"})
 		return
 	}
-	contracts := productionPathContracts()
+	contracts := applyPathEvidenceLastCertified(productionPathContracts(), harness.EvidenceDir())
 	primary := forcedPrimaryPathContracts()
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"version":          "v1",
@@ -248,4 +251,28 @@ func (s *Server) handlePathContracts(w http.ResponseWriter, r *http.Request) {
 		"forced_primary":   primary,
 		"contracts":        contracts,
 	})
+}
+
+// applyPathEvidenceLastCertified fills PathContract.LastCertified from the
+// committed path evidence artifacts (IT-1/T1.5 acceptance 3): a contract is
+// certified only by a fully-passing evidence run of the same path_id, and
+// the field carries the run timestamp plus the source commit it ran on.
+// Missing, unparsable, or non-passing evidence leaves the field empty —
+// an unproven contract must never claim a certification date.
+func applyPathEvidenceLastCertified(contracts []PathContract, evidenceDir string) []PathContract {
+	out := make([]PathContract, len(contracts))
+	copy(out, contracts)
+	for i := range out {
+		ev, err := harness.LoadEvidence(filepath.Join(evidenceDir, out[i].PathID+".json"))
+		if err != nil || ev.Result != "passed" || ev.Commit == "" {
+			out[i].LastCertified = ""
+			continue
+		}
+		short := ev.Commit
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		out[i].LastCertified = ev.RunStartedAt + " @" + short
+	}
+	return out
 }
