@@ -1,0 +1,30 @@
+{
+  "path_id": "mysql_cdc__mysql_upsert",
+  "commit": "cf98441eb182ad3d08256f2517158edfe0b80efa",
+  "run_started_at": "2026-08-31T15:49:51Z",
+  "runner": "local",
+  "deps": {
+    "harness": "e2e",
+    "mysql": "docker.io/library/mysql:8.0"
+  },
+  "checks": [
+    {
+      "name": "happy_path",
+      "result": "passed"
+    },
+    {
+      "name": "crash_restart_recovery",
+      "result": "passed"
+    },
+    {
+      "name": "checkpoint_reset_absorption",
+      "result": "passed"
+    },
+    {
+      "name": "sink_outage_dlq_replay",
+      "result": "passed"
+    }
+  ],
+  "result": "passed",
+  "finished_at": "2026-08-31T15:49:58Z"
+}

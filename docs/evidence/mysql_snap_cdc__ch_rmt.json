@@ -1,0 +1,39 @@
+{
+  "path_id": "mysql_snap_cdc__ch_rmt",
+  "commit": "cf98441eb182ad3d08256f2517158edfe0b80efa",
+  "run_started_at": "2026-08-31T15:49:59Z",
+  "runner": "local",
+  "deps": {
+    "clickhouse": "docker.io/clickhouse/clickhouse-server:24.3-alpine",
+    "harness": "e2e",
+    "mysql": "docker.io/library/mysql:8.0"
+  },
+  "checks": [
+    {
+      "name": "snapshot_initial",
+      "result": "passed"
+    },
+    {
+      "name": "cdc_update_insert_delete",
+      "result": "passed"
+    },
+    {
+      "name": "schema_drift_add_column",
+      "result": "passed"
+    },
+    {
+      "name": "process_restart_recovery",
+      "result": "passed"
+    },
+    {
+      "name": "checkpoint_reset_rmt_absorption",
+      "result": "passed"
+    },
+    {
+      "name": "sink_outage_dlq_replay",
+      "result": "passed"
+    }
+  ],
+  "result": "passed",
+  "finished_at": "2026-08-31T15:50:16Z"
+}

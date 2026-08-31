@@ -126,6 +126,23 @@ func TestHandlePathContracts(t *testing.T) {
 	if !ok || len(primary) != 2 {
 		t.Fatalf("forced_primary = %#v", body["forced_primary"])
 	}
+	// With committed path evidence present (IT-1/T1.5), the served contracts
+	// carry last_certified derived from the run artifact (timestamp + commit).
+	for _, raw := range contracts {
+		c, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if c["path_id"] == "mysql_cdc__mysql_upsert" || c["path_id"] == "mysql_snap_cdc__ch_rmt" {
+			lc, _ := c["last_certified"].(string)
+			if lc == "" {
+				t.Fatalf("path %v missing derived last_certified (docs/evidence must be committed)", c["path_id"])
+			}
+			if !strings.Contains(lc, " @") {
+				t.Fatalf("last_certified %q lacks run timestamp + commit", lc)
+			}
+		}
+	}
 }
 
 func TestPathContractByID(t *testing.T) {
