@@ -70,8 +70,8 @@ IT-3 集中在 `storage`/`backup`/CI 基准），在满足「同一时间只推�
 | GAP-3：`postgres` sink `pk_columns_from_metadata` | 已实现，e2e 待补 | IT-1 |
 | GAP-4：`elasticsearch` mapping-conflict 策略 | 有界后续 | IT-1 |
 | P4：Doris/Kafka 事实核验 follow-up | bounded follow-up | IT-1 |
-| RA-4：release 流水线无测试门禁 | `queued` | IT-1 |
-| RA-7：e2e 证据自动化 | `queued` | IT-1 |
+| RA-4：release 流水线无测试门禁 | `blocked_external`（push 授权待用户；3 条 run URL 待构造） | IT-1 |
+| RA-7：e2e 证据自动化 | `active`（T1.3 done；T1.4/T1.5 验收 1-3 本地闭合，CI run 待 push） | IT-1 |
 | RA-2：`RestoreFromDB` 静默跳过 | `queued` | IT-2 |
 | RA-3：`StartAll` 无视 desired state | `queued` | IT-2 |
 | RA-1：ClickHouse `_version` 非源事件序 | `queued` | IT-2 |
@@ -140,7 +140,7 @@ AGENTS.md 默认一次执行请求上限 **5 rounds**。每个迭代的 `tasks.m
 
 | 迭代 | Round 1 | Round 2 | Round 3 | Round 4 | Round 5 | 迭代状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| IT-1 | 完成（run URL 证据待 push） | 完成（T1.3 done、T1.4 3/4，CI run 待 push） | — | — | — | `active` |
+| IT-1 | 完成（run URL 证据待 push） | T1.3 done；T1.4/T1.5 验收 1-3 本地闭合、验收 4 CI run 待 push；发现 manifest 重绑阻塞（见 tasks.md Round 3） | — | — | — | `active` |
 | IT-2 | — | — | — | — | — | `queued` |
 | IT-3 | — | — | — | — | — | `queued` |
 | IT-4 | — | — | — | — | — | `queued` |

@@ -1726,6 +1726,18 @@ artifact 复制、Redis state 纳入等其余 PR-1.3 残留（单独排队）。
 > 实跑全绿（全量套件 59.0s，2/2 PASS，断言比对表见 IT-1 tasks.md，无放宽）。
 > T1.4 验收 4（`connector-e2e` 在 CI 内实跑 run URL）pending push，任务置
 > `blocked`；RA-7 保持 `active` 至 run URL 补齐并完成 T1.5。
+>
+> Round 3/5 实施记录（2026-08-31）：T1.5 验收 1/2/3 本地闭合 —— 两条主路径
+> 实跑产出 `docs/evidence/<path_id>.json`（`result:passed`，commit 绑定运行时
+> HEAD cf98441，检查项覆盖全部 case 断言）；校验器新增路径证据校验（commit
+> 祖先绑定 + 相对相关源码新鲜度 + checks 一致性，单测 10 项含 6 种篡改变体），
+> 本地篡改实证（翻转 check / 伪 commit）均被拒；`PathContract.LastCertified`
+> 由证据派生（passed 才填充），服务端 API 断言 + hermetic 单测双覆盖。
+> T1.5 验收 4（CI live 判定）与篡改失败 run URL pending push，任务置 `blocked`。
+> **迭代级阻塞**：`connector-evidence.json` 静态绑定 CertifiedCommit=d75600be
+> 早于本迭代全部 workflow 改动，`_gate.yml` 等被 `-strict -commit` 判定为
+> 「认证后变更」—— main push / release 门禁必然失败，需完整 certification run
+> 重绑 manifest 或用户裁决认证策略（归 T1.12 迭代收口）。
 
 **追溯依据**：
 

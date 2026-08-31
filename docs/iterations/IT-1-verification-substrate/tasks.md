@@ -22,7 +22,7 @@
 | T1.2 | release / release-beta-container 接入门禁 | T1.1 | `blocked` | 失败 tag 与正常 tag 两次 run URL |
 | T1.3 | e2e harness 骨架（容器、子进程、命名空间、skip 语义） | — | `done` | `internal/etl/e2e/harness/` + harness 单测 |
 | T1.4 | 迁移两条主推荐路径并接入 CI | T1.3 | `blocked` | `connector-e2e` job run URL |
-| T1.5 | 结构化证据产出 + commit 绑定校验 + `LastCertified` | T1.4 | `todo` | `docs/evidence/*.json`、篡改证据的失败 run |
+| T1.5 | 结构化证据产出 + commit 绑定校验 + `LastCertified` | T1.4 | `blocked` | `docs/evidence/*.json`、篡改证据的失败 run |
 | T1.6 | BUG-1 状态与证据一致性核对与订正 | T1.3 | `todo` | ROADMAP BUG-1 验收矩阵 |
 | T1.7 | BUG-2 三策略容器级闭合 | T1.3 | `todo` | ROADMAP BUG-2 验收矩阵 |
 | T1.8 | BUG-6 `ColumnTypes` e2e 闭合 | T1.3 | `todo` | ROADMAP BUG-6 验收矩阵 |
@@ -333,3 +333,64 @@ Evidence: <commands, run URL, e2e, docs>
 Result: <delivered|active|blocked_external>
 Residual/follow-up: <bounded next item or none>
 ```
+
+### Round 3/5 —— RA-7（T1.5），2026-08-31 领取
+
+```text
+Round: 3/5（同一窗口第三轮，对应 IT-1 Round 3/5）
+Roadmap item: RA-7 (IT-1/T1.5)
+Profile/path: standalone（两条主推荐路径的证据产出）
+Objective: 证据成为测试的结构化输出：每条路径运行产出 docs/evidence/<path_id>.json；
+          校验器对已提交证据做 commit 祖先绑定 + 相对相关源码的新鲜度 + 一致性校验；
+          PathContract.LastCertified 由证据派生，不再手工维护
+Scope: internal/etl/e2e/harness/evidence.go（+单测）、docs/evidence/（新增目录）、
+       hack/cmd/check-connector-evidence/{main,main_test}.go、
+       internal/etl/server/path_contract{,_test}.go、docs/connector-certification.md
+Non-goals: 不改 _gate.yml；不迁移其余路径；不动 connector-evidence.json；不重认证 manifest
+Acceptance: T1.5 验收 1-4（见任务明细）
+Evidence: 本地容器实跑产出两份 JSON（检查项全 passed）；校验器单测 10 项（含 6 种篡改）；
+          篡改实证：翻转 check 与伪 commit 均被拒；server 单测（last_certified 派生）；
+          CI run URL pending push
+Result: blocked（验收 1/2/3 本地闭合；验收 4 与篡改失败 run URL 待 push）
+Residual/follow-up: connector-e2e CI run URL + 篡改失败 run URL 待 push；
+      新增迭代级发现：connector-evidence.json 的 CertifiedCommit=d75600be 早于本迭代
+      全部 workflow 改动（_gate.yml/test.yml/release*.yml，commit 932370f/3c615b6），
+      `-strict -commit` 在 main push / release 上必然失败 —— 需一次完整 certification
+      run 重绑 manifest，或按用户对认证策略的裁决调整（记入 T1.12 迭代收口）
+```
+
+**Round 3/5 实施证据（2026-08-31，本地阶段）**：
+
+- 验收 1 ✅ 两条路径实跑（podman socket + testcontainers，runner=local，2/2 PASS）后产出：
+  - `docs/evidence/mysql_cdc__mysql_upsert.json`：4 个 checks（happy_path /
+    crash_restart_recovery / checkpoint_reset_absorption / sink_outage_dlq_replay）全
+    passed，`result:"passed"`，`commit` = 运行时的 HEAD；
+  - `docs/evidence/mysql_snap_cdc__ch_rmt.json`：6 个 checks（snapshot_initial /
+    cdc_update_insert_delete / schema_drift_add_column / process_restart_recovery /
+    checkpoint_reset_rmt_absorption / sink_outage_dlq_replay）全 passed；
+  - 字段齐备：`path_id/commit/run_started_at/runner/deps/checks[]/result`。
+- 验收 2 ✅ 校验器改造 + 实证：
+  - `check-connector-evidence` 新增路径证据校验（`-path-evidence docs/evidence` 默认）：
+    commit 可解析且为当前 HEAD/`-commit` 的祖先或相等；不早于相关源码最近改动
+    （`internal/etl/source|sink|core|transform|checkpoint|pipeline|server|e2e`、
+    `internal/logic`、`manifest/config` 等，snapshot→CH 另含 `internal/etl/ddl`）；
+    checks 非空且全 passed；`result` 与 checks 一致；`path_id` 与文件名一致；
+  - 单测 10 项全绿（既有 3 项 commit 绑定 + 新增 4 项路径证据 + 6 种篡改变体）；
+  - 本地篡改实证：① 将 happy_path 翻成 failed → `check "happy_path" result failed
+    (reason: ); evidence not certified`；② 把 commit 改成不存在的哈希 →
+    `does not resolve ... (tampered or rerun needed)`；恢复后校验通过；
+  - 新鲜度（不早于相关源码改动）由单测 `TestCheckPathEvidenceRejectsStaleAfterSourceChange`
+    覆盖（sink 改动后证据 → `stale` 拒绝）。
+- 验收 3 ✅ `PathContract.LastCertified` 由 `docs/evidence/<path_id>.json` 派生：
+  - `applyPathEvidenceLastCertified` 只在对应证据 `result=passed` 时填充
+    （`run_started_at @ <8位commit>`），缺失/失败/不可解析证据一律留空；
+  - 单测：hermetic 临时目录 passed→填充、failed→空；`TestHandlePathContracts` 扩为
+    真实仓库级断言（证据已提交时两条主路径 `last_certified` 非空且含 ` @`）。
+- 验收 4 ✅（本地确认，CI 待 push）`connector-e2e` job 按 `go test -tags=e2e -e2e.strict`
+  的 **live 结果**判定，job 不读任何已提交证据文件；证据文件只是测试的写产物。
+
+**发现并记录（迭代级阻塞，非 T1.5 缺陷）**：如上文 `Residual`，manifest 静态绑定
+（CertifiedCommit=d75600be）与本迭代全部 workflow 改动冲突，`-strict -commit` 步骤
+在 main push / release 上必失败。T1.5 的路径证据校验本身已绿（
+`path evidence OK: 2 file(s) under docs/evidence, bound to <HEAD>`）；
+manifest 重绑需要一次完整 certification run，属 T1.12 迭代收口范围，需用户裁决。
