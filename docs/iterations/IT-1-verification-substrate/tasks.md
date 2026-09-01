@@ -25,7 +25,7 @@
 | T1.5 | 结构化证据产出 + commit 绑定校验 + `LastCertified` | T1.4 | `blocked` | `docs/evidence/*.json`、篡改证据的失败 run |
 | T1.6 | BUG-1 状态与证据一致性核对与订正 | T1.3 | `done` | ROADMAP BUG-1 验收矩阵 |
 | T1.7 | BUG-2 三策略容器级闭合 | T1.3 | `done` | ROADMAP BUG-2 验收矩阵 |
-| T1.8 | BUG-6 `ColumnTypes` e2e 闭合 | T1.3 | `todo` | ROADMAP BUG-6 验收矩阵 |
+| T1.8 | BUG-6 `ColumnTypes` e2e 闭合 | T1.3 | `done` | ROADMAP BUG-6 验收矩阵 |
 | T1.9 | GAP-1 / GAP-3 PostgreSQL 实例 e2e | T1.3 | `todo` | ROADMAP GAP-1/GAP-3 条目 |
 | T1.10 | GAP-4 ES mapping-conflict e2e | T1.3 | `todo` | ROADMAP GAP-4 条目 |
 | T1.11 | P4 Doris/Kafka 事实核验 | T1.3 | `todo` | P4 follow-up 记录 |
@@ -436,3 +436,16 @@ Residual/follow-up: T1.8 BUG-6 ColumnTypes e2e 下一轮
   4. 单测补齐：`TestBinlogPurgedRecoveryResnapshotOnPlainCDCFailsClosed`（纯
      mysql_cdc 的 resnapshot 请求 fail-closed 返回 ErrBinlogPurged 哨兵）；
   5. ROADMAP BUG-2 验收矩阵 5 项全部 pass 入档。
+
+**T1.8 实施证据（2026-09-01，Round  追加）**：
+
+- BUG-6 验收 2/3 闭合：新脚本 `hack/e2e-bug6-column-types.sh` 容器级实跑 PASS：
+  snapshot_cdc（MySQL 源表 `link_src`，`request_id varchar(32)`、`amount decimal(12,2)`）→
+  kafka envelope（`column_types` 序列化确认于 sink/kafka.go kafkaEnvelope.ColumnTypes）→
+  clickhouse auto_create：CH `system.columns` 断言 `request_id=String`（源 varchar →
+  声明类型，而非数值样本推断成 Int）、`amount=Decimal(12,2)`（源精度直传）；
+  CDC 相位 UPDATE+INSERT 经信封中继后 FINAL count=3、id=3 行 `amount=44.44` 落地。
+- 脚本自身两处修正（非产品缺陷）：① kafka source 的 topic 配置项为单数
+  `topic:`（`topics:` 数组配置无效 → invalid topic）；② ReplacingMergeTree 下
+  count 断言必须 `FINAL`（raw count 含未折叠副本导致 4≠3）。
+- ROADMAP BUG-6 置 `delivered`，README 看板同步。

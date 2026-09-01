@@ -1157,7 +1157,10 @@ context deadline exceeded（非 retryable），全部 500 条计入 failures 进
 
 ### BUG-6：snapshot_cdc CDC 阶段事件不填 ColumnTypes（2026-08-13 发现）
 
-状态：`active`
+状态：`delivered`（2026-09-01 验收矩阵补全：`hack/e2e-bug6-column-types.sh` 容器级实跑
+PASS —— CDC 相位事件经 kafka 信封中继 → clickhouse auto_create 使用**声明类型**
+（源 varchar `request_id` → CH `String`、源 `decimal(12,2)` → CH `Decimal(12,2)`）
+而非样本值 + name-hint 推断；FINAL 3 行，id=3 新行 44.44 落地）
 
 ```text
 Round: 0/5
