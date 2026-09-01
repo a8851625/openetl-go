@@ -27,14 +27,14 @@ PGREP() { pgrep -f "openetl-go" || true; }
 echo "=== BUG-2 binlog purged recovery e2e ==="
 
 # Source table.
-docker exec etl-mysql-source mysql -uroot -proot123456 -e "
+"$CONTAINER_CLI" exec etl-mysql-source mysql -uroot -proot123456 -e "
 DROP DATABASE IF EXISTS snap_e2e;
 CREATE DATABASE snap_e2e;
 CREATE TABLE snap_e2e.staff(id int NOT NULL AUTO_INCREMENT, name varchar(32), PRIMARY KEY(id)) ENGINE=InnoDB;
 INSERT INTO snap_e2e.staff(name) VALUES('alice'),('bob');
 " 2>&1 | grep -v "Using a password" || true
 
-docker exec etl-clickhouse clickhouse-client -h 127.0.0.1 --password dzh123456 -q "DROP TABLE IF EXISTS dzh3136_go.ods_binlog_purge" 2>/dev/null || true
+"$CONTAINER_CLI" exec etl-clickhouse clickhouse-client -h 127.0.0.1 --password dzh123456 -q "DROP TABLE IF EXISTS dzh3136_go.ods_binlog_purge" 2>/dev/null || true
 
 # Run app with the fail-policy spec.
 NETS="sync-canal-go-evidence_default,sync-canal-go-p3-evidence-20260808_default,sync-canal-go_default"
@@ -79,12 +79,12 @@ except Exception as e: print('parse:',e)
 " 2>/dev/null || echo "(no checkpoint yet)"
 
 echo "--- RESET MASTER on source (purges all binlogs)"
-docker exec etl-mysql-source mysql -uroot -proot123456 -e "RESET MASTER;" 2>&1 | grep -v "Using a password"
+"$CONTAINER_CLI" exec etl-mysql-source mysql -uroot -proot123456 -e "RESET MASTER;" 2>&1 | grep -v "Using a password" || true
 echo "--- binlogs after reset:"
-docker exec etl-mysql-source mysql -uroot -proot123456 -e "SHOW BINARY LOGS;" 2>&1 | grep -v "Using a password"
+"$CONTAINER_CLI" exec etl-mysql-source mysql -uroot -proot123456 -e "SHOW BINARY LOGS;" 2>&1 | grep -v "Using a password" || true
 
 # Insert a new row so there IS a new binlog to read (if recovery succeeded).
-docker exec etl-mysql-source mysql -uroot -proot123456 -e "INSERT INTO snap_e2e.staff(name) VALUES('carol');" 2>&1 | grep -v "Using a password" || true
+"$CONTAINER_CLI" exec etl-mysql-source mysql -uroot -proot123456 -e "INSERT INTO snap_e2e.staff(name) VALUES('carol');" 2>&1 | grep -v "Using a password" || true
 
 echo "--- restart pipeline from the now-stale checkpoint"
 curl -s -X POST -H "X-API-Token: $TOKEN" "$API/api/v2/pipelines/$PID/start" >/dev/null 2>&1 || true

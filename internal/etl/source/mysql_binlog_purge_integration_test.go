@@ -110,7 +110,10 @@ func TestBinlogPurgeRuntimeDetectionResumeFromCurrent(t *testing.T) {
 		t.Fatalf("post-purge insert: %v", err)
 	}
 
-	addr := "127.0.0.1:3399"
+	addr := os.Getenv("OPENETL_TEST_MYSQL_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:3399"
+	}
 	cfg := canal.NewDefaultConfig()
 	cfg.Addr = addr
 	cfg.User = "root"

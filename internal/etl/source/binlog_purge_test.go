@@ -83,6 +83,21 @@ func TestBinlogPurgedRecoveryFail(t *testing.T) {
 	}
 }
 
+func TestBinlogPurgedRecoveryResnapshotOnPlainCDCFailsClosed(t *testing.T) {
+	// On a plain mysql_cdc source (no snapshot phase machine), the resnapshot
+	// policy is unsupported: the shared decision point must fail closed with
+	// the ErrBinlogPurged sentinel, never silently continue on a stale
+	// coordinate. The snapshot_cdc caller handles resnapshot itself
+	// (resnapshotRequested) before reaching this helper.
+	_, err := binlogPurgedRecovery(BinlogPurgedResnapshot, "mysql-bin.000120", 2789538, func() (mysql.Position, error) {
+		t.Fatal("GetMasterPos should not be called on resnapshot policy")
+		return mysql.Position{}, nil
+	})
+	if !errors.Is(err, ErrBinlogPurged) {
+		t.Errorf("resnapshot-on-plain-cdc err = %v, want ErrBinlogPurged", err)
+	}
+}
+
 func TestErrBinlogPurgedIsSentinel(t *testing.T) {
 	// Ensure errors.Is works through fmt.Errorf("%w: ...") wrapping.
 	_, wrapped := binlogPurgedRecovery(BinlogPurgedFail, "mysql-bin.000120", 100, nil)
