@@ -63,8 +63,8 @@ IT-3 集中在 `storage`/`backup`/CI 基准），在满足「同一时间只推�
 | Roadmap 条目 | 当前状态 | 归属 |
 | --- | --- | --- |
 | P0：MaxCompute 真实环境认证 | `blocked_external` | PT-A |
-| BUG-1：`mysql_batch` 字符串主键游标不推进 | `active`（状态与证据存疑，见 `IT-1/T1.6`） | IT-1 |
-| BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复 | `active` | IT-1 |
+| BUG-1：`mysql_batch` 字符串主键游标不推进 | `delivered`（2026-09-01 复核：容器 e2e 补全） | IT-1 |
+| BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复 | `delivered`（三策略容器级闭合） | IT-1 |
 | BUG-6：`snapshot_cdc` CDC 阶段不填 `ColumnTypes` | `active` | IT-1 |
 | GAP-1：`postgres_cdc` Metadata 契约 | 已实现，待 PG 实例 e2e | IT-1 |
 | GAP-3：`postgres` sink `pk_columns_from_metadata` | 已实现，e2e 待补 | IT-1 |

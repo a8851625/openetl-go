@@ -23,8 +23,8 @@
 | T1.3 | e2e harness 骨架（容器、子进程、命名空间、skip 语义） | — | `done` | `internal/etl/e2e/harness/` + harness 单测 |
 | T1.4 | 迁移两条主推荐路径并接入 CI | T1.3 | `blocked` | `connector-e2e` job run URL |
 | T1.5 | 结构化证据产出 + commit 绑定校验 + `LastCertified` | T1.4 | `blocked` | `docs/evidence/*.json`、篡改证据的失败 run |
-| T1.6 | BUG-1 状态与证据一致性核对与订正 | T1.3 | `todo` | ROADMAP BUG-1 验收矩阵 |
-| T1.7 | BUG-2 三策略容器级闭合 | T1.3 | `todo` | ROADMAP BUG-2 验收矩阵 |
+| T1.6 | BUG-1 状态与证据一致性核对与订正 | T1.3 | `done` | ROADMAP BUG-1 验收矩阵 |
+| T1.7 | BUG-2 三策略容器级闭合 | T1.3 | `done` | ROADMAP BUG-2 验收矩阵 |
 | T1.8 | BUG-6 `ColumnTypes` e2e 闭合 | T1.3 | `todo` | ROADMAP BUG-6 验收矩阵 |
 | T1.9 | GAP-1 / GAP-3 PostgreSQL 实例 e2e | T1.3 | `todo` | ROADMAP GAP-1/GAP-3 条目 |
 | T1.10 | GAP-4 ES mapping-conflict e2e | T1.3 | `todo` | ROADMAP GAP-4 条目 |
@@ -394,3 +394,45 @@ Residual/follow-up: connector-e2e CI run URL + 篡改失败 run URL 待 push；
 在 main push / release 上必失败。T1.5 的路径证据校验本身已绿（
 `path evidence OK: 2 file(s) under docs/evidence, bound to <HEAD>`）；
 manifest 重绑需要一次完整 certification run，属 T1.12 迭代收口范围，需用户裁决。
+
+### Round 4/5 —— RA-7（T1.6 + T1.7），2026-09-01 领取
+
+```text
+Round: 4/5（同一窗口第四轮，对应 IT-1 Round 4/5）
+Roadmap item: RA-7 (IT-1/T1.6 + T1.7)
+Profile/path: standalone（BUG-1 mysql_batch varchar PK；BUG-2 binlog purged 三策略）
+Objective: BUG-1 状态与证据一致性核对订正；BUG-2 fail/resume_from_current/resnapshot
+          三策略容器级闭合，证据入验收矩阵
+Scope: hack/e2e-binlog-purged*.sh、internal/etl/source/binlog_purge_test.go、
+       mysql_binlog_purge_integration_test.go（addr env 化）、ROADMAP BUG-1/BUG-2 矩阵
+Non-goals: 不改 mysql_batch/mysql_snapshot_cdc 运行时代码（代码已完成，本轮只补证据）；
+          不动 connector-evidence.json
+Acceptance: T1.6 核对 BUG-1 标题「delivered」vs 状态矛盾；T1.7 BUG-2 验收 1-5 全闭合
+Evidence: e2e-bug1-varchar-pk.sh / e2e-binlog-purged.sh / e2e-binlog-purged-resnapshot.sh
+          实跑输出（openetl-go-etl:dev + 本机 compose）、集成测试真机 PASS、单测
+Result: active（T1.6/T1.7 证据闭合并置 done；process 继续 T1.8）
+Residual/follow-up: T1.8 BUG-6 ColumnTypes e2e 下一轮
+```
+
+**Round 4/5 实施证据（2026-09-01）**：
+
+- T1.6 ✅ BUG-1 核对订正：`mysql_batch.go` 自认证 commit d75600be 起**零改动**；
+  `hack/e2e-bug1-varchar-pk.sh` 实跑 `openetl-go-etl:dev`（08-23 构建）→
+  `state: completed, written=6`（验收 4 容器级证据补全）。ROADMAP BUG-1 置
+  `delivered`，验收矩阵在标题行注明 2026-09-01 复核。
+- T1.7 ✅ BUG-2 三策略容器级闭合：
+  1. **fail**（`e2e-binlog-purged.sh`，修复脚本 docker 硬编码 + set -e pipefail
+     grep 无匹配即退出的两个脚本 bug）：RESET MASTER → `binlog purged (ERROR
+     1236) ... policy=fail` → `[ALERT] {"level":"error","title":"Pipeline read
+     error"}` critical 告警 → 管道 status `completed`（终止态，非无限重试）；
+  2. **resume_from_current**（集成测试 env 化后真机跑
+     `TestBinlogPurgeRuntimeDetectionResumeFromCurrent`，OPENETL_TEST_MYSQL_ADDR=
+     127.0.0.1:13306，compose mysql-source）：陈旧坐标 RunFrom → 1236 识别 →
+     GetMasterPos 探测 → 续流无 1236；
+  3. **resnapshot**（新脚本 `e2e-binlog-purged-resnapshot.sh`）：快照 2 行 →
+     RESET MASTER → checkpoint `mysql-bin.000004:4460` 失效 → `falling back to
+     snapshot phase from last cursors (RPO gap ...)` → 续读不重读 + 新行 carol
+     送达（sink `alice bob carol`）→ 管道 running；
+  4. 单测补齐：`TestBinlogPurgedRecoveryResnapshotOnPlainCDCFailsClosed`（纯
+     mysql_cdc 的 resnapshot 请求 fail-closed 返回 ErrBinlogPurged 哨兵）；
+  5. ROADMAP BUG-2 验收矩阵 5 项全部 pass 入档。

@@ -936,8 +936,9 @@ P4.2a follow-up 验收矩阵（Round 2/5）：
 
 ### BUG-1：`mysql_batch` 字符串主键游标不推进（2026-08-09 发现；2026-08-23 delivered）
 
-状态：`active`（代码完成 + 单测闭合；验收 4 容器级 e2e 未跑——镜像构建被
-go mod download 网络阻塞，恢复后补跑再置 delivered）
+状态：`delivered`（2026-09-01 复核：容器级验收 4 证据补全 —— `hack/e2e-bug1-varchar-pk.sh`
+实跑 `openetl-go-etl:dev`（08-23 构建，`mysql_batch.go` 自认证 commit 起零改动）：
+`state: completed, written=6`；as-of 复核日期根因/范围/证据链完整）
 
 **现象与根因**：`mysql_batch` 源的 `updateLastID` 只处理 int/int64/float64，
 字符串主键（如 `request_id`）作为 `pk_column` 时游标从不推进，每次轮询
@@ -977,8 +978,17 @@ any/字符串游标）、checkpoint position 序列化与恢复兼容（旧数�
 
 ### BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复（2026-08-12 发现）
 
-状态：`active`（fail 策略容器 e2e 已跑但证据未入验收矩阵；resume_from_current 有真机
-运行时验证 6a814fe；resnapshot 端到端与完整 e2e 记录待容器恢复后补跑再置 delivered）
+状态：`delivered`（2026-09-01 三策略容器级闭合）
+
+**验收矩阵（2026-09-01 补全，全部通过）**：
+
+| 验收 | 证据（命令/日志） | 结果 |
+| --- | --- | --- |
+| 1. `fail` 策略停止管道 + critical 告警，不无限重试 | `hack/e2e-binlog-purged.sh`：RESET MASTER → `binlog purged (ERROR 1236) ... policy=fail` → `[ALERT] {"level":"error","title":"Pipeline read error",...}` → 管道 status `completed`（终止态）；`binlog_purge_test.go` `TestBinlogPurgedRecoveryFail` | pass |
+| 2. `resume_from_current` 从当前 master 位点续 CDC | `TestBinlogPurgeRuntimeDetectionResumeFromCurrent`（真机 MySQL 8.0 + RESET MASTER，OPENETL_TEST_MYSQL_ADDR=:13306）：陈旧坐标 RunFrom → 1236 被 `isBinlogPurgedError` 识别 → GetMasterPos 探测新坐标 → 后续 canal 运行 3s 无 1236 | pass |
+| 3. `resnapshot`（snapshot_cdc）从 last cursors 续读后重新进 CDC | `hack/e2e-binlog-purged-resnapshot.sh`：快照 2 行 → RESET MASTER → CHECKPOINT `mysql-bin.000004:4460` 失效 → `falling back to snapshot phase from last cursors (RPO gap ...)` → 快照续读（不重读已读行）+ 新行 carol 送达（sink `alice bob carol`）→ 管道 running | pass |
+| 4. 瞬时断连仍指数退避不误判 | `TestIsBinlogPurgedError` 非 1236 错误（connection_refused/1045）返回 false；`binlog_purge.go` 仅 1236/文本匹配判 purge | pass |
+| 5. 单测 + 容器级 e2e 证据 | 单测：`TestIsBinlogPurgedError`、`TestParseBinlogPurgedPolicy`（6 变体含 fail-closed）、`TestBinlogPurgedRecovery*`×4、`TestErrBinlogPurgedIsSentinel`；容器：上述 2 个 e2e 脚本实跑（openetl-go-etl:dev） | pass |
 
 **现象与根因**：当 MySQL binlog 被按保留期（`binlog_expire_logs_seconds`，云库
 常仅 1–3 天）自动清理，或被 `PURGE BINARY LOGS`/`RESET MASTER` 删除后，checkpoint
