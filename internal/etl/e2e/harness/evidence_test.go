@@ -118,8 +118,16 @@ func TestRecorderCleanupWritesAndDerives(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "unit-test-record.json")); err != nil {
 		t.Fatalf("evidence file not written: %v", err)
 	}
-	if r.ev.Runner != "local" || r.ev.Commit == "" {
-		t.Fatalf("recorder metadata incomplete: runner=%q commit=%q", r.ev.Runner, r.ev.Commit)
+	// RunnerName() is environment-derived (local / ci / github-actions); the
+	// assertion must accept any valid derivation, not hardcode "local" — the
+	// gate CI sets GITHUB_ACTIONS and legitimately derives "github-actions".
+	switch r.ev.Runner {
+	case "local", "ci", "github-actions":
+	default:
+		t.Fatalf("recorder runner %q is not a known derivation", r.ev.Runner)
+	}
+	if r.ev.Commit == "" {
+		t.Fatalf("recorder metadata incomplete: commit empty (runner=%q)", r.ev.Runner)
 	}
 
 	f2 := &fakeLifecycle{failed: true}
