@@ -1,7 +1,7 @@
 {
   "path_id": "mysql_cdc__mysql_upsert",
-  "commit": "3d6c8ad9a9851f6176a3e897578b1dcc1e247646",
-  "run_started_at": "2026-09-02T14:39:46Z",
+  "commit": "40d2aff91072c0b54752d4afbe31ca2fe42b5de5",
+  "run_started_at": "2026-09-02T15:03:12Z",
   "runner": "local",
   "deps": {
     "harness": "e2e",
@@ -26,5 +26,5 @@
     }
   ],
   "result": "passed",
-  "finished_at": "2026-09-02T14:39:54Z"
+  "finished_at": "2026-09-02T15:03:19Z"
 }
