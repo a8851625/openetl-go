@@ -35,6 +35,26 @@ unverified record is reported as `partial` / `production_with_review` without
 changing connector maturity. Missing or malformed records are `missing`, and
 an expired verified record is `partial`.
 
+### Rebind 2026-09-02 (IT-1/T1.12)
+
+Manifest rebound from `d75600be` to `d30fee9` with image `sha256:d180c62c...`
+(following the 2026-08-23 rebind procedure in commit c2ac396). The runtime
+surface changed since `d75600be` is `internal/etl/sink/postgres.go` (GAP-3
+auto-create PK fix, commit 1966a03) and `internal/etl/sink/elasticsearch.go`
+(GAP-4 validation semantics; no manifest record). Affected records were
+re-certified by rerunning both of their scripts on the fresh image, both green:
+
+- `hack/e2e-mysql-postgres.sh` — `MySQL batch JOIN -> PostgreSQL E2E passed`
+  (mysql-batch-join-to-postgres: completed, 9 written).
+- `hack/e2e-cdc-postgres.sh` — `MySQL CDC -> PostgreSQL E2E passed`
+  (mysql-cdc-to-postgres: checkpoint restart event recovered).
+
+`hack/e2e-doris.sh` was NOT rerun: the `apache/doris:be-2.1.11` image could not
+be pulled (three attempts, repeated blob EOF / TLS timeouts from
+registry-1.docker.io; FE image pulled fine). The Doris record keeps its
+2026-08-09 certification; its runtime file is unchanged since `d75600be`. The
+strict checker passes with `-strict -commit d30fee9 -image <digest>`.
+
 Run the structural checker from the repository root:
 
 ```sh
@@ -106,7 +126,7 @@ e2e-kafka-multitable-clickhouse, e2e-snapshot-cdc-clickhouse and the new
 e2e-bug1-varchar-pk all PASS; historical record e2e execution window remains
 the 2026-08-11 run):
 
-- source commit: `d75600bea140b7a7e46b10ce39c48cbb84173ee9`
+- source commit: `d30fee900f871627a43cbf44c8ae8faf9df96c1b` (rebound 2026-09-02, see Rebind 2026-09-02 above)
 - image: `sha256:9b887beb2ed3d4f26aea3833478981f540151f3ab82943eef7e119928cfee2b5`
 - environment: Linux/arm64 image, Podman `5.8.2`, Go `1.24.13`
 - dependency set: MySQL `8.0.46`, PostgreSQL `16.14`, ClickHouse `24.3.18.7`, Redpanda `24.1.1`, Doris `2.1.11`, MinIO `RELEASE.2024-07-16T23-46-41Z`
