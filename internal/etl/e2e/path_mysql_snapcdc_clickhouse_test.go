@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,25 @@ import (
 
 	"github.com/a8851625/openetl-go/internal/etl/e2e/harness"
 )
+
+// dumpCHLogs drains the ClickHouse container logs into the test output so a
+// restart failure on CI can be diagnosed (Logs returns an io.ReadCloser; a
+// bare %s would print the reader struct).
+func dumpCHLogs(t *testing.T, ch *harness.ClickHouseInstance, label string) {
+	t.Helper()
+	rd, err := ch.Container.Logs(context.Background())
+	if err != nil {
+		t.Logf("clickhouse logs (%s): unavailable: %v", label, err)
+		return
+	}
+	defer rd.Close()
+	body, err := io.ReadAll(rd)
+	if err != nil {
+		t.Logf("clickhouse logs (%s): read: %v", label, err)
+		return
+	}
+	t.Logf("clickhouse logs (%s): %s", label, body)
+}
 
 // mustQuery runs a ClickHouse query whose failure is fatal.
 func mustQuery(t *testing.T, ch *harness.ClickHouseInstance, sql string) string {
@@ -295,18 +315,14 @@ dlq:
 		// (e.g. an abrupt stop landing during first-time initialization).
 		// Dump the server logs for diagnosis and give the container one clean
 		// restart cycle before failing the case.
-		if logs, lerr := ch.Container.Logs(ctx); lerr == nil {
-			t.Logf("clickhouse logs after failed restart: %s", logs)
-		}
+		dumpCHLogs(t, ch, "restart")
 		grace := 5 * time.Second
 		_ = ch.Container.Stop(ctx, &grace)
 		if err := ch.Container.Start(ctx); err != nil {
 			t.Fatalf("start clickhouse (retry): %v", err)
 		}
 		if err := harness.PollUntil(ctx, 2*time.Minute, 2*time.Second, "clickhouse ping (retry)", ch.Ping); err != nil {
-			if logs, lerr := ch.Container.Logs(ctx); lerr == nil {
-				t.Logf("clickhouse logs after failed retry: %s", logs)
-			}
+			dumpCHLogs(t, ch, "retry")
 			t.Fatalf("clickhouse did not come back: %v", err)
 		}
 	}
