@@ -26,8 +26,8 @@
 | T1.6 | BUG-1 状态与证据一致性核对与订正 | T1.3 | `done` | ROADMAP BUG-1 验收矩阵 |
 | T1.7 | BUG-2 三策略容器级闭合 | T1.3 | `done` | ROADMAP BUG-2 验收矩阵 |
 | T1.8 | BUG-6 `ColumnTypes` e2e 闭合 | T1.3 | `done` | ROADMAP BUG-6 验收矩阵 |
-| T1.9 | GAP-1 / GAP-3 PostgreSQL 实例 e2e | T1.3 | `todo` | ROADMAP GAP-1/GAP-3 条目 |
-| T1.10 | GAP-4 ES mapping-conflict e2e | T1.3 | `todo` | ROADMAP GAP-4 条目 |
+| T1.9 | GAP-1 / GAP-3 PostgreSQL 实例 e2e | T1.3 | `done` | ROADMAP GAP-1/GAP-3 条目 |
+| T1.10 | GAP-4 ES mapping-conflict e2e | T1.3 | `done` | ROADMAP GAP-4 条目 |
 | T1.11 | P4 Doris/Kafka 事实核验 | T1.3 | `todo` | P4 follow-up 记录 |
 | T1.12 | CI 时长调优 + 迭代收口 | T1.1..T1.11 | `todo` | 时长记录、`README.md` 看板、迭代 DoD |
 

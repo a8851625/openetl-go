@@ -1201,7 +1201,13 @@ Residual/follow-up: none
 实现（grep + 代码走读，非运行时验证）。发现的缺口按生产影响排队如下，逐项做到
 与基线同等成熟度后再关项。
 
-### GAP-1：`postgres_cdc` 三个 Metadata 契约全缺（2026-08-21 已实现，待 PG 实例 e2e）
+### GAP-1：`postgres_cdc` 三个 Metadata 契约全缺（2026-08-21 已实现；2026-09-01 PG 实例 e2e 闭合，`delivered`）
+
+**2026-09-01 e2e 证据**：`hack/e2e-postgres-cdc.sh` 实跑（重建镜像 = 当前 HEAD 代码）PASS
+——真实 pgoutput 流 INSERT/UPDATE/DELETE 经 postgres_cdc 源写入 MySQL sink，含
+checkpoint stop/restart 后停止期事件补收（`Verify checkpoint restart consumed
+stopped-period event`）；Key/ColumnTypes 由 `TestPGCatalogRecordKeyComposite`、
+`TestPGCatalogColumnTypes` 单测覆盖。
 
 - **现状**：postgres_cdc 的 INSERT/UPDATE/DELETE 记录（postgres_cdc.go:716/804/839）
   只填 Source/Table/Timestamp/LSN，完全不填 `Metadata.Key`、`Metadata.ColumnTypes`。
@@ -1216,8 +1222,8 @@ Residual/follow-up: none
   indkey 顺序，tables 为空时全量 indisprimary，best-effort 非致命）；三个
   parse*Msg 填 Key（recordKey：UPDATE 优先 before-image，镜像 mysql_cdc 契约）
   与 ColumnTypes。测试：TestPGCatalogRecordKeyComposite、
-  TestPGCatalogColumnTypes；source 全量与 -race 绿。**残留**：PG 实例 e2e（真实
-  pgoutput 流含 Key/ColumnTypes 断言）待容器环境恢复后补。
+  TestPGCatalogColumnTypes；source 全量与 -race 绿。PG 实例 e2e 已于 2026-09-01
+  闭合（见上）。
 
 ### GAP-2：`mysql_cdc` 缺 `Metadata.ColumnTypes`（2026-08-21 复核：审计误报，已存在）
 
@@ -1226,7 +1232,15 @@ Residual/follow-up: none
   后缀）构建 colTypes 并填入每条 CDC 记录（mysql_cdc.go:501 起），与 BUG-6 的
   snapshot_cdc 修复同构。**无需开发**，本项关闭。
 
-### GAP-3：`postgres` sink 缺 `pk_columns_from_metadata`（2026-08-21 已实现，e2e 待补）
+### GAP-3：`postgres` sink 缺 `pk_columns_from_metadata`（2026-08-21 已实现；2026-09-01 e2e 闭合并修复 auto-create PK 缺陷，`delivered`）
+
+**2026-09-01 e2e 证据**：新脚本 `hack/e2e-kafka-postgres-fanout.sh` 实跑（当前 HEAD 镜像）
+PASS —— kafka 单 topic 两表 envelope（orders BIGINT pk order_id / users VARCHAR pk
+user_no）→ postgres sink `pk_columns_from_metadata`：INSERT 落表、UPDATE 按派生 PK
+upsert（11.00→15.00）、DELETE 按派生 PK 删除、`pg_index` 断言 ods_orders 主键即
+派生列。**e2e 暴露并修复真实缺陷**：auto-create 建表未携带派生 PK 约束，后续
+upsert `ON CONFLICT(pk)` 报 SQLSTATE 42P10 进 DLQ；修复为 `pkByTable` 快照提前到
+schema ensure 之前、`buildPgCreateTableDDL` 输出真 PRIMARY KEY（commit 1966a03）。
 
 - **现状**：mysql sink 支持 per-table PK 派生（mysql.go:354），postgres sink 为 0。
 - **影响**：kafka 多表扇出→PG upsert 链路无法按表解析 PK，DELETE/UPDATE 失败。
@@ -1240,10 +1254,20 @@ Residual/follow-up: none
   的 pkColumnsByTable 对空 Metadata.Key 从整批报错改为回退静态 pk_columns→id
   （带警告日志）——修复 DLQ replay 存量记录（无 Key）永久无法重放的问题；旧行为
   测试改为回退断言。测试：TestPostgresDerivePKFromMetadataShared、
-  TestPostgresPKFromMetadataConfig、TestClickHousePKColumnsByTableFallsBackToStatic；
-  sink+server 全量绿。**残留**：kafka→PG 多表扇出 e2e 待容器环境恢复后补。
+  TestPostgresPKFromMetadataConfig、TestClickHousePKColumnsByTableFallsBackToStatic、
+  TestBuildPgCreateTableDDLDerivedPK；sink 全量绿。kafka→PG 多表扇出 e2e 已于
+  2026-09-01 闭合（见上）。
 
-### GAP-4：`elasticsearch` sink 缺 `schema_drift` 与 index 模板（2026-08-21 index_template 已实现；schema_drift 收敛为 mapping-conflict 策略，留有界后续）
+### GAP-4：`elasticsearch` sink 缺 `schema_drift` 与 index 模板（2026-08-21 index_template 已实现；2026-09-01 mapping-conflict e2e 闭合，`delivered`；schema_drift 收敛为 mapping-conflict 策略，留有界后续）
+
+**2026-09-01 e2e 证据**：`hack/e2e-elasticsearch.sh` 实跑（当前 HEAD 镜像）PASS ——
+mysql_batch→ES bulk：2 条成功写入；phone=`not-a-number` 触发
+`mapper_parsing_exception` → item-level DLQ（`records_dlq:1`，`error_class:schema`）；
+修复 mapping（phone→keyword）后 DLQ replay `replayed:1`、9403 文档落地。
+**e2e 揭示的语义修正**：前置 schema validation 原把 varchar→long 判为不兼容而整管道
+阻断，与「mapping 冲突靠 item-level DLQ 兜底」契约矛盾；`esTypeCompatible` 放行
+字符串源→数值/日期映射（bulk 自解析，值冲突落单条 DLQ），boolean→数值仍拒绝
+（commit 1966a03）。
 
 - **现状**：ES 无 schema_drift（mapping 冲突目前靠 item-level DLQ 兜底）；index 名只做
   `Metadata.Table` 小写直用（elasticsearch.go:369），无 `{table}` 模板。

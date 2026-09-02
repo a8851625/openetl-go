@@ -66,9 +66,9 @@ IT-3 集中在 `storage`/`backup`/CI 基准），在满足「同一时间只推�
 | BUG-1：`mysql_batch` 字符串主键游标不推进 | `delivered`（2026-09-01 复核：容器 e2e 补全） | IT-1 |
 | BUG-2：MySQL CDC binlog 断裂（ERROR 1236）无自动恢复 | `delivered`（三策略容器级闭合） | IT-1 |
 | BUG-6：`snapshot_cdc` CDC 阶段不填 `ColumnTypes` | `delivered`（声明类型 e2e 闭合） | IT-1 |
-| GAP-1：`postgres_cdc` Metadata 契约 | 已实现，待 PG 实例 e2e | IT-1 |
-| GAP-3：`postgres` sink `pk_columns_from_metadata` | 已实现，e2e 待补 | IT-1 |
-| GAP-4：`elasticsearch` mapping-conflict 策略 | 有界后续 | IT-1 |
+| GAP-1：`postgres_cdc` Metadata 契约 | `delivered`（PG 实例 e2e 闭合） | IT-1 |
+| GAP-3：`postgres` sink `pk_columns_from_metadata` | `delivered`（扇出 e2e + auto-create PK 修复） | IT-1 |
+| GAP-4：`elasticsearch` mapping-conflict 策略 | `delivered`（mapping-conflict e2e + 校验语义对齐） | IT-1 |
 | P4：Doris/Kafka 事实核验 follow-up | bounded follow-up | IT-1 |
 | RA-4：release 流水线无测试门禁 | `blocked_external`（push 授权待用户；3 条 run URL 待构造） | IT-1 |
 | RA-7：e2e 证据自动化 | `active`（T1.3 done；T1.4/T1.5 验收 1-3 本地闭合，CI run 待 push） | IT-1 |

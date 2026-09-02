@@ -2552,21 +2552,78 @@ func TestRunPreflightReturnsElasticsearchMappingFieldIssues(t *testing.T) {
 	}
 	pipeline.ApplyDefaults(&spec)
 
+	// GAP-4 contract: string source -> numeric ES mapping is coercible (the
+	// bulk API parses numeric-looking strings; value conflicts surface as
+	// item-level DLQ mapper_parsing_exception, proven by
+	// hack/e2e-elasticsearch.sh). Preflight therefore passes instead of
+	// hard-failing the pipeline.
 	result := s.RunPreflight(context.Background(), &spec)
-	if result.Passed {
-		t.Fatalf("RunPreflight passed = true, want ES mapping error")
-	}
-	if !preflightIssuesContain(result, "schema-compatibility") {
-		t.Fatalf("issues = %#v, want schema-compatibility", result.Issues)
+	if !result.Passed {
+		t.Fatalf("RunPreflight passed = false, want pass (string->long is coercible); issues=%#v", result.Issues)
 	}
 	if !preflightGuidanceContain(result, "schema-fallback-inferred") {
 		t.Fatalf("guidance = %#v, want schema-fallback-inferred", result.Guidance)
 	}
+}
+
+func TestRunPreflightRejectsElasticsearchNonCoercibleMapping(t *testing.T) {
+	s, ts := newTestHTTPServer(t)
+	defer ts.Close()
+
+	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_cluster/health":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"green"}`))
+		case "/orders/_mapping":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"orders":{"mappings":{"properties":{"id":{"type":"long"},"phone":{"type":"long"},"name":{"type":"keyword"}}}}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer es.Close()
+
+	spec := pipeline.Spec{
+		Name: "es-mapping-preflight-bool",
+		Source: pipeline.SourceSpec{
+			Type: "kafka",
+			Config: map[string]any{
+				"brokers":  []any{"127.0.0.1:9092"},
+				"topic":    "orders",
+				"group_id": "test",
+				"sample": map[string]any{
+					"data": map[string]any{
+						"id":    1,
+						"phone": true,
+						"name":  "Alice",
+					},
+				},
+			},
+		},
+		Sink: pipeline.SinkSpec{
+			Type: "elasticsearch",
+			Config: map[string]any{
+				"host":  es.URL,
+				"index": "orders",
+			},
+		},
+	}
+	pipeline.ApplyDefaults(&spec)
+
+	result := s.RunPreflight(context.Background(), &spec)
+	if result.Passed {
+		t.Fatalf("RunPreflight passed = true, want ES mapping error for boolean->long")
+	}
+	if !preflightIssuesContain(result, "schema-compatibility") {
+		t.Fatalf("issues = %#v, want schema-compatibility", result.Issues)
+	}
 	if len(result.FieldIssues) != 1 {
 		t.Fatalf("field issues = %#v, want one phone type issue", result.FieldIssues)
 	}
-	if got := result.FieldIssues[0]; got.Field != "phone" || got.SourceType != "string" || got.TargetType != "long" {
-		t.Fatalf("field issue = %#v, want phone string->long", got)
+	if got := result.FieldIssues[0]; got.Field != "phone" || got.SourceType != "bool" || got.TargetType != "long" {
+		t.Fatalf("field issue = %#v, want phone bool->long", got)
 	}
 }
 
