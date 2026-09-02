@@ -166,15 +166,29 @@ func TestElasticsearchValidateSchemaUsesConfiguredMapping(t *testing.T) {
 		t.Fatalf("NewElasticsearchSink: %v", err)
 	}
 
+	// GAP-4 contract: string sources may target numeric mappings (the bulk API
+	// parses numeric-looking strings; value failures surface as item-level DLQ
+	// mapper_parsing_exception instead of blocking the pipeline). phone
+	// VARCHAR(32) -> long must therefore be accepted.
 	err = s.ValidateSchema(context.Background(), core.SchemaInfo{Columns: []core.ColumnInfo{
 		{Name: "id", DataType: "BIGINT"},
 		{Name: "phone", DataType: "VARCHAR(32)"},
 		{Name: "name", DataType: "TEXT"},
 	}})
-	if err == nil {
-		t.Fatal("ValidateSchema() = nil, want phone type mismatch")
+	if err != nil {
+		t.Fatalf("ValidateSchema() = %v, want nil (varchar->long is coercible)", err)
 	}
-	if !strings.Contains(err.Error(), "phone source=VARCHAR(32) target=long") {
+
+	// Non-coercible categories stay blocked: a boolean source cannot feed a
+	// numeric mapping via any value parsing.
+	err = s.ValidateSchema(context.Background(), core.SchemaInfo{Columns: []core.ColumnInfo{
+		{Name: "id", DataType: "BIGINT"},
+		{Name: "phone", DataType: "BOOLEAN"},
+	}})
+	if err == nil {
+		t.Fatal("ValidateSchema() = nil, want boolean->long mismatch")
+	}
+	if !strings.Contains(err.Error(), "phone source=BOOLEAN target=long") {
 		t.Fatalf("ValidateSchema() error = %v, want phone mismatch", err)
 	}
 }
@@ -229,6 +243,35 @@ func TestSummarizeBulkErrorsIncludesItemIndex(t *testing.T) {
 	for _, want := range []string{"item=1", "id=bad", "status=400", "mapper_parsing_exception"} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary = %q, want %q", summary, want)
+		}
+	}
+}
+
+func TestEsTypeCompatibleStringSourceCoercible(t *testing.T) {
+	// GAP-4 e2e contract: a string source column may target a numeric or date
+	// ES mapping. ES bulk parses numeric/date strings; a value that cannot be
+	// parsed fails on that single bulk item and lands in item-level DLQ
+	// (mapper_parsing_exception), instead of blocking the whole pipeline
+	// upfront. Keyword/text targets stay compatible; non-coercible categories
+	// (e.g. boolean source to long) stay incompatible.
+	cases := []struct {
+		src, tgt string
+		want     bool
+	}{
+		{"varchar", "long", true},
+		{"varchar", "keyword", true},
+		{"varchar", "double", true},
+		{"varchar", "date", true},
+		{"text", "integer", true},
+		{"boolean", "long", false},
+		{"bigint", "keyword", false},
+		{"datetime", "keyword", true},
+		{"int", "long", true},
+		{"decimal(12,2)", "scaled_float", true},
+	}
+	for _, c := range cases {
+		if got := esTypeCompatible(c.src, c.tgt); got != c.want {
+			t.Errorf("esTypeCompatible(%q, %q) = %v, want %v", c.src, c.tgt, got, c.want)
 		}
 	}
 }

@@ -346,7 +346,15 @@ func esTypeCompatible(sourceType, targetType string) bool {
 	case strings.Contains(src, "date") || strings.Contains(src, "time"):
 		return tgt == "date" || tgt == "date_nanos" || tgt == "keyword" || tgt == "text"
 	case strings.Contains(src, "char") || strings.Contains(src, "text") || strings.Contains(src, "string") || strings.Contains(src, "json"):
-		return tgt == "keyword" || tgt == "text" || tgt == "wildcard" || tgt == "constant_keyword" || tgt == "match_only_text" || tgt == "semantic_text"
+		// String sources may target numeric/date ES mappings too: the bulk API
+		// parses numeric-looking strings into longs/doubles, and a value that
+		// fails to parse surfaces as a mapper_parsing_exception on that single
+		// bulk item -> item-level DLQ (GAP-4 contract), not a whole-pipeline
+		// block. Upfront validation still rejects non-coercible categories.
+		return tgt == "keyword" || tgt == "text" || tgt == "wildcard" || tgt == "constant_keyword" || tgt == "match_only_text" || tgt == "semantic_text" ||
+			tgt == "byte" || tgt == "short" || tgt == "integer" || tgt == "long" || tgt == "unsigned_long" ||
+			tgt == "float" || tgt == "half_float" || tgt == "double" || tgt == "scaled_float" ||
+			tgt == "date" || tgt == "date_nanos"
 	default:
 		return true
 	}

@@ -24,6 +24,10 @@ RUN apk add --no-cache bash curl git ca-certificates tzdata
 
 # Copy go mod files
 COPY go.mod go.sum ./
+# GOPROXY is overridable for builds behind regional proxies, e.g.
+#   podman build --build-arg GOPROXY=https://goproxy.cn,direct -t openetl-go-etl:dev .
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 RUN go mod download
 
 # Copy source code

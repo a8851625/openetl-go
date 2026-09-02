@@ -294,6 +294,23 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 	}
 
 	// Auto-create missing tables and handle schema drift.
+	// Snapshot per-table PKs for this batch BEFORE schema ensure/auto-create:
+	// auto-created tables must carry the derived PRIMARY KEY constraint, or
+	// later upserts with ON CONFLICT(per-table pk) fail with SQLSTATE 42P10.
+	if s.pkColumnsFromMetadata {
+		s.pkByTable = make(map[string][]string)
+		for _, rec := range records {
+			if rec.Metadata.Table == "" {
+				continue
+			}
+			if _, ok := s.pkByTable[rec.Metadata.Table]; ok {
+				continue
+			}
+			if pk := derivePKFromMetadataShared(rec.Metadata.Table, records); len(pk) > 0 {
+				s.pkByTable[rec.Metadata.Table] = pk
+			}
+		}
+	}
 	if err := s.ensureSchemaForBatch(ctx, records); err != nil {
 		return err
 	}
@@ -342,22 +359,9 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 		}
 		return []string{"id"}
 	})
-	// Snapshot per-table PKs for the grouped writes below (upsert conflict
-	// targets must match the per-table key when pk_columns_from_metadata is on).
-	if s.pkColumnsFromMetadata {
-		s.pkByTable = make(map[string][]string)
-		for _, rec := range records {
-			if rec.Metadata.Table == "" {
-				continue
-			}
-			if _, ok := s.pkByTable[rec.Metadata.Table]; ok {
-				continue
-			}
-			if pk := derivePKFromMetadataShared(rec.Metadata.Table, records); len(pk) > 0 {
-				s.pkByTable[rec.Metadata.Table] = pk
-			}
-		}
-	}
+	// Per-table PK snapshot for the grouped writes below (upsert conflict
+	// targets must match the per-table key when pk_columns_from_metadata is
+	// on); derived at the top of Write before schema ensure.
 
 	// Group records by sorted-column signature to enable multi-row VALUES.
 	type groupKey struct {
@@ -859,24 +863,62 @@ func (s *PostgresSink) pgCreateTable(ctx context.Context, table string, columns 
 	if len(columns) == 0 {
 		return nil
 	}
-	sort.Strings(columns)
 
-	pkCol := ""
-	for _, c := range columns {
-		if c == "id" || c == "ID" {
-			pkCol = c
-			break
+	// Prefer the per-table PK derived from Metadata.Key (GAP-3): the upsert
+	// path targets ON CONFLICT(pk) and the auto-created table must carry the
+	// matching unique constraint. Fall back to static pk_columns, then to the
+	// legacy "id is BIGSERIAL PK" heuristic.
+	pkCols := s.pkColumns
+	if s.pkColumnsFromMetadata && s.pkByTable != nil {
+		if pks, ok := s.pkByTable[table]; ok && len(pks) > 0 {
+			pkCols = pks
+		}
+	}
+
+	ddl := buildPgCreateTableDDL(s.schema, table, columns, fieldValues, pkCols, s.resolveColumnDDL)
+	_, err := s.pool.Exec(ctx, ddl)
+	return err
+}
+
+// buildPgCreateTableDDL renders the CREATE TABLE statement. When pkCols are
+// known and present in columns, a real PRIMARY KEY constraint is emitted and
+// the legacy BIGSERIAL "id" heuristic is skipped; otherwise the heuristic
+// applies unchanged.
+func buildPgCreateTableDDL(schema, table string, columns []string, fieldValues map[string]any, pkCols []string, resolveDDL func(column string, sample any, recordDeclared map[string]string) string) string {
+	sorted := make([]string, len(columns))
+	copy(sorted, columns)
+	sort.Strings(sorted)
+
+	pkSet := make(map[string]bool, len(pkCols))
+	for _, c := range pkCols {
+		pkSet[c] = true
+	}
+	// Only claim PK columns that actually exist in this table's columns.
+	validPK := make([]string, 0, len(pkCols))
+	for _, c := range sorted {
+		if pkSet[c] {
+			validPK = append(validPK, c)
+		}
+	}
+
+	legacyIDPK := ""
+	if len(validPK) == 0 {
+		for _, c := range sorted {
+			if c == "id" || c == "ID" {
+				legacyIDPK = c
+				break
+			}
 		}
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.%s (`, pgQuote(s.schema), pgQuote(table)))
-	for i, c := range columns {
+	b.WriteString(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.%s (`, pgQuote(schema), pgQuote(table)))
+	for i, c := range sorted {
 		if i > 0 {
 			b.WriteString(", ")
 		}
 		b.WriteString(pgQuote(c))
-		if c == pkCol {
+		if c == legacyIDPK {
 			b.WriteString(" BIGSERIAL PRIMARY KEY")
 		} else {
 			var recordDeclared map[string]string
@@ -885,15 +927,20 @@ func (s *PostgresSink) pgCreateTable(ctx context.Context, table string, columns 
 					recordDeclared = m
 				}
 			}
-			colType := s.resolveColumnDDL(c, fieldValues[c], recordDeclared)
+			colType := resolveDDL(c, fieldValues[c], recordDeclared)
 			b.WriteString(" ")
 			b.WriteString(colType)
 		}
 	}
+	if len(validPK) > 0 {
+		quoted := make([]string, len(validPK))
+		for i, c := range validPK {
+			quoted[i] = pgQuote(c)
+		}
+		b.WriteString(fmt.Sprintf(", PRIMARY KEY (%s)", strings.Join(quoted, ", ")))
+	}
 	b.WriteString(")")
-
-	_, err := s.pool.Exec(ctx, b.String())
-	return err
+	return b.String()
 }
 
 func (s *PostgresSink) pgAddColumn(ctx context.Context, table, column string, fieldValues map[string]any) error {
