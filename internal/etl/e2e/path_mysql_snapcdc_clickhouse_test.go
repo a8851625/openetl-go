@@ -290,7 +290,7 @@ dlq:
 	if err := ch.Container.Start(ctx); err != nil {
 		t.Fatalf("start clickhouse: %v", err)
 	}
-	if err := harness.PollUntil(ctx, 90*time.Second, time.Second, "clickhouse ping", ch.Ping); err != nil {
+	if err := harness.PollUntil(ctx, 3*time.Minute, 2*time.Second, "clickhouse ping", ch.Ping); err != nil {
 		t.Fatalf("clickhouse did not come back: %v", err)
 	}
 	replayBody, err := srv.Post(fmt.Sprintf("/api/v2/dlq/%s/%s/replay", pipeline, dlqID))

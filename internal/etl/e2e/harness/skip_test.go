@@ -31,6 +31,13 @@ func TestRecordSkipAppendsEvidence(t *testing.T) {
 }
 
 func TestSkipMarksTestSkippedAndRecords(t *testing.T) {
+	if *strictMode {
+		// Under -e2e.strict Skip() fails the calling test instead of skipping
+		// it, so the child-subtest semantics asserted below do not hold. The
+		// strict decision itself is covered by TestSkipFatalDecisionFollowsStrictFlag.
+		t.Log("strict mode: skip semantics inverted; nothing to assert here")
+		return
+	}
 	before := len(RecordedSkips())
 	t.Run("child", func(t *testing.T) {
 		Skip(t, "intentional %s", "skip")
