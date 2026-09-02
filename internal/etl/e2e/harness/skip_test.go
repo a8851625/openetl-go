@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"flag"
 	"testing"
 )
 
@@ -52,7 +53,11 @@ func TestSkipFatalDecisionFollowsStrictFlag(t *testing.T) {
 	if skipFatal(true) != true || skipFatal(false) != false {
 		t.Fatalf("skipFatal decision is wrong")
 	}
-	if *strictMode {
-		t.Errorf("-e2e.strict must default to false (local runs allow skips)")
+	// Assert the DECLARED default, not the runtime value: the CI gate runs the
+	// whole tagged binary with -e2e.strict, so *strictMode is legitimately true
+	// there. flag.Lookup("e2e.strict").DefValue is invocation-independent.
+	f := flag.Lookup("e2e.strict")
+	if f == nil || f.DefValue != "false" {
+		t.Fatalf("-e2e.strict must be declared defaulting to false (local runs allow skips); got %+v", f)
 	}
 }
