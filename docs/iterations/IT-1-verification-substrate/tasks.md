@@ -12,7 +12,7 @@
 | 2/5 | T1.3、T1.4 | e2e 框架可用，两条主推荐路径在 CI 内实跑 | 是 |
 | 3/5 | T1.5 | 证据由测试产出并与 commit 绑定，`LastCertified` 自动填充 | 是 |
 | 4/5 | T1.6、T1.7、T1.8 | BUG backlog 清零 | 是 |
-| 5/5 | T1.9、T1.10、T1.11、T1.12 | GAP e2e 欠账闭合 + 迭代收口 | 是 |
+| 5/5 | T1.9、T1.10、T1.11、T1.12 | GAP e2e 欠账闭合 + 迭代收口 | 是（T1.1/2/4/5 阻塞待 push） |
 
 ## 任务表
 
@@ -28,7 +28,7 @@
 | T1.8 | BUG-6 `ColumnTypes` e2e 闭合 | T1.3 | `done` | ROADMAP BUG-6 验收矩阵 |
 | T1.9 | GAP-1 / GAP-3 PostgreSQL 实例 e2e | T1.3 | `done` | ROADMAP GAP-1/GAP-3 条目 |
 | T1.10 | GAP-4 ES mapping-conflict e2e | T1.3 | `done` | ROADMAP GAP-4 条目 |
-| T1.11 | P4 Doris/Kafka 事实核验 | T1.3 | `todo` | P4 follow-up 记录 |
+| T1.11 | P4 Doris/Kafka 事实核验 | T1.3 | `done` | P4 follow-up 记录（Kafka PASS；Doris 镜像拉取 3 次 EOF 记 blocked） |
 | T1.12 | CI 时长调优 + 迭代收口 | T1.1..T1.11 | `todo` | 时长记录、`README.md` 看板、迭代 DoD |
 
 ## 任务明细
@@ -449,3 +449,43 @@ Residual/follow-up: T1.8 BUG-6 ColumnTypes e2e 下一轮
   `topic:`（`topics:` 数组配置无效 → invalid topic）；② ReplacingMergeTree 下
   count 断言必须 `FINAL`（raw count 含未折叠副本导致 4≠3）。
 - ROADMAP BUG-6 置 `delivered`，README 看板同步。
+
+**T1.9/T1.10/T1.11 实施证据（2026-09-01/02，Round 5/5）**：
+
+- T1.9 ✅ GAP-1：`e2e-postgres-cdc.sh` 实跑（重建镜像=当前 HEAD 代码）PASS——真实
+  pgoutput 流 INSERT/UPDATE/DELETE → MySQL sink，含 checkpoint stop/restart 停止期
+  事件补收。GAP-3：新脚本 `e2e-kafka-postgres-fanout.sh` PASS——单 topic 两表
+  envelope 扇出 → PG `pk_columns_from_metadata`（INSERT/upsert 11.00→15.00/DELETE、
+  `pg_index` 断言派生 PK 约束）。**e2e 暴露并修复真实缺陷**（commit 1966a03）：
+  auto-create 建表缺派生 PK 约束 → 后续 `ON CONFLICT(pk)` SQLSTATE 42P10 进 DLQ；
+  修复为 pkByTable 快照提前 + `buildPgCreateTableDDL` 输出真 PRIMARY KEY。
+- T1.10 ✅ GAP-4：`e2e-elasticsearch.sh` PASS——bulk 2 成功 + `mapper_parsing_exception`
+  单条 item-level DLQ + 修 mapping 后 replay `replayed:1`。**语义修正**（同 commit）：
+  `esTypeCompatible` 放行 string→数值/日期（bulk 自解析、值冲突落单条 DLQ，与 GAP-4
+  契约一致），bool→数值仍拒绝；preflight 测试拆分两契约各自断言。
+- T1.11 部分：**Kafka 事实核验 ✅** `e2e-kafka.sh` PASS（rebalance 恢复 + offset
+  replay 去重吸收）。**Doris `blocked`**：`apache/doris:be-2.1.11` 镜像拉取两次
+  于大 blob 处 `unexpected EOF`/TLS 握手超时（registry 不稳；FE 镜像拉取成功，
+  BE 始终失败），本机 5CPU/16GB 可运行但镜像不可得；`hack/e2e-doris.sh` 保留为
+  手动路径，不记 pass（P4 规则：镜像不可得记 blocked，绝不虚报）。
+
+### 迭代收口状态（2026-09-02，T1.12）
+
+**本地可完成工作已全部完成**。剩余任务全部阻塞于同一外部输入：**push `main` 触发 CI**：
+
+- T1.1/T1.2：`_gate.yml` reusable workflow 与 release 门禁接线**代码已就绪**（此前轮次
+  已提交），验收要求的三类 run URL（skip-fail、fail tag、normal tag）只能由真实
+  push 产生 → `blocked`（待用户授权 push）；
+- T1.4/T1.5：两条主路径迁移、`connector-e2e` job、结构化证据与校验器**全部完成且
+  本地绿**（证据绑定 3d6c8ad，checker 全绿，篡改拒绝已本地实证），验收要求的
+  `connector-e2e` run URL 与篡改失败 run URL 同样待 push → `blocked`（同因）；
+- **manifest 重绑决策（需用户裁决）**：`check-connector-evidence -strict -commit HEAD`
+  失败——manifest `CertifiedCommit=d75600be` 早于本迭代全部 workflow 改动
+  （932370f/3c615b6 等），main push/release 上 strict 模式必失败。重绑需要一次完整
+  certification run（或用户决定放宽 strict 绑定策略）。不在本迭代擅自重绑。
+- 卫生清理（T1.12）：根目录 `data-*`×20、`logs/`、`.tmp-go-cache/`(839M)、
+  `openetl-go`(86M) 测试残留已清除；`.pi/`、`.pi-subagents/`、`pipes-clickhouse-prod/`
+  按 AGENTS 规则未触碰。
+
+**全量回归（2026-09-02）**：`go vet` OK；`go test ./... -count=1` 无 FAIL；
+`-race`（server/sink/source/checker）全 ok。
