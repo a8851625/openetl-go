@@ -290,8 +290,25 @@ dlq:
 	if err := ch.Container.Start(ctx); err != nil {
 		t.Fatalf("start clickhouse: %v", err)
 	}
-	if err := harness.PollUntil(ctx, 3*time.Minute, 2*time.Second, "clickhouse ping", ch.Ping); err != nil {
-		t.Fatalf("clickhouse did not come back: %v", err)
+	if err := harness.PollUntil(ctx, 90*time.Second, 2*time.Second, "clickhouse ping", ch.Ping); err != nil {
+		// The first boot after restart can fail on some container runtimes
+		// (e.g. an abrupt stop landing during first-time initialization).
+		// Dump the server logs for diagnosis and give the container one clean
+		// restart cycle before failing the case.
+		if logs, lerr := ch.Container.Logs(ctx); lerr == nil {
+			t.Logf("clickhouse logs after failed restart: %s", logs)
+		}
+		grace := 5 * time.Second
+		_ = ch.Container.Stop(ctx, &grace)
+		if err := ch.Container.Start(ctx); err != nil {
+			t.Fatalf("start clickhouse (retry): %v", err)
+		}
+		if err := harness.PollUntil(ctx, 2*time.Minute, 2*time.Second, "clickhouse ping (retry)", ch.Ping); err != nil {
+			if logs, lerr := ch.Container.Logs(ctx); lerr == nil {
+				t.Logf("clickhouse logs after failed retry: %s", logs)
+			}
+			t.Fatalf("clickhouse did not come back: %v", err)
+		}
 	}
 	replayBody, err := srv.Post(fmt.Sprintf("/api/v2/dlq/%s/%s/replay", pipeline, dlqID))
 	if err != nil {
