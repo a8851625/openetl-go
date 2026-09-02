@@ -184,6 +184,7 @@ jobs:
           CLICKHOUSE_PORT: 9000
           CLICKHOUSE_USER: default
           CLICKHOUSE_PASSWORD: dzh123456
+          GOPROXY: "direct"
         run: go test -race -count=1 -tags=integration ./internal/etl/...
 
   # IT-1/T1.4 (RA-7): the migrated primary connector paths run as Go tests
@@ -194,6 +195,10 @@ jobs:
     timeout-minutes: 45
     env:
       TESTCONTAINERS_RYUK_DISABLED: "true"
+      # proxy.golang.org intermittently dies mid-stream on large module zips
+      # (pingcap/tidb parser etc.), failing the whole build; on GitHub
+      # runners `direct` (github.com) is the reliable path.
+      GOPROXY: "direct"
     steps:
       - uses: actions/checkout@v4
         with:
