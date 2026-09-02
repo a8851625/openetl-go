@@ -33,6 +33,7 @@ func dumpCHLogs(t *testing.T, ch *harness.ClickHouseInstance, label string) {
 		return
 	}
 	t.Logf("clickhouse logs (%s): %s", label, body)
+	t.Logf("clickhouse server err.log (%s): %s", label, ch.TailErrLog())
 }
 
 // mustQuery runs a ClickHouse query whose failure is fatal.

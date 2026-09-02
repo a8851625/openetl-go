@@ -22,7 +22,7 @@ import (
 // the shell scripts certified.
 const (
 	MySQLImage      = "docker.io/library/mysql:8.0"
-	ClickHouseImage = "docker.io/clickhouse/clickhouse-server:24.3-alpine"
+	ClickHouseImage = "docker.io/clickhouse/clickhouse-server:24.3" // non-alpine: alpine entrypoint hangs after stop/start on CI runners
 
 	MySQLRootPassword = "root123456"
 	MySQLSyncUser     = "sync_user"
@@ -302,6 +302,20 @@ func hostForHTTP(host string) string {
 		return "127.0.0.1"
 	}
 	return host
+}
+
+// TailErrLog returns the tail of the server error log (the container
+// stdout only shows entrypoint messages; the real server error goes to
+// /var/log/clickhouse-server/clickhouse-server.err.log).
+func (c *ClickHouseInstance) TailErrLog() string {
+	out, _, err := execResult(c.ctx, c.Container, []string{"sh", "-c", "tail -80 /var/log/clickhouse-server/clickhouse-server.err.log 2>/dev/null || true"})
+	if err != nil {
+		return "<errlog unavailable: " + err.Error() + ">"
+	}
+	if strings.TrimSpace(out.stdout) == "" && strings.TrimSpace(out.stderr) == "" {
+		return "<errlog empty>"
+	}
+	return strings.TrimSpace(out.stdout + "\n" + out.stderr)
 }
 
 // Exec runs one clickhouse-client query inside the container.
