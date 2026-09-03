@@ -22,7 +22,7 @@
 
 | 迭代 | 主题 | 归属 roadmap 条目 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
-| [IT-1](./IT-1-verification-substrate/) | 验证基座与存量收口 | RA-4、RA-7、BUG-1/2/6、GAP-1/3/4、P4 follow-up | push main 触发 CI（T1.1/2/4/5 run URL）+ manifest 重绑决策 | `active`（本地范围完成；剩余 4 任务同因阻塞） |
+| [IT-1](./IT-1-verification-substrate/) | 验证基座与存量收口 | RA-4、RA-7、BUG-1/2/6、GAP-1/3/4、P4 follow-up | 无 | `complete` |
 | [IT-2](./IT-2-correctness/) | 正确性（控制面真值 + 数据面身份与顺序） | RA-1、RA-2、RA-3、GAP-7.1/.2/.3 | IT-1 | `queued` |
 | [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `queued` |
 | [IT-4](./IT-4-ga-closeout/) | GA 收口评估 | 证据刷新、maturity 对齐、移除 beta 判定 | IT-1 + IT-2 + IT-3 | `queued` |
@@ -71,7 +71,7 @@ IT-3 集中在 `storage`/`backup`/CI 基准），在满足「同一时间只推�
 | GAP-4：`elasticsearch` mapping-conflict 策略 | `delivered`（mapping-conflict e2e + 校验语义对齐） | IT-1 |
 | P4：Doris/Kafka 事实核验 follow-up | bounded follow-up | IT-1 |
 | RA-4：release 流水线无测试门禁 | `blocked_external`（push 授权待用户；3 条 run URL 待构造） | IT-1 |
-| RA-7：e2e 证据自动化 | `active`（BUG-1/2/6、GAP-1/3/4 e2e 欠账全部闭合；T1.3-T1.5/T1.8-T1.11 done；仅剩 CI run URL 待 push） | IT-1 |
+| RA-7：e2e 证据自动化 | `delivered`（结构化证据+commit 绑定+CI 全绿：run 33767847369；篡改拒绝 33769319891/33769344338） | IT-1 |
 | RA-2：`RestoreFromDB` 静默跳过 | `queued` | IT-2 |
 | RA-3：`StartAll` 无视 desired state | `queued` | IT-2 |
 | RA-1：ClickHouse `_version` 非源事件序 | `queued` | IT-2 |

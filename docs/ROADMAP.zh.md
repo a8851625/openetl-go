@@ -1746,7 +1746,7 @@ artifact 复制、Redis state 纳入等其余 PR-1.3 残留（单独排队）。
 
 ### RA-7：e2e 证据自动化 —— 从人工 shell 迁移到 CI 内可复现集成测试
 
-状态：`active`
+状态：`delivered`
 
 > 领取记录（2026-08-29，IT-1 Round 2/5 = T1.3 + T1.4，承接 RA-4 的
 > `blocked_external` 释放出的 active 名额）：目标 = `internal/etl/e2e/harness`
@@ -1763,6 +1763,16 @@ artifact 复制、Redis state 纳入等其余 PR-1.3 残留（单独排队）。
 > 实跑全绿（全量套件 59.0s，2/2 PASS，断言比对表见 IT-1 tasks.md，无放宽）。
 > T1.4 验收 4（`connector-e2e` 在 CI 内实跑 run URL）pending push，任务置
 > `blocked`；RA-7 保持 `active` 至 run URL 补齐并完成 T1.5。
+>
+> 收口记录（2026-09-03）：push 授权后 CI 全绿——首批全绿 main run
+> https://github.com/a8851625/openetl-go/actions/runs/33767847369（9/9 job ✓，
+> connector-e2e 两路径 + strict manifest 同在）；篡改证据被 strict 拒绝
+> 33769319891/33769344338；skip-fail 聚合拒绝 33770996843；正常 tag 门禁全绿并
+> 发布 beta 容器 v0.2.12-beta.18（33770010045）。CI 修复 4 项（环境相关断言、
+> strict 下 skip 语义、GOPROXY=direct 抗代理断流、CH outage 改容器 pause 免进程
+> 重启——GH runner 上 CH 重启必崩于 cgroup 内存观察器）。T1.1-T1.5/T1.6-T1.12
+> 全部闭合，IT-1 `complete`。Doris 镜像（be-2.1.11）拉取 3 次 EOF 记 blocked，
+> 留 `hack/e2e-doris.sh` 手动路径。（明细与 run URL 见 IT-1 tasks.md。）
 >
 > Round 3/5 实施记录（2026-08-31）：T1.5 验收 1/2/3 本地闭合 —— 两条主路径
 > 实跑产出 `docs/evidence/<path_id>.json`（`result:passed`，commit 绑定运行时

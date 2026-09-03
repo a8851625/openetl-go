@@ -12,24 +12,24 @@
 | 2/5 | T1.3、T1.4 | e2e 框架可用，两条主推荐路径在 CI 内实跑 | 是 |
 | 3/5 | T1.5 | 证据由测试产出并与 commit 绑定，`LastCertified` 自动填充 | 是 |
 | 4/5 | T1.6、T1.7、T1.8 | BUG backlog 清零 | 是 |
-| 5/5 | T1.9、T1.10、T1.11、T1.12 | GAP e2e 欠账闭合 + 迭代收口 | 是（T1.1/2/4/5 阻塞待 push） |
+| 5/5 | T1.9、T1.10、T1.11、T1.12 | GAP e2e 欠账闭合 + 迭代收口 | 是 |
 
 ## 任务表
 
 | ID | 任务 | 依赖 | 状态 | 证据落点 |
 | --- | --- | --- | --- | --- |
-| T1.1 | 抽出 `_gate.yml` reusable workflow + `gate-passed` 聚合断言 | — | `blocked` | workflow 文件、故意失败的 run URL |
-| T1.2 | release / release-beta-container 接入门禁 | T1.1 | `blocked` | 失败 tag 与正常 tag 两次 run URL |
+| T1.1 | 抽出 `_gate.yml` reusable workflow + `gate-passed` 聚合断言 | — | `done` | workflow 文件、skip-fail run URL 33770996843 |
+| T1.2 | release / release-beta-container 接入门禁 | T1.1 | `done` | fail tag 33769319891 + 正常 tag 33770010045 |
 | T1.3 | e2e harness 骨架（容器、子进程、命名空间、skip 语义） | — | `done` | `internal/etl/e2e/harness/` + harness 单测 |
-| T1.4 | 迁移两条主推荐路径并接入 CI | T1.3 | `blocked` | `connector-e2e` job run URL |
-| T1.5 | 结构化证据产出 + commit 绑定校验 + `LastCertified` | T1.4 | `blocked` | `docs/evidence/*.json`、篡改证据的失败 run |
+| T1.4 | 迁移两条主推荐路径并接入 CI | T1.3 | `done` | connector-e2e run 33767847369（首批全绿 main） |
+| T1.5 | 结构化证据产出 + commit 绑定校验 + `LastCertified` | T1.4 | `done` | `docs/evidence/*.json`；篡改 run 33769319891/33769344338 |
 | T1.6 | BUG-1 状态与证据一致性核对与订正 | T1.3 | `done` | ROADMAP BUG-1 验收矩阵 |
 | T1.7 | BUG-2 三策略容器级闭合 | T1.3 | `done` | ROADMAP BUG-2 验收矩阵 |
 | T1.8 | BUG-6 `ColumnTypes` e2e 闭合 | T1.3 | `done` | ROADMAP BUG-6 验收矩阵 |
 | T1.9 | GAP-1 / GAP-3 PostgreSQL 实例 e2e | T1.3 | `done` | ROADMAP GAP-1/GAP-3 条目 |
 | T1.10 | GAP-4 ES mapping-conflict e2e | T1.3 | `done` | ROADMAP GAP-4 条目 |
 | T1.11 | P4 Doris/Kafka 事实核验 | T1.3 | `done` | P4 follow-up 记录（Kafka PASS；Doris 镜像拉取 3 次 EOF 记 blocked） |
-| T1.12 | CI 时长调优 + 迭代收口 | T1.1..T1.11 | `todo` | 时长记录、`README.md` 看板、迭代 DoD |
+| T1.12 | CI 时长调优 + 迭代收口 | T1.1..T1.11 | `done` | 时长记录、`README.md` 看板、迭代 DoD（见收口记录） |
 
 ## 任务明细
 
@@ -489,3 +489,26 @@ Residual/follow-up: T1.8 BUG-6 ColumnTypes e2e 下一轮
 
 **全量回归（2026-09-02）**：`go vet` OK；`go test ./... -count=1` 无 FAIL；
 `-race`（server/sink/source/checker）全 ok。
+
+### CI 验收 run URL 证据（2026-09-03，T1.1/2/4/5 闭合）
+
+push 授权后全部在远端实跑，工作流：`test.yml`(main push/PR)、`release.yml`(tag)、
+`release-beta-container.yml`(tag)。
+
+| 验收项 | run URL | 结论 |
+| --- | --- | --- |
+| T1.1 skip-fail：required job 被跳过 → 聚合拒绝 | https://github.com/a8851625/openetl-go/actions/runs/33770996843 | FAIL：`Assert every gate job succeeded (skip/cancel is failure)`；证明分支 `if:false` 未合入，已关 PR |
+| T1.2 fail tag：坏 tag 被门禁拦截 | https://github.com/a8851625/openetl-go/actions/runs/33769319891 | FAIL：`check "happy_path" result tampered ... evidence not certified`，Release 被阻断；演示 tag `v0.0.0-gate-proof-fail` 已删 |
+| T1.2 normal tag：门禁全绿且出产物 | https://github.com/a8851625/openetl-go/actions/runs/33770010045 | PASS：gate 9 job 全 ✓ + `Publish beta container` ✓，`v0.2.12-beta.18` 已发布 |
+| T1.4 connector-e2e job（两条路径） | https://github.com/a8851625/openetl-go/actions/runs/33767847369 | PASS：首批全绿 main；`TestPathMySQLCDCMySQLUpsert` / `TestPathMySQLSnapshotCDCToClickHouse` 均过 |
+| T1.5 篡改失败 run（Release 路径） | https://github.com/a8851625/openetl-go/actions/runs/33769319891 | FAIL：证据被篡改（check result 翻转）→ strict 拒绝，同上 run |
+| T1.5 篡改失败 run（PR 路径） | https://github.com/a8851625/openetl-go/actions/runs/33769344338 | FAIL：同一篡改在 PR 上被拒，PR #11 已关 |
+
+**CI 修复历程（本轮 push 授权后）**：
+1. harness runner 断言环境相关（GITHUB_ACTIONS 下 RunnerName=github-actions 被误判）→ 改声明级断言；
+2. strict 模式下 Skip 语义反转导致 meta-test 误伤 → strict 分支直接返回；
+3. proxy.golang.org 大 zip 中途断流（3 job 同因）→ gate job 改 `GOPROXY=direct`；
+4. CH 容器 stop/start 重启在 GH runner 上必崩（err.log 实证 `DB::CgroupsMemoryUsageObserver`
+   cgroup 不可读异常）→ outage 机制改为容器 CLI `pause`/`unpause`（cgroup freezer，
+   进程不重启，写超时 30s 产生分类错误进 DLQ，unpause 后 replay 直达）；
+   同时 CH 镜像 24.3-alpine → 24.3（非 alpine entrypoint 更稳）。
