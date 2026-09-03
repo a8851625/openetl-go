@@ -40,6 +40,9 @@ jobs:
         run: go vet ./...
 
   connector-evidence:
+    # proof: if a required gate job is skipped, the gate must not pass.
+    # This branch demonstrates that; never merged.
+    if: false
     name: Connector Evidence Manifest
     runs-on: ubuntu-latest
     steps:
