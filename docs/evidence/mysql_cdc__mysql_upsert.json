@@ -10,7 +10,8 @@
   "checks": [
     {
       "name": "happy_path",
-      "result": "passed"
+      "result": "tampered",
+      "reason": "proof: tamper injection for gate demonstration (never merged)"
     },
     {
       "name": "crash_restart_recovery",
