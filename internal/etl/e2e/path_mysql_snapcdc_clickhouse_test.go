@@ -5,7 +5,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,27 +15,6 @@ import (
 	"github.com/a8851625/openetl-go/internal/etl/e2e/harness"
 )
 
-// dumpCHLogs drains the ClickHouse container logs into the test output so a
-// restart failure on CI can be diagnosed (Logs returns an io.ReadCloser; a
-// bare %s would print the reader struct).
-func dumpCHLogs(t *testing.T, ch *harness.ClickHouseInstance, label string) {
-	t.Helper()
-	rd, err := ch.Container.Logs(context.Background())
-	if err != nil {
-		t.Logf("clickhouse logs (%s): unavailable: %v", label, err)
-		return
-	}
-	defer rd.Close()
-	body, err := io.ReadAll(rd)
-	if err != nil {
-		t.Logf("clickhouse logs (%s): read: %v", label, err)
-		return
-	}
-	t.Logf("clickhouse logs (%s): %s", label, body)
-	t.Logf("clickhouse server err.log (%s): %s", label, ch.TailErrLog())
-}
-
-// mustQuery runs a ClickHouse query whose failure is fatal.
 func mustQuery(t *testing.T, ch *harness.ClickHouseInstance, sql string) string {
 	t.Helper()
 	v, err := ch.QueryValue(sql)
@@ -292,40 +270,32 @@ dlq:
 	rec.AddCheck("checkpoint_reset_rmt_absorption", "passed", "")
 
 	// Case clickhouse_outage_dlq_replay (script lines 229-262).
-	if err := ch.Container.Stop(ctx, nil); err != nil {
-		t.Fatalf("stop clickhouse: %v", err)
+	//
+	// Outage is simulated by PAUSING the CH container (processes frozen in
+	// place) instead of stop/start: on GitHub runners a CH process restart
+	// crashes in DB::CgroupsMemoryUsageObserver (cgroup memory stats
+	// unreadable in the runner container), so restart-based outages cannot
+	// recover there. Pause keeps the process alive and the 30s sink HTTP
+	// timeout converts the frozen writes into classified DLQ errors.
+	if err := harness.SetContainerPaused(ctx, ch.Container, true); err != nil {
+		t.Fatalf("pause clickhouse: %v", err)
 	}
 	mustExec(t, my.Exec, fmt.Sprintf(
 		"INSERT INTO %s.%s (id, name, status, amount, loyalty) VALUES (9001, 'DLQ CH 9001', 'active', 900.10, 'replay');",
 		srcDB, table))
-	dlqBody := pollDLQ(t, srv, pipeline, "9001", 90*time.Second)
+	// Sink retry budget (2 attempts) x 30s HTTP timeout -> allow 3m.
+	dlqBody := pollDLQ(t, srv, pipeline, "9001", 3*time.Minute)
 	t.Logf("dlq body: %s", dlqBody)
 	// The DLQ record must carry a classified sink error, not silence.
-	errKeywords := []string{"clickhouse", "connection refused", "broken pipe", "reset by peer", "EOF"}
+	errKeywords := []string{"clickhouse", "connection refused", "broken pipe", "reset by peer", "EOF", "Client.Timeout", "deadline exceeded"}
 	if !containsAny(string(dlqBody), errKeywords) {
 		t.Fatalf("dlq entry lacks classified clickhouse error: %s", dlqBody)
 	}
 	dlqID := extractDLQID(t, dlqBody)
 
 	_, _ = srv.Post("/api/v2/pipelines/" + pipeline + "/stop") // script: || true
-	if err := ch.Container.Start(ctx); err != nil {
-		t.Fatalf("start clickhouse: %v", err)
-	}
-	if err := harness.PollUntil(ctx, 90*time.Second, 2*time.Second, "clickhouse ping", ch.Ping); err != nil {
-		// The first boot after restart can fail on some container runtimes
-		// (e.g. an abrupt stop landing during first-time initialization).
-		// Dump the server logs for diagnosis and give the container one clean
-		// restart cycle before failing the case.
-		dumpCHLogs(t, ch, "restart")
-		grace := 5 * time.Second
-		_ = ch.Container.Stop(ctx, &grace)
-		if err := ch.Container.Start(ctx); err != nil {
-			t.Fatalf("start clickhouse (retry): %v", err)
-		}
-		if err := harness.PollUntil(ctx, 2*time.Minute, 2*time.Second, "clickhouse ping (retry)", ch.Ping); err != nil {
-			dumpCHLogs(t, ch, "retry")
-			t.Fatalf("clickhouse did not come back: %v", err)
-		}
+	if err := harness.SetContainerPaused(ctx, ch.Container, false); err != nil {
+		t.Fatalf("unpause clickhouse: %v", err)
 	}
 	replayBody, err := srv.Post(fmt.Sprintf("/api/v2/dlq/%s/%s/replay", pipeline, dlqID))
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -155,6 +157,33 @@ func MySQL(ctx context.Context) (*MySQLInstance, error) {
 type execOutput struct {
 	stdout string
 	stderr string
+}
+
+// SetContainerPaused freezes (pause=true) or resumes (pause=false) a
+// container via the container CLI's cgroup freezer (docker pause / podman
+// pause). This simulates an outage WITHOUT restarting the process: a CH
+// process restart crashes on GitHub runners (DB::CgroupsMemoryUsageObserver
+// cannot read the runner cgroup), so stop/start cannot be used there.
+func SetContainerPaused(ctx context.Context, c testcontainers.Container, paused bool) error {
+	cli := os.Getenv("CONTAINER_CLI")
+	if cli == "" {
+		cli = "docker"
+		if _, err := exec.LookPath(cli); err != nil {
+			cli = "podman"
+		}
+	}
+	if _, err := exec.LookPath(cli); err != nil {
+		return fmt.Errorf("container CLI %q not found (need docker or podman)", cli)
+	}
+	sub := "unpause"
+	if paused {
+		sub = "pause"
+	}
+	out, err := exec.CommandContext(ctx, cli, sub, c.GetContainerID()).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s %s: %w (%s)", cli, sub, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // execResult runs argv inside the container and returns demultiplexed output
