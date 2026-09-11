@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.19] — 2026-09-11 — 完整性与正确性加固（IT-2/IT-3）
+
+交付 IT-2 正确性与 IT-3 完整性/容量两轮迭代：记录身份契约、原子备份/恢复、
+descriptor 驱动的 secret 加密、生命周期 desired-state，以及新镜像上的全量 connector 重认证。
+
+### 新增
+
+- **记录契约与身份（IT-2）**：统一 `Metadata` 信封，在管道全链携带源位点、主键列与列类型；
+  DLQ 记录嵌入 `identity_context`（原始 payload、编码、源/目标库表、重放溯源与状态、记录哈希），
+  重放与审计使用同一事件身份。
+- **ClickHouse `version_mode` 契约（fail-closed）**：可变/重放数据默认 `source_order`，
+  要求 `metadata.source_type` 与 connector 自持的持久位点，推导单调 UInt64 `_version`；
+  `append` 仅限 INSERT-only，建普通 MergeTree。设计上拒绝回落墙钟版本。
+- **Secret 单一真值（RA-5）**：descriptor `Secret: true` 字段在 spec/connection/settings
+  全面静态加密（含 jdbc/dbt/enricher sql/lookup 四条 DSN 路径）；启动时检测遗留明文
+  secret（只读），维护命令幂等重新加密。
+- **原子恢复与流式导出（RA-6 / T3.3/T3.4）**：可移植备份无静默截断；恢复单事务、
+  失败 fail-closed 保留原库；插件 WASM artifact 走不可变暂存迁移，失败不覆盖旧文件。
+- **生命周期 desired-state（RA-3）**：管道暴露 `desired_state`/`observed_state`/`generation`；
+  `checkpoint/reset` 与 `checkpoint/set` 要求管道先静默（否则 409 `pipeline_not_quiescent` 带修复指引）。
+- **备份/恢复与基线工具**：`hack/e2e-backup-volume.sh`、secret 保真检查、
+  `check-plaintext-secrets.sh` 扫描器、容量基线脚本，均已接入 CI production gate（按存储后端）。
+
+### 修复
+
+- **Shell e2e 脚本重置运行中管道**：409 静默契约暴露了 s3-minio、mysql-postgres、
+  relational-write-modes、clickhouse-replay-ordering 四个脚本的重置用法；现已在重置前先 stop。
+- **ClickHouse 类型推断集成测试**对齐 `append` 契约（INSERT-only、普通 MergeTree、无 `_version` 列）。
+
+### 认证证据
+
+- commit `7f98692`、镜像 `3e63238d`（linux/arm64，podman 5.8.4）全量重认证：
+  14 个 shell 认证脚本 + 2 条 Go 路径 e2e（mysql_cdc→mysql upsert、
+  mysql snapshot+CDC→ClickHouse RMT）全部通过。
+
+### 已知残余
+
+- MaxCompute sink 仍为 `experimental`（P0 阻塞于真实环境凭据）；distributed 形态仍为 beta
+  （PR-D1 证据部分完成）；sqlite 并发容量曲线（T3.6-B）与 CI 回归阈值（T3.7）尚未闭合。
+
 ## [v0.2.12-beta.17] — 2026-08-21 — Connector 成熟度对齐（GAP-1..6）+ Kafka 预处理
 
 ### 新增

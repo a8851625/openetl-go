@@ -4,6 +4,60 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.19] — 2026-09-11 — Integrity & correctness hardening (IT-2/IT-3)
+
+Delivery of the IT-2 correctness and IT-3 integrity-capacity iterations: record
+identity contract, atomic backup/restore, descriptor-driven secret encryption,
+lifecycle desired-state, and a full connector recertification on the fresh image.
+
+### Added
+
+- **Record contract & identity (IT-2)**: unified `Metadata` envelope carrying
+  source position, primary key columns, and column types across the pipeline;
+  DLQ entries now embed an `identity_context` (raw payload, payload encoding,
+  source/target database & table, replay provenance/state, record hash) so
+  replay and audit use the same event identity.
+- **ClickHouse `version_mode` contract (fail-closed)**: `source_order` (default
+  for mutable/replayed data) requires `metadata.source_type` plus a
+  connector-owned durable position and derives a monotonic UInt64 `_version`;
+  `append` is INSERT-only and creates a plain MergeTree. Wall-clock version
+  fallback is rejected by design.
+- **Secret single source of truth (RA-5)**: descriptor `Secret: true` fields
+  encrypt at rest across spec/connection/settings (including jdbc/dbt/enricher
+  sql/lookup DSN paths); startup detects legacy plaintext secrets (read-only),
+  and a maintenance command re-encrypts them idempotently.
+- **Atomic restore & streaming export (RA-6 / T3.3/T3.4)**: portable backup
+  without silent truncation; restore is single-transaction and fails closed
+  keeping the previous DB intact; plugin WASM artifacts migrate via immutable
+  staging (failure never overwrites the old artifact).
+- **Lifecycle desired-state (RA-3)**: `desired_state`/`observed_state`/`generation`
+  on pipelines; `checkpoint/reset` and `checkpoint/set` require a quiesced
+  pipeline (409 `pipeline_not_quiescent` with remediation otherwise).
+- **Backup/restore & baseline tooling**: `hack/e2e-backup-volume.sh`, secret
+  artifact fidelity checks, `check-plaintext-secrets.sh` scanner, capacity
+  baseline scripts — all wired into the CI production gate per storage backend.
+
+### Fixed
+
+- **Shell e2e scripts reset running pipelines**: the 409 quiesce contract
+  broke s3-minio, mysql-postgres, relational-write-modes, and
+  clickhouse-replay-ordering scripts; they now stop the pipeline before reset.
+- **ClickHouse type-inference integration test** aligned with the `append`
+  contract (INSERT-only, plain MergeTree, no `_version` column).
+
+### Cert evidence
+
+- Full recertification on commit `7f98692`, image `3e63238d` (linux/arm64,
+  podman 5.8.4): all 14 shell certification scripts + 2 Go path e2e
+  (mysql_cdc→mysql upsert, mysql snapshot+CDC→ClickHouse RMT) green.
+
+### Known residuals
+
+- MaxCompute sink remains `experimental` (P0 blocked on real-environment
+  credentials); distributed profile remains beta (PR-D1 evidence partial);
+  sqlite concurrency capacity curve (T3.6-B) and CI regression thresholds
+  (T3.7) are still open.
+
 ## [v0.2.12-beta.17] — 2026-08-21 — Connector maturity alignment (GAP-1..6) + kafka preprocessing
 
 ### Added
