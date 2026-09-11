@@ -28,7 +28,7 @@ func newTableMetricsSet() *tableMetricsSet {
 
 // record updates the per-table counters.
 func (t *tableMetricsSet) record(table string, rows int, latency time.Duration, failed bool) {
-	if table == "" {
+	if t == nil || table == "" {
 		return
 	}
 	t.mu.Lock()
@@ -57,6 +57,9 @@ type TableWriteStats struct {
 
 // snapshot returns sorted-by-table stats.
 func (t *tableMetricsSet) snapshot() []TableWriteStats {
+	if t == nil {
+		return nil
+	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	out := make([]TableWriteStats, 0, len(t.m))
@@ -88,3 +91,6 @@ func (s *MySQLSink) TableWriteStats() []TableWriteStats { return s.tableMetrics.
 
 // TableWriteStats returns per-table write counters for the postgres sink.
 func (s *PostgresSink) TableWriteStats() []TableWriteStats { return s.tableMetrics.snapshot() }
+
+// TableWriteStats returns per-table write counters for the Doris sink.
+func (s *DorisSink) TableWriteStats() []TableWriteStats { return s.tableMetrics.snapshot() }

@@ -26,11 +26,51 @@ type Metadata struct {
 	Timestamp  time.Time `json:"timestamp"`
 	BinlogFile string    `json:"binlog_file,omitempty"`
 	BinlogPos  uint32    `json:"binlog_pos,omitempty"`
-	Gtid       string    `json:"gtid,omitempty"`
-	LSN        string    `json:"lsn,omitempty"`
-	Partition  int32     `json:"partition,omitempty"`
-	Offset     int64     `json:"offset,omitempty"`
-	DDL        string    `json:"ddl,omitempty"`
+	// SnapshotHandoffFile/Pos identify the MySQL binlog boundary captured
+	// before a mysql_snapshot_cdc consistent snapshot starts. Snapshot rows
+	// use this boundary as their replacement version: a later re-snapshot can
+	// supersede CDC rows already present in an idempotent sink without
+	// pretending that the pagination key is an event order.
+	SnapshotHandoffFile string `json:"snapshot_handoff_file,omitempty"`
+	SnapshotHandoffPos  uint32 `json:"snapshot_handoff_pos,omitempty"`
+	Gtid                string `json:"gtid,omitempty"`
+	LSN                 string `json:"lsn,omitempty"`
+	Partition           int32  `json:"partition,omitempty"`
+	Offset              int64  `json:"offset,omitempty"`
+	DDL                 string `json:"ddl,omitempty"`
+	// SourceType is the canonical connector type, independent from Source,
+	// which may be a user-defined instance name. Ordering and identity
+	// contracts must never guess connector semantics from a custom name.
+	SourceType string `json:"source_type,omitempty"`
+	// SourcePhase identifies a connector phase whose positions have different
+	// ordering semantics (for example snapshot before cdc).
+	SourcePhase string `json:"source_phase,omitempty"`
+	// Cursor and CursorKind carry the exact per-record keyset cursor for batch
+	// and snapshot sources. Cursor is a string on purpose: arbitrary ordered
+	// text must not be lossy-hashed into a numeric version.
+	Cursor     string           `json:"cursor,omitempty"`
+	CursorKind SourceCursorKind `json:"cursor_kind,omitempty"`
+	// PrimaryKeyColumns is the authoritative ordered declaration used to
+	// decide whether Key contains a complete row identity. Key alone cannot
+	// reveal that a composite primary key is only partially present.
+	PrimaryKeyColumns []string `json:"primary_key_columns,omitempty"`
+	// FormatContractID freezes the producer format semantics used to derive
+	// identity. Consumers must not infer UPDATE before-image rules from a
+	// mutable runtime configuration or from the source instance name.
+	FormatContractID string `json:"format_contract_id,omitempty"`
+	// BeforeImageState preserves whether an UPDATE's upstream old image was
+	// absent, empty, partial, or full. This distinction is required before a
+	// registered format contract may fill unchanged key columns from Data.
+	BeforeImageState BeforeImageState `json:"before_image_state,omitempty"`
+	// RawPayload retains the exact source bytes only while a record is in
+	// memory. It is deliberately excluded from normal Record JSON so sinks and
+	// transport envelopes do not duplicate potentially large payloads. The DLQ
+	// adapter freezes it into DLQIdentityContext before persistence.
+	RawPayload []byte `json:"-"`
+	// ReplayProvenance is populated only by the controlled DLQ replay path.
+	// Sinks may use it to distinguish a verified legacy repair from ordinary
+	// traffic, but it never relaxes the complete identity contract by itself.
+	ReplayProvenance DLQReplayProvenance `json:"replay_provenance,omitempty"`
 	// Route is set by the router transform to a downstream route tag (TF-5).
 	// Separate from Source so provenance (which pipeline/source produced the
 	// record, used by DLQ entries + metrics) is preserved while edges have a
@@ -48,14 +88,32 @@ type Record struct {
 	Data      map[string]any `json:"data"`
 	Before    map[string]any `json:"before"`
 	Metadata  Metadata       `json:"metadata"`
+	// Rejection is set by a source when a concrete source position was read but
+	// cannot become a normal record (for example, a malformed configured Kafka
+	// format). The runner persists it to DLQ before checkpointing that position;
+	// sinks must never receive records carrying Rejection.
+	Rejection *RecordRejection `json:"rejection,omitempty"`
+}
+
+// RecordRejection is a durable, record-scoped source failure. Message and
+// Remediation must not contain credentials or connection strings because the
+// complete record is exposed by the DLQ API.
+type RecordRejection struct {
+	Code        string     `json:"code"`
+	Message     string     `json:"message"`
+	Class       ErrorClass `json:"error_class"`
+	Remediation string     `json:"remediation,omitempty"`
 }
 
 type Checkpoint struct {
-	ID        string          `json:"id"`
-	JobName   string          `json:"job_name"`
-	Source    string          `json:"source"`
-	Position  json.RawMessage `json:"position"`
-	Timestamp time.Time       `json:"timestamp"`
+	ID       string          `json:"id"`
+	JobName  string          `json:"job_name"`
+	Source   string          `json:"source"`
+	Position json.RawMessage `json:"position"`
+	// Generation is the pipeline execution fencing token that produced this
+	// checkpoint. Zero denotes a legacy or explicit administrative write.
+	Generation int64     `json:"generation,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 type CheckpointStore interface {
@@ -183,6 +241,14 @@ type SchemaDescriptor interface {
 // sinks can implement the same interface through the Sink SDK.
 type SchemaValidator interface {
 	ValidateSchema(ctx context.Context, schema SchemaInfo) error
+}
+
+// TargetContractValidator is an optional sink startup gate for invariants
+// that depend only on the configured target (for example an engine/version
+// contract) and therefore must be checked even when the source cannot expose
+// a static schema. It runs after Sink.Open and before Source.Open/read.
+type TargetContractValidator interface {
+	ValidateTargetContract(ctx context.Context) error
 }
 
 type Transform interface {

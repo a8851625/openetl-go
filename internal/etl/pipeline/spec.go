@@ -532,6 +532,9 @@ func ValidateSpec(spec *Spec) error {
 	}
 	problems = append(problems, ValidateRuntimeStateRequirements(spec)...)
 	problems = append(problems, ValidateTransformConfigRequirements(spec)...)
+	if identityIssue := CheckMetadataIdentityCompatibility(spec); identityIssue != nil {
+		problems = append(problems, fmt.Sprintf("%s: %s", identityIssue.Field, identityIssue.Message))
+	}
 	if spec.BatchSize <= 0 {
 		problems = append(problems, "batch_size must be > 0")
 	}

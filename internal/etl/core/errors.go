@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+// ErrCheckpointFenced means an execution attempted to persist a checkpoint
+// after the control plane advanced the pipeline generation (for example, a
+// reset raced with an in-flight batch). The caller must never retry the stale
+// write under a newer generation because that would defeat the fence.
+var ErrCheckpointFenced = errors.New("checkpoint write fenced by a newer pipeline generation")
+
 // CheckpointValidationError is returned when a persisted source position is
 // syntactically readable but cannot be safely interpreted by the source.  It
 // is intentionally separate from ordinary connector/configuration errors so

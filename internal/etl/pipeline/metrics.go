@@ -10,14 +10,21 @@ import (
 )
 
 type MetricsHooks struct {
-	mu              sync.Mutex
-	SourceReadNanos int64
-	SinkWriteNanos  int64
-	LastBatchSize   int
-	BatchCount      int64
-	TotalBatchSize  int64
-	SourceReadCount int64
-	CDCLagMs        int64
+	mu                    sync.Mutex
+	SourceReadNanos       int64
+	SinkWriteNanos        int64
+	LastBatchSize         int
+	BatchCount            int64
+	TotalBatchSize        int64
+	SourceReadCount       int64
+	CDCLagMs              int64
+	CheckpointFencedTotal int64
+}
+
+func (m *MetricsHooks) RecordCheckpointFenced() {
+	m.mu.Lock()
+	m.CheckpointFencedTotal++
+	m.mu.Unlock()
 }
 
 func (m *MetricsHooks) RecordSourceRead(start time.Time) {
@@ -52,24 +59,26 @@ func (m *MetricsHooks) Snapshot() MetricsSnapshot {
 		avgWriteMs = float64(m.SinkWriteNanos) / float64(m.BatchCount) / 1e6
 	}
 	return MetricsSnapshot{
-		SourceReadLatencyMs: avgReadMs,
-		SinkWriteLatencyMs:  avgWriteMs,
-		LastBatchSize:       m.LastBatchSize,
-		AvgBatchSize:        avgBatchSize,
-		BatchCount:          m.BatchCount,
-		CDCLagMs:            m.CDCLagMs,
+		SourceReadLatencyMs:   avgReadMs,
+		SinkWriteLatencyMs:    avgWriteMs,
+		LastBatchSize:         m.LastBatchSize,
+		AvgBatchSize:          avgBatchSize,
+		BatchCount:            m.BatchCount,
+		CDCLagMs:              m.CDCLagMs,
+		CheckpointFencedTotal: m.CheckpointFencedTotal,
 	}
 }
 
 type MetricsSnapshot struct {
-	SourceReadLatencyMs  float64 `json:"source_read_latency_ms"`
-	SinkWriteLatencyMs   float64 `json:"sink_write_latency_ms"`
-	LastBatchSize        int     `json:"last_batch_size"`
-	AvgBatchSize         int64   `json:"avg_batch_size"`
-	BatchCount           int64   `json:"batch_count"`
-	CDCLagMs             int64   `json:"cdc_lag_ms,omitempty"`
-	BackpressureDepth    int     `json:"backpressure_depth"`
-	BackpressureCapacity int     `json:"backpressure_capacity"`
+	SourceReadLatencyMs   float64 `json:"source_read_latency_ms"`
+	SinkWriteLatencyMs    float64 `json:"sink_write_latency_ms"`
+	LastBatchSize         int     `json:"last_batch_size"`
+	AvgBatchSize          int64   `json:"avg_batch_size"`
+	BatchCount            int64   `json:"batch_count"`
+	CDCLagMs              int64   `json:"cdc_lag_ms,omitempty"`
+	CheckpointFencedTotal int64   `json:"checkpoint_fenced_total"`
+	BackpressureDepth     int     `json:"backpressure_depth"`
+	BackpressureCapacity  int     `json:"backpressure_capacity"`
 }
 
 type SinkWriteHook struct {

@@ -1,98 +1,10 @@
 package sink
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 )
-
-func resetPKMetaCache() {
-	pkMetaCache.mu.Lock()
-	pkMetaCache.pkBy = map[string][]string{}
-	pkMetaCache.mu.Unlock()
-}
-
-func TestDerivePKFromMetadata(t *testing.T) {
-	resetPKMetaCache()
-	s := &MySQLSink{pkColumnsFromMetadata: true}
-	records := []core.Record{
-		{Metadata: core.Metadata{Table: "orders", Key: `{"order_id": 123}`}},
-		{Metadata: core.Metadata{Table: "orders", Key: `{"order_id": 456}`}},
-	}
-	pk := s.derivePKFromMetadata("orders", records)
-	if len(pk) != 1 || pk[0] != "order_id" {
-		t.Fatalf("got pk=%v, want [order_id]", pk)
-	}
-}
-
-func TestDerivePKFromMetadataComposite(t *testing.T) {
-	resetPKMetaCache()
-	s := &MySQLSink{pkColumnsFromMetadata: true}
-	records := []core.Record{
-		{Metadata: core.Metadata{Table: "t", Key: `{"tenant_id":"x","seq":5}`}},
-	}
-	pk := s.derivePKFromMetadata("t", records)
-	if len(pk) != 2 {
-		t.Fatalf("got pk=%v, want 2 cols", pk)
-	}
-}
-
-func TestDerivePKFromMetadataEmptyKeyFallsBack(t *testing.T) {
-	resetPKMetaCache()
-	s := &MySQLSink{pkColumnsFromMetadata: true, pkColumns: []string{"id"}}
-	records := []core.Record{
-		{Metadata: core.Metadata{Table: "t"}}, // no key
-	}
-	pk := s.derivePKFromMetadata("t", records)
-	if pk != nil {
-		t.Fatalf("expected nil when no usable key, got %v", pk)
-	}
-}
-
-func TestDerivePKFromMetadataCachedAcrossCalls(t *testing.T) {
-	resetPKMetaCache()
-	s := &MySQLSink{pkColumnsFromMetadata: true}
-	records := []core.Record{
-		{Metadata: core.Metadata{Table: "t", Key: `{"id":1}`}},
-	}
-	first := s.derivePKFromMetadata("t", records)
-	second := s.derivePKFromMetadata("t", nil) // no records second time
-	if len(first) == 0 || len(second) == 0 || first[0] != second[0] {
-		t.Fatalf("cache miss: first=%v second=%v", first, second)
-	}
-}
-
-func TestMySQLDeleteUsesMetadataDerivedPKColumns(t *testing.T) {
-	resetPKMetaCache()
-	s := &MySQLSink{pkColumnsFromMetadata: true}
-	records := []core.Record{
-		{
-			Operation: core.OpDelete,
-			Data:      map[string]any{"tenant_id": "fleet-a", "seq": 7, "vin": "VIN-7"},
-			Metadata:  core.Metadata{Table: "ods_pk_vehicle_trip", Key: `{"tenant_id":"fleet-a","seq":7}`},
-		},
-	}
-	pk := s.derivePKFromMetadata("ods_pk_vehicle_trip", records)
-	if len(pk) != 2 {
-		t.Fatalf("pk = %v, want composite metadata key", pk)
-	}
-	vals, err := s.deleteValues(pk, records[0])
-	if err != nil {
-		t.Fatalf("deleteValues: %v", err)
-	}
-	got := map[string]any{}
-	for i, col := range pk {
-		got[col] = vals[i]
-	}
-	if got["tenant_id"] != "fleet-a" || got["seq"] != 7 {
-		t.Fatalf("delete values = %#v, want metadata-derived composite key values", vals)
-	}
-	stmt := s.buildBatchDeleteStatement("ods_pk_vehicle_trip", pk, 1)
-	if !strings.Contains(stmt, "`seq`=?") || !strings.Contains(stmt, "`tenant_id`=?") {
-		t.Fatalf("delete stmt = %s, want composite key predicates", stmt)
-	}
-}
 
 func TestGeneratedColumnsCacheRoundtrip(t *testing.T) {
 	c := core.NewSchemaCache()

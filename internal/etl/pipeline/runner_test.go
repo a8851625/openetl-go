@@ -117,8 +117,10 @@ func (s *schemaSource) Describe(_ context.Context) (core.SchemaInfo, error) {
 
 type schemaValidatingSink struct {
 	validateErr error
+	targetErr   error
 	openCalls   int32
 	closeCalls  int32
+	targetCalls int32
 }
 
 func (s *schemaValidatingSink) Name() string { return "schema-validating-sink" }
@@ -133,6 +135,10 @@ func (s *schemaValidatingSink) Close() error {
 }
 func (s *schemaValidatingSink) ValidateSchema(_ context.Context, _ core.SchemaInfo) error {
 	return s.validateErr
+}
+func (s *schemaValidatingSink) ValidateTargetContract(_ context.Context) error {
+	atomic.AddInt32(&s.targetCalls, 1)
+	return s.targetErr
 }
 
 type checkpointTestReader struct{}
@@ -337,6 +343,49 @@ func (s *orderedCheckpointStore) Delete(ctx context.Context, job string) error {
 }
 func (s *orderedCheckpointStore) List(ctx context.Context) ([]core.Checkpoint, error) {
 	return s.inner.List(ctx)
+}
+
+type fencedCheckpointStore struct{}
+
+func (fencedCheckpointStore) Save(context.Context, core.Checkpoint) error {
+	return fmt.Errorf("%w: write_generation=4 current_generation=5", core.ErrCheckpointFenced)
+}
+func (fencedCheckpointStore) Load(context.Context, string) (*core.Checkpoint, error) {
+	return nil, nil
+}
+func (fencedCheckpointStore) Delete(context.Context, string) error { return nil }
+func (fencedCheckpointStore) List(context.Context) ([]core.Checkpoint, error) {
+	return nil, nil
+}
+
+func TestRunnerCheckpointFenceIsObservableAndNotRetried(t *testing.T) {
+	am := alert.NewManager()
+	defer am.Close()
+	r := &Runner{
+		spec:            &Spec{Name: "checkpoint-fenced"},
+		transforms:      nil,
+		sink:            &recordingSink{},
+		checkpointStore: fencedCheckpointStore{},
+		alertManager:    am,
+		reader:          checkpointTestReader{},
+		metricsHooks:    &MetricsHooks{},
+		logBuf:          NewLogBuffer(20),
+	}
+
+	if r.saveCommittedCheckpoint(context.Background(), []core.Record{{Metadata: core.Metadata{Offset: 11}}}, nil) {
+		t.Fatal("stale generation checkpoint unexpectedly succeeded")
+	}
+	if got := r.MetricsSnapshot().CheckpointFencedTotal; got != 1 {
+		t.Fatalf("checkpoint_fenced_total=%d, want 1", got)
+	}
+	stats := r.Stats()
+	if stats.LastErrorCode != "checkpoint_generation_fenced" || stats.LastErrorRemediation == "" {
+		t.Fatalf("checkpoint stats=%#v", stats)
+	}
+	logs := r.LogBuffer().Snapshot(0)
+	if len(logs) != 1 || !strings.Contains(logs[0].Message, "checkpoint write fenced") {
+		t.Fatalf("checkpoint fence logs=%#v", logs)
+	}
 }
 
 type batchCountingReader struct {
@@ -631,6 +680,30 @@ func TestSchemaValidatorForSinkUnwrapsSinkWriteHook(t *testing.T) {
 	}
 	if validator != snk {
 		t.Fatalf("schemaValidatorForSink() = %T, want wrapped sink", validator)
+	}
+}
+
+func TestRunnerValidatesTargetContractBeforeSourceOpen(t *testing.T) {
+	src := &schemaSource{}
+	snk := &schemaValidatingSink{targetErr: errors.New("legacy Int64 version table")}
+	r := &Runner{
+		spec:   &Spec{Name: "target-contract-failure"},
+		source: src,
+		sink:   &SinkWriteHook{Hooks: &MetricsHooks{}, Sink: snk},
+	}
+
+	err := r.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "validate target contract") {
+		t.Fatalf("Start() error = %v, want target-contract failure", err)
+	}
+	if atomic.LoadInt32(&snk.targetCalls) != 1 {
+		t.Fatalf("target validation calls = %d, want 1", atomic.LoadInt32(&snk.targetCalls))
+	}
+	if atomic.LoadInt32(&src.openCalls) != 0 {
+		t.Fatalf("source Open calls = %d, want 0", atomic.LoadInt32(&src.openCalls))
+	}
+	if atomic.LoadInt32(&snk.closeCalls) != 1 {
+		t.Fatalf("sink Close calls = %d, want 1", atomic.LoadInt32(&snk.closeCalls))
 	}
 }
 

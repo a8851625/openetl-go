@@ -29,6 +29,7 @@ type DLQEntry struct {
 	Record          core.Record
 	Error           string
 	ErrorClass      string
+	IdentityContext core.DLQIdentityContext
 	Attempt         int
 	PipelineVersion int
 	DAGNode         string
@@ -600,6 +601,14 @@ func (r *Runner) Start(ctx context.Context) error {
 		markStartFailed()
 		return fmt.Errorf("open sink: %w", err)
 	}
+	if validator, ok := targetContractValidatorForSink(r.sink); ok {
+		if err := validator.ValidateTargetContract(ctx); err != nil {
+			r.setStatus(StatusFailed)
+			r.logError(fmt.Sprintf("Target contract validation failed: %v", err))
+			markStartFailed()
+			return fmt.Errorf("validate target contract: %w", err)
+		}
+	}
 
 	// Optional schema validation + typed auto_create: if source describes its
 	// schema, feed it to sinks that implement SourceSchemaConsumer (so
@@ -702,6 +711,17 @@ func schemaValidatorForSink(sink core.Sink) (core.SchemaValidator, bool) {
 	}
 	if hook, ok := sink.(*SinkWriteHook); ok {
 		validator, ok := hook.Sink.(core.SchemaValidator)
+		return validator, ok
+	}
+	return nil, false
+}
+
+func targetContractValidatorForSink(sink core.Sink) (core.TargetContractValidator, bool) {
+	if validator, ok := sink.(core.TargetContractValidator); ok {
+		return validator, true
+	}
+	if hook, ok := sink.(*SinkWriteHook); ok {
+		validator, ok := hook.Sink.(core.TargetContractValidator)
 		return validator, ok
 	}
 	return nil, false
@@ -1154,12 +1174,33 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 	copy(processed, batch)
 	filteredCount := 0
 	transformFailureCount := 0
+	identityFailureCount := 0
+	sourceFailureCount := 0
 	batchTransformZeroOutput := false
 	checkpointBoundarySafe := true
 
+	// Source parsers attach record-scoped rejections when a concrete source
+	// position cannot safely become a normal record. Persist those records to
+	// DLQ before transforms/sink, while retaining the original batch in
+	// processed so a successful DLQ write can be bound to its checkpoint.
+	accepted := make([]core.Record, 0, len(batch))
+	for _, rec := range batch {
+		if rec.Rejection == nil {
+			accepted = append(accepted, rec)
+			continue
+		}
+		sourceFailureCount++
+		if !r.handleFailedRecord(ctx, rec, sourceRecordRejectionError(rec.Rejection)) {
+			checkpointBoundarySafe = false
+		}
+	}
+	batch = accepted
+
 	hasBatch := r.hasBatchTransform()
 
-	if hasBatch {
+	if len(batch) == 0 {
+		transformed = nil
+	} else if hasBatch {
 		// Batch path: process the entire batch through the chain.
 		out, err := r.transforms.ApplyBatch(ctx, batch)
 		if err != nil {
@@ -1186,12 +1227,41 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 		transformed, filteredCount, transformFailureCount, checkpointBoundarySafe = r.applyRecordTransforms(ctx, batch)
 	}
 
+	// A metadata-PK sink may only see records whose declared primary key is
+	// complete. Validate after transforms so a transform cannot accidentally
+	// remove or contradict a key component. Failed records are durably routed
+	// to DLQ before any checkpoint can cover their source position.
+	if MetadataIdentityRequired(r.spec) && len(transformed) > 0 {
+		valid := make([]core.Record, 0, len(transformed))
+		for _, rec := range transformed {
+			identity := core.RecordIdentity(rec)
+			if identity.Complete {
+				valid = append(valid, rec)
+				continue
+			}
+			identityFailureCount++
+			if !r.handleFailedRecord(ctx, rec, incompleteRecordIdentityError(identity)) {
+				checkpointBoundarySafe = false
+			}
+		}
+		transformed = valid
+	}
+
 	if len(transformed) == 0 {
+		// Once every identity-invalid record is durably present in the DLQ, its
+		// source position may advance. If DLQ persistence failed,
+		// checkpointBoundarySafe is false and the unsafe range replays. Keep the
+		// older zero-survivor transform behavior unchanged: transform failures
+		// may have state/output semantics that this identity gate cannot prove.
+		if (sourceFailureCount > 0 || identityFailureCount > 0) && transformFailureCount == 0 && checkpointBoundarySafe && !batchTransformZeroOutput {
+			r.saveCommittedCheckpoint(ctx, processed, nil)
+			return
+		}
 		if !hasBatch && filteredCount == len(processed) && transformFailureCount == 0 {
 			r.saveCommittedCheckpoint(ctx, processed, nil)
 			return
 		}
-		reason := fmt.Sprintf("filtered=%d failed=%d", filteredCount, transformFailureCount)
+		reason := fmt.Sprintf("filtered=%d failed=%d source_failed=%d identity_failed=%d", filteredCount, transformFailureCount, sourceFailureCount, identityFailureCount)
 		if batchTransformZeroOutput {
 			reason = "batch transform produced no records"
 		}
@@ -1545,10 +1615,11 @@ func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err er
 
 	if r.dlqWriter != nil {
 		entry := DLQEntry{
-			JobName:    r.spec.Name,
-			Record:     rec,
-			Error:      err.Error(),
-			ErrorClass: string(core.ClassifyError(err)),
+			JobName:         r.spec.Name,
+			Record:          rec,
+			Error:           err.Error(),
+			ErrorClass:      string(core.ClassifyError(err)),
+			IdentityContext: dlqIdentityContext(r.spec, rec, err),
 		}
 		dlqCtx, dlqCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer dlqCancel()
@@ -1656,9 +1727,16 @@ func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committ
 
 	if saveErr := r.checkpointStore.Save(ctx, cp); saveErr != nil {
 		errMsg := fmt.Sprintf("checkpoint save failed: %v", saveErr)
+		if errors.Is(saveErr, core.ErrCheckpointFenced) && r.metricsHooks != nil {
+			r.metricsHooks.RecordCheckpointFenced()
+		}
 		r.blockCheckpoint(errMsg)
 		r.mu.Lock()
 		r.stats.LastError = errMsg
+		if errors.Is(saveErr, core.ErrCheckpointFenced) {
+			r.stats.LastErrorCode = "checkpoint_generation_fenced"
+			r.stats.LastErrorRemediation = "Do not retry this stale checkpoint. Inspect the newer lifecycle generation and restart only from its durable checkpoint."
+		}
 		r.mu.Unlock()
 
 		// Checkpoint save failure means already-written data's position
