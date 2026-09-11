@@ -52,8 +52,15 @@ func seedControlPlane(t *testing.T, s storage.Storage) {
 	}
 	if err := s.WriteDeadLetter(ctx, &storage.DLQRecord{
 		JobName: "backup-pipe",
-		Record:  core.Record{Data: map[string]any{"id": 1}},
-		Error:   "boom",
+		Record: core.Record{Operation: core.OpInsert, Data: map[string]any{"id": 1}, Metadata: core.Metadata{
+			Table: "orders", Key: `{"id":1}`, PrimaryKeyColumns: []string{"id"},
+		}},
+		Error: "boom",
+		IdentityContext: core.DLQIdentityContext{
+			RawPayload: `{"id":1}`, PayloadEncoding: core.DLQPayloadEncodingSourceBytes,
+			PrimaryKeyColumns: []string{"id"}, SourceTable: "orders", TargetTable: "ods_orders",
+			ReplayProvenance: core.DLQReplayProvenanceNormalFlow, ReplayState: core.DLQReplayStatePending,
+		},
 	}); err != nil {
 		t.Fatalf("write dlq: %v", err)
 	}
@@ -79,8 +86,12 @@ func seedControlPlane(t *testing.T, s storage.Storage) {
 	}); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	wasmPath := filepath.Join(t.TempDir(), "p1.wasm")
+	if err := os.WriteFile(wasmPath, []byte("\x00asm\x01\x00\x00\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.SavePlugin(ctx, &storage.PluginEntry{
-		Name: "p1", Kind: "transform", WASMPath: "/tmp/p1.wasm", Version: "1.0.0", Enabled: true,
+		Name: "p1", Kind: "transform", WASMPath: wasmPath, Version: "1.0.0", Enabled: true,
 	}); err != nil {
 		t.Fatalf("save plugin: %v", err)
 	}
@@ -131,7 +142,7 @@ func TestBackupRestoreRoundTripSQLite(t *testing.T) {
 	}
 
 	dst := openTestStore(t)
-	if err := backup.Restore(ctx, dst, loaded, backup.Options{ClearBeforeRestore: true}); err != nil {
+	if err := backup.Restore(ctx, dst, loaded, backup.Options{ClearBeforeRestore: true, PluginsDir: t.TempDir()}); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 
@@ -163,6 +174,9 @@ func TestBackupRestoreRoundTripSQLite(t *testing.T) {
 	if err != nil || len(dlq) != 1 {
 		t.Fatalf("dlq: %v len=%d", err, len(dlq))
 	}
+	if dlq[0].IdentityContext.RawPayload != `{"id":1}` || dlq[0].IdentityContext.TargetTable != "ods_orders" || dlq[0].IdentityContext.ReplayProvenance != core.DLQReplayProvenanceNormalFlow {
+		t.Fatalf("dlq identity context lost in backup/restore: %+v", dlq[0].IdentityContext)
+	}
 	setting, err := dst.GetSetting(ctx, "llm.api_key")
 	if err != nil || setting != "enc:v1:secret" {
 		t.Fatalf("setting: %v %q", err, setting)
@@ -189,7 +203,7 @@ func TestBackupRestoreClearsPreviousState(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed stale: %v", err)
 	}
-	if err := backup.Restore(ctx, dst, snap, backup.Options{ClearBeforeRestore: true}); err != nil {
+	if err := backup.Restore(ctx, dst, snap, backup.Options{ClearBeforeRestore: true, PluginsDir: t.TempDir()}); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	stale, err := dst.GetPipeline(ctx, "stale")

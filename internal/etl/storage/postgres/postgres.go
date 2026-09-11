@@ -85,6 +85,10 @@ func (s *Store) migrate(ctx context.Context) error {
 			name        TEXT NOT NULL,
 			spec_yaml   TEXT NOT NULL,
 			status      TEXT NOT NULL DEFAULT 'stopped',
+			desired_state TEXT NOT NULL DEFAULT 'running',
+			observed_state TEXT NOT NULL DEFAULT 'stopped',
+			generation  BIGINT NOT NULL DEFAULT 0,
+			restore_error TEXT NOT NULL DEFAULT '',
 			created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -101,6 +105,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			job_name    TEXT PRIMARY KEY,
 			source      TEXT,
 			position    JSONB,
+			generation  BIGINT NOT NULL DEFAULT 0,
 			timestamp   TIMESTAMPTZ,
 			updated_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -110,6 +115,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			record_json  TEXT NOT NULL,
 			error        TEXT,
 			error_class  TEXT,
+			identity_context_json TEXT,
 			attempt      INT DEFAULT 0,
 			created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -249,6 +255,12 @@ func (s *Store) runVersionedMigrations(ctx context.Context) error {
 		{14, "add attempt to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS attempt INTEGER DEFAULT 0"},
 		{15, "add lease_expires_at to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ"},
 		{16, "add last_error to task_assignments", "ALTER TABLE task_assignments ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT ''"},
+		{17, "add restore_error to pipelines", "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS restore_error TEXT NOT NULL DEFAULT ''"},
+		{18, "add desired_state to pipelines", "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS desired_state TEXT NOT NULL DEFAULT ''"},
+		{19, "add observed_state to pipelines", "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS observed_state TEXT NOT NULL DEFAULT ''"},
+		{20, "add generation to pipelines", "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0"},
+		{21, "add generation to checkpoints", "ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0"},
+		{22, "add identity context to dead_letters", "ALTER TABLE dead_letters ADD COLUMN IF NOT EXISTS identity_context_json TEXT"},
 	}
 
 	for _, m := range migrations {
@@ -284,6 +296,29 @@ func (s *Store) runVersionedMigrations(ctx context.Context) error {
 	}
 	_, _ = s.pool.Exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_pipelines_id ON pipelines(id)`)
 	_, _ = s.pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_pipelines_name ON pipelines(name)`)
+	if _, err := s.pool.Exec(ctx, `UPDATE pipelines
+		SET desired_state = CASE LOWER(TRIM(status))
+			WHEN 'stopped' THEN 'stopped'
+			WHEN 'paused' THEN 'paused'
+			ELSE 'running'
+		END
+		WHERE desired_state IS NULL OR desired_state = ''`); err != nil {
+		return fmt.Errorf("backfill pipeline desired_state: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE pipelines
+		SET observed_state = CASE LOWER(TRIM(status))
+			WHEN 'running' THEN 'running'
+			WHEN 'scheduled' THEN 'scheduled'
+			WHEN 'stopped' THEN 'stopped'
+			WHEN 'paused' THEN 'paused'
+			WHEN 'failed' THEN 'failed'
+			WHEN 'completed' THEN 'completed'
+			WHEN 'restore_failed' THEN 'restore_failed'
+			ELSE 'stopped'
+		END
+		WHERE observed_state IS NULL OR observed_state = ''`); err != nil {
+		return fmt.Errorf("backfill pipeline observed_state: %w", err)
+	}
 	return nil
 }
 

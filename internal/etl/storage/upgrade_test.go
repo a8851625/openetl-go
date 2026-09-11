@@ -134,7 +134,12 @@ func TestSQLiteForwardUpgradeFromLegacySchema(t *testing.T) {
 			('legacy-pipe', 'name: legacy-pipe
 source:
   type: file
-', 'stopped')`,
+', 'stopped'),
+			('legacy-running', 'name: legacy-running', 'running'),
+			('legacy-paused', 'name: legacy-paused', 'paused'),
+			('legacy-scheduled', 'name: legacy-scheduled', 'scheduled'),
+			('legacy-failed', 'name: legacy-failed', 'failed'),
+			('legacy-completed', 'name: legacy-completed', 'completed')`,
 		`INSERT INTO pipeline_versions (pipeline, version, spec_yaml) VALUES
 			('legacy-pipe', 1, 'name: legacy-pipe
 source:
@@ -180,6 +185,35 @@ source:
 	if pipe.ID == "" {
 		t.Error("expected pipeline id backfill after upgrade")
 	}
+	if pipe.RestoreError != "" {
+		t.Errorf("legacy pipeline restore_error = %q, want empty", pipe.RestoreError)
+	}
+	wantLifecycle := map[string][2]string{
+		"legacy-pipe":      {storage.PipelineDesiredStopped, "stopped"},
+		"legacy-running":   {storage.PipelineDesiredRunning, "running"},
+		"legacy-paused":    {storage.PipelineDesiredPaused, "paused"},
+		"legacy-scheduled": {storage.PipelineDesiredRunning, "scheduled"},
+		"legacy-failed":    {storage.PipelineDesiredRunning, "failed"},
+		"legacy-completed": {storage.PipelineDesiredRunning, "completed"},
+	}
+	for name, want := range wantLifecycle {
+		row, err := store.GetPipeline(ctx, name)
+		if err != nil || row == nil {
+			t.Fatalf("get migrated lifecycle %s: row=%+v err=%v", name, row, err)
+		}
+		if row.DesiredState != want[0] || row.ObservedState != want[1] || row.Generation != 0 {
+			t.Errorf("migrated lifecycle %s = desired=%q observed=%q generation=%d, want %q/%q/0", name, row.DesiredState, row.ObservedState, row.Generation, want[0], want[1])
+		}
+	}
+	foundMigrations := map[int]bool{}
+	for _, version := range vers {
+		foundMigrations[version.Version] = true
+	}
+	for _, version := range []int{17, 18, 19, 20, 21, 22} {
+		if !foundMigrations[version] {
+			t.Fatalf("schema versions missing migration %d: %+v", version, vers)
+		}
+	}
 	cp, err := store.LoadCheckpoint(ctx, "legacy-pipe")
 	if err != nil || cp == nil {
 		t.Fatalf("checkpoint after upgrade: %v", err)
@@ -187,9 +221,15 @@ source:
 	if string(cp.Position) != `{"offset":7}` {
 		t.Errorf("position = %s", cp.Position)
 	}
+	if cp.Generation != 0 {
+		t.Errorf("legacy checkpoint generation = %d, want 0", cp.Generation)
+	}
 	dlq, err := store.ListDeadLetters(ctx, storage.DLQFilter{JobName: "legacy-pipe", Limit: 10})
 	if err != nil || len(dlq) != 1 {
 		t.Fatalf("dlq after upgrade: %v len=%d", err, len(dlq))
+	}
+	if dlq[0].IdentityContext.ReplayProvenance != core.DLQReplayProvenanceLegacyUnknown || dlq[0].IdentityContext.ReplayState != core.DLQReplayStateRepairRequired {
+		t.Fatalf("legacy dlq identity context did not fail closed: %+v", dlq[0].IdentityContext)
 	}
 	setting, err := store.GetSetting(ctx, "llm.api_key")
 	if err != nil || setting != "enc:v1:legacy" {
@@ -368,7 +408,13 @@ func runBackupRestorePath(t *testing.T, newStore func(t *testing.T) (storage.Sto
 	}
 	runID, _ := src.RecordRunStart(ctx, "upgrade-pipe")
 	_ = src.RecordRunEnd(ctx, runID, "succeeded", 1, 1, 0, 0, 1)
-	_ = src.SavePlugin(ctx, &storage.PluginEntry{Name: "pl", Kind: "transform", WASMPath: "/x.wasm", Version: "1", Enabled: true})
+	wasmPath := filepath.Join(t.TempDir(), "pl.wasm")
+	if err := os.WriteFile(wasmPath, []byte("\x00asm\x01\x00\x00\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.SavePlugin(ctx, &storage.PluginEntry{Name: "pl", Kind: "transform", WASMPath: wasmPath, Version: "1", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	_ = src.SaveConnection(ctx, &storage.ConnectionEntry{Name: "c1", Kind: "source", Type: "mysql", Config: map[string]any{"host": "h"}})
 	_ = src.SetSetting(ctx, "k", "v")
 
@@ -387,7 +433,7 @@ func runBackupRestorePath(t *testing.T, newStore func(t *testing.T) (storage.Sto
 
 	dst, cleanup2 := newStore(t)
 	defer cleanup2()
-	if err := backup.Restore(ctx, dst, loaded, backup.Options{ClearBeforeRestore: true, Backend: backend}); err != nil {
+	if err := backup.Restore(ctx, dst, loaded, backup.Options{ClearBeforeRestore: true, Backend: backend, PluginsDir: t.TempDir()}); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	report, ok, err := backup.Reconcile(ctx, dst, loaded)

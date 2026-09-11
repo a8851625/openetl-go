@@ -6,13 +6,44 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/gogf/gf/v2/frame/g"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 )
 
 // ── CheckpointStore adapter ──────────────────────────────────────────
+
+type checkpointFenceContextKey struct{}
+
+type CheckpointFence struct {
+	PipelineID string
+	Generation int64
+}
+
+// WithCheckpointFence binds one immutable execution generation to all
+// checkpoint writes derived from ctx. A restarted runner receives a new
+// context, so an older in-flight write retains (and is rejected with) its old
+// generation instead of accidentally borrowing the new token.
+func WithCheckpointFence(ctx context.Context, pipelineID string, generation int64) context.Context {
+	return context.WithValue(ctx, checkpointFenceContextKey{}, CheckpointFence{
+		PipelineID: pipelineID,
+		Generation: generation,
+	})
+}
+
+func CheckpointFenceFromContext(ctx context.Context) (CheckpointFence, bool) {
+	if ctx == nil {
+		return CheckpointFence{}, false
+	}
+	fence, ok := ctx.Value(checkpointFenceContextKey{}).(CheckpointFence)
+	return fence, ok && fence.PipelineID != "" && fence.Generation > 0
+}
 
 // CheckpointStoreAdapter bridges storage.Storage to core.CheckpointStore.
 type CheckpointStoreAdapter struct {
@@ -25,10 +56,15 @@ func NewCheckpointStoreAdapter(s Storage) *CheckpointStoreAdapter {
 
 func (a *CheckpointStoreAdapter) Save(ctx context.Context, cp core.Checkpoint) error {
 	rec := &CheckpointRecord{
-		JobName:   cp.JobName,
-		Source:    cp.Source,
-		Position:  cp.Position,
-		Timestamp: time.Now(),
+		JobName:    cp.JobName,
+		Source:     cp.Source,
+		Position:   cp.Position,
+		Generation: cp.Generation,
+		Timestamp:  time.Now(),
+	}
+	if fence, ok := CheckpointFenceFromContext(ctx); ok {
+		rec.PipelineID = fence.PipelineID
+		rec.Generation = fence.Generation
 	}
 	return a.store.SaveCheckpoint(ctx, rec)
 }
@@ -42,11 +78,12 @@ func (a *CheckpointStoreAdapter) Load(ctx context.Context, jobName string) (*cor
 		return nil, nil
 	}
 	return &core.Checkpoint{
-		ID:        jobName,
-		JobName:   rec.JobName,
-		Source:    rec.Source,
-		Position:  rec.Position,
-		Timestamp: rec.Timestamp,
+		ID:         jobName,
+		JobName:    rec.JobName,
+		Source:     rec.Source,
+		Position:   rec.Position,
+		Generation: rec.Generation,
+		Timestamp:  rec.Timestamp,
 	}, nil
 }
 
@@ -62,11 +99,12 @@ func (a *CheckpointStoreAdapter) List(ctx context.Context) ([]core.Checkpoint, e
 	result := make([]core.Checkpoint, len(recs))
 	for i, rec := range recs {
 		result[i] = core.Checkpoint{
-			ID:        rec.JobName,
-			JobName:   rec.JobName,
-			Source:    rec.Source,
-			Position:  rec.Position,
-			Timestamp: rec.Timestamp,
+			ID:         rec.JobName,
+			JobName:    rec.JobName,
+			Source:     rec.Source,
+			Position:   rec.Position,
+			Generation: rec.Generation,
+			Timestamp:  rec.Timestamp,
 		}
 	}
 	return result, nil
@@ -107,13 +145,22 @@ func (a *DLQWriterAdapter) WriteEntry(ctx context.Context, entry pipeline.DLQEnt
 		Record:          entry.Record,
 		Error:           entry.Error,
 		ErrorClass:      entry.ErrorClass,
+		IdentityContext: entry.IdentityContext,
 		Attempt:         entry.Attempt,
 		RecordHash:      hash,
 		PipelineVersion: entry.PipelineVersion,
 		DAGNode:         entry.DAGNode,
 		CreatedAt:       time.Now(),
 	}
+	if rec.IdentityContext.ReplayProvenance == "" {
+		rec.IdentityContext = core.NewDLQIdentityContext(entry.Record, entry.Error, entry.Record.Metadata.Database, entry.Record.Metadata.Table)
+	}
 	return a.store.WriteDeadLetter(ctx, rec)
+}
+
+// Update persists an existing DLQ record and its replay checkpoint context.
+func (a *DLQWriterAdapter) Update(ctx context.Context, rec DLQRecord) error {
+	return a.store.UpdateDeadLetter(ctx, &rec)
 }
 
 // Read returns the most recent dead-letter records for a job (limit <=0 means 100).
@@ -279,6 +326,25 @@ func (p *PipelineSpecStore) SaveCurrentWithID(ctx context.Context, id, name, spe
 		return err
 	}
 	return p.store.SavePipeline(ctx, &PipelineRow{ID: id, Name: name, SpecYAML: storedYAML, Status: status})
+}
+
+// UpdateRestoreState publishes restore diagnostics without producing a spec
+// version or touching a checkpoint. The fallback reads the raw storage row so
+// encrypted spec YAML is never replaced with the decrypted runtime view.
+func (p *PipelineSpecStore) UpdateRestoreState(ctx context.Context, ref, status, restoreError string) error {
+	if updater, ok := p.store.(PipelineRestoreStateStore); ok {
+		return updater.UpdatePipelineRestoreState(ctx, ref, status, restoreError)
+	}
+	row, err := p.store.GetPipeline(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return fmt.Errorf("pipeline %q not found", ref)
+	}
+	row.Status = status
+	row.RestoreError = restoreError
+	return p.store.SavePipeline(ctx, row)
 }
 
 func (p *PipelineSpecStore) Get(ctx context.Context, name string) (string, error) {
@@ -492,12 +558,19 @@ func MarshalCheckpointPosition(v any) (json.RawMessage, error) {
 
 // ── SecretFieldStore adapter ─────────────────────────────────────────
 
+// SecretFieldResolver reports whether a config field is secret-bearing for a
+// given connector kind and type. It is the single source of truth injected by
+// the control plane from connector descriptors; IsSecretFieldKey is only a
+// fallback when no resolver is available.
+type SecretFieldResolver func(kind, typ, field string) bool
+
 // SecretFieldStore wraps Storage and encrypts connection/settings secret
 // fields at rest while exposing decrypted values to runtime callers.
 // API masking remains a separate presentation concern in the control plane.
 type SecretFieldStore struct {
 	Storage
-	cipher *SpecCipher
+	cipher        *SpecCipher
+	resolveSecret SecretFieldResolver
 }
 
 // NewSecretFieldStore returns a storage view that applies field-level secret
@@ -511,6 +584,45 @@ func NewSecretFieldStore(inner Storage, cipher *SpecCipher) Storage {
 		return inner
 	}
 	return &SecretFieldStore{Storage: inner, cipher: cipher}
+}
+
+// WithSecretFieldResolver attaches a descriptor-backed secret field resolver.
+// With no resolver the store falls back to key-pattern matching and surfaces
+// that fallback via the exported FallbackSecretWrites counter so health/log
+// observers can WARN about encryption decisions made without descriptors.
+func (s *SecretFieldStore) WithSecretFieldResolver(r SecretFieldResolver) *SecretFieldStore {
+	if s == nil {
+		return s
+	}
+	s.resolveSecret = r
+	return s
+}
+
+// FallbackSecretWrites counts secret encryption decisions that had to use the
+// legacy key-pattern fallback because no descriptor resolver was available.
+var FallbackSecretWrites int64
+
+var warnedSecretFallback sync.Map
+
+// FallbackSecretField protects fields absent from the connector descriptor.
+// Warn once per field (never include its value) so health polling cannot flood
+// the log while the decision counter remains observable.
+func FallbackSecretField(kind, typ, field string) bool {
+	if !IsSecretFieldKey(field) {
+		return false
+	}
+	atomic.AddInt64(&FallbackSecretWrites, 1)
+	if _, warned := warnedSecretFallback.LoadOrStore([3]string{kind, typ, field}, true); !warned {
+		g.Log().Warningf(context.Background(), "Secret field uses legacy name fallback; add a descriptor: kind=%q type=%q field=%q", kind, typ, field)
+	}
+	return true
+}
+
+func (s *SecretFieldStore) isSecretField(kind, typ, field string) bool {
+	if s != nil && s.resolveSecret != nil {
+		return s.resolveSecret(kind, typ, field)
+	}
+	return FallbackSecretField(kind, typ, field)
 }
 
 // Cipher exposes the configured field cipher for rotation helpers/tests.
@@ -553,6 +665,64 @@ func (s *SecretFieldStore) SavePipelineWithVersionAndCheckpointReset(ctx context
 	return nil
 }
 
+// UpdatePipelineRestoreState preserves the optional atomic restore-state
+// capability through the secret-field wrapper.
+func (s *SecretFieldStore) UpdatePipelineRestoreState(ctx context.Context, ref, status, restoreError string) error {
+	if updater, ok := s.Storage.(PipelineRestoreStateStore); ok {
+		return updater.UpdatePipelineRestoreState(ctx, ref, status, restoreError)
+	}
+	row, err := s.Storage.GetPipeline(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return fmt.Errorf("pipeline %q not found", ref)
+	}
+	row.Status = status
+	row.RestoreError = restoreError
+	return s.Storage.SavePipeline(ctx, row)
+}
+
+func (s *SecretFieldStore) UpdatePipelineDesiredState(ctx context.Context, id, desired string) error {
+	store, ok := s.Storage.(PipelineLifecycleStore)
+	if !ok {
+		return fmt.Errorf("storage %T does not support pipeline lifecycle state", s.Storage)
+	}
+	return store.UpdatePipelineDesiredState(ctx, id, desired)
+}
+
+func (s *SecretFieldStore) BeginPipelineGeneration(ctx context.Context, id string) (int64, error) {
+	store, ok := s.Storage.(PipelineLifecycleStore)
+	if !ok {
+		return 0, fmt.Errorf("storage %T does not support pipeline lifecycle generation", s.Storage)
+	}
+	return store.BeginPipelineGeneration(ctx, id)
+}
+
+func (s *SecretFieldStore) UpdatePipelineObservedState(ctx context.Context, id string, generation int64, observed string) error {
+	store, ok := s.Storage.(PipelineLifecycleStore)
+	if !ok {
+		return fmt.Errorf("storage %T does not support pipeline observed state", s.Storage)
+	}
+	return store.UpdatePipelineObservedState(ctx, id, generation, observed)
+}
+
+func (s *SecretFieldStore) ResetPipelineCheckpoint(ctx context.Context, id string) (int64, error) {
+	store, ok := s.Storage.(PipelineLifecycleStore)
+	if !ok {
+		return 0, fmt.Errorf("storage %T does not support fenced checkpoint reset", s.Storage)
+	}
+	return store.ResetPipelineCheckpoint(ctx, id)
+}
+
+func (s *SecretFieldStore) SetPipelineCheckpoint(ctx context.Context, id string, rec *CheckpointRecord) (int64, error) {
+	store, ok := s.Storage.(PipelineLifecycleStore)
+	if !ok {
+		return 0, fmt.Errorf("storage %T does not support fenced checkpoint set", s.Storage)
+	}
+	return store.SetPipelineCheckpoint(ctx, id, rec)
+}
+
 // DeletePipelineWithCheckpoint forwards the optional atomic delete boundary.
 func (s *SecretFieldStore) DeletePipelineWithCheckpoint(ctx context.Context, ref string) error {
 	if atomicStore, ok := s.Storage.(interface {
@@ -571,7 +741,8 @@ func (s *SecretFieldStore) SaveConnection(ctx context.Context, c *ConnectionEntr
 		return fmt.Errorf("connection entry is nil")
 	}
 	stored := *c
-	cfg, err := EncryptConfigSecrets(s.cipher, c.Config)
+	isSecret := func(field string) bool { return s.isSecretField(c.Kind, c.Type, field) }
+	cfg, err := EncryptConfigSecretsWithResolver(s.cipher, c.Config, isSecret)
 	if err != nil {
 		return err
 	}
@@ -712,6 +883,138 @@ func (s *SecretFieldStore) ReencryptSecrets(ctx context.Context) error {
 	return nil
 }
 
+// PlaintextSecretReport describes plaintext secret-bearing values found in
+// persisted rows. Detection is read-only; remediation is a separate explicit
+// step so operators can review before anything is rewritten (IT-3/T3.2).
+type PlaintextSecretReport struct {
+	Connections []PlaintextSecretFinding `json:"connections,omitempty"`
+	Settings    []PlaintextSecretFinding `json:"settings,omitempty"`
+}
+
+type PlaintextSecretFinding struct {
+	Name  string `json:"name"`
+	Field string `json:"field,omitempty"`
+}
+
+// DetectPlaintextSecrets scans persisted connections and settings for
+// secret-bearing values that are not encrypted envelopes. It never writes.
+// Recognition uses the descriptor resolver when available so newly declared
+// secret fields (e.g. dsn) are detected even though they were stored before
+// the marking existed.
+func (s *SecretFieldStore) DetectPlaintextSecrets(ctx context.Context) (*PlaintextSecretReport, error) {
+	if s == nil {
+		return nil, fmt.Errorf("nil secret field store")
+	}
+	report := &PlaintextSecretReport{}
+	rows, err := s.Storage.ListConnections(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("scan connections for plaintext secrets: %w", err)
+	}
+	for _, c := range rows {
+		for _, f := range plaintextConfigFindings(c.Kind, c.Type, c.Config, s.isSecretField) {
+			f.Name = c.Name
+			report.Connections = append(report.Connections, f)
+		}
+	}
+	settings, err := s.Storage.ListSettings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("scan settings for plaintext secrets: %w", err)
+	}
+	for k, v := range settings {
+		if v != "" && !strings.HasPrefix(v, specEnvelopePrefix) && s.isSecretField("", "", k) {
+			report.Settings = append(report.Settings, PlaintextSecretFinding{Name: k})
+		}
+	}
+	sort.Slice(report.Connections, func(i, j int) bool { return report.Connections[i].Name < report.Connections[j].Name })
+	sort.Slice(report.Settings, func(i, j int) bool { return report.Settings[i].Name < report.Settings[j].Name })
+	return report, nil
+}
+
+// ConnectionHasPlaintextSecrets checks one stored row without decrypting it.
+// Backup uses this bounded check before writing each row to the output stream.
+func (s *SecretFieldStore) ConnectionHasPlaintextSecrets(c *ConnectionEntry) bool {
+	return c != nil && len(plaintextConfigFindings(c.Kind, c.Type, c.Config, s.isSecretField)) != 0
+}
+
+func (s *SecretFieldStore) SettingHasPlaintextSecret(key, value string) bool {
+	return value != "" && !strings.HasPrefix(value, specEnvelopePrefix) && s.isSecretField("", "", key)
+}
+
+func plaintextConfigFindings(kind, typ string, cfg map[string]any, isSecret func(kind, typ, field string) bool) []PlaintextSecretFinding {
+	var out []PlaintextSecretFinding
+	var walk func(prefix string, m map[string]any)
+	walk = func(prefix string, m map[string]any) {
+		for k, v := range m {
+			field := k
+			if prefix != "" {
+				field = prefix + "." + k
+			}
+			switch vv := v.(type) {
+			case map[string]any:
+				walk(field, vv)
+			case []any:
+				for _, item := range vv {
+					if im, ok := item.(map[string]any); ok {
+						walk(field, im)
+					}
+				}
+			case string:
+				if vv != "" && !strings.HasPrefix(vv, specEnvelopePrefix) && isSecret(kind, typ, k) {
+					out = append(out, PlaintextSecretFinding{Field: field})
+				}
+			}
+		}
+	}
+	if cfg != nil {
+		walk("", cfg)
+	}
+	return out
+}
+
+// RemediatePlaintextSecrets re-encrypts every detected plaintext secret in
+// place. It is idempotent: values already sealed with an envelope are skipped;
+// interruption is safe to retry because each row is rewritten independently.
+func (s *SecretFieldStore) RemediatePlaintextSecrets(ctx context.Context) (*PlaintextSecretReport, error) {
+	if s == nil || s.cipher == nil || !s.cipher.Enabled() {
+		return nil, fmt.Errorf("%w; set ETL_SPEC_ENCRYPTION_KEY before remediating plaintext secrets", ErrSpecEncryptionKeyUnavailable)
+	}
+	detect, err := s.DetectPlaintextSecrets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Connection rows are rewritten as a whole (SaveConnection encrypts every
+	// declared secret field, skipping existing envelopes).
+	connNames := map[string]bool{}
+	for _, f := range detect.Connections {
+		connNames[f.Name] = true
+	}
+	for name := range connNames {
+		c, err := s.GetConnection(ctx, name)
+		if err != nil {
+			return detect, fmt.Errorf("remediate connection %q: %w", name, err)
+		}
+		if c == nil {
+			return detect, fmt.Errorf("remediate connection %q: not found", name)
+		}
+		if err := s.SaveConnection(ctx, c); err != nil {
+			return detect, fmt.Errorf("remediate connection %q: %w", name, err)
+		}
+	}
+	for _, f := range detect.Settings {
+		v, err := s.GetSetting(ctx, f.Name)
+		if err != nil {
+			return detect, fmt.Errorf("remediate setting %q: %w", f.Name, err)
+		}
+		if v == "" {
+			continue
+		}
+		if err := s.SetSetting(ctx, f.Name, v); err != nil {
+			return detect, fmt.Errorf("remediate setting %q: %w", f.Name, err)
+		}
+	}
+	return detect, nil
+}
+
 func (s *SecretFieldStore) decryptConnection(c *ConnectionEntry) (*ConnectionEntry, error) {
 	if c == nil {
 		return nil, nil
@@ -735,4 +1038,19 @@ func UnwrapStorage(s Storage) Storage {
 		}
 		s = sf.Storage
 	}
+}
+
+// UnwrapSecretFieldStore returns the view with field-level secret decryption
+// bypassed: rows come back exactly as persisted (encrypted envelopes stay
+// sealed). Backup export uses this so portable products never contain
+// decrypted credentials. It preserves other outer wrappers by peeling only
+// the SecretFieldStore layer when it is the outermost one; callers that need
+// the innermost raw backend should use UnwrapStorage.
+func UnwrapSecretFieldStore(s Storage) Storage {
+	if sf, ok := s.(*SecretFieldStore); ok {
+		// SecretFieldStore embeds Storage; reads through sf.Storage skip the
+		// decrypting methods entirely.
+		return sf.Storage
+	}
+	return s
 }

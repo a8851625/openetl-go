@@ -11,16 +11,17 @@ import (
 // DeadLetter mirrors dlq.DeadLetter for the adapter interface.
 // Keeping this as a structural alias avoids a circular import.
 type DeadLetter struct {
-	ID              int64       `json:"id"`
-	JobName         string      `json:"job_name"`
-	Record          core.Record `json:"record"`
-	Error           string      `json:"error"`
-	ErrorClass      string      `json:"error_class,omitempty"`
-	Timestamp       time.Time   `json:"timestamp"`
-	Attempt         int         `json:"attempt"`
-	RecordHash      string      `json:"record_hash,omitempty"`
-	PipelineVersion int         `json:"pipeline_version,omitempty"`
-	DAGNode         string      `json:"dag_node,omitempty"`
+	ID              int64                   `json:"id"`
+	JobName         string                  `json:"job_name"`
+	Record          core.Record             `json:"record"`
+	Error           string                  `json:"error"`
+	ErrorClass      string                  `json:"error_class,omitempty"`
+	IdentityContext core.DLQIdentityContext `json:"identity_context"`
+	Timestamp       time.Time               `json:"timestamp"`
+	Attempt         int                     `json:"attempt"`
+	RecordHash      string                  `json:"record_hash,omitempty"`
+	PipelineVersion int                     `json:"pipeline_version,omitempty"`
+	DAGNode         string                  `json:"dag_node,omitempty"`
 }
 
 // DLQCompatWriter implements pipeline.DLQWriter (WriteDLQ) and also provides
@@ -111,6 +112,18 @@ func (w *DLQCompatWriter) DeleteByID(ctx context.Context, id int64) error {
 	return w.adapter.DeleteByID(ctx, id)
 }
 
+// Update persists a repaired record and/or its replay checkpoint context.
+func (w *DLQCompatWriter) Update(ctx context.Context, item DeadLetter) error {
+	return w.adapter.Update(ctx, DLQRecord{
+		ID: item.ID, JobName: item.JobName, Record: item.Record,
+		Error: item.Error, ErrorClass: item.ErrorClass,
+		IdentityContext: item.IdentityContext,
+		Attempt:         item.Attempt, RecordHash: item.RecordHash,
+		PipelineVersion: item.PipelineVersion, DAGNode: item.DAGNode,
+		CreatedAt: item.Timestamp,
+	})
+}
+
 func deadLetterFromRecord(rec DLQRecord) DeadLetter {
 	return DeadLetter{
 		ID:              rec.ID,
@@ -118,6 +131,7 @@ func deadLetterFromRecord(rec DLQRecord) DeadLetter {
 		Record:          rec.Record,
 		Error:           rec.Error,
 		ErrorClass:      rec.ErrorClass,
+		IdentityContext: rec.IdentityContext,
 		Timestamp:       rec.CreatedAt,
 		Attempt:         rec.Attempt,
 		RecordHash:      rec.RecordHash,

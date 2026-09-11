@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
@@ -20,6 +21,7 @@ type Dialect interface {
 	Now() string
 	PipelineUpsert() string
 	CheckpointUpsert() string
+	FencedCheckpointUpsert() string
 	WorkerUpsert() string
 	PluginUpsert() string
 	ConnectionUpsert() string
@@ -96,10 +98,16 @@ func (s *Store) injectFailure(operation string) error {
 }
 
 func (s *Store) exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if tx := s.txFromContext(ctx); tx != nil {
+		return tx.ExecContext(ctx, s.dialect.Bind(query), args...)
+	}
 	return s.db.ExecContext(ctx, s.dialect.Bind(query), args...)
 }
 
 func (s *Store) query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if tx := s.txFromContext(ctx); tx != nil {
+		return tx.QueryContext(ctx, s.dialect.Bind(query), args...)
+	}
 	rdb := s.readDB
 	if rdb == nil {
 		rdb = s.db
@@ -108,11 +116,65 @@ func (s *Store) query(ctx context.Context, query string, args ...any) (*sql.Rows
 }
 
 func (s *Store) queryRow(ctx context.Context, query string, args ...any) *sql.Row {
+	if tx := s.txFromContext(ctx); tx != nil {
+		return tx.QueryRowContext(ctx, s.dialect.Bind(query), args...)
+	}
 	rdb := s.readDB
 	if rdb == nil {
 		rdb = s.db
 	}
 	return rdb.QueryRowContext(ctx, s.dialect.Bind(query), args...)
+}
+
+type txContextKey struct{ store *Store }
+
+// WithTx runs fn inside a single database transaction. Every store write
+// issued with the returned context participates in the transaction; any error
+// rolls everything back (IT-3/T3.4 atomic restore). Nested WithTx calls reuse
+// the outer transaction.
+func (s *Store) WithTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if tx := s.txFromContext(ctx); tx != nil {
+		return fn(ctx)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	if err := fn(context.WithValue(ctx, txContextKey{store: s}, tx)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) txFromContext(ctx context.Context) *sql.Tx {
+	if ctx == nil {
+		return nil
+	}
+	tx, _ := ctx.Value(txContextKey{store: s}).(*sql.Tx)
+	return tx
+}
+
+// WipeControlPlane empties every backup-covered table inside the given
+// transaction context. Refuse autocommit to prevent a half-cleared database.
+func (s *Store) WipeControlPlane(ctx context.Context) error {
+	if s.txFromContext(ctx) == nil {
+		return fmt.Errorf("wiping the control plane requires a transaction")
+	}
+	tables := []string{
+		"dead_letters", "audit_logs", "run_history", "task_assignments",
+		"checkpoints", "pipeline_versions", "pipelines", "workers",
+		"plugins", "connections", "settings",
+	}
+	for _, t := range tables {
+		if err := s.injectFailure("backup.wipe." + t); err != nil {
+			return err
+		}
+		if _, err := s.exec(ctx, "DELETE FROM "+t); err != nil {
+			return fmt.Errorf("wipe %s: %w", t, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error {
@@ -144,6 +206,10 @@ func (s *Store) migrateUnlocked() error {
 			name        TEXT NOT NULL,
 			spec_yaml   TEXT NOT NULL,
 			status      TEXT NOT NULL DEFAULT 'stopped',
+			desired_state TEXT NOT NULL DEFAULT 'running',
+			observed_state TEXT NOT NULL DEFAULT 'stopped',
+			generation  INTEGER NOT NULL DEFAULT 0,
+			restore_error TEXT NOT NULL DEFAULT '',
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -160,6 +226,7 @@ func (s *Store) migrateUnlocked() error {
 			job_name    TEXT PRIMARY KEY,
 			source      TEXT,
 			position    TEXT,
+			generation  INTEGER NOT NULL DEFAULT 0,
 			timestamp   DATETIME,
 			updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -169,6 +236,7 @@ func (s *Store) migrateUnlocked() error {
 			record_json TEXT NOT NULL,
 			error       TEXT,
 			error_class TEXT,
+			identity_context_json TEXT,
 			attempt     INTEGER DEFAULT 0,
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -308,6 +376,12 @@ func (s *Store) runVersionedMigrations() error {
 		{14, "add attempt to task_assignments", "ALTER TABLE task_assignments ADD COLUMN attempt INTEGER DEFAULT 0"},
 		{15, "add lease_expires_at to task_assignments", "ALTER TABLE task_assignments ADD COLUMN lease_expires_at DATETIME"},
 		{16, "add last_error to task_assignments", "ALTER TABLE task_assignments ADD COLUMN last_error TEXT DEFAULT ''"},
+		{17, "add restore_error to pipelines", "ALTER TABLE pipelines ADD COLUMN restore_error TEXT NOT NULL DEFAULT ''"},
+		{18, "add desired_state to pipelines", "ALTER TABLE pipelines ADD COLUMN desired_state TEXT NOT NULL DEFAULT ''"},
+		{19, "add observed_state to pipelines", "ALTER TABLE pipelines ADD COLUMN observed_state TEXT NOT NULL DEFAULT ''"},
+		{20, "add generation to pipelines", "ALTER TABLE pipelines ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"},
+		{21, "add generation to checkpoints", "ALTER TABLE checkpoints ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"},
+		{22, "add identity context to dead_letters", "ALTER TABLE dead_letters ADD COLUMN identity_context_json TEXT"},
 	}
 
 	for _, m := range migrations {
@@ -349,7 +423,7 @@ func (s *Store) runVersionedMigrations() error {
 	}
 	_, _ = s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pipelines_id ON pipelines(id)`)
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_pipelines_name ON pipelines(name)`)
-	return nil
+	return s.backfillPipelineLifecycle()
 }
 
 func (s *Store) backfillPipelineIDs() error {
@@ -378,6 +452,33 @@ func (s *Store) backfillPipelineIDs() error {
 		if _, err := s.db.Exec(`UPDATE pipelines SET id=? WHERE name=? AND (id IS NULL OR id='')`, row.ID, name); err != nil {
 			return fmt.Errorf("backfill pipeline id for %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) backfillPipelineLifecycle() error {
+	if _, err := s.db.Exec(`UPDATE pipelines
+		SET desired_state = CASE LOWER(TRIM(status))
+			WHEN 'stopped' THEN 'stopped'
+			WHEN 'paused' THEN 'paused'
+			ELSE 'running'
+		END
+		WHERE desired_state IS NULL OR desired_state = ''`); err != nil {
+		return fmt.Errorf("backfill pipeline desired_state: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE pipelines
+		SET observed_state = CASE LOWER(TRIM(status))
+			WHEN 'running' THEN 'running'
+			WHEN 'scheduled' THEN 'scheduled'
+			WHEN 'stopped' THEN 'stopped'
+			WHEN 'paused' THEN 'paused'
+			WHEN 'failed' THEN 'failed'
+			WHEN 'completed' THEN 'completed'
+			WHEN 'restore_failed' THEN 'restore_failed'
+			ELSE 'stopped'
+		END
+		WHERE observed_state IS NULL OR observed_state = ''`); err != nil {
+		return fmt.Errorf("backfill pipeline observed_state: %w", err)
 	}
 	return nil
 }
@@ -423,11 +524,15 @@ func (s *Store) migratePipelinePrimaryKey() error {
 			name        TEXT NOT NULL,
 			spec_yaml   TEXT NOT NULL,
 			status      TEXT NOT NULL DEFAULT 'stopped',
+			desired_state TEXT NOT NULL DEFAULT '',
+			observed_state TEXT NOT NULL DEFAULT '',
+			generation  INTEGER NOT NULL DEFAULT 0,
+			restore_error TEXT NOT NULL DEFAULT '',
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`INSERT INTO pipelines_new (id, name, spec_yaml, status, created_at, updated_at)
-		 SELECT id, name, spec_yaml, status, created_at, updated_at FROM pipelines`,
+		`INSERT INTO pipelines_new (id, name, spec_yaml, status, desired_state, observed_state, generation, restore_error, created_at, updated_at)
+		 SELECT id, name, spec_yaml, status, '', '', 0, '', created_at, updated_at FROM pipelines`,
 		`DROP TABLE pipelines`,
 		`ALTER TABLE pipelines_new RENAME TO pipelines`,
 	}
@@ -455,7 +560,8 @@ func (s *Store) SavePipeline(ctx context.Context, row *storage.PipelineRow) erro
 		}
 	}
 	storage.EnsurePipelineID(row)
-	_, err := s.exec(ctx, s.dialect.PipelineUpsert(), row.ID, row.Name, row.SpecYAML, row.Status)
+	storage.NormalizePipelineLifecycle(row)
+	_, err := s.exec(ctx, s.dialect.PipelineUpsert(), row.ID, row.Name, row.SpecYAML, row.Status, row.DesiredState, row.ObservedState, row.Generation, row.RestoreError)
 	return err
 }
 
@@ -483,6 +589,7 @@ func (s *Store) savePipelineWithVersion(ctx context.Context, row *storage.Pipeli
 		}
 	}
 	storage.EnsurePipelineID(row)
+	storage.NormalizePipelineLifecycle(row)
 
 	// Retry allocation under the unique (pipeline, version) constraint so two
 	// concurrent updaters cannot both observe the same MAX(version) and commit
@@ -513,7 +620,7 @@ func (s *Store) savePipelineWithVersionOnce(ctx context.Context, row *storage.Pi
 	if err := s.injectFailure("pipeline.current"); err != nil {
 		return fmt.Errorf("save current pipeline: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, s.dialect.Bind(s.dialect.PipelineUpsert()), row.ID, row.Name, row.SpecYAML, row.Status); err != nil {
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(s.dialect.PipelineUpsert()), row.ID, row.Name, row.SpecYAML, row.Status, row.DesiredState, row.ObservedState, row.Generation, row.RestoreError); err != nil {
 		return fmt.Errorf("save current pipeline: %w", err)
 	}
 
@@ -534,6 +641,18 @@ func (s *Store) savePipelineWithVersionOnce(ctx context.Context, row *storage.Pi
 		return fmt.Errorf("save pipeline version %d: %w", version, err)
 	}
 	if resetCheckpoint {
+		result, err := tx.ExecContext(ctx, s.dialect.Bind(
+			`UPDATE pipelines SET generation=generation+1, updated_at=CURRENT_TIMESTAMP WHERE id=? AND desired_state IN ('stopped','paused')`), row.ID)
+		if err != nil {
+			return fmt.Errorf("fence pipeline checkpoint reset: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("inspect pipeline checkpoint reset fence: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("%w: pipeline %s", storage.ErrPipelineNotQuiescent, row.ID)
+		}
 		if err := s.injectFailure("checkpoint.delete"); err != nil {
 			return fmt.Errorf("reset pipeline checkpoint: %w", err)
 		}
@@ -560,11 +679,11 @@ func isUniqueVersionConflict(err error) bool {
 func (s *Store) GetPipeline(ctx context.Context, ref string) (*storage.PipelineRow, error) {
 	row := &storage.PipelineRow{}
 	err := s.queryRow(ctx,
-		`SELECT id, name, spec_yaml, status, created_at, updated_at FROM pipelines
+		`SELECT id, name, spec_yaml, status, desired_state, observed_state, generation, COALESCE(restore_error, ''), created_at, updated_at FROM pipelines
 		 WHERE id=? OR name=?
 		 ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END, created_at
 		 LIMIT 1`, ref, ref, ref,
-	).Scan(&row.ID, &row.Name, &row.SpecYAML, &row.Status, &row.CreatedAt, &row.UpdatedAt)
+	).Scan(&row.ID, &row.Name, &row.SpecYAML, &row.Status, &row.DesiredState, &row.ObservedState, &row.Generation, &row.RestoreError, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -573,7 +692,7 @@ func (s *Store) GetPipeline(ctx context.Context, ref string) (*storage.PipelineR
 
 func (s *Store) ListPipelines(ctx context.Context) ([]*storage.PipelineRow, error) {
 	rows, err := s.query(ctx,
-		`SELECT id, name, spec_yaml, status, created_at, updated_at FROM pipelines ORDER BY name, created_at`)
+		`SELECT id, name, spec_yaml, status, desired_state, observed_state, generation, COALESCE(restore_error, ''), created_at, updated_at FROM pipelines ORDER BY name, created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -581,7 +700,7 @@ func (s *Store) ListPipelines(ctx context.Context) ([]*storage.PipelineRow, erro
 	var result []*storage.PipelineRow
 	for rows.Next() {
 		row := &storage.PipelineRow{}
-		if err := rows.Scan(&row.ID, &row.Name, &row.SpecYAML, &row.Status, &row.CreatedAt, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.Name, &row.SpecYAML, &row.Status, &row.DesiredState, &row.ObservedState, &row.Generation, &row.RestoreError, &row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, row)
@@ -641,9 +760,213 @@ func (s *Store) DeletePipelineWithCheckpoint(ctx context.Context, ref string) er
 
 func (s *Store) UpdatePipelineStatus(ctx context.Context, ref string, status string) error {
 	_, err := s.exec(ctx,
-		`UPDATE pipelines SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=? OR name=?`,
-		status, ref, ref)
+		`UPDATE pipelines SET status=?, observed_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=? OR name=?`,
+		status, status, ref, ref)
 	return err
+}
+
+// UpdatePipelineRestoreState changes only the control-plane restore status and
+// diagnostic payload. It deliberately leaves spec/version/checkpoint/DLQ data
+// outside this write boundary.
+func (s *Store) UpdatePipelineRestoreState(ctx context.Context, ref, status, restoreError string) error {
+	result, err := s.exec(ctx,
+		`UPDATE pipelines SET status=?, observed_state=?, restore_error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? OR name=?`,
+		status, status, restoreError, ref, ref)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("pipeline %q not found", ref)
+	}
+	return nil
+}
+
+func (s *Store) UpdatePipelineDesiredState(ctx context.Context, id, desired string) error {
+	switch desired {
+	case storage.PipelineDesiredRunning, storage.PipelineDesiredStopped, storage.PipelineDesiredPaused:
+	default:
+		return fmt.Errorf("invalid desired state %q", desired)
+	}
+	if err := s.injectFailure("pipeline.desired_state"); err != nil {
+		return err
+	}
+	result, err := s.exec(ctx,
+		`UPDATE pipelines SET desired_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, desired, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		var existing string
+		if err := s.queryRow(ctx, `SELECT desired_state FROM pipelines WHERE id=?`, id).Scan(&existing); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("pipeline %q not found", id)
+			}
+			return err
+		}
+		if existing != desired {
+			return fmt.Errorf("pipeline %s desired_state remained %s", id, existing)
+		}
+	}
+	return nil
+}
+
+func (s *Store) BeginPipelineGeneration(ctx context.Context, id string) (int64, error) {
+	if err := s.injectFailure("pipeline.generation"); err != nil {
+		return 0, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, s.dialect.Bind(
+		`UPDATE pipelines SET generation=generation+1, status='starting', observed_state='starting', updated_at=CURRENT_TIMESTAMP WHERE id=? AND desired_state='running'`), id)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 {
+		var desired string
+		lookupErr := tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT desired_state FROM pipelines WHERE id=?`), id).Scan(&desired)
+		if lookupErr == sql.ErrNoRows {
+			return 0, fmt.Errorf("pipeline %q not found", id)
+		}
+		if lookupErr != nil {
+			return 0, lookupErr
+		}
+		return 0, fmt.Errorf("%w: pipeline %s desired_state=%s", storage.ErrPipelineNotRunnable, id, desired)
+	}
+	var generation int64
+	if err := tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT generation FROM pipelines WHERE id=?`), id).Scan(&generation); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return generation, nil
+}
+
+func (s *Store) UpdatePipelineObservedState(ctx context.Context, id string, generation int64, observed string) error {
+	if err := s.injectFailure("pipeline.observed_state"); err != nil {
+		return err
+	}
+	query := `UPDATE pipelines SET status=?, observed_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+	args := []any{observed, observed, id}
+	if generation > 0 {
+		query += ` AND generation=?`
+		args = append(args, generation)
+	}
+	result, err := s.exec(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		var currentGeneration int64
+		var currentObserved string
+		if err := s.queryRow(ctx, `SELECT generation, observed_state FROM pipelines WHERE id=?`, id).Scan(&currentGeneration, &currentObserved); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("pipeline %q not found", id)
+			}
+			return err
+		}
+		if generation > 0 && currentGeneration != generation {
+			return fmt.Errorf("%w: pipeline=%s write_generation=%d current_generation=%d", storage.ErrPipelineGenerationFenced, id, generation, currentGeneration)
+		}
+		if currentObserved != observed {
+			return fmt.Errorf("pipeline %s observed_state remained %s", id, currentObserved)
+		}
+	}
+	return nil
+}
+
+func (s *Store) advanceQuiescentGeneration(ctx context.Context, tx *sql.Tx, id string) (int64, string, error) {
+	result, err := tx.ExecContext(ctx, s.dialect.Bind(
+		`UPDATE pipelines SET generation=generation+1, updated_at=CURRENT_TIMESTAMP WHERE id=? AND desired_state IN ('stopped','paused')`), id)
+	if err != nil {
+		return 0, "", err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, "", err
+	}
+	var generation int64
+	var name, desired string
+	if err := tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT name, desired_state, generation FROM pipelines WHERE id=?`), id).Scan(&name, &desired, &generation); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, "", fmt.Errorf("pipeline %q not found", id)
+		}
+		return 0, "", err
+	}
+	if affected == 0 {
+		return 0, "", fmt.Errorf("%w: pipeline %s desired_state=%s", storage.ErrPipelineNotQuiescent, id, desired)
+	}
+	return generation, name, nil
+}
+
+func (s *Store) ResetPipelineCheckpoint(ctx context.Context, id string) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	generation, name, err := s.advanceQuiescentGeneration(ctx, tx, id)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.injectFailure("checkpoint.delete"); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(
+		`DELETE FROM checkpoints WHERE job_name=? OR job_name=? OR job_name LIKE ? OR job_name LIKE ?`),
+		id, name, id+".shard-%", id+"-%"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return generation, nil
+}
+
+func (s *Store) SetPipelineCheckpoint(ctx context.Context, id string, rec *storage.CheckpointRecord) (int64, error) {
+	if rec == nil {
+		return 0, fmt.Errorf("checkpoint is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	generation, _, err := s.advanceQuiescentGeneration(ctx, tx, id)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.injectFailure("checkpoint.save"); err != nil {
+		return 0, err
+	}
+	rec.PipelineID = id
+	rec.Generation = generation
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(s.dialect.CheckpointUpsert()), rec.JobName, rec.Source, string(rec.Position), rec.Generation, rec.Timestamp); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return generation, nil
 }
 
 // ── Pipeline versions ────────────────────────────────────────────────
@@ -706,7 +1029,33 @@ func (s *Store) ListPipelineVersions(ctx context.Context, name string) ([]*stora
 // ── Checkpoints ──────────────────────────────────────────────────────
 
 func (s *Store) SaveCheckpoint(ctx context.Context, rec *storage.CheckpointRecord) error {
-	_, err := s.exec(ctx, s.dialect.CheckpointUpsert(), rec.JobName, rec.Source, string(rec.Position), rec.Timestamp)
+	if err := s.injectFailure("checkpoint.save"); err != nil {
+		return err
+	}
+	if rec.PipelineID != "" && rec.Generation > 0 {
+		result, err := s.exec(ctx, s.dialect.FencedCheckpointUpsert(), rec.JobName, rec.Source, string(rec.Position), rec.Generation, rec.Timestamp, rec.PipelineID, rec.Generation)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			var current int64
+			if err := s.queryRow(ctx, `SELECT generation FROM pipelines WHERE id=?`, rec.PipelineID).Scan(&current); err != nil {
+				if err == sql.ErrNoRows {
+					return fmt.Errorf("%w: pipeline %s no longer exists", core.ErrCheckpointFenced, rec.PipelineID)
+				}
+				return err
+			}
+			if current != rec.Generation {
+				return fmt.Errorf("%w: pipeline=%s write_generation=%d current_generation=%d", core.ErrCheckpointFenced, rec.PipelineID, rec.Generation, current)
+			}
+		}
+		return nil
+	}
+	_, err := s.exec(ctx, s.dialect.CheckpointUpsert(), rec.JobName, rec.Source, string(rec.Position), rec.Generation, rec.Timestamp)
 	return err
 }
 
@@ -714,9 +1063,9 @@ func (s *Store) LoadCheckpoint(ctx context.Context, jobName string) (*storage.Ch
 	rec := &storage.CheckpointRecord{}
 	var pos string
 	err := s.queryRow(ctx,
-		`SELECT job_name, source, position, timestamp, updated_at FROM checkpoints WHERE job_name=?`,
+		`SELECT job_name, source, position, generation, timestamp, updated_at FROM checkpoints WHERE job_name=?`,
 		jobName,
-	).Scan(&rec.JobName, &rec.Source, &pos, &rec.Timestamp, &rec.UpdatedAt)
+	).Scan(&rec.JobName, &rec.Source, &pos, &rec.Generation, &rec.Timestamp, &rec.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -734,7 +1083,7 @@ func (s *Store) DeleteCheckpoint(ctx context.Context, jobName string) error {
 
 func (s *Store) ListCheckpoints(ctx context.Context) ([]*storage.CheckpointRecord, error) {
 	rows, err := s.query(ctx,
-		`SELECT job_name, source, position, timestamp, updated_at FROM checkpoints ORDER BY job_name`)
+		`SELECT job_name, source, position, generation, timestamp, updated_at FROM checkpoints ORDER BY job_name`)
 	if err != nil {
 		return nil, err
 	}
@@ -743,7 +1092,7 @@ func (s *Store) ListCheckpoints(ctx context.Context) ([]*storage.CheckpointRecor
 	for rows.Next() {
 		rec := &storage.CheckpointRecord{}
 		var pos string
-		if err := rows.Scan(&rec.JobName, &rec.Source, &pos, &rec.Timestamp, &rec.UpdatedAt); err != nil {
+		if err := rows.Scan(&rec.JobName, &rec.Source, &pos, &rec.Generation, &rec.Timestamp, &rec.UpdatedAt); err != nil {
 			return nil, err
 		}
 		rec.Position = json.RawMessage(pos)
@@ -759,13 +1108,20 @@ func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) err
 	if err != nil {
 		return fmt.Errorf("marshal dlq record: %w", err)
 	}
+	if rec.IdentityContext.ReplayProvenance == "" {
+		rec.IdentityContext = core.NewDLQIdentityContext(rec.Record, rec.Error, rec.Record.Metadata.Database, rec.Record.Metadata.Table)
+	}
+	identityJSON, err := json.Marshal(rec.IdentityContext)
+	if err != nil {
+		return fmt.Errorf("marshal dlq identity context: %w", err)
+	}
 	if rec.RecordHash == "" {
 		rec.RecordHash = storage.RecordHashJSON(recJSON)
 	}
 	_, err = s.exec(ctx,
-		`INSERT INTO dead_letters (job_name, record_json, error, error_class, attempt, record_hash, pipeline_version, dag_node, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.JobName, string(recJSON), rec.Error, rec.ErrorClass, rec.Attempt, rec.RecordHash, rec.PipelineVersion, rec.DAGNode, time.Now(),
+		`INSERT INTO dead_letters (job_name, record_json, error, error_class, identity_context_json, attempt, record_hash, pipeline_version, dag_node, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.JobName, string(recJSON), rec.Error, rec.ErrorClass, string(identityJSON), rec.Attempt, rec.RecordHash, rec.PipelineVersion, rec.DAGNode, time.Now(),
 	)
 	return err
 }
@@ -773,13 +1129,14 @@ func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) err
 func (s *Store) GetDeadLetterByID(ctx context.Context, jobName string, id int64) (*storage.DLQRecord, error) {
 	rec := &storage.DLQRecord{}
 	var recJSON string
+	var identityJSON string
 	var errMsg, errClass sql.NullString
 	err := s.queryRow(ctx,
-		`SELECT id, job_name, record_json, error, error_class, attempt,
+		`SELECT id, job_name, record_json, error, error_class, COALESCE(identity_context_json, '{}'), attempt,
 		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
 		 FROM dead_letters WHERE job_name=? AND id=?`,
 		jobName, id,
-	).Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt)
+	).Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &identityJSON, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -791,6 +1148,10 @@ func (s *Store) GetDeadLetterByID(ctx context.Context, jobName string, id int64)
 	if err := json.Unmarshal([]byte(recJSON), &rec.Record); err != nil {
 		return nil, err
 	}
+	if err := json.Unmarshal([]byte(identityJSON), &rec.IdentityContext); err != nil {
+		return nil, fmt.Errorf("unmarshal dlq identity context: %w", err)
+	}
+	core.NormalizePersistedDLQIdentityContext(&rec.IdentityContext)
 	return rec, nil
 }
 
@@ -805,8 +1166,9 @@ func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) (
 	for rows.Next() {
 		rec := &storage.DLQRecord{}
 		var recJSON string
+		var identityJSON string
 		var errMsg, errClass sql.NullString
-		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &identityJSON, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt); err != nil {
 			return nil, err
 		}
 		rec.Error = errMsg.String
@@ -814,9 +1176,46 @@ func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) (
 		if err := json.Unmarshal([]byte(recJSON), &rec.Record); err != nil {
 			continue
 		}
+		if err := json.Unmarshal([]byte(identityJSON), &rec.IdentityContext); err != nil {
+			return nil, fmt.Errorf("unmarshal dlq identity context: %w", err)
+		}
+		core.NormalizePersistedDLQIdentityContext(&rec.IdentityContext)
 		result = append(result, rec)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) UpdateDeadLetter(ctx context.Context, rec *storage.DLQRecord) error {
+	if rec == nil || rec.ID <= 0 || strings.TrimSpace(rec.JobName) == "" {
+		return fmt.Errorf("update dlq requires a positive id and job_name")
+	}
+	if err := s.injectFailure("dlq.update"); err != nil {
+		return err
+	}
+	recJSON, err := json.Marshal(rec.Record)
+	if err != nil {
+		return fmt.Errorf("marshal dlq record: %w", err)
+	}
+	core.NormalizePersistedDLQIdentityContext(&rec.IdentityContext)
+	identityJSON, err := json.Marshal(rec.IdentityContext)
+	if err != nil {
+		return fmt.Errorf("marshal dlq identity context: %w", err)
+	}
+	rec.RecordHash = storage.RecordHashJSON(recJSON)
+	result, err := s.exec(ctx,
+		`UPDATE dead_letters SET record_json=?, error=?, error_class=?, identity_context_json=?, attempt=?, record_hash=?, pipeline_version=?, dag_node=? WHERE job_name=? AND id=?`,
+		string(recJSON), rec.Error, rec.ErrorClass, string(identityJSON), rec.Attempt, rec.RecordHash, rec.PipelineVersion, rec.DAGNode, rec.JobName, rec.ID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("dlq record %s:%d not found", rec.JobName, rec.ID)
+	}
+	return nil
 }
 
 func (s *Store) DeleteDeadLettersByFilter(ctx context.Context, filter storage.DLQFilter) (int64, error) {
@@ -864,6 +1263,9 @@ func rewriteLimitedDelete(query string, limit int, supportsBareLimit bool) strin
 }
 
 func (s *Store) DeleteDeadLetterByID(ctx context.Context, id int64) error {
+	if err := s.injectFailure("dlq.delete"); err != nil {
+		return err
+	}
 	_, err := s.exec(ctx, `DELETE FROM dead_letters WHERE id=?`, id)
 	return err
 }
@@ -919,7 +1321,7 @@ func newDLQQueryBuilder(f storage.DLQFilter) *dlqQueryBuilder {
 		limit = 100
 	}
 	q := fmt.Sprintf(
-		`SELECT id, job_name, record_json, error, error_class, attempt,
+		`SELECT id, job_name, record_json, error, error_class, COALESCE(identity_context_json, '{}'), attempt,
 		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
 		 FROM dead_letters WHERE %s ORDER BY created_at DESC LIMIT %d OFFSET %d`,
 		strings.Join(where, " AND "), limit, f.Offset,
@@ -985,6 +1387,18 @@ func (s *Store) WriteAudit(ctx context.Context, entry *storage.AuditEntry) error
 	return err
 }
 
+// WriteAuditFidelity writes an audit row preserving the original id and
+// created_at (restore fidelity, IT-3/T3.4). Used by backup restore so audit
+// rows are byte-identical to the snapshot.
+func (s *Store) WriteAuditFidelity(ctx context.Context, entry *storage.AuditEntry) error {
+	if entry == nil {
+		return fmt.Errorf("nil audit entry")
+	}
+	return s.insertBackupRow(ctx, "audit_logs", "id,action,method,path,target,remote,created_at",
+		entry.ID, entry.Action, entry.Method, entry.Path, entry.Target, entry.Remote, entry.CreatedAt,
+	)
+}
+
 func (s *Store) ListAudit(ctx context.Context, limit int) ([]*storage.AuditEntry, error) {
 	if limit <= 0 {
 		limit = 100
@@ -1030,6 +1444,18 @@ func (s *Store) RecordRunEnd(ctx context.Context, runID int64, status string, re
 	return err
 }
 
+// WriteRunRecordFidelity inserts a run-history row exactly as recorded in a
+// snapshot: original id, job name, timestamps and stats are preserved instead
+// of being recomputed through RecordRunStart/End (IT-3/T3.4).
+func (s *Store) WriteRunRecordFidelity(ctx context.Context, r *storage.RunRecord) error {
+	if r == nil {
+		return fmt.Errorf("nil run record")
+	}
+	return s.insertBackupRow(ctx, "run_history", "id,job_name,status,started_at,finished_at,duration_ms,records_read,records_written,records_failed,records_dlq",
+		r.ID, r.JobName, r.Status, r.StartedAt, r.FinishedAt, r.DurationMs,
+		r.RecordsRead, r.RecordsWritten, r.RecordsFailed, r.RecordsDLQ)
+}
+
 func (s *Store) ListRunHistory(ctx context.Context, jobName string, limit int) ([]*storage.RunRecord, error) {
 	if limit <= 0 {
 		limit = 20
@@ -1037,6 +1463,58 @@ func (s *Store) ListRunHistory(ctx context.Context, jobName string, limit int) (
 	rows, err := s.query(ctx,
 		`SELECT id, job_name, status, started_at, finished_at, duration_ms, records_read, records_written, records_failed, records_dlq
 		 FROM run_history WHERE job_name=? ORDER BY started_at DESC LIMIT ?`, jobName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*storage.RunRecord
+	for rows.Next() {
+		r := &storage.RunRecord{}
+		var finishedAt sql.NullTime
+		if err := rows.Scan(&r.ID, &r.JobName, &r.Status, &r.StartedAt, &finishedAt, &r.DurationMs, &r.RecordsRead, &r.RecordsWritten, &r.RecordsFailed, &r.RecordsDLQ); err != nil {
+			return nil, err
+		}
+		if finishedAt.Valid {
+			r.FinishedAt = &finishedAt.Time
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+// ListAuditPaged pages audit rows ascending by id for full-table backup
+// export (IT-3/T3.3). It exists alongside ListAudit's API-facing limit view.
+func (s *Store) ListAuditPaged(ctx context.Context, afterID int64, limit int) ([]*storage.AuditEntry, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := s.query(ctx,
+		`SELECT id, action, method, path, target, remote, created_at
+		 FROM audit_logs WHERE id > ? ORDER BY id ASC LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*storage.AuditEntry
+	for rows.Next() {
+		e := &storage.AuditEntry{}
+		if err := rows.Scan(&e.ID, &e.Action, &e.Method, &e.Path, &e.Target, &e.Remote, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, e)
+	}
+	return result, rows.Err()
+}
+
+// ListRunHistoryPaged pages run-history rows ascending by id for full-table
+// backup export (IT-3/T3.3).
+func (s *Store) ListRunHistoryPaged(ctx context.Context, afterID int64, limit int) ([]*storage.RunRecord, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := s.query(ctx,
+		`SELECT id, job_name, status, started_at, finished_at, duration_ms, records_read, records_written, records_failed, records_dlq
+		 FROM run_history WHERE id > ? ORDER BY id ASC LIMIT ?`, afterID, limit)
 	if err != nil {
 		return nil, err
 	}

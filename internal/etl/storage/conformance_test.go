@@ -3,6 +3,8 @@ package storage_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -22,6 +24,8 @@ func runConformanceSuite(t *testing.T, newStore func(t *testing.T) (storage.Stor
 	t.Run("PipelineCRUD", func(t *testing.T) { testPipelineCRUD(t, newStore) })
 	t.Run("PipelineDuplicateNamesUseID", func(t *testing.T) { testPipelineDuplicateNamesUseID(t, newStore) })
 	t.Run("PipelineStatus", func(t *testing.T) { testPipelineStatus(t, newStore) })
+	t.Run("PipelineRestoreState", func(t *testing.T) { testPipelineRestoreState(t, newStore) })
+	t.Run("PipelineLifecycleFence", func(t *testing.T) { testPipelineLifecycleFence(t, newStore) })
 	t.Run("PipelineVersions", func(t *testing.T) { testPipelineVersions(t, newStore) })
 	t.Run("PipelineAtomicLifecycle", func(t *testing.T) { testPipelineAtomicLifecycle(t, newStore) })
 	t.Run("CheckpointCRUD", func(t *testing.T) { testCheckpointCRUD(t, newStore) })
@@ -160,6 +164,149 @@ func testPipelineStatus(t *testing.T, newStore func(t *testing.T) (storage.Stora
 	got, _ := s.GetPipeline(ctx, "p")
 	if got.Status != "running" {
 		t.Errorf("status = %q, want running", got.Status)
+	}
+}
+
+func testPipelineRestoreState(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())) {
+	s, cleanup := newStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	row := &storage.PipelineRow{ID: "restore-state-id", Name: "restore-state", SpecYAML: "name: restore-state\n", Status: "paused"}
+	if err := s.SavePipeline(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SavePipelineVersion(ctx, row.ID, row.SpecYAML); err != nil {
+		t.Fatalf("save version: %v", err)
+	}
+	wantPosition := json.RawMessage(`{"offset":17}`)
+	if err := s.SaveCheckpoint(ctx, &storage.CheckpointRecord{
+		JobName:   row.ID,
+		Source:    "file",
+		Position:  wantPosition,
+		Timestamp: time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+	checkpointBefore, err := s.LoadCheckpoint(ctx, row.ID)
+	if err != nil || checkpointBefore == nil {
+		t.Fatalf("load checkpoint baseline: cp=%+v err=%v", checkpointBefore, err)
+	}
+
+	updater, ok := s.(storage.PipelineRestoreStateStore)
+	if !ok {
+		t.Fatalf("%T does not expose PipelineRestoreStateStore", s)
+	}
+	const diagnostic = `{"stage":"runner_build","code":"pipeline_restore.runner_build"}`
+	if err := updater.UpdatePipelineRestoreState(ctx, row.ID, "restore_failed", diagnostic); err != nil {
+		t.Fatalf("update restore state: %v", err)
+	}
+	got, err := s.GetPipeline(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("get restore state: %v", err)
+	}
+	if got == nil || got.Status != "restore_failed" || got.RestoreError != diagnostic {
+		t.Fatalf("restore state = %+v", got)
+	}
+	versions, err := s.ListPipelineVersions(ctx, row.ID)
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("versions changed by restore state update: len=%d err=%v", len(versions), err)
+	}
+	cp, err := s.LoadCheckpoint(ctx, row.ID)
+	if err != nil || cp == nil || !reflect.DeepEqual(cp.Position, checkpointBefore.Position) || !cp.Timestamp.Equal(checkpointBefore.Timestamp) {
+		t.Fatalf("checkpoint changed by restore state update: cp=%+v err=%v", cp, err)
+	}
+
+	row.Status = "paused"
+	row.RestoreError = ""
+	if err := s.SavePipeline(ctx, row); err != nil {
+		t.Fatalf("save repaired pipeline: %v", err)
+	}
+	got, err = s.GetPipeline(ctx, row.ID)
+	if err != nil || got == nil || got.RestoreError != "" || got.Status != "paused" {
+		t.Fatalf("repaired pipeline did not clear restore state: row=%+v err=%v", got, err)
+	}
+}
+
+func testPipelineLifecycleFence(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())) {
+	s, cleanup := newStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	row := &storage.PipelineRow{
+		ID:       "lifecycle-fence-id",
+		Name:     "lifecycle-fence",
+		SpecYAML: "name: lifecycle-fence\n",
+		Status:   "stopped",
+	}
+	if err := s.SavePipeline(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.GetPipeline(ctx, row.ID)
+	if err != nil || loaded == nil {
+		t.Fatalf("load lifecycle row: row=%+v err=%v", loaded, err)
+	}
+	if loaded.DesiredState != storage.PipelineDesiredStopped || loaded.ObservedState != storage.PipelineDesiredStopped || loaded.Generation != 0 {
+		t.Fatalf("legacy lifecycle normalization = %+v", loaded)
+	}
+
+	lifecycle, ok := s.(storage.PipelineLifecycleStore)
+	if !ok {
+		t.Fatalf("%T does not expose PipelineLifecycleStore", s)
+	}
+	if err := lifecycle.UpdatePipelineDesiredState(ctx, row.ID, storage.PipelineDesiredRunning); err != nil {
+		t.Fatalf("set desired running: %v", err)
+	}
+	generation1, err := lifecycle.BeginPipelineGeneration(ctx, row.ID)
+	if err != nil || generation1 != 1 {
+		t.Fatalf("begin generation: generation=%d err=%v", generation1, err)
+	}
+	adapter := storage.NewCheckpointStoreAdapter(s)
+	run1ctx := storage.WithCheckpointFence(ctx, row.ID, generation1)
+	if err := adapter.Save(run1ctx, core.Checkpoint{
+		JobName: row.ID, Source: "file", Position: json.RawMessage(`{"offset":1}`),
+	}); err != nil {
+		t.Fatalf("save current generation checkpoint: %v", err)
+	}
+	if err := lifecycle.UpdatePipelineObservedState(ctx, row.ID, generation1, "running"); err != nil {
+		t.Fatalf("mark observed running: %v", err)
+	}
+	if _, err := lifecycle.ResetPipelineCheckpoint(ctx, row.ID); !errors.Is(err, storage.ErrPipelineNotQuiescent) {
+		t.Fatalf("running reset err=%v, want ErrPipelineNotQuiescent", err)
+	}
+	if err := lifecycle.UpdatePipelineDesiredState(ctx, row.ID, storage.PipelineDesiredPaused); err != nil {
+		t.Fatalf("set desired paused: %v", err)
+	}
+	generation2, err := lifecycle.ResetPipelineCheckpoint(ctx, row.ID)
+	if err != nil || generation2 != 2 {
+		t.Fatalf("reset checkpoint: generation=%d err=%v", generation2, err)
+	}
+	if err := adapter.Save(run1ctx, core.Checkpoint{
+		JobName: row.ID, Source: "file", Position: json.RawMessage(`{"offset":2}`),
+	}); !errors.Is(err, core.ErrCheckpointFenced) {
+		t.Fatalf("stale checkpoint save err=%v, want ErrCheckpointFenced", err)
+	}
+	if cp, err := adapter.Load(ctx, row.ID); err != nil || cp != nil {
+		t.Fatalf("stale checkpoint reappeared after reset: cp=%+v err=%v", cp, err)
+	}
+	if err := lifecycle.UpdatePipelineObservedState(ctx, row.ID, generation1, "completed"); !errors.Is(err, storage.ErrPipelineGenerationFenced) {
+		t.Fatalf("stale observed update err=%v, want generation fence", err)
+	}
+	admin := &storage.CheckpointRecord{
+		JobName: row.ID, Source: "file", Position: json.RawMessage(`{"offset":9}`),
+		Timestamp: time.Date(2026, time.September, 5, 0, 0, 0, 0, time.UTC),
+	}
+	generation3, err := lifecycle.SetPipelineCheckpoint(ctx, row.ID, admin)
+	if err != nil || generation3 != 3 {
+		t.Fatalf("set checkpoint: generation=%d err=%v", generation3, err)
+	}
+	cp, err := s.LoadCheckpoint(ctx, row.ID)
+	var gotPosition, wantAdminPosition any
+	if cp != nil {
+		_ = json.Unmarshal(cp.Position, &gotPosition)
+	}
+	_ = json.Unmarshal(admin.Position, &wantAdminPosition)
+	if err != nil || cp == nil || cp.Generation != generation3 || !reflect.DeepEqual(gotPosition, wantAdminPosition) {
+		t.Fatalf("admin checkpoint after set: cp=%+v err=%v", cp, err)
 	}
 }
 
@@ -363,10 +510,16 @@ func testDLQ(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())
 
 	for i := 0; i < 5; i++ {
 		rec := &storage.DLQRecord{
-			JobName:         "test-pipe",
-			Record:          core.Record{Operation: core.OpInsert, Data: map[string]any{"id": i}},
-			Error:           "schema mismatch: unknown column",
-			ErrorClass:      "schema",
+			JobName: "test-pipe",
+			Record: core.Record{Operation: core.OpInsert, Data: map[string]any{"id": i}, Metadata: core.Metadata{
+				Database: "source_db", Table: "orders", Key: fmt.Sprintf(`{"id":%d}`, i),
+				PrimaryKeyColumns: []string{"id"}, FormatContractID: core.FormatContractCanalJSONV1,
+			}},
+			Error:      "schema mismatch: unknown column",
+			ErrorClass: "schema",
+			IdentityContext: core.NewDLQIdentityContext(core.Record{Operation: core.OpInsert, Data: map[string]any{"id": i}, Metadata: core.Metadata{
+				Database: "source_db", Table: "orders", Key: fmt.Sprintf(`{"id":%d}`, i), PrimaryKeyColumns: []string{"id"},
+			}}, "schema mismatch", "target_db", "ods_orders"),
 			Attempt:         1,
 			PipelineVersion: i + 1,
 			DAGNode:         "sink-clickhouse",
@@ -395,6 +548,18 @@ func testDLQ(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())
 	}
 	if byID.RecordHash != items[0].RecordHash || byID.PipelineVersion == 0 || byID.DAGNode != "sink-clickhouse" {
 		t.Fatalf("dlq metadata not preserved: %+v", byID)
+	}
+	if byID.IdentityContext.TargetDatabase != "target_db" || byID.IdentityContext.TargetTable != "ods_orders" || byID.IdentityContext.ReplayProvenance != core.DLQReplayProvenanceNormalFlow {
+		t.Fatalf("dlq identity context not preserved: %+v", byID.IdentityContext)
+	}
+	byID.IdentityContext.ReplayState = core.DLQReplayStateSinkAcked
+	byID.IdentityContext.ReplayAttempt = 1
+	if err := s.UpdateDeadLetter(ctx, byID); err != nil {
+		t.Fatalf("update replay checkpoint: %v", err)
+	}
+	updated, err := s.GetDeadLetterByID(ctx, "test-pipe", byID.ID)
+	if err != nil || updated == nil || updated.IdentityContext.ReplayState != core.DLQReplayStateSinkAcked || updated.IdentityContext.ReplayAttempt != 1 {
+		t.Fatalf("updated replay checkpoint = %+v err=%v", updated, err)
 	}
 
 	// Count.

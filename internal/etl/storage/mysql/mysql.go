@@ -59,6 +59,10 @@ func (s *Store) migrate() error {
 			name        VARCHAR(255) NOT NULL,
 			spec_yaml   LONGTEXT NOT NULL,
 			status      VARCHAR(32) NOT NULL DEFAULT 'stopped',
+			desired_state VARCHAR(16) NOT NULL DEFAULT 'running',
+			observed_state VARCHAR(32) NOT NULL DEFAULT 'stopped',
+			generation  BIGINT NOT NULL DEFAULT 0,
+			restore_error LONGTEXT,
 			created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 			updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 			KEY idx_pipelines_name (name)
@@ -76,6 +80,7 @@ func (s *Store) migrate() error {
 			job_name    VARCHAR(255) PRIMARY KEY,
 			source      VARCHAR(255),
 			position    JSON,
+			generation  BIGINT NOT NULL DEFAULT 0,
 			timestamp   DATETIME(3),
 			updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
 		)`,
@@ -85,6 +90,7 @@ func (s *Store) migrate() error {
 			record_json  LONGTEXT NOT NULL,
 			error        LONGTEXT,
 			error_class  VARCHAR(255),
+			identity_context_json LONGTEXT,
 			attempt      INT DEFAULT 0,
 			created_at   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 			PRIMARY KEY (id),
@@ -227,6 +233,12 @@ func (s *Store) runVersionedMigrations() error {
 		{14, "add attempt to task_assignments", "ALTER TABLE task_assignments ADD COLUMN attempt INT DEFAULT 0"},
 		{15, "add lease_expires_at to task_assignments", "ALTER TABLE task_assignments ADD COLUMN lease_expires_at DATETIME(3) NULL"},
 		{16, "add last_error to task_assignments", "ALTER TABLE task_assignments ADD COLUMN last_error TEXT"},
+		{17, "add restore_error to pipelines", "ALTER TABLE pipelines ADD COLUMN restore_error LONGTEXT"},
+		{18, "add desired_state to pipelines", "ALTER TABLE pipelines ADD COLUMN desired_state VARCHAR(16) NOT NULL DEFAULT ''"},
+		{19, "add observed_state to pipelines", "ALTER TABLE pipelines ADD COLUMN observed_state VARCHAR(32) NOT NULL DEFAULT ''"},
+		{20, "add generation to pipelines", "ALTER TABLE pipelines ADD COLUMN generation BIGINT NOT NULL DEFAULT 0"},
+		{21, "add generation to checkpoints", "ALTER TABLE checkpoints ADD COLUMN generation BIGINT NOT NULL DEFAULT 0"},
+		{22, "add identity context to dead_letters", "ALTER TABLE dead_letters ADD COLUMN identity_context_json LONGTEXT"},
 	}
 
 	for _, m := range migrations {
@@ -264,6 +276,29 @@ func (s *Store) runVersionedMigrations() error {
 	}
 	_, _ = s.db.Exec(`CREATE UNIQUE INDEX idx_pipelines_id ON pipelines(id)`)
 	_, _ = s.db.Exec(`CREATE INDEX idx_pipelines_name ON pipelines(name)`)
+	if _, err := s.db.Exec(`UPDATE pipelines
+		SET desired_state = CASE LOWER(TRIM(status))
+			WHEN 'stopped' THEN 'stopped'
+			WHEN 'paused' THEN 'paused'
+			ELSE 'running'
+		END
+		WHERE desired_state IS NULL OR desired_state = ''`); err != nil {
+		return fmt.Errorf("backfill pipeline desired_state: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE pipelines
+		SET observed_state = CASE LOWER(TRIM(status))
+			WHEN 'running' THEN 'running'
+			WHEN 'scheduled' THEN 'scheduled'
+			WHEN 'stopped' THEN 'stopped'
+			WHEN 'paused' THEN 'paused'
+			WHEN 'failed' THEN 'failed'
+			WHEN 'completed' THEN 'completed'
+			WHEN 'restore_failed' THEN 'restore_failed'
+			ELSE 'stopped'
+		END
+		WHERE observed_state IS NULL OR observed_state = ''`); err != nil {
+		return fmt.Errorf("backfill pipeline observed_state: %w", err)
+	}
 	return nil
 }
 

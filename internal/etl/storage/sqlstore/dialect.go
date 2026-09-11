@@ -10,14 +10,20 @@ type SQLiteDialect struct{}
 func (SQLiteDialect) Bind(query string) string { return query }
 func (SQLiteDialect) Now() string              { return "CURRENT_TIMESTAMP" }
 func (SQLiteDialect) PipelineUpsert() string {
-	return `INSERT INTO pipelines (id, name, spec_yaml, status, updated_at)
-		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, spec_yaml=excluded.spec_yaml, status=excluded.status, updated_at=CURRENT_TIMESTAMP`
+	return `INSERT INTO pipelines (id, name, spec_yaml, status, desired_state, observed_state, generation, restore_error, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, spec_yaml=excluded.spec_yaml, status=excluded.status, restore_error=excluded.restore_error, updated_at=CURRENT_TIMESTAMP`
 }
 func (SQLiteDialect) CheckpointUpsert() string {
-	return `INSERT INTO checkpoints (job_name, source, position, timestamp, updated_at)
-		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(job_name) DO UPDATE SET source=excluded.source, position=excluded.position, timestamp=excluded.timestamp, updated_at=CURRENT_TIMESTAMP`
+	return `INSERT INTO checkpoints (job_name, source, position, generation, timestamp, updated_at)
+		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(job_name) DO UPDATE SET source=excluded.source, position=excluded.position, generation=excluded.generation, timestamp=excluded.timestamp, updated_at=CURRENT_TIMESTAMP`
+}
+func (SQLiteDialect) FencedCheckpointUpsert() string {
+	return `INSERT INTO checkpoints (job_name, source, position, generation, timestamp, updated_at)
+		 SELECT ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+		 WHERE EXISTS (SELECT 1 FROM pipelines WHERE id=? AND generation=?)
+		 ON CONFLICT(job_name) DO UPDATE SET source=excluded.source, position=excluded.position, generation=excluded.generation, timestamp=excluded.timestamp, updated_at=CURRENT_TIMESTAMP`
 }
 func (SQLiteDialect) WorkerUpsert() string {
 	return `INSERT INTO workers (id, host, port, slots, status, labels, last_heartbeat, registered_at)
@@ -51,14 +57,19 @@ func (SQLiteDialect) SupportsDeleteLimit() bool         { return true }
 type MySQLDialect struct{ SQLiteDialect }
 
 func (MySQLDialect) PipelineUpsert() string {
-	return `INSERT INTO pipelines (id, name, spec_yaml, status, updated_at)
-		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3))
-		 ON DUPLICATE KEY UPDATE name=VALUES(name), spec_yaml=VALUES(spec_yaml), status=VALUES(status), updated_at=CURRENT_TIMESTAMP(3)`
+	return `INSERT INTO pipelines (id, name, spec_yaml, status, desired_state, observed_state, generation, restore_error, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))
+		 ON DUPLICATE KEY UPDATE name=VALUES(name), spec_yaml=VALUES(spec_yaml), status=VALUES(status), restore_error=VALUES(restore_error), updated_at=CURRENT_TIMESTAMP(3)`
 }
 func (MySQLDialect) CheckpointUpsert() string {
-	return `INSERT INTO checkpoints (job_name, source, position, timestamp, updated_at)
-		 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3))
-		 ON DUPLICATE KEY UPDATE source=VALUES(source), position=VALUES(position), timestamp=VALUES(timestamp), updated_at=CURRENT_TIMESTAMP(3)`
+	return `INSERT INTO checkpoints (job_name, source, position, generation, timestamp, updated_at)
+		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))
+		 ON DUPLICATE KEY UPDATE source=VALUES(source), position=VALUES(position), generation=VALUES(generation), timestamp=VALUES(timestamp), updated_at=CURRENT_TIMESTAMP(3)`
+}
+func (MySQLDialect) FencedCheckpointUpsert() string {
+	return `INSERT INTO checkpoints (job_name, source, position, generation, timestamp, updated_at)
+		 SELECT ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3) FROM pipelines WHERE id=? AND generation=?
+		 ON DUPLICATE KEY UPDATE source=VALUES(source), position=VALUES(position), generation=VALUES(generation), timestamp=VALUES(timestamp), updated_at=CURRENT_TIMESTAMP(3)`
 }
 func (MySQLDialect) WorkerUpsert() string {
 	return `INSERT INTO workers (id, host, port, slots, status, labels, last_heartbeat, registered_at)
@@ -102,7 +113,10 @@ func (PostgresDialect) BoolValue(v bool) any              { return v }
 func (PostgresDialect) SupportsDeleteLimit() bool         { return false }
 func (PostgresDialect) PipelineUpsert() string            { return SQLiteDialect{}.PipelineUpsert() }
 func (PostgresDialect) CheckpointUpsert() string          { return SQLiteDialect{}.CheckpointUpsert() }
-func (PostgresDialect) WorkerUpsert() string              { return SQLiteDialect{}.WorkerUpsert() }
-func (PostgresDialect) PluginUpsert() string              { return SQLiteDialect{}.PluginUpsert() }
-func (PostgresDialect) ConnectionUpsert() string          { return SQLiteDialect{}.ConnectionUpsert() }
-func (PostgresDialect) SettingUpsert() string             { return SQLiteDialect{}.SettingUpsert() }
+func (PostgresDialect) FencedCheckpointUpsert() string {
+	return SQLiteDialect{}.FencedCheckpointUpsert()
+}
+func (PostgresDialect) WorkerUpsert() string     { return SQLiteDialect{}.WorkerUpsert() }
+func (PostgresDialect) PluginUpsert() string     { return SQLiteDialect{}.PluginUpsert() }
+func (PostgresDialect) ConnectionUpsert() string { return SQLiteDialect{}.ConnectionUpsert() }
+func (PostgresDialect) SettingUpsert() string    { return SQLiteDialect{}.SettingUpsert() }

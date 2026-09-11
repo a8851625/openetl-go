@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
@@ -12,25 +14,28 @@ import (
 
 // CheckpointRecord is the storage-layer representation of a checkpoint.
 type CheckpointRecord struct {
-	JobName   string          `json:"job_name"`
-	Source    string          `json:"source"`
-	Position  json.RawMessage `json:"position"`
-	Timestamp time.Time       `json:"timestamp"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	JobName    string          `json:"job_name"`
+	PipelineID string          `json:"pipeline_id,omitempty"`
+	Source     string          `json:"source"`
+	Position   json.RawMessage `json:"position"`
+	Generation int64           `json:"generation,omitempty"`
+	Timestamp  time.Time       `json:"timestamp"`
+	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
 // DLQRecord is the storage-layer representation of a dead-letter entry.
 type DLQRecord struct {
-	ID              int64       `json:"id"`
-	JobName         string      `json:"job_name"`
-	Record          core.Record `json:"record"`
-	Error           string      `json:"error"`
-	ErrorClass      string      `json:"error_class,omitempty"`
-	Attempt         int         `json:"attempt"`
-	RecordHash      string      `json:"record_hash,omitempty"`
-	PipelineVersion int         `json:"pipeline_version,omitempty"`
-	DAGNode         string      `json:"dag_node,omitempty"`
-	CreatedAt       time.Time   `json:"created_at"`
+	ID              int64                   `json:"id"`
+	JobName         string                  `json:"job_name"`
+	Record          core.Record             `json:"record"`
+	Error           string                  `json:"error"`
+	ErrorClass      string                  `json:"error_class,omitempty"`
+	IdentityContext core.DLQIdentityContext `json:"identity_context"`
+	Attempt         int                     `json:"attempt"`
+	RecordHash      string                  `json:"record_hash,omitempty"`
+	PipelineVersion int                     `json:"pipeline_version,omitempty"`
+	DAGNode         string                  `json:"dag_node,omitempty"`
+	CreatedAt       time.Time               `json:"created_at"`
 }
 
 // DLQFilter provides SQL-style filtering for dead-letter queries.
@@ -58,12 +63,66 @@ type AuditEntry struct {
 
 // PipelineRow is the storage-layer representation of a stored pipeline definition.
 type PipelineRow struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	SpecYAML  string    `json:"spec_yaml"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	SpecYAML string `json:"spec_yaml"`
+	// Status remains a compatibility mirror of ObservedState for one schema
+	// cycle. Lifecycle decisions must use DesiredState/ObservedState.
+	Status        string    `json:"status"`
+	DesiredState  string    `json:"desired_state"`
+	ObservedState string    `json:"observed_state"`
+	Generation    int64     `json:"generation"`
+	RestoreError  string    `json:"restore_error,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+const (
+	PipelineDesiredRunning = "running"
+	PipelineDesiredStopped = "stopped"
+	PipelineDesiredPaused  = "paused"
+)
+
+// DesiredStateFromLegacyStatus preserves the pre-split restart behaviour:
+// only an explicit stopped/paused status suppresses startup. Runtime outcomes
+// such as failed/completed and historical transitional labels remain runnable.
+func DesiredStateFromLegacyStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case PipelineDesiredStopped:
+		return PipelineDesiredStopped
+	case PipelineDesiredPaused:
+		return PipelineDesiredPaused
+	default:
+		return PipelineDesiredRunning
+	}
+}
+
+// ObservedStateFromLegacyStatus maps historical control-plane labels to an
+// actual runtime state without treating created/imported/loaded as running.
+func ObservedStateFromLegacyStatus(status string) string {
+	switch value := strings.ToLower(strings.TrimSpace(status)); value {
+	case "running", "scheduled", "stopped", "paused", "failed", "completed", "restore_failed", "starting":
+		return value
+	default:
+		return PipelineDesiredStopped
+	}
+}
+
+// NormalizePipelineLifecycle supplies split-state values for callers that
+// still construct PipelineRow through the legacy Status field.
+func NormalizePipelineLifecycle(row *PipelineRow) {
+	if row == nil {
+		return
+	}
+	if strings.TrimSpace(row.DesiredState) == "" {
+		row.DesiredState = DesiredStateFromLegacyStatus(row.Status)
+	}
+	if strings.TrimSpace(row.ObservedState) == "" {
+		row.ObservedState = ObservedStateFromLegacyStatus(row.Status)
+	}
+	if strings.TrimSpace(row.Status) == "" {
+		row.Status = row.ObservedState
+	}
 }
 
 // EnsurePipelineID assigns a stable UUID to a pipeline row before persistence.
@@ -217,6 +276,7 @@ type Storage interface {
 	WriteDeadLetter(ctx context.Context, rec *DLQRecord) error
 	GetDeadLetterByID(ctx context.Context, jobName string, id int64) (*DLQRecord, error)
 	ListDeadLetters(ctx context.Context, filter DLQFilter) ([]*DLQRecord, error)
+	UpdateDeadLetter(ctx context.Context, rec *DLQRecord) error
 	CountDeadLetters(ctx context.Context, jobName string) (int64, error)
 	DeleteDeadLettersByFilter(ctx context.Context, filter DLQFilter) (int64, error)
 	DeleteDeadLetterByID(ctx context.Context, id int64) error
@@ -276,6 +336,36 @@ type Storage interface {
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
 	ListSettings(ctx context.Context) (map[string]string, error)
+}
+
+// PipelineRestoreStateStore is an optional storage capability used by the
+// control plane to atomically publish restore_failed diagnostics without
+// creating a new spec version or touching checkpoints/DLQ rows.
+type PipelineRestoreStateStore interface {
+	UpdatePipelineRestoreState(ctx context.Context, ref, status, restoreError string) error
+}
+
+var (
+	// ErrPipelineNotRunnable is returned when a start-generation allocation is
+	// attempted while desired_state is not running.
+	ErrPipelineNotRunnable = errors.New("pipeline desired state does not permit execution")
+	// ErrPipelineNotQuiescent is returned when checkpoint reset/set is attempted
+	// unless desired_state is stopped or paused.
+	ErrPipelineNotQuiescent = errors.New("pipeline must be stopped or paused for checkpoint mutation")
+	// ErrPipelineGenerationFenced means a lifecycle completion/update belongs
+	// to an execution generation that is no longer current.
+	ErrPipelineGenerationFenced = errors.New("pipeline lifecycle update fenced by a newer generation")
+)
+
+// PipelineLifecycleStore is the durable lifecycle/CAS capability required by
+// the standalone control plane. Implementations must keep Reset/Set atomic
+// with the generation advance so stale in-flight checkpoints cannot reappear.
+type PipelineLifecycleStore interface {
+	UpdatePipelineDesiredState(ctx context.Context, id, desired string) error
+	BeginPipelineGeneration(ctx context.Context, id string) (int64, error)
+	UpdatePipelineObservedState(ctx context.Context, id string, generation int64, observed string) error
+	ResetPipelineCheckpoint(ctx context.Context, id string) (int64, error)
+	SetPipelineCheckpoint(ctx context.Context, id string, rec *CheckpointRecord) (int64, error)
 }
 
 // ObjectCounts is a point-in-time inventory of control-plane tables used by

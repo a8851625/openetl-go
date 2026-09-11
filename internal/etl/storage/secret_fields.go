@@ -28,13 +28,25 @@ func IsSecretFieldKey(key string) bool {
 // EncryptConfigSecrets encrypts secret string fields in a connector config map.
 // Non-secret values, empty strings, and already-encrypted envelopes are preserved
 // as-is except that encrypted values are re-sealed with the current key on write.
+// Secret recognition uses the descriptor-backed resolver when provided;
+// IsSecretFieldKey is a fallback for callers without descriptors.
 func EncryptConfigSecrets(cipher *SpecCipher, cfg map[string]any) (map[string]any, error) {
+	return encryptConfigSecrets(cipher, cfg, nil)
+}
+
+// EncryptConfigSecretsWithResolver behaves like EncryptConfigSecrets but takes
+// an explicit secret predicate (kind/type-aware) as the source of truth.
+func EncryptConfigSecretsWithResolver(cipher *SpecCipher, cfg map[string]any, isSecret func(field string) bool) (map[string]any, error) {
+	return encryptConfigSecrets(cipher, cfg, isSecret)
+}
+
+func encryptConfigSecrets(cipher *SpecCipher, cfg map[string]any, isSecret func(field string) bool) (map[string]any, error) {
 	if cfg == nil {
 		return nil, nil
 	}
 	out := make(map[string]any, len(cfg))
 	for k, v := range cfg {
-		nv, err := encryptConfigValue(cipher, k, v)
+		nv, err := encryptConfigValue(cipher, k, v, isSecret)
 		if err != nil {
 			return nil, err
 		}
@@ -92,15 +104,21 @@ func DecryptSettingValue(cipher *SpecCipher, key, value string) (string, error) 
 	return plain, nil
 }
 
-func encryptConfigValue(cipher *SpecCipher, key string, v any) (any, error) {
+func encryptConfigValue(cipher *SpecCipher, key string, v any, isSecret func(field string) bool) (any, error) {
+	secret := func(field string) bool {
+		if isSecret != nil {
+			return isSecret(field)
+		}
+		return IsSecretFieldKey(field)
+	}
 	switch vv := v.(type) {
 	case map[string]any:
-		return EncryptConfigSecrets(cipher, vv)
+		return encryptConfigSecrets(cipher, vv, isSecret)
 	case []any:
 		items := make([]any, len(vv))
 		for i, item := range vv {
 			if m, ok := item.(map[string]any); ok {
-				enc, err := EncryptConfigSecrets(cipher, m)
+				enc, err := encryptConfigSecrets(cipher, m, isSecret)
 				if err != nil {
 					return nil, err
 				}
@@ -111,7 +129,7 @@ func encryptConfigValue(cipher *SpecCipher, key string, v any) (any, error) {
 		}
 		return items, nil
 	case string:
-		if !IsSecretFieldKey(key) || vv == "" || cipher == nil || !cipher.Enabled() {
+		if !secret(key) || vv == "" || cipher == nil || !cipher.Enabled() {
 			return vv, nil
 		}
 		plain := vv

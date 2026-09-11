@@ -86,7 +86,7 @@ func BackupSQLStore(ctx context.Context, d SQLDumper, outDir string, knownPlaint
 	for _, t := range tables {
 		n, chunk, err := dumpTableJSONL(ctx, db, "SELECT * FROM "+t.name)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("backup: export %s: %w", t.name, err)
 		}
 		*t.count = n
 		path := filepath.Join(dir, t.name+".jsonl")
@@ -161,7 +161,7 @@ func normalizeDumpValue(v any) any {
 // ScanPlaintextSecrets looks for known secret substrings in dumps.
 func ScanPlaintextSecrets(dump string, known []string) SecretScanResult {
 	res := SecretScanResult{OK: true}
-	for _, k := range known {
+	for i, k := range known {
 		if k == "" || len(k) < 4 {
 			continue
 		}
@@ -169,7 +169,7 @@ func ScanPlaintextSecrets(dump string, known []string) SecretScanResult {
 			res.PlaintextHits++
 			res.OK = false
 			if len(res.Samples) < 5 {
-				res.Samples = append(res.Samples, k)
+				res.Samples = append(res.Samples, fmt.Sprintf("needle[%d] length=%d", i, len(k)))
 			}
 		}
 	}
