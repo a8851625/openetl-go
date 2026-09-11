@@ -397,6 +397,7 @@ VALUES (11, '2026-07-07', 999, 'polluted-before-replay')
 ON DUPLICATE KEY UPDATE amount=VALUES(amount), note=VALUES(note);
 UPDATE dzh3136_target.pre_write_orders SET amount=777, note='mutated-before-replay' WHERE id=1;
 "
+curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPE_PRE_WRITE/stop" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPE_PRE_WRITE/checkpoint/reset" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPE_PRE_WRITE/start" >/dev/null
 wait_mysql_value "$prewrite_sql" "3|400|0|1|0|100"
@@ -408,11 +409,13 @@ VALUES (111, '2026-07-07', 999, 'polluted-before-replay')
 ON CONFLICT (id) DO UPDATE SET amount=EXCLUDED.amount, note=EXCLUDED.note;
 UPDATE pg_pre_write_orders SET amount=777, note='mutated-before-replay' WHERE id=101;
 "
+curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPE_PG_PRE_WRITE/stop" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPE_PG_PRE_WRITE/checkpoint/reset" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPE_PG_PRE_WRITE/start" >/dev/null
 wait_pg_value "$pg_prewrite_sql" "3|520|0|1|0|100"
 
 echo "==> Reset increment checkpoint and verify additive replay boundary"
+curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPE_INCREMENT/stop" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPE_INCREMENT/checkpoint/reset" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPE_INCREMENT/start" >/dev/null
 wait_mysql_value "$increment_sql" "2|4|10|e2e"

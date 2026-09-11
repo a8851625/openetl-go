@@ -256,6 +256,7 @@ wait_ch_value "SELECT count() FROM $CH_DB.$CH_TABLE FINAL WHERE id = 7002" "0"
 wait_ch_value "SELECT count() FROM $CH_DB.$CH_TABLE WHERE id = 7002 AND value = 'old-insert' AND _is_deleted = 0" "1"
 
 echo "==> Reset checkpoint + Kafka group and replay the full offset range"
+curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/stop" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/checkpoint/reset" >/dev/null
 delete_consumer_group
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/start" >/dev/null

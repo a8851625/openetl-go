@@ -225,6 +225,7 @@ echo "$validate_body" | grep 'schema-compatibility'
 echo "$validate_body" | grep 'unexpected_field'
 
 echo "==> Replay from beginning and verify PostgreSQL upsert absorbs duplicates"
+curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/stop" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/checkpoint/reset" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/start" >/dev/null
 i=0

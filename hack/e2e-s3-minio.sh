@@ -109,6 +109,7 @@ first_run_count="$(finished_count)"
 test "$first_run_count" -ge 1
 
 echo "==> Verify checkpoint reset replay overwrites the same deterministic object"
+curl -fsS -X POST "http://127.0.0.1:8007/api/v2/pipelines/$PIPELINE/stop" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:8007/api/v2/pipelines/$PIPELINE/checkpoint/reset" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:8007/api/v2/pipelines/$PIPELINE/start" >/dev/null
 
