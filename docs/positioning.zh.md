@@ -39,3 +39,11 @@ OpenETL-Go 的核心定位是：
 - 易用优先：常见任务应通过 UI/API/YAML 快速完成，preflight 应在启动前解释风险、字段问题和幂等策略。
 - 可扩展优先：连接器、transform 和插件共享 descriptor、schema、preflight、metrics、DLQ、测试认证合约。
 - 诚实优先：默认投递语义是 at-least-once；生产依赖业务主键、版本列、upsert、ReplacingMergeTree 或 deduplicate 消除重放影响。
+
+## 已声明的边界
+
+- **schema evolution（2026-09-06 用户确认）**：`ddl_guard` 当前拒绝源端 DDL 变更是有意基线。
+  项目已立项受限的 additive-only schema evolution（仅新增列自动演进；删除列、重命名和
+  不兼容类型变更继续在 preflight 阻断），独立排期实现，见 ROADMAP。在此之前，schema 变更
+  需人工评估后调整 spec，preflight 的 `ddl_preview` 与字段问题反馈是决策依据。
+- **性能证据（2026-09-06 复核）**：旧 ClickHouse async/HTTP 对比及 SQLite pipeline 容量推论已撤回。RA-8 待补可复现基线；ClickHouse 专项画像范围等待用户决议。

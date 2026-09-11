@@ -236,6 +236,7 @@ source:
 | `shard_index` | 否 | | 表分片索引。 |
 | `shard_total` | 否 | | 表分片总数。 |
 | `start_from` | 否 | | CDC 起始点：`timestamp`、`binlog:<file>:<pos>` 或 `gtid:<set>`。 |
+| `cdc_on_binlog_purged` | 否 | `fail` | checkpoint binlog 不存在（ERROR 1236）时的策略。`fail` 停止并暴露错误；`resume_from_current` 从当前位点续跑但**丢弃缺口内全部变更**；`resnapshot`（仅 `mysql_snapshot_cdc`）从已持久化的逐表游标补快照、捕获新 handoff 后重入 CDC。若因 `RESET MASTER`、PITR 或换源造成坐标回退，ClickHouse `source_order` 必须先重建/切换目标版本域；不同 binlog lineage 不会因 resnapshot 自动可比。 |
 
 需要 MySQL binlog `ROW` 格式和 `FULL` row image。
 
@@ -275,7 +276,7 @@ source:
 | `shard_index` | 否 | | 快照分片索引。 |
 | `shard_total` | 否 | | 快照分片总数。 |
 
-按主键分块快照，记录 binlog 位置，然后切换到 CDC。两个阶段的 checkpoint 都可以在崩溃后恢复。
+按主键分块快照，在一致性读取前捕获 binlog handoff，然后切换到 CDC。两个阶段的 checkpoint 都可以在崩溃后恢复。每条 snapshot 记录携带 `snapshot_handoff_file` / `snapshot_handoff_pos`；即使分页键是文本，ClickHouse 源序也使用该 handoff，而不是分页键。
 
 全库快照设 `tables: ["*"]` 并省略 `pk_column`：每张表的快照游标从其自身的单列主键推导（从 `information_schema` 自动探测），因此异构主键库不再需要单一全局主键。整型主键用数字游标分页（可配合 `shard_*` 哈希分片）；可排序的非整型主键（如 `VARCHAR`、`DATETIME`）用字典序字符串游标分页。没有可用单列主键的表（复合主键或无主键）在历史快照阶段跳过，但仍会在 CDC 阶段采集。
 
@@ -338,12 +339,11 @@ source:
 | `topic` | 是 | | 要消费的 Kafka topic。 |
 | `group_id` | 否 | `etl-consumer` | 消费者组 ID。同一 pipeline 的所有 logical shard 共享该 group，以便 Kafka 在 shard 间分配分区。 |
 | `topic_partitions` | 否 | | 可选的静态分区数提示，用于 broker 不可达时的离线 validate。当 `logical_shards > topic_partitions` 时会警告多余 shard 空转。生产优先用 preflight 实时元数据；推荐 `logical_shards` 等于 topic 分区数。 |
-| `format` | 否 | `json` | 消息格式：`json` 或 `text`。 |
 | `key_column` | 否 | | 消息 key 的列名。 |
 | `value_column` | 否 | | 原始消息 value 的列名。 |
 | `initial_offset` | 否 | `newest` | 无已提交 offset 时的初始消费位置：`oldest` 或 `newest`。 |
-| `format` | 否 | `json` | 消息格式：`json`（平铺对象）、`envelope`（Debezium 或旧版 OpenETL）、`canal_json`（Alibaba canal 扁平消息，支持 INSERT/UPDATE/DELETE，mysqlType 转 ColumnTypes，pkNames 生成 Metadata.Key）。 |
-| `on_parse_error` | 否 | `raw` | 解析失败策略：`raw`（载荷存入 value 列，旧行为）、`skip`（丢弃）、`dlq`（进入错误通道带上下文）。 |
+| `format` | 否 | `json` | 消息格式：`json`（平铺对象）、`envelope`（Debezium 或 OpenETL before/after envelope）、`canal_json`。Canal `pkNames` 是完整键的权威声明；UPDATE 仅按登记的 `kafka.canal_json/v1` 语义，从显式 `old` 对象省略的未变化列中使用 `Data` 补齐。缺失、部分或冲突身份会在 metadata-PK sink 前失败。OpenETL envelope 携带 `primary_key_columns`；Debezium JSON 对象 Kafka key 也可恢复声明。 |
+| `on_parse_error` | 否 | `raw` | 解析失败策略：`raw`（载荷存入 value，旧版 append 行为）、`skip`（显式丢弃）、`dlq`。`dlq` 产出带 source position 的拒绝记录；Runner 先持久化 DLQ 再提交 checkpoint/consumer group，DLQ 失败会阻断 checkpoint。身份错误不能用 `raw` 绕过。 |
 | `tombstone_policy` | 否 | `delete` | 空值消息（log-compaction tombstone）：`delete`（产出 OpDelete）或 `skip`。 |
 | `expand_key_json` | 否 | `false` | 将 JSON 对象形式的消息 key 展开为 `__key_<列>` 虚拟列。 |
 | `sasl_user` | 否 | | SASL 用户名。 |
@@ -456,10 +456,10 @@ sink:
 | `user` | 是 | | MySQL 用户。 |
 | `password` | 否 | | MySQL 密码（**密钥**）。 |
 | `database` | 是 | | 目标数据库。 |
-| `table` | 是 | | 目标表。 |
+| `table` | 否 | | 固定目标表；仅当兼容的 CDC/Kafka envelope source 保证每条记录都携带 `Metadata.Table` 时可留空。 |
 | `batch_mode` | 否 | `insert` | `insert`、`upsert` 或 `increment`。 |
-| `pk_columns` | 否 | `["id"]` | Upsert 模式的主键列。 |
-| `pk_columns_from_metadata` | 否 | `false` | 从 `record.metadata.key` 为 Debezium 多表 CDC 按表推导主键列。 |
+| `pk_columns` | 否 | `["id"]` | Upsert 模式的静态主键列。开启 `pk_columns_from_metadata` 时，显式列表只作为 `legacy_verified` replay 的精确安全集合，不会修复普通记录。 |
+| `pk_columns_from_metadata` | 否 | `false` | 从声明完整的 JSON 对象 `record.metadata.key` 按表推导主键列。validate/preflight 拒绝没有登记身份契约的 source；Runner 在 sink 前把空、部分或冲突身份写入 DLQ。 |
 | `increment_columns` | 否 | | `batch_mode: increment` 的目标列 -> 源字段映射。 |
 | `pre_write` | 否 | | 写入前动作块：`delete`、`truncate` 或 `truncate_partition`，可带 `params`。 |
 | `auto_create` | 否 | `false` | 自动建表。 |
@@ -467,7 +467,7 @@ sink:
 | `ddl_policy` | 否 | `reject` | `reject`、`ignore` 或 `apply`。 |
 | `insert_chunk_size` | 否 | `500` | 每个 INSERT 语句的行数。 |
 
-CDC/snapshot+CDC 幂等性请使用 `batch_mode: upsert`。
+CDC/snapshot+CDC 幂等性请使用 `batch_mode: upsert`。metadata-PK 自动建表会创建真实单列/复合 `PRIMARY KEY`；主键变更 UPDATE 在同一事务中写入新键并删除已验证的旧键。
 
 ### `clickhouse`
 
@@ -484,7 +484,9 @@ sink:
     auto_create: true
     schema_drift: add_columns
     pk_columns: [id]
+    version_mode: source_order
     version_column: _version
+    delete_column: _is_deleted
 ```
 
 | 字段 | 必填 | 默认值 | 说明 |
@@ -496,8 +498,11 @@ sink:
 | `password` | 否 | | ClickHouse 密码（**密钥**）。 |
 | `database` | 是 | | 目标数据库。 |
 | `table` | 否 | | 目标表；为空时使用 source table 动态落表。 |
-| `pk_columns` | 否 | `["id"]` | 用于 ORDER BY、DELETE 和 UPDATE 条件的主键列。 |
-| `version_column` | 否 | `_version` | ReplacingMergeTree 的版本列。 |
+| `pk_columns` | 否 | `["id"]` | 用于 ORDER BY、DELETE 和 UPDATE 条件的主键列。开启 `pk_columns_from_metadata` 时，显式值也是单条 legacy DLQ 身份修复 API 要求精确匹配的安全集合；它不会使普通空 Metadata.Key 合法化。 |
+| `pk_columns_from_metadata` | 否 | `false` | 从声明完整的 JSON 对象 `Metadata.Key` 按表推导主键。validate/preflight 会拒绝没有登记身份契约的 source；Runner 在 sink 前把空、部分或冲突身份写入 DLQ。Replay 只能依据 DLQ 行冻结的 format contract 重建身份。 |
+| `version_mode` | 否 | `source_order` | `source_order` 写 connector-owned UInt64 版本与 tombstone，并要求 `ReplacingMergeTree(version, deleted)`；`append` 仅接受 INSERT，且要求非 ReplacingMergeTree 的 MergeTree 目标。 |
+| `version_column` | 否 | `_version` | 可写的 `UInt64` 源序版本列。 |
+| `delete_column` | 否 | `_is_deleted` | 可写的 `UInt8` tombstone 列，同时作为 ReplacingMergeTree 第二参数。 |
 | `auto_create` | 否 | `false` | 表缺失时自动创建。 |
 | `schema_drift` | 否 | `ignore` | `ignore`、`fail`、`add_columns` 或 `sync`。 |
 | `ddl_policy` | 否 | `apply` | `reject`、`ignore` 或 `apply`。 |
@@ -511,6 +516,13 @@ sink:
 | `async_insert` | 否 | `false` | 启用 ClickHouse `async_insert`。 |
 | `async_insert_wait` | 否 | `true` | 等待异步写入完成。 |
 | `ttl` | 否 | | 自动建表时使用的 TTL 表达式。 |
+
+`source_order` 支持 MySQL binlog file/position、`mysql_snapshot_cdc` handoff、PostgreSQL CDC
+LSN、Kafka partition/offset 和 MySQL batch 数字游标；缺失/溢出位点、纯文本 batch 游标、
+file/HTTP/Redis、PostgreSQL 初始快照和派生 `window` 记录会 fail-closed。Kafka 顺序仅在单
+partition 内成立，同一业务 key 必须固定 partition。MySQL 顺序仅在同一 binlog lineage 内
+成立；`RESET MASTER`、PITR 或坐标回退换源后必须重建/切换目标。旧 `Int64`/wall-clock
+版本表及单参数 ReplacingMergeTree 必须重建，不会被自动 ALTER 或与新版本混存。
 
 ### `maxcompute` / `odps`
 
@@ -627,9 +639,10 @@ sink:
 | `password` | 否 | | PostgreSQL 密码（**密钥**）。 |
 | `database` | 是 | | 目标数据库。 |
 | `schema` | 否 | `public` | 目标 schema。 |
-| `table` | 是 | | 目标表。 |
+| `table` | 否 | | 固定目标表；仅当兼容的 CDC/Kafka envelope source 保证每条记录都携带 `Metadata.Table` 时可留空。 |
 | `batch_mode` | 否 | `insert` | `insert`、`upsert`（INSERT … ON CONFLICT）或 `increment`。 |
-| `pk_columns` | 否 | `["id"]` | Upsert 模式的主键列。 |
+| `pk_columns` | 否 | `["id"]` | Upsert 模式的静态主键列。开启 `pk_columns_from_metadata` 时，显式列表只作为 `legacy_verified` replay 的精确安全集合。 |
+| `pk_columns_from_metadata` | 否 | `false` | 只从完整声明的 `Metadata.PrimaryKeyColumns` 与 JSON 对象 `Metadata.Key` 按表取键。空、部分、冲突或 provenance 未知的身份 fail-closed；主键变更 UPDATE 在事务内执行新键 upsert 与旧键删除。 |
 | `increment_columns` | 否 | | `batch_mode: increment` 的目标列 -> 源字段映射。 |
 | `pre_write` | 否 | | 写入前动作块：`delete`、`truncate` 或 `truncate_partition`，可带 `params`。 |
 | `auto_create` | 否 | `false` | 自动建表。 |
@@ -673,13 +686,13 @@ sink:
 | `write_mode` | 否 | `stream_load` | `stream_load` 或 MySQL 协议 `insert` fallback。 |
 | `batch_mode` | 否 | `insert` | `insert` 或 `upsert`。生产 CDC/upsert 需要 Doris Unique Key 表和稳定 `pk_columns`，或显式开启 `pk_columns_from_metadata: true`。 |
 | `pk_columns` | 否 | | DELETE、自动创建 Unique Key 表和 replay-safe upsert 校验使用的业务主键列。 |
-| `pk_columns_from_metadata` | 否 | `false` | 从 JSON 对象形式的 `record.metadata.key`（Debezium/Kafka envelope）按表推导主键列，支持复合键和 DELETE；标量 key 必须使用静态 `pk_columns`。 |
+| `pk_columns_from_metadata` | 否 | `false` | 只从完整声明的 `Metadata.PrimaryKeyColumns` 与 JSON 对象 `Metadata.Key` 按表取键。空、部分、冲突或 provenance 未知的身份 fail-closed；标量 key 使用静态模式。主键变更 UPDATE 先写新键，再删除已验证的旧键。 |
 | `stream_load_format` | 否 | `json` | `json` 或 `csv`。 |
 | `stream_load_scheme` | 否 | `http` | `http` 或 `https`。 |
 | `stream_load_timeout_sec` | 否 | `30` | Stream Load HTTP 超时时间，单位秒。 |
 | `insert_chunk_size` | 否 | `500` | 使用 `write_mode: insert` 时每个 INSERT 语句的行数。 |
 | `tls_skip_verify` | 否 | `false` | 跳过 TLS 证书校验。 |
-| `auto_create` | 否 | `false` | 自动创建 Doris Unique Key 表。未配置 `pk_columns` 且未显式开启 `pk_columns_from_metadata: true` 时必须存在 `id` 字段。 |
+| `auto_create` | 否 | `false` | 自动创建 Doris Unique Key 表。类型优先级为 `column_types` 覆盖 → 记录 `Metadata.ColumnTypes`/source 声明 → 样本推断。未配置 `pk_columns` 且未显式开启 `pk_columns_from_metadata: true` 时必须存在 `id` 字段。 |
 | `schema_drift` | 否 | `ignore` | `ignore`、`fail` 或 `add_columns`。 |
 | `ddl_policy` | 否 | `reject` | `reject`、`ignore` 或 `apply`。生产默认拒绝源端 DDL；Doris `apply` 仅允许安全的 `ALTER TABLE ... ADD COLUMN` 子集。 |
 | `allow_mixed_cdc_non_atomic` | 否 | `false` | 允许混合 write/delete CDC 批次，需接受 Stream Load 与 MySQL DELETE 非原子语义。 |

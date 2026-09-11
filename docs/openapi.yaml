@@ -70,7 +70,21 @@ components:
       properties:
         id: { type: string, description: Pipeline instance UUID }
         name: { type: string }
-        status: { type: string, enum: [running, stopped, failed, paused, completed] }
+        status: { type: string, enum: [running, stopped, failed, paused, completed, scheduled, restore_failed] }
+        desired_state:
+          type: string
+          enum: [running, stopped, paused]
+          description: Durable operator intent used as the startup source of truth.
+        observed_state:
+          type: string
+          enum: [starting, running, stopped, paused, scheduled, failed, completed, restore_failed]
+          description: Last persisted runtime observation; status remains a compatibility field.
+        generation:
+          type: integer
+          format: int64
+          description: Monotonic pipeline execution/checkpoint fencing token.
+        restore_error:
+          $ref: '#/components/schemas/RestoreFailure'
         stats:
           type: object
           properties:
@@ -83,6 +97,20 @@ components:
             last_error: { type: string }
             last_error_code: { type: string, description: Stable machine-readable failure category }
             last_error_remediation: { type: string, description: Safe operator next step; checkpoint reset is not implied }
+    RestoreFailure:
+      type: object
+      required: [pipeline_id, pipeline_name, stage, code, message, remediation, previous_status, failed_at]
+      properties:
+        pipeline_id: { type: string }
+        pipeline_name: { type: string }
+        stage:
+          type: string
+          enum: [dag_yaml_parse, linear_yaml_parse, dag_connection_resolve, linear_connection_resolve, spec_validate, runner_build]
+        code: { type: string, example: pipeline_restore.runner_build }
+        message: { type: string }
+        remediation: { type: string }
+        previous_status: { type: string }
+        failed_at: { type: string, format: date-time }
     MetricsResponse:
       type: object
       properties:
@@ -104,6 +132,10 @@ components:
         last_error: { type: string }
         last_error_code: { type: string }
         last_error_remediation: { type: string }
+        checkpoint_fenced_total:
+          type: integer
+          format: int64
+          description: Checkpoint writes rejected because their execution generation was stale.
         state_metrics:
           type: array
           items:
@@ -134,6 +166,59 @@ components:
             miss: 2
             miss_dropped: 1
             miss_dlq: 1
+    CheckpointResetSemantics:
+      type: object
+      required: [source, effect, external_boundary, operator_action]
+      properties:
+        source: { type: string, description: Source type; built-in reset contracts include kafka, mysql_cdc, mysql_snapshot_cdc, and postgres_cdc. }
+        effect: { type: string, description: The OpenETL checkpoint state changed by this operation. }
+        external_boundary: { type: string, description: Broker/database state that reset does not change. }
+        operator_action: { type: string, description: Safe source-specific replay guidance. }
+    PipelineNotQuiescent:
+      type: object
+      required: [error, code, remediation]
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [pipeline_not_quiescent] }
+        remediation: { type: string }
+    DLQIdentityContext:
+      type: object
+      required: [replay_provenance, replay_state]
+      properties:
+        raw_payload: { type: string, description: Exact UTF-8 source bytes or base64 according to payload_encoding. }
+        payload_encoding: { type: string, enum: [source_bytes, source_bytes_base64, normalized_data_json] }
+        primary_key_columns: { type: array, items: { type: string } }
+        failure_reason: { type: string }
+        missing_columns: { type: array, items: { type: string } }
+        format_contract_id: { type: string }
+        before_image_state: { type: string, enum: [absent, null, empty_array, present_empty, partial, full, invalid] }
+        source_database: { type: string }
+        source_table: { type: string }
+        target_database: { type: string }
+        target_table: { type: string }
+        replay_provenance: { type: string, enum: [normal_flow, contract_reconstructed, legacy_unknown, legacy_verified] }
+        replay_state: { type: string, enum: [pending, repair_required, quarantined, sink_acked] }
+        replay_attempt: { type: integer }
+        replay_error: { type: string }
+        sink_acknowledged_at: { type: string, format: date-time }
+    DLQReplayGateError:
+      type: object
+      required: [error, id, replay_state, reason]
+      properties:
+        error: { type: string }
+        replayed: { type: integer }
+        id: { type: integer, format: int64 }
+        replay_state: { type: string, enum: [repair_required, quarantined, sink_acked] }
+        reason: { type: string }
+    DLQIdentityRepairRequest:
+      type: object
+      additionalProperties: false
+      required: [primary_key_columns]
+      properties:
+        primary_key_columns:
+          type: array
+          minItems: 1
+          items: { type: string }
 
 tags:
   - name: Pipelines
@@ -153,6 +238,7 @@ paths:
     get:
       tags: [Pipelines]
       summary: List all pipelines
+      description: Includes stored pipelines whose runner restore failed, with status restore_failed and a structured restore_error.
       responses:
         '200':
           description: Pipeline list
@@ -187,7 +273,7 @@ paths:
     get:
       tags: [Pipelines]
       summary: Get pipeline status
-      description: The path value is the pipeline instance UUID. For backward compatibility, a display name is accepted only when it resolves to one instance.
+      description: The path value is the pipeline instance UUID. For backward compatibility, a display name is accepted only when it resolves to one instance. Restore failures remain queryable with status restore_failed and restore_error.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
@@ -209,6 +295,7 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Started }
+        '409': { description: Runner is unavailable because the stored pipeline is restore_failed; response includes the structured restore_error. }
 
   /pipelines/{id}/stop:
     post:
@@ -315,6 +402,7 @@ paths:
     post:
       tags: [Pipelines, Checkpoints]
       summary: Set checkpoint position or Kafka replay offset
+      description: Requires desired_state stopped or paused and a non-running runner. Atomically advances the pipeline generation and sets the checkpoint; stale in-flight writes are fenced.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       requestBody:
@@ -355,17 +443,39 @@ paths:
                   enum: [replay_from, last_committed]
                   description: replay_from stores offset-1 so the next start reads the requested offset; last_committed stores offsets as-is.
       responses:
-        '200': { description: Checkpoint saved }
+        '200':
+          description: Checkpoint saved with the new generation and source reset semantics.
         '400': { description: Invalid checkpoint request }
+        '409':
+          description: Pipeline is still running.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineNotQuiescent' }
 
   /pipelines/{id}/checkpoint/reset:
     post:
       tags: [Pipelines, Checkpoints]
-      summary: Reset checkpoint (start from beginning)
+      summary: Reset OpenETL checkpoint using source-specific next-start semantics
+      description: Requires desired_state stopped or paused and a non-running runner. Atomically advances the pipeline generation and deletes OpenETL checkpoint state. It does not reset Kafka consumer groups, MySQL binlog positions, PostgreSQL replication slots, or WAL retention.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: Checkpoint reset }
+        '200':
+          description: Checkpoint reset; response identifies the new generation and the source-specific external boundary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, generation, reset_semantics]
+                properties:
+                  status: { type: string, enum: [reset] }
+                  generation: { type: integer, format: int64 }
+                  reset_semantics: { $ref: '#/components/schemas/CheckpointResetSemantics' }
+        '409':
+          description: Pipeline is still running.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineNotQuiescent' }
 
   /metrics:
     get:
@@ -397,7 +507,7 @@ paths:
         - { name: limit, in: query, schema: { type: integer } }
         - { name: contains, in: query, schema: { type: string } }
       responses:
-        '200': { description: DLQ items, including stable id and dag_node when available }
+        '200': { description: DLQ items, including stable id, frozen identity_context, and dag_node when available }
     delete:
       tags: [DLQ]
       summary: Delete DLQ records
@@ -415,6 +525,11 @@ paths:
       responses:
         '200': { description: Replayed }
         '400': { description: DAG DLQ replay requires dag_node context on legacy records }
+        '409':
+          description: Identity cannot be proven; the row remains repair-required or quarantined
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DLQReplayGateError' }
 
   /dlq/{pipeline_id}/{id}:
     delete:
@@ -436,6 +551,34 @@ paths:
       responses:
         '200': { description: Replayed }
         '400': { description: DAG DLQ replay requires dag_node context on legacy records }
+        '409':
+          description: Identity cannot be proven; the row remains repair-required or quarantined
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DLQReplayGateError' }
+
+  /dlq/{pipeline_id}/{id}/identity:
+    put:
+      tags: [DLQ]
+      summary: Verify and repair one legacy metadata-PK identity
+      description: Requires an original primary-key declaration in the historical row and an exactly matching sink.config.pk_columns safety set. Never invents keys from current source configuration and rejects legacy primary-key-changing UPDATEs.
+      parameters:
+        - { name: pipeline_id, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DLQIdentityRepairRequest' }
+      responses:
+        '200': { description: Repaired row with legacy_verified identity context }
+        '400': { description: Invalid request or pipeline does not enable the controlled compatibility path }
+        '404': { description: DLQ row not found }
+        '409':
+          description: Declaration/value proof failed; row remains repair-required or quarantined
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DLQReplayGateError' }
 
   /connections:
     get:

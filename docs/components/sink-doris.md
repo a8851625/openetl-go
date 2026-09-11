@@ -13,15 +13,17 @@ Write records into Doris through Stream Load with MySQL-protocol fallback for su
 Writes record `data` columns. Production CDC/upsert requires Unique Key tables and stable `pk_columns` or an explicitly enabled metadata-derived key.
 
 For Kafka `format: envelope` or Debezium multi-table CDC, set
-`pk_columns_from_metadata: true` to derive each table's key columns from a
-JSON-object `record.metadata.key` (including composite keys and DELETEs). A
-scalar envelope key such as `"42"` has no column name and is rejected; use
-static `pk_columns` for that path. `table_template` may be used without a
+`pk_columns_from_metadata: true` to consume complete declared
+`Metadata.PrimaryKeyColumns` plus a JSON-object `record.metadata.key`
+(including composite keys and DELETEs). Empty/partial/conflicting identity fails
+closed; static `pk_columns` is only the exact `legacy_verified` replay safety
+set. A scalar envelope key such as `"42"` has no column name and is rejected;
+use static mode for that path. `table_template` may be used without a
 static `table`; preflight then validates the routed-table contract instead of
 requiring `sink.config.table`.
 
 ## Checkpoint, DLQ, Idempotency
-Doris production path relies on Unique Key/upsert behavior. Mixed write/delete batches are constrained unless explicitly allowed.
+Doris production path relies on Unique Key/upsert behavior. Auto-create prioritizes `Metadata.ColumnTypes` and emits the derived Unique Key. A key-changing UPDATE writes the new key before deleting the validated old key; these two protocols are not atomic, so a crash may temporarily retain the old row but retry/replay converges without losing the new row. Originally mixed write/delete batches remain constrained unless explicitly allowed.
 
 ## Fits
 MySQL batch -> Doris and production-candidate Doris Unique Key upsert paths.

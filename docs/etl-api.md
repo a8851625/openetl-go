@@ -5,6 +5,34 @@
 - Clients may pass `X-API-Token: <token>` or `Authorization: Bearer <token>`.
 - `GET /api/v2/health` remains unauthenticated for liveness checks.
 
+## Secret fields
+
+Connection responses and linear/DAG pipeline specs use connector descriptors to
+mask secret fields, including JDBC/dbt/enricher/lookup DSNs. Connections return
+`******`; specs retain the historical first/last-character mask for longer values.
+Submitting a returned placeholder for an existing secret preserves its stored value. The same
+descriptor policy drives encryption at rest; explicit non-secret fields remain
+readable. Undeclared fields use legacy secret-name matching with a warning.
+
+`secret_encryption` health reports stored plaintext connection/settings findings.
+See [the runbook](./ops-runbook.md#11b-existing-plaintext-secrets) for the offline
+`--check-secrets` and idempotent `--remediate-secrets` commands.
+
+## Restore-failed pipelines
+
+`GET /api/v2/pipelines` and `GET /api/v2/pipelines/{id}` continue to return a
+stored pipeline when startup cannot reconstruct its runner. Its status is
+`restore_failed`, and `restore_error` contains the failure `stage`, stable
+`code`, `message`, operator `remediation`, `previous_status`, and `failed_at`.
+Starting or resuming that pipeline returns HTTP `409` with the same diagnostic
+instead of a misleading `404`.
+
+`GET /api/v2/health` reports the per-pipeline value `restore_failed`, overall
+status `degraded`, `restore_failed_count`, and a JSON `pipeline_issues` map.
+Repair the stored spec or referenced connection and restart; restore-state
+updates never reset the checkpoint. See [runtime-modes.md](./runtime-modes.md)
+for strict/non-strict startup configuration and recovery procedure.
+
 ## DLQ APIs
 
 Dead-letter records include `error_class` when the runtime can classify the failure. Current classes are `transient`, `data`, `schema`, `auth`, `config`, `programming`, and `unknown`. Retry policy uses the same classifier: transient and unknown errors are retried, while data/schema/auth/config/programming errors fail fast into DLQ or fail the operation.
@@ -20,7 +48,7 @@ Query parameters:
 - `contains`: substring match against the serialized failed record payload.
 - `error_contains`: substring match against the DLQ error string.
 
-SQL-backed DLQ responses include stable `id` values for per-record delete/replay. DAG DLQ responses also include `dag_node` when the failure was recorded with node context.
+SQL-backed DLQ responses include stable `id` values for per-record delete/replay. DAG DLQ responses also include `dag_node` when the failure was recorded with node context. New rows also expose `identity_context`: the raw source payload (UTF-8 in `source_bytes`, otherwise base64 in `source_bytes_base64`), original primary-key declaration, identity failure/missing columns, frozen format-contract ID and before-image state, source/target coordinates, replay provenance/state, and replay acknowledgement. Treat the raw payload as production data and protect this API with authentication and normal data-access controls.
 
 Examples:
 ```sh
@@ -38,7 +66,9 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
 `POST /api/v2/dlq/{pipeline}/replay`
 `POST /api/v2/dlq/{pipeline}/{id}/replay`
 
-Replay uses the same query parameters as list. Replayed records are transformed again and written to the configured sink. Successfully replayed records are deleted from SQL-backed DLQ storage by stable DLQ ID when available.
+Replay uses the same query parameters as list. Replayed records are transformed again and written to the configured sink. For a metadata-PK pipeline, replay first proves a complete identity from the record or its frozen format contract and validates it again after transforms. It never derives historical key semantics from the current source configuration. Unprovable rows remain in `repair_required` or `quarantined` and return HTTP `409` with `id`, `replay_state`, and `reason`.
+
+After a sink acknowledges a replay, the SQL-backed row is first updated to `sink_acked`, then deleted. A crash or storage failure before that replay checkpoint may write the row again (the documented at-least-once boundary); a crash or delete failure after it causes the next request to perform cleanup only, without another sink write. This replay checkpoint does not advance the source checkpoint.
 
 Use the ID endpoint for deterministic one-record replay and UI/API feedback such as `{"replayed":1}`. Linear pipeline DLQ replay is supported. DAG pipeline DLQ replay is supported for records that include `dag_node`: sink-node failures are written back to that sink, and transform-node failures resume at that transform and route downstream. Legacy DAG DLQ records without `dag_node` return HTTP `400` with `{"error":"...dag_node...","replayed":0}` and are not deleted.
 
@@ -52,6 +82,19 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 
 curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
   'http://127.0.0.1:8001/api/v2/dlq/orders/replay?from=2026-06-06T00:00:00Z&until=2026-06-07T00:00:00Z'
+```
+
+### Repair one legacy identity declaration
+
+`PUT /api/v2/dlq/{pipeline}/{id}/identity`
+
+This is a single-row, explicit compatibility gate for historical metadata-PK DLQ rows. It is available only when the linear sink has `pk_columns_from_metadata: true` and an explicit static `pk_columns` safety set. `primary_key_columns` in the request must exactly match both the declaration already stored in the historical record and that static target set. The server verifies that every value exists and rejects partial keys, invented declarations, and every legacy primary-key-changing UPDATE. A successful repair durably stores the reconstructed Key with `legacy_verified` provenance before replay is allowed. There is no bulk or automatic repair endpoint.
+
+```sh
+curl -X PUT -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"primary_key_columns":["tenant_id","id"]}' \
+  'http://127.0.0.1:8001/api/v2/dlq/orders/123/identity'
 ```
 
 ### Delete DLQ Records
@@ -69,6 +112,21 @@ curl -X DELETE -H "X-API-Token: $ETL_API_TOKEN" \
 ```
 
 ## Checkpoint APIs
+
+Pipeline responses expose three lifecycle fields: `desired_state` is the
+durable operator intent (`running`, `stopped`, or `paused`), `observed_state`
+is the last persisted runtime state, and `generation` is the checkpoint
+fencing token. Start/resume persists `desired_state=running` before opening a
+source. Stop/pause persists the quiescent intent before changing the runner;
+if that persistence fails, the request is non-2xx and the runner is unchanged.
+
+Checkpoint `set` and `reset` are administrative operations and are accepted
+only while the pipeline is stopped or paused. A running pipeline receives HTTP
+`409`, code `pipeline_not_quiescent`, and remediation. A successful operation
+atomically advances `generation` and changes the checkpoint. Any in-flight
+write from an older generation is rejected, logged, and counted by
+`checkpoint_fenced_total`; it is never retried with the new token. Delivery
+therefore remains at-least-once, and the sink must absorb replay duplicates.
 
 ### Set Kafka Replay Offset
 `POST /api/v2/pipelines/{pipeline}/checkpoint/set`
@@ -89,6 +147,25 @@ curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
 ```
 
 Use `{"mode":"last_committed","offsets":{"0":41}}` when setting the stored committed offsets directly. Legacy raw checkpoints remain supported with `{"position":{...}}`.
+
+### Reset Source Checkpoint
+
+`POST /api/v2/pipelines/{pipeline}/checkpoint/reset`
+
+The response includes `generation` plus `reset_semantics` (`effect`,
+`external_boundary`, and `operator_action`). Reset only changes OpenETL's
+durable checkpoint; its exact next-start boundary is source-specific:
+
+| Source | Next-start boundary after reset |
+| --- | --- |
+| `kafka` | OpenETL offsets are removed, but broker consumer-group offsets and topic retention are unchanged. Reset the group separately for older replay. |
+| `mysql_cdc` | The connector discovers the current MySQL master position; reset is not “replay from the oldest binlog”. Use `checkpoint/set` with a retained position for controlled replay. |
+| `mysql_snapshot_cdc` | Snapshot/handoff state is removed and the full snapshot runs again before CDC; every source row can be redelivered. |
+| `postgres_cdc` | The saved LSN is removed, while the replication slot and retained WAL remain the external boundary. Reset does not reposition or recreate the slot. |
+
+Stop or pause the pipeline and wait for it to quiesce before invoking either
+checkpoint endpoint. Neither endpoint resets an external broker group,
+replication slot, or database log position automatically.
 
 ## Plugin Metadata
 

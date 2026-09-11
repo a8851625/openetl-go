@@ -331,7 +331,7 @@ source:
 | `shard_index` | no | | Shard index for table partitioning. |
 | `shard_total` | no | | Total shard count for table partitioning. |
 | `start_from` | no | | CDC start point: `timestamp`, `binlog:<file>:<pos>`, or `gtid:<set>`. |
-| `cdc_on_binlog_purged` | no | `fail` | Recovery when the checkpointed binlog file no longer exists on MySQL (ERROR 1236 "Could not find first log file name in binary log index", typically after `binlog_expire_logs_seconds` purged it during a long pipeline stop). `fail` (default) stops the pipeline and surfaces a fatal error for manual checkpoint reset — no silent data loss. `resume_from_current` advances the CDC resume position to the current MySQL master position and continues; **all changes between the stale checkpoint and now are dropped** (explicit RPO loss, use only with another recovery source). `resnapshot` (`mysql_snapshot_cdc` only) falls back to the snapshot phase from the last per-table cursors and re-enters CDC at the new handoff. |
+| `cdc_on_binlog_purged` | no | `fail` | Recovery when the checkpointed binlog file no longer exists on MySQL (ERROR 1236). `fail` stops and surfaces the error. `resume_from_current` continues at the current master coordinate and **drops all changes in the gap**. `resnapshot` (`mysql_snapshot_cdc` only) resumes the snapshot from durable per-table cursors, captures a new handoff, and re-enters CDC. If purge was caused by `RESET MASTER`, PITR, or a source switch that moves coordinates backwards, ClickHouse `source_order` users must rebuild/switch the target version domain first; resnapshot does not make different binlog lineages comparable. |
 
 Requires MySQL binlog `ROW` format and `FULL` row image.
 
@@ -371,7 +371,7 @@ source:
 | `shard_index` | no | | Shard index for snapshot partitioning. |
 | `shard_total` | no | | Total shard count for snapshot partitioning. |
 
-Snapshots by primary-key chunks, records binlog position, then switches to CDC. Checkpoints survive crash during both phases.
+Snapshots by primary-key chunks, captures a binlog handoff before the consistent read, then switches to CDC. Checkpoints survive crash during both phases. Every snapshot record carries `snapshot_handoff_file` / `snapshot_handoff_pos`; ClickHouse source ordering uses that boundary even when the pagination key is text.
 
 For whole-database snapshots, set `tables: ["*"]` and omit `pk_column`: each table's snapshot cursor is derived from its own single-column PRIMARY KEY (auto-detected from `information_schema`), so heterogeneous-PK databases no longer require a single global key. Integer keys page with a numeric cursor (and optional `shard_*` hashing); non-integer orderable keys (e.g. `VARCHAR`, `DATETIME`) page with a lexicographic string cursor. Tables without a usable single-column key (composite PK or no PK) are skipped during the historical snapshot but still captured by the CDC phase.
 
@@ -404,12 +404,11 @@ source:
 | `topic` | yes | | Kafka topic to consume. |
 | `group_id` | no | `etl-consumer` | Consumer group ID. All logical shards of a pipeline share this group so Kafka assigns partitions across shards. |
 | `topic_partitions` | no | | Optional static partition-count hint for offline validate when brokers are unreachable. When `logical_shards > topic_partitions`, validate warns excess shards will idle. Prefer preflight live metadata in production; recommended `logical_shards` equals topic partition count. |
-| `format` | no | `json` | Message format: `json`, `text`, or `envelope`. `envelope` consumes OpenETL `kafka`-sink envelopes (`{event_id,op,table,key,data,timestamp}`) and restores the original INSERT/UPDATE/DELETE operation plus source table/key/data, so a Kafka-relayed chain (e.g. MySQL CDC -> Kafka -> Doris) behaves like a direct CDC consumer. Note: the envelope carries `Data` (after-image) only; `Before` (pre-image for update/delete) is not relayed, so sinks/transforms that depend on `Before` are not supported across a Kafka relay. A malformed/non-envelope message degrades to `data[value]=<raw>` with `op=INSERT`. |
 | `key_column` | no | | Column name for message key. |
 | `value_column` | no | | Column name for raw message value. |
 | `initial_offset` | no | `newest` | Initial consumer offset when no committed offset exists: `oldest` or `newest`. |
-| `format` | no | `json` | Message format: `json` (flat object), `envelope` (Debezium or legacy OpenETL), `canal_json` (Alibaba canal flat message; INSERT/UPDATE/DELETE, mysqlType to ColumnTypes, pkNames to Metadata.Key). |
-| `on_parse_error` | no | `raw` | Parse-failure policy: `raw` (payload under value, pre-existing), `skip` (drop), `dlq` (error channel with context). |
+| `format` | no | `json` | Message format: `json` (flat object), `envelope` (Debezium or OpenETL before/after envelope), or `canal_json`. Canal `pkNames` is the authoritative complete-key declaration; UPDATE uses the registered `kafka.canal_json/v1` rule to fill only unchanged key columns omitted from an explicit `old` object. Missing/partial/conflicting identity fails before a metadata-PK sink. OpenETL envelopes carry `primary_key_columns`; schemaful/schemaless JSON-object Kafka keys are recognized for Debezium paths. |
+| `on_parse_error` | no | `raw` | Parse-failure policy: `raw` (payload under value, legacy append behavior), `skip` (explicitly drop), or `dlq`. `dlq` emits a positioned rejected record; the runner persists it before checkpoint/consumer-group acknowledgement, and a DLQ failure blocks checkpoint progress. Identity failures cannot be bypassed with `raw`. |
 | `tombstone_policy` | no | `delete` | Nil-value (log-compaction tombstone): `delete` (emit OpDelete) or `skip`. |
 | `expand_key_json` | no | `false` | Unfold a JSON-object message key into `__key_<col>` virtual columns. |
 | `sasl_user` | no | | SASL username. |
@@ -531,10 +530,10 @@ sink:
 | `user` | yes | | MySQL user. |
 | `password` | no | | MySQL password (**secret**). |
 | `database` | yes | | Target database. |
-| `table` | yes | | Target table. |
+| `table` | no | | Fixed target table. It may be empty only when a compatible CDC/Kafka envelope source supplies `Metadata.Table` for every record. |
 | `batch_mode` | no | `insert` | `insert`, `upsert`, or `increment`. |
-| `pk_columns` | no | `["id"]` | Primary key columns for upsert mode. |
-| `pk_columns_from_metadata` | no | `false` | Derive per-table primary key columns from `record.metadata.key` for Debezium multi-table CDC. |
+| `pk_columns` | no | `["id"]` | Static primary key columns for upsert mode. With `pk_columns_from_metadata`, an explicit list is only the exact safety set for `legacy_verified` replay; it does not repair ordinary records. |
+| `pk_columns_from_metadata` | no | `false` | Derive each table's key only from declared complete `Metadata.PrimaryKeyColumns` plus a JSON-object `Metadata.Key`. Empty, partial, conflicting, or unknown-provenance identity fails closed. |
 | `increment_columns` | no | | Target column -> source field map for additive `batch_mode: increment`. |
 | `pre_write` | no | | Pre-write action block: `delete`, `truncate`, or `truncate_partition` with optional `params`. |
 | `auto_create` | no | `false` | Auto-create table if missing. Type resolution: `column_types` → source/Debezium declared types → sample inference. |
@@ -543,7 +542,7 @@ sink:
 | `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. |
 | `insert_chunk_size` | no | `500` | Rows per INSERT statement. |
 
-Use `batch_mode: upsert` for CDC/snapshot+CDC idempotency. For Kafka Debezium → MySQL with `auto_create`, prefer schema-inclusive JSON or set `column_types` for ambiguous columns such as soft-delete flags.
+Use `batch_mode: upsert` for CDC/snapshot+CDC idempotency. Metadata-PK auto-create emits the real single/composite `PRIMARY KEY`; a key-changing UPDATE writes the new key and deletes the validated old key in the same transaction. For Kafka Debezium → MySQL with `auto_create`, prefer schema-inclusive JSON or set `column_types` for ambiguous columns such as soft-delete flags.
 
 ### `clickhouse`
 
@@ -560,7 +559,9 @@ sink:
     auto_create: true
     schema_drift: add_columns
     pk_columns: [id]
+    version_mode: source_order
     version_column: _version
+    delete_column: _is_deleted
 ```
 
 | Field | Required | Default | Description |
@@ -573,9 +574,11 @@ sink:
 | `database` | yes | | Target database. |
 | `table` | no | | Target table. Empty uses the source table name dynamically. |
 | `table_template` | no | | Multi-table fan-out template, e.g. `ods_{table}` (also supports `{db}`). Each record's destination is derived from its metadata `table`/`db`; set `table` empty. Requires envelope/json records carrying table metadata (e.g. `kafka` source `format: envelope`). |
-| `pk_columns` | no | `["id"]` | Primary key columns for ORDER BY, DELETE, and UPDATE conditions. |
-| `pk_columns_from_metadata` | no | `false` | Derive per-table primary keys from each record's JSON-object metadata key (`Metadata.Key`). Required for multi-table streams with heterogeneous keys (e.g. envelope CDC); auto-created tables get `ORDER BY (<key columns>)` per table. A missing/scalar key or a key-set change within one batch is a write error. |
-| `version_column` | no | `_version` | Version column for ReplacingMergeTree. |
+| `pk_columns` | no | `["id"]` | Primary key columns for ORDER BY, DELETE, and UPDATE conditions. When `pk_columns_from_metadata` is enabled, an explicit value is also the exact safety set required by the single-row legacy DLQ identity repair API; it never makes ordinary empty Metadata.Key valid. |
+| `pk_columns_from_metadata` | no | `false` | Derive per-table primary keys from the declared complete JSON-object `Metadata.Key`. Validate/preflight rejects sources without a registered identity contract; the runner routes missing/partial/conflicting identity to DLQ before this sink. Auto-created tables get `ORDER BY (<key columns>)` per table. Replay reconstructs only from the format contract frozen in each DLQ row. |
+| `version_mode` | no | `source_order` | `source_order` writes connector-owned UInt64 versions plus tombstones and requires `ReplacingMergeTree(version, deleted)`; `append` accepts INSERT only and requires a non-replacing MergeTree target. |
+| `version_column` | no | `_version` | Writable `UInt64` source-order version column. |
+| `delete_column` | no | `_is_deleted` | Writable `UInt8` tombstone column and second ReplacingMergeTree argument. |
 | `auto_create` | no | `false` | Auto-create table if missing. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, `add_columns`, or `sync`. |
 | `ddl_policy` | no | `apply` | `reject`, `ignore`, or `apply`. |
@@ -589,6 +592,14 @@ sink:
 | `async_insert` | no | `false` | Enable ClickHouse `async_insert`. |
 | `async_insert_wait` | no | `true` | Wait for async insert completion. |
 | `ttl` | no | | TTL expression for auto-created tables. |
+
+`source_order` supports MySQL binlog file/position, `mysql_snapshot_cdc` handoff, PostgreSQL CDC LSN,
+Kafka partition/offset, and numeric MySQL batch cursors. It fails closed for missing/overflowed positions,
+text-only batch cursors, file/HTTP/Redis sources, PostgreSQL initial snapshots, and derived `window`
+records. Kafka ordering is per partition: keep each business key on one stable partition. MySQL ordering
+is per binlog lineage: after `RESET MASTER`, PITR, or coordinate-regressing failover, rebuild or switch
+the target. Legacy `Int64`/wall-clock version tables and one-argument ReplacingMergeTree must be rebuilt;
+they are not altered or mixed automatically.
 
 ### `maxcompute` / `odps`
 
@@ -707,9 +718,10 @@ sink:
 | `password` | no | | PostgreSQL password (**secret**). |
 | `database` | yes | | Target database. |
 | `schema` | no | `public` | Target schema. |
-| `table` | yes | | Target table. |
+| `table` | no | | Fixed target table. It may be empty only when a compatible CDC/Kafka envelope source supplies `Metadata.Table` for every record. |
 | `batch_mode` | no | `insert` | `insert`, `upsert` (`INSERT ... ON CONFLICT`), or `increment`. |
-| `pk_columns` | no | `["id"]` | Primary key columns for upsert mode. |
+| `pk_columns` | no | `["id"]` | Static primary key columns for upsert mode. With `pk_columns_from_metadata`, an explicit list is only the exact safety set for `legacy_verified` replay. |
+| `pk_columns_from_metadata` | no | `false` | Derive each table's key only from declared complete `Metadata.PrimaryKeyColumns` plus a JSON-object `Metadata.Key`. Empty, partial, conflicting, or unknown-provenance identity fails closed. Key-changing UPDATE is an atomic new-key upsert plus old-key delete. |
 | `increment_columns` | no | | Target column -> source field map for additive `batch_mode: increment`. |
 | `pre_write` | no | | Pre-write action block: `delete`, `truncate`, or `truncate_partition` with optional `params`. |
 | `auto_create` | no | `false` | Auto-create table if missing. Type resolution: `column_types` → source/Debezium declared types → sample inference. |
@@ -754,13 +766,13 @@ sink:
 | `write_mode` | no | `stream_load` | `stream_load` or MySQL-protocol `insert` fallback. |
 | `batch_mode` | no | `insert` | `insert` or `upsert`. Production CDC/upsert requires a Doris Unique Key table and stable `pk_columns` or `pk_columns_from_metadata: true`. |
 | `pk_columns` | no | | Key columns for DELETE, auto-created Unique Key tables, and replay-safe upsert validation. |
-| `pk_columns_from_metadata` | no | `false` | Derive per-table key columns from a JSON-object `record.metadata.key` (Debezium/Kafka envelope). Supports composite keys and DELETEs; scalar keys must use static `pk_columns`. |
+| `pk_columns_from_metadata` | no | `false` | Derive each table's key only from declared complete `Metadata.PrimaryKeyColumns` plus a JSON-object `Metadata.Key`. Empty, partial, conflicting, or unknown-provenance identity fails closed; scalar keys require static mode. Key-changing UPDATE writes the new key before deleting the validated old key. |
 | `stream_load_format` | no | `json` | `json` or `csv`. |
 | `stream_load_scheme` | no | `http` | `http` or `https`. |
 | `stream_load_timeout_sec` | no | `30` | Stream Load HTTP timeout in seconds. |
 | `insert_chunk_size` | no | `500` | Rows per INSERT statement when `write_mode: insert` is used. |
 | `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
-| `auto_create` | no | `false` | Auto-create missing Doris Unique Key tables. If neither `pk_columns` nor `pk_columns_from_metadata: true` is set, an `id` column is required. |
+| `auto_create` | no | `false` | Auto-create missing Doris Unique Key tables. Type resolution is `column_types` override → record `Metadata.ColumnTypes`/source declaration → sample inference. If neither `pk_columns` nor `pk_columns_from_metadata: true` is set, an `id` column is required. |
 | `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
 | `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. The production default rejects source DDL; Doris `apply` is limited to safe `ALTER TABLE ... ADD COLUMN` statements. |
 | `allow_mixed_cdc_non_atomic` | no | `false` | Allow mixed write/delete CDC batches even though Stream Load and MySQL DELETE are not atomic together. |

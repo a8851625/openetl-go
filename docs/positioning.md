@@ -39,3 +39,12 @@ It targets common pipelines across databases, Kafka, files, HTTP APIs, object st
 - Usability first: common tasks should be achievable through UI/API/YAML, with preflight explaining risks, schema issues, and idempotency choices before start.
 - Extensibility first: connectors, transforms, and plugins should share descriptor, schema, preflight, metrics, DLQ, and certification contracts.
 - Honest semantics: the default delivery contract is at-least-once; production pipelines absorb replay with business keys, versions, upserts, ReplacingMergeTree-style sinks, or deduplication.
+
+## Declared Boundaries
+
+- **Schema evolution (user decision 2026-09-06)**: `ddl_guard` rejecting source DDL changes is an
+  intentional baseline. A restricted additive-only schema evolution project (new columns only;
+  dropped/renamed/incompatible columns keep failing preflight) has been accepted and is scheduled
+  separately in the roadmap. Until it lands, schema changes require manual spec updates guided by
+  preflight `ddl_preview` and field-issue feedback.
+- **Performance evidence (revalidation 2026-09-06)**: the previous ClickHouse async/HTTP comparisons and SQLite pipeline-capacity inference were withdrawn. RA-8 must establish a reproducible baseline; the additional ClickHouse profile awaits a user decision.

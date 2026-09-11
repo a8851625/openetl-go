@@ -41,7 +41,11 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 | Path / `path_id` | Happy path | Replay absorption | Failure / DLQ | Restart / crash | Broker / rebalance | Residual boundary |
 | --- | --- | --- | --- | --- | --- | --- |
 | **MySQL CDC -> MySQL upsert** `mysql_cdc__mysql_upsert` (PR-2 forced) | `hack/e2e-path-mysql-cdc-mysql.sh`, `hack/e2e-cdc-mysql.sh` | MySQL `batch_mode: upsert` + stable PK | Sink privilege/outage -> DLQ -> replay | SIGKILL + checkpoint resume (`hack/e2e-cdc-crash-recovery.sh`, path matrix) | Not applicable | Source binlog and sink are not a distributed transaction |
-| **MySQL snapshot+CDC -> ClickHouse** `mysql_snap_cdc__ch_rmt` (PR-2 forced) | `hack/e2e-snapshot-cdc-clickhouse.sh` | ReplacingMergeTree absorbs checkpoint reset replay | ClickHouse outage DLQ/replay | Snapshot and CDC crash recovery (`hack/e2e-snapshot-cdc-crash.sh`) | Not applicable | Source binlog and sink are not a distributed transaction; use `FINAL` for exact current state |
+| **MySQL snapshot+CDC -> ClickHouse** `mysql_snap_cdc__ch_rmt` (PR-2 forced) | `hack/e2e-clickhouse-replay-ordering.sh` (native path) | `UInt64` binlog-handoff/source-position versions + two-argument ReplacingMergeTree absorb delayed DLQ and checkpoint-reset replay | ClickHouse outage DLQ/replay | Snapshot and CDC crash recovery (`hack/e2e-snapshot-cdc-crash.sh`) | Not applicable | Source binlog and sink are not a transaction; order is valid only within one binlog lineage; use `FINAL` |
+| **Kafka envelope -> ClickHouse** (IT-2 source-order certification) | `hack/e2e-clickhouse-replay-ordering.sh` (HTTP path), `hack/e2e-kafka-multitable-clickhouse.sh` | Partition/offset version + tombstone preserve newer UPDATE/DELETE during delayed replay | Constraint failure -> DLQ -> delayed replay | OpenETL checkpoint + external consumer-group reset to offset 0 | One business key must remain on one stable partition | No cross-partition order; partition-count/key routing change requires migration |
+| **Kafka Canal -> ClickHouse metadata PK** `kafka_canal__ch_metadata_pk` | `hack/e2e-kafka-canal-identity.sh` | Complete composite `pkNames`, before-key UPDATE and partition/offset version | Frozen raw/PK/contract/old/target context; exact legacy repair; partial/key-change/unknown quarantine | Process restart preserves repair state; sink-acked/delete crash order has fault-injection tests | Single stable partition in certification | Replay remains at-least-once before the durable sink-ack marker |
+| **Kafka envelope -> PostgreSQL metadata PK** (IT-2 GAP-7.3 certification, 2026-09-05) | `hack/e2e-kafka-postgres-fanout.sh` | Per-table PK derived from metadata Key; composite key and key-changing UPDATE remove old key in one transaction | PostgreSQL outage -> DLQ -> restart -> controlled replay | Checkpoint + consumer-group reset replay leaves business-key state unchanged (no resurrection) | Same-partition ordering as ClickHouse path | Per-record upsert atomicity only; no cross-sink transaction |
+| **Kafka envelope -> ClickHouse multi-table** (IT-2 GAP-7.3 certification, 2026-09-05) | `hack/e2e-kafka-multitable-clickhouse.sh` | `table_template` fan-out to three tables; composite ORDER BY; key-change tombstone | ClickHouse outage -> DLQ -> restart -> controlled replay | Checkpoint + group reset replay absorbed by source-ordered ReplacingMergeTree | One business key per stable partition | No cross-partition order; business-key rerouting requires migration |
 | Kafka -> file `kafka__file_unsafe` | `hack/e2e-kafka.sh` (`allow_unsafe: true` is explicit in the fixture) | Content-addressed file key keeps object count stable after offset replay | Runner and file sink tests | Wait for source offset + sink commit, SIGKILL, produce while down, restart from checkpoint | Redpanda restart and same-group join/leave | Changed batch boundaries may produce different objects; production specs remain blocked by default without explicit opt-in |
 | Kafka raw -> lookup -> Kafka ODS | `hack/e2e-kafka-raw-ods.sh` | Kafka append duplicates are explicitly visible after offset replay | Parser and lookup miss DLQ | Source checkpoint restart coverage inherited from Kafka tests | Covered by ordinary Kafka and Debezium paths | Kafka transactions/exactly-once are not claimed |
 | Debezium Kafka -> MySQL `debezium_kafka__mysql` | `hack/e2e-debezium-mysql.sh` | MySQL upsert and stable keys absorb replay | Data/schema DLQ and replay | App restart | Broker restart and consumer-group rebalance | Debezium connector lifecycle remains external |
@@ -64,7 +68,13 @@ The fields describe one durable recovery boundary; they are not a distributed tr
 - PostgreSQL CDC `CheckpointForRecord` does not advance `committedLsn`; `AckCheckpoint` sends the WAL status update first and publishes the committed LSN only after a successful send. Keepalives without a durable LSN use 0/0, and reconnects use the durable marker rather than the server/read-ahead end.
 - MySQL snapshot+CDC keeps producer pagination cursors separate from acknowledged snapshot cursors. Linear and DAG writers pass the complete source batch to the snapshot checkpointer; numeric and ordered string cursors are applied only after the checkpoint row is saved. Snapshot checkpoints retain the original CDC handoff position, and CDC reconnects use the last acknowledged binlog file/position rather than handler read-ahead.
 - MySQL snapshot+CDC malformed numeric cursors, missing cursor columns, unsupported phases, and missing snapshot/CDC binlog handoff positions fail closed. A checkpoint-generation error blocks later advancement and marks the linear/DAG pipeline failed so restart replays from the last durable boundary.
+- ClickHouse `source_order` accepts only a connector-owned numeric position, writes writable
+  `UInt64` version + `UInt8` tombstone columns through native and HTTP protocols, and rejects missing/
+  overflowed positions, derived `window` outputs, and incompatible legacy target engines/types. Its
+  append mode is INSERT-only.
 - Kafka offset zero is retained and an idle stream flushes the latest throttled checkpoint boundary after the configured interval.
+- Metadata-PK pipelines reject incapable source/format combinations in validate/preflight. The runner validates complete declared Key/Data/before identity after transforms; source parse rejections and identity failures reach durable DLQ before checkpoint acknowledgement, while DLQ failure fences later checkpoint progress.
+- Metadata-PK DLQ replay uses only the context frozen with the failed row, revalidates identity after transforms, and returns structured HTTP 409 repair/quarantine outcomes. A persisted `sink_acked` marker precedes DLQ deletion; restart after delete failure performs cleanup without another sink write.
 - CDC/Kafka to file/S3 remains rejected unless `allow_unsafe: true` explicitly acknowledges the documented duplicate boundary.
 - DAG DLQ records without `dag_node` remain stored and replay returns HTTP 400.
 
@@ -200,6 +210,87 @@ ClickHouse script now asserts `phase: cdc` only after a real CDC record is
 acknowledged, including after reset, rather than treating producer completion
 as a durable phase transition. The path remains at-least-once: use stable
 business keys/upsert or an equivalent deduplication strategy at the sink.
+
+### IT-2/T2.4 ClickHouse source-order evidence (2026-09-05)
+
+ClickHouse no longer assigns versions from sink wall-clock arrival. In
+`version_mode: source_order`, snapshot rows use the MySQL binlog handoff captured
+before the consistent read; CDC uses binlog file/position; Kafka uses
+partition/offset. Native and HTTP writes preserve the full UInt64 value and add
+an UInt8 tombstone consumed by `ReplacingMergeTree(version, deleted)`.
+
+Targeted gates:
+
+```text
+go test ./internal/etl/core/... ./internal/etl/source ./internal/etl/sink ./internal/etl/server -count=1
+go test -race ./internal/etl/core/... ./internal/etl/source ./internal/etl/sink ./internal/etl/server -count=1
+```
+
+Container evidence against `openetl-go-etl:dev` image
+`8ded68e84e7434b591cc83d4fbb80f8171bdeb190f61e1182e574a489f4fa7c9`:
+
+```text
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-clickhouse-replay-ordering.sh  PASS
+CONTAINER_CLI=docker ./hack/e2e-binlog-purged-resnapshot.sh                  PASS
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-kafka-multitable-clickhouse.sh PASS
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-wide-table.sh               PASS
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-clickhouse-autocreate.sh     PASS
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-clickhouse.sh                PASS
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-snapshot-cdc-crash.sh        PASS
+```
+
+The first script proves that a newer UPDATE remains visible after an older DLQ
+record is replayed, a newer DELETE is not resurrected by an older INSERT, and an
+offset-0 replay leaves `FINAL` business state unchanged. It also validates
+`_version UInt64`, `_is_deleted UInt8`, the two-argument engine, schema drift,
+restart, outage, and DLQ recovery. Multi-table metadata keys and tombstones are
+covered separately. Window aggregates explicitly use append/MergeTree because a
+derived aggregate has no single connector-owned position; preflight rejects that
+combination in source-order mode.
+
+Residual boundary: source positions are comparable only inside one lineage.
+MySQL `RESET MASTER`, PITR, or failover to a lower binlog coordinate requires a
+new/rebuilt ClickHouse target version domain; Kafka requires a stable partition
+for each business key. Legacy `Int64` wall-clock versions and one-argument
+ReplacingMergeTree tables are rejected and must be migrated by rebuild/switch,
+not mixed in place. This remains checkpointed at-least-once, not exactly-once.
+
+### IT-2/T2.6 frozen DLQ identity and controlled replay (2026-09-05)
+
+Every new SQL-backed DLQ row now freezes the source payload, original
+primary-key declaration, failure/missing columns, format contract,
+before-image state, source/target coordinates, and replay provenance. Legacy
+rows without this column normalize to `legacy_unknown` + `repair_required`;
+they are never interpreted with the current source configuration. Non-UTF-8
+source bytes are retained losslessly as base64.
+
+Metadata-PK replay reconstructs a Key only from the frozen contract and
+validates identity again after transforms. The single-row repair API requires
+the operator's declaration to match both the historical Record and the
+explicit target `pk_columns`; partial composite keys, an absent original
+declaration, static-set drift, and legacy key-changing UPDATEs remain stored.
+Sink acknowledgement is then persisted as `sink_acked` before deletion. A
+checkpoint-write failure leaves the row pending and permits an at-least-once
+retry; a delete failure leaves `sink_acked`, so restart performs cleanup only.
+
+Evidence against `openetl-go-etl:dev`
+`sha256:0076a91ddef463046bb97e604cecd25b335c97d99c66b62dfd4eaaee6519d928`:
+
+```text
+CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-kafka-canal-identity.sh  PASS
+CONTAINER_CLI=docker ./hack/e2e-storage-mysql.sh                         PASS (MySQL 8)
+CONTAINER_CLI=docker ./hack/e2e-storage-postgres.sh                      PASS (PostgreSQL 16)
+go test -race ./internal/etl/core/... ./internal/etl/pipeline ./internal/etl/server ./internal/etl/storage/... -count=1  PASS
+go test ./... -count=1                                                   PASS
+go vet ./internal/etl/core/... ./internal/etl/pipeline ./internal/etl/server ./internal/etl/storage/...  PASS
+```
+
+The focused container path validates API-visible frozen context, process
+restart, successful legacy composite-key repair, and durable quarantine for
+partial composite, key-changing, and unknown-contract records. Fault-injection
+unit tests cover both sides of the sink-ack replay checkpoint and backup/restore
+tests preserve the full context. The remaining GAP-7 work is T2.7 cross-sink
+conformance and path certification, not a broader exactly-once claim.
 
 ### PR-2.4.4 source position semantic validation and recovery visibility (2026-08-08)
 

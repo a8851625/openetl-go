@@ -30,7 +30,7 @@
 | path_id | source → sink | write_mode / key | 故障证据入口 | residuals |
 | --- | --- | --- | --- | --- |
 | `mysql_cdc__mysql_upsert` | MySQL CDC → MySQL | `batch_mode: upsert` + 稳定 PK | `hack/e2e-path-mysql-cdc-mysql.sh`（含 crash / checkpoint reset / sink outage / DLQ replay）· `hack/e2e-cdc-mysql.sh` · `hack/e2e-cdc-crash-recovery.sh` | 源 binlog 与 sink 非分布式事务；允许至少一次重复，由 upsert 吸收 |
-| `mysql_snap_cdc__ch_rmt` | MySQL snapshot+CDC → ClickHouse | ReplacingMergeTree + `pk_columns` + `_version` | `hack/e2e-snapshot-cdc-clickhouse.sh` · `hack/e2e-snapshot-cdc-crash.sh` | binlog 与 sink 非原子；查询当前态需 `FINAL` 或物化 |
+| `mysql_snap_cdc__ch_rmt` | MySQL snapshot+CDC → ClickHouse | `source_order` + `pk_columns` + `ReplacingMergeTree(_version UInt64, _is_deleted UInt8)` | `hack/e2e-clickhouse-replay-ordering.sh` · `hack/e2e-snapshot-cdc-crash.sh` | binlog 与 sink 非原子；仅同一 binlog lineage 可比较；查询当前态需 `FINAL` 或物化 |
 
 扩展候选（非 PR-2 强制但已有证据）：
 
@@ -39,6 +39,7 @@
 | `debezium_kafka__mysql` | `hack/e2e-debezium-mysql.sh` | production_with_review（Debezium 生命周期外部） |
 | `kafka__file_unsafe` | `hack/e2e-kafka.sh` + `allow_unsafe: true` | 默认阻断，需显式 opt-in |
 | `mysql_snap_cdc__doris_uk` | `hack/e2e-doris.sh` | production_with_review |
+| `kafka_canal__ch_metadata_pk` | `hack/e2e-kafka-canal-identity.sh` | production_with_review（单 partition 内源序） |
 | `file_batch__s3_content_key` | `hack/e2e-s3-minio.sh` | production_with_review（无 first-class manifest） |
 
 完整矩阵见 [reliability-certification.md](./reliability-certification.md)。
@@ -78,7 +79,9 @@
 
 - `hack/e2e-path-contract-smoke.sh` — 文档交叉引用 + 单元门闩 + descriptor API 契约  
 - `hack/e2e-path-mysql-cdc-mysql.sh` — 强制 path 1 故障矩阵  
-- `hack/e2e-snapshot-cdc-clickhouse.sh` — 强制 path 2 故障矩阵  
+- `hack/e2e-snapshot-cdc-clickhouse.sh` — 强制 path 2 的基础 snapshot/CDC、restart、drift、outage/DLQ 矩阵
+- `hack/e2e-clickhouse-replay-ordering.sh` — path 2 的 snapshot+CDC/native 与 Kafka/HTTP 乱序 replay 增强矩阵
+- `hack/e2e-kafka-canal-identity.sh` — Kafka Canal metadata-PK 的冻结 DLQ 上下文、legacy 单条修复、quarantine 与重启矩阵
 
 ## 5. 边界语义（PR-2.3）
 
@@ -98,7 +101,26 @@
 | **重复上界** | 未 checkpoint 的最后若干 batch；由 upsert / ReplacingMergeTree / 内容寻址 key 吸收，或显式可见。 |
 | **不宣称** | 跨 sink 原子 fanout、Kafka transactional EOS、source offset / Redis state / sink 三方原子提交。 |
 
-## 7. 非宣称
+## 7. 共享记录身份与源序
+
+IT-2 的 source/sink/DLQ 共用契约见
+[Record Identity & Source Ordering Contract](./record-contract.md)。它固定：规范化
+`source_type`、snapshot/CDC phase、无 wall-clock 的源序、完整复合 Key 判定、UPDATE
+before-image 身份，以及无法证明时的显式 unavailable/incomplete 原因。
+
+T2.3 提供共享分类地基；T2.4 已闭合 ClickHouse 消费侧：默认 `source_order` 使用
+`UInt64` 源序和 `UInt8` tombstone，并在无数值源序、派生 `window` 输出或不兼容旧表时
+fail-closed。T2.5 已闭合普通 metadata-PK 流的组合预检、逐记录完整 Key 门禁和
+DLQ-before-checkpoint 边界；T2.6 冻结原始 payload、PK 声明、format contract、old 状态与
+目标坐标，只允许可证明身份或显式 `legacy_verified` 单条修复进入 replay。Sink ack 会先落
+`sink_acked` replay checkpoint 再删 DLQ；checkpoint 前失败可重复、之后失败仅清理，且不推进
+source checkpoint。
+
+ClickHouse 的 replay 保证限于同一顺序域。MySQL `RESET MASTER`/PITR/换源导致 binlog 坐标
+回退时，必须重建或切换目标版本域；Kafka 同一业务 key 必须固定 partition，扩容 partition
+视为迁移。旧 `Int64` wall-clock `_version` 或单参数 ReplacingMergeTree 不能与新版本混存。
+
+## 8. 非宣称
 
 - 不宣称 Kafka transactional exactly-once  
 - 不宣称 source offset / Redis state / sink 三方原子提交  

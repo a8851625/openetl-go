@@ -54,6 +54,11 @@ dzhcore
 .tmp-go-cache/
 .tmp-go-cache-race/
 .opencode/
+.pi/
+.pi-subagents/
+.bench-out/
+hack/__pycache__/
+*.pyc
 
 # Local binary / accidental root build artifacts
 /openetl-go

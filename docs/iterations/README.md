@@ -3,8 +3,12 @@
 > 规划基线：`c2ac396`（v0.2.12-beta.17，2026-08-29）
 >
 > 唯一执行 backlog 仍是 [docs/ROADMAP.zh.md](../ROADMAP.zh.md)。本目录不复制 roadmap 条目，
-> 只把**尚未实现**的条目组织成可领取、可验证的迭代，并补充 roadmap 条目层面没有的
-> **技术方案**与**交付约束**。两者冲突时以 ROADMAP 的验收标准为准。
+> 只把**已经进入当前执行 backlog、尚未实现**的条目组织成可领取、可验证的迭代，并补充
+> roadmap 条目层面没有的**技术方案**与**交付约束**。两者冲突时以 ROADMAP 的验收标准为准。
+>
+> ROADMAP 中标为“候选规划/待决策”的内容（当前包括 ClickHouse `CH-C1`–`CH-C8`）不属于
+> 本目录的覆盖范围，也不计入“未实现条目已覆盖”的承诺。候选项只有在用户确认范围与优先级、
+> 并新增或更新对应的 `spec.md`/`plan.md`/`tasks.md` 后，才可进入本目录和状态看板。
 
 ## 这是什么
 
@@ -23,8 +27,8 @@
 | 迭代 | 主题 | 归属 roadmap 条目 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
 | [IT-1](./IT-1-verification-substrate/) | 验证基座与存量收口 | RA-4、RA-7、BUG-1/2/6、GAP-1/3/4、P4 follow-up | 无 | `complete` |
-| [IT-2](./IT-2-correctness/) | 正确性（控制面真值 + 数据面身份与顺序） | RA-1、RA-2、RA-3、GAP-7.1/.2/.3 | IT-1 | `queued` |
-| [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `queued` |
+| [IT-2](./IT-2-correctness/) | 正确性（控制面真值 + 数据面身份与顺序） | RA-1、RA-2、RA-3、GAP-7.1/.2/.3 | IT-1 | `complete`（2026-09-05；T2.1–T2.8 全部 done，16 项验收 passed） |
+| [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `active`（2026-09-09：T3.1–T3.4、T3.6-A 已交付；Round 5/5 推进 T3.6-B；CH 专项待决策） |
 | [IT-4](./IT-4-ga-closeout/) | GA 收口评估 | 证据刷新、maturity 对齐、移除 beta 判定 | IT-1 + IT-2 + IT-3 | `queued` |
 | [PT-A](./PT-A-maxcompute-certification/) | MaxCompute 真实环境认证（并行轨） | P0 | 外部凭据 | `blocked_external` |
 
@@ -58,7 +62,7 @@ IT-3 集中在 `storage`/`backup`/CI 基准），在满足「同一时间只推�
 
 ## Roadmap 覆盖映射
 
-本轮迭代覆盖 roadmap 中**全部**未实现条目。逐条对照：
+本轮迭代覆盖 roadmap 中**已进入当前执行 backlog 的全部**未实现条目。逐条对照：
 
 | Roadmap 条目 | 当前状态 | 归属 |
 | --- | --- | --- |
@@ -70,24 +74,28 @@ IT-3 集中在 `storage`/`backup`/CI 基准），在满足「同一时间只推�
 | GAP-3：`postgres` sink `pk_columns_from_metadata` | `delivered`（扇出 e2e + auto-create PK 修复） | IT-1 |
 | GAP-4：`elasticsearch` mapping-conflict 策略 | `delivered`（mapping-conflict e2e + 校验语义对齐） | IT-1 |
 | P4：Doris/Kafka 事实核验 follow-up | bounded follow-up | IT-1 |
-| RA-4：release 流水线无测试门禁 | `blocked_external`（push 授权待用户；3 条 run URL 待构造） | IT-1 |
+| RA-4：release 流水线无测试门禁 | `delivered`（2026-09-03；skip/fail/normal tag run URL 已补齐） | IT-1 |
 | RA-7：e2e 证据自动化 | `delivered`（结构化证据+commit 绑定+CI 全绿：run 33767847369；篡改拒绝 33769319891/33769344338） | IT-1 |
-| RA-2：`RestoreFromDB` 静默跳过 | `queued` | IT-2 |
-| RA-3：`StartAll` 无视 desired state | `queued` | IT-2 |
-| RA-1：ClickHouse `_version` 非源事件序 | `queued` | IT-2 |
-| GAP-7.1/.2/.3：身份元数据与受控 DLQ replay | `queued` | IT-2 |
-| RA-5：secret 两套真值来源 | `queued` | IT-3 |
-| RA-6：backup 硬截断 100000 | `queued` | IT-3 |
-| PR-1.3 残留：非原子 restore、version/ID 保真、WASM artifact、Redis state | 残留 | IT-3 |
-| RA-8：实测 resource baseline | `queued` | IT-3 |
-| 待决策：RA-1 是否提升优先级 | 未决 | IT-2 前置门 |
-| 待决策：schema evolution 立场 | 未决 | IT-3 |
+| RA-2：`RestoreFromDB` 静默跳过 | `delivered`（2026-09-05；IT-2/T2.1） | IT-2 |
+| RA-3：`StartAll` 无视 desired state | `delivered`（2026-09-05；IT-2/T2.2） | IT-2 |
+| RA-1：ClickHouse `_version` 非源事件序 | `delivered`（2026-09-05；IT-2/T2.4） | IT-2 |
+| GAP-7.1：普通流完整 Key 与组合预检 | `delivered`（2026-09-05；T2.5） | IT-2 |
+| GAP-7.2：受控 DLQ replay | `delivered`（2026-09-05；T2.6） | IT-2 |
+| GAP-7.3：metadata-PK sink 认证 | `delivered`（2026-09-05；T2.7） | IT-2 |
+| RA-5：secret 两套真值来源 | `delivered`（复核 Round 2/5） | IT-3 |
+| RA-6：backup 硬截断 100000 | `delivered`（复核 Round 3/5） | IT-3 |
+| PR-1.3 残留：非原子 restore、version/ID 保真、WASM artifact、Redis state | `delivered`（复核 Round 1/5） | IT-3 |
+| RA-8：实测 resource baseline | `active`（复核 Round 5/5，T3.6-A 已交付） | IT-3 |
+| 决策记录：RA-1 优先级 | 已按用户持续交付授权在 IT-1 后完成（2026-09-05） | IT-2 |
+| schema evolution：additive-only 单独排期 | 2026-09-06 用户确认 | IT-3 |
 | 待决策：ClickHouse 写入吞吐是否立项 | 未决 | IT-3（与 RA-8 合并测定） |
 | 项目级发布门槛 / 移除 beta 判定 | — | IT-4 |
+| ClickHouse 迭代启发候选 `CH-C1`–`CH-C8` | —（候选，待用户决策；不计入状态机） | 尚未纳入；晋级后新增/更新迭代 |
 
-**显式不纳入本轮**：ROADMAP「有界后续」5 项（S3/File first-class manifest、ODPS lookup/source
-方向、Feishu 真实环境证据、JS/TS/WASM parser 示例扩展、复杂多事实 merge）与「明确暂缓或不做」
-全部条目。它们保持原状态，需要显式重新排序才进入执行。
+**显式不纳入本轮**：ROADMAP「有界后续」及 ClickHouse `CH-C1`–`CH-C8` 候选项（包括
+S3/File first-class manifest、ODPS lookup/source 方向、Feishu 真实环境证据、JS/TS/WASM
+parser 示例扩展、复杂多事实 merge）与「明确暂缓或不做」全部条目。它们保持原状态，需要
+显式重新排序并补齐迭代三件套才进入执行。
 
 ## 怎么用（SDD 循环）
 
@@ -138,10 +146,10 @@ AGENTS.md 默认一次执行请求上限 **5 rounds**。每个迭代的 `tasks.m
 
 在每次收口时更新此表（`—` 表示尚未开始）。
 
-| 迭代 | Round 1 | Round 2 | Round 3 | Round 4 | Round 5 | 迭代状态 |
+| 迭代 | Round 1 | Round 2 | Round 3 | Round 4 | Round 5+ | 迭代状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| IT-1 | 完成（run URL 证据待 push） | T1.3 done；T1.4/T1.5 验收 1-3 本地闭合、验收 4 CI run 待 push；发现 manifest 重绑阻塞（见 tasks.md Round 3） | — | — | — | `active` |
-| IT-2 | — | — | — | — | — | `queued` |
-| IT-3 | — | — | — | — | — | `queued` |
+| IT-1 | T1.1/T1.2 完成 | T1.3/T1.4 完成 | T1.5/T1.6/T1.7/T1.8 完成 | T1.9/T1.10/T1.11 完成（Doris 外部镜像问题保留为 bounded follow-up） | T1.12 完成 | `complete` |
+| IT-2 | T2.1 完成：restore failure 持久化/API/health/strict gate | T2.2 完成：desired/observed + reset fencing | T2.3 完成：identity/order 共享契约 | T2.4/T2.5/T2.6 完成 | T2.7 完成：metadata-PK 跨路径认证；T2.8 完成：16 项验收核对 + 证据重绑；迭代 `complete` | `complete` |
+| IT-3 | T3.1–T3.4 复核交付；T3.6 通用基线修复中 | — | — | — | — | `active`（见复核交付记录） |
 | IT-4 | — | — | — | — | — | `queued` |
 | PT-A | — | — | — | — | — | `blocked_external` |

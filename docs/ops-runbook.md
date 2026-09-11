@@ -31,28 +31,146 @@ Thresholds: `ETL_HEALTH_CHECKPOINT_STALE_SEC` (300), `ETL_HEALTH_CDC_LAG_MS` (60
 
 ## 1. Backup
 
-### 1.1 Logical control-plane backup (all SQL backends)
+### 1.1 Portable control-plane backup (all SQL backends)
 
-Programmatic (Go / maintenance job):
-
-```go
-man, err := storage.BackupSQLStore(ctx, store, "./backup", []string{
-    // known plaintext secrets that must never appear after encryption
-})
-// man.SecretScan.OK must be true before shipping off-box
-```
-
-Artifacts: `openetl-backup-<ts>/{manifest.json,*.jsonl}` covering pipelines,
-versions, checkpoints, DLQ, audit, runs, workers, plugins, connections, settings.
-
-Evidence scripts:
+Stop every OpenETL process that writes this metadata database and its Redis state,
+including workers and scheduled jobs. Keep them stopped until both artifacts below
+are complete. The maintenance command does not start HTTP, pipelines, workers or
+retention jobs, but cannot stop another process for you. Online consistent snapshots
+across SQL, Redis and plugin files are not provided.
 
 ```bash
-./hack/e2e-backup-restore-sqlite.sh
-# with env:
-./hack/e2e-backup-restore-mysql.sh
-./hack/e2e-backup-restore-postgres.sh
+mkdir -p /backup/openetl
+openetl-go --config /etc/openetl/config.yaml --backup-file /backup/openetl/control-plane.json
 ```
+
+Configuration uses the normal CLI > environment > file priority. In particular,
+`--storage postgresql` works with `ETL_STORAGE_DSN`; `--plugins-dir` / `ETL_PLUGINS_DIR`
+select the destination artifact directory for restore. No encryption key is needed
+for ciphertext passthrough, but the original key and any previous rotation keys are
+required before the restored runtime starts.
+
+The portable JSON v2 contains pipelines, all retained versions, checkpoints, DLQ,
+audit, run history, workers, tasks, plugin metadata plus WASM bytes, connections and
+settings. Stored credential envelopes remain unchanged. The command checks stored
+connections/settings using the runtime descriptor policy and refuses export if
+known secret fields still contain plaintext. Use section 1.1b to migrate them, then
+scan the resulting artifact. Export also fails when an installed plugin's recorded
+artifact is unreadable.
+
+The command uses `backup.ExportFile` from `internal/etl/storage/backup`: all tables
+are read in primary-key order in pages of 1,000 rows and streamed to a private
+temporary file. This includes DLQ/version history whose pipeline was deleted and
+retained completed/failed tasks. Counts must match both the initial and final SQL
+inventory. A read, encoding, count or write failure aborts publication and preserves
+the previous backup. Plugin WASM bytes are also streamed. JSON integer business
+keys retain their precision, including values larger than `2^53`.
+
+Library callers can use `ExportJSON` for an output stream; on error its output is
+incomplete and must be discarded. `Export` still returns an in-memory `Snapshot`
+for small callers. `ReadFile` and restore also load the full snapshot: allow memory
+for the complete decoded data even though export has bounded memory. Library callers must pass a descriptor-configured
+`SecretFieldStore` or `Options.SecretFieldResolver` to obtain the same secret
+preflight; otherwise only legacy field-name matching is available.
+`storage.BackupSQLStore` produces a separate
+`manifest.json` + table JSONL diagnostic export; those files are **not** input to
+`--restore-file`. A scanner result from one format does not certify the other.
+
+The large-data drill is `CONTAINER_CLI=podman bash hack/e2e-backup-volume.sh
+sqlite` (also `mysql` / `postgres`; use the installed container CLI). It creates
+isolated data with 100,037 rows in **each** of DLQ/audit/run history and 2,003 retained
+tasks, verifies every history field, and compares independent SQL hashes before and
+after restore. It records process peak RSS for 10,003 versus 100,037 rows per table.
+The [2026-09-08 evidence](./evidence/it3-backup-volume-20260908/manifest.json) reports
+roughly 51–61 MiB export peak RSS and 710–724 MiB restore peak RSS for a 140–142 MiB
+JSON fixture on the recorded macOS host. These are maintenance fixture measurements;
+production capacity and streaming pipeline throughput are measured separately.
+
+### 1.1a Coordinated Redis state backup
+
+Redis transform state is separate from the portable control-plane JSON. While all
+writers remain stopped, capture the same deployment's Redis instance:
+
+```bash
+# Use REDISCLI_AUTH for password authentication; add --tls if required.
+redis-cli -h "$REDIS_HOST" -p "${REDIS_PORT:-6379}" --rdb /backup/openetl/state.rdb
+```
+
+Keep `control-plane.json`, `state.rdb`, the image/version pin, the Redis DB number
+and key prefix, and the plugin/runtime configuration together. Redis RDB covers all
+logical databases and retains absolute expiry times. Preserve the encryption keys
+separately in the deployment's secret store. Existing `plugin_state` or
+`etl_state_entries` SQL tables and file-backed state are outside this portable
+format; use a physical/vendor database backup and the associated data volume when
+using those legacy local state stores. Restore never deletes these unexported tables.
+
+For restore, load `state.rdb` as `dump.rdb` into a **fresh, stopped Redis data volume**
+and start that Redis instance before starting any OpenETL writer. Do not mix it with
+an existing AOF (AOF takes precedence over RDB). Point OpenETL at the restored
+instance with the original DB number and key prefix, then restore SQL as in section 2.
+
+Lookup caches may be rebuilt from an authoritative dimension source if that recovery
+choice is explicit. Deduplication and unfinished aggregate/window state cannot be
+recreated merely by restarting at an already advanced checkpoint. Without matching
+state, keep the pipelines stopped and plan source replay/reset plus sink duplicate
+absorption. Do not label that recovery lossless or atomic across SQL and Redis.
+
+Evidence scripts use their own temporary resources and never borrow ambient DSNs:
+
+```bash
+bash ./hack/e2e-backup-restore-sqlite.sh
+bash ./hack/e2e-backup-restore-mysql.sh
+bash ./hack/e2e-backup-restore-postgres.sh
+bash ./hack/e2e-backup-restore-state.sh
+```
+
+The state drill closes all fixture writers, exports metadata plus Redis RDB, loads a
+new Redis instance, then compares checkpoint generation/offset and the real
+`RedisStore` values, key indexes and TTL for lookup/deduplicate/window state. It
+certifies the offline RDB procedure, not an online distributed snapshot protocol.
+
+### 1.1b Existing plaintext secrets
+
+On startup, OpenETL performs a read-only scan of stored connection/settings secret
+fields. Findings produce a warning and a degraded `secret_encryption` health
+component. Fields use connector descriptors; undeclared fields use legacy
+name matching, with one warning per kind/type/field. Logs and detection reports
+contain identifiers/field names, never the credential values.
+
+Stop all writers and keep a protected physical backup before migration. Check the
+same config/backend that the runtime uses:
+
+```bash
+openetl-go --config /etc/openetl/config.yaml --check-secrets
+# Set ETL_SPEC_ENCRYPTION_KEY, ETL_SPEC_ENCRYPTION_KEY_ID and any
+# ETL_SPEC_ENCRYPTION_PREVIOUS_KEYS through the deployment's secret store.
+openetl-go --config /etc/openetl/config.yaml --remediate-secrets
+openetl-go --config /etc/openetl/config.yaml --check-secrets
+```
+
+The check exits nonzero for remaining plaintext or a failed scan. Remediation
+requires an encryption key and rewrites only rows with plaintext findings. Existing
+envelopes stay unchanged, so retain their previous keys. Interrupted migration can
+be rerun; a successful repeat does not re-encrypt already sealed fields. These
+maintenance commands exit without starting HTTP, pipelines or retention jobs.
+
+Scan actual exports with a private file of known plaintext test values, one value
+per line. Use a plain SQL dump for this scan; a compressed/custom-format dump must
+first be rendered as SQL using the matching vendor utility.
+
+```bash
+bash hack/check-plaintext-secrets.sh /backup/openetl/control-plane.json \
+  --needles-file /secure/known-secret-values.txt
+bash hack/check-plaintext-secrets.sh /backup/openetl/control-plane.sql \
+  --needles-file /secure/known-secret-values.txt
+```
+
+The scanner exits 0 for clean, 1 for a known plaintext match, and 2 for invalid input
+or a read failure. It handles JSON/SQL escaping and never prints matching values.
+It is a guard for supplied values, not a detector of every possible secret in
+arbitrary payloads. CI runs `hack/e2e-secret-artifacts.sh` for all three backends:
+actual legacy SQL must fail, migrated portable/JSONL/SQL products must pass, and a
+deliberately leaked value in an actual generated portable backup must fail.
 
 ### 1.2 Physical / vendor dump
 
@@ -97,22 +215,49 @@ DLQ TTL: `ETL_DLQ_TTL` (default production `168h`). Monitor `dlq_file_count` /
 
 ## 2. Restore
 
-1. Stop OpenETL process/containers (`docker compose stop openetl-go`).
-2. Restore metadata DB (copy file / `mysql < dump` / `pg_restore`).
-3. Restore `data/` volume if checkpoints/DLQ files are file-backed.
-4. Ensure `ETL_SPEC_ENCRYPTION_KEY` (+ previous keys if rotating) matches backup era.
-5. Start process; confirm:
+1. Stop **all** OpenETL writers that share the metadata DB and Redis; save a rollback
+   copy of the destination before replacing it.
+2. Prepare matching Redis/file state as in section 1.1a, and the backup-era encryption
+   key plus previous keys if rotating.
+3. Use the portable maintenance command (or the matching physical/vendor restore
+   procedure for a physical backup):
+
+```bash
+openetl-go --config /etc/openetl/config.yaml --restore-file /backup/openetl/control-plane.json
+```
+
+The command replaces covered SQL rows in one transaction and exits. IDs, version
+numbers, lifecycle/generation, run timestamps/status/statistics, checkpoint positions
+and DLQ identity fields are preserved. Timestamp instants retain the backend's native
+precision (MySQL metadata uses milliseconds; PostgreSQL may display another timezone).
+The command prints a per-table count reconciliation and returns nonzero on failure.
+Review historical versions, checkpoint position and representative payloads as well
+as counts before restarting.
+
+Plugin files are fsynced into a fresh private `plugins/.restore-*` directory before
+SQL commits their new absolute paths. The runtime loads those recorded paths; do not
+move the generation directory afterward. Restore does not overwrite old WASM files.
+A failed SQL restore rolls back its rows and leaves the previous files usable. An
+error during COMMIT can have an unknown outcome: staged directories are deliberately
+retained. Inspect the `plugins.wasm_path` database references before retry/cleanup;
+remove only generations that no row references, while writers remain stopped.
+
+Legacy v1/unversioned JSON is accepted. Because v1 had no bundled WASM bytes, first
+supply each original `<name>.wasm` in `--plugins-dir` (or retain the recorded original
+path). Missing bytes abort restore before SQL mutation. Unknown format versions,
+invalid JSON and nontransactional storage implementations fail closed.
+
+4. Start the runtime only after metadata, artifacts and Redis state agree. Check
+   health, pipeline desired/observed state, retained DLQ, checkpoint and source lag:
 
 ```bash
 curl -fsS -H "X-API-Token: $ETL_API_TOKEN" .../api/v2/health
 curl -fsS -H "X-API-Token: $ETL_API_TOKEN" .../api/v2/pipelines
-# reconcile: pipeline count, sample checkpoint age, DLQ backlog
 ```
 
-6. Start critical pipelines; watch lag / DLQ for one checkpoint interval.
-
-**Success criteria:** object counts match backup manifest; critical pipeline
-checkpoints resume without silent skip; secrets remain encrypted/masked in API.
+5. Observe critical pipelines for at least one checkpoint interval. Source retention
+   must still cover the restored position; at-least-once replay requires the path's
+   documented business-key/version/upsert or duplicate-absorption strategy.
 
 ## 3. Upgrade
 
@@ -139,7 +284,7 @@ curl .../api/v2/health
 3. Set `OPENETL_IMAGE` back to previous pin; `up -d`.
 4. Verify health + pipeline resume.
 
-RPO: last successful checkpoint (typically ≤ checkpoint interval, default 30s for many specs).
+RPO depends on the latest matching metadata/state backup and source retention; an older restored checkpoint can replay only data the source still retains.
 RTO: container restart + restore time (target < 15 minutes for single-node metadata restore).
 
 ## 4. Common incidents

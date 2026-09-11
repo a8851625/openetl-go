@@ -16,7 +16,7 @@ Path-level write mode, business key, evidence scripts, and RPO/RTO declarations 
 | Sink | Recommended Mode | Duplicate Behavior | Notes |
 | --- | --- | --- | --- |
 | MySQL/TiDB | `batch_mode: upsert` with `pk_columns` | Replayed rows overwrite the same primary key | Required for CDC and crash recovery when using mutable tables. Plain insert is only safe for append-only unique events. |
-| ClickHouse | ReplacingMergeTree-compatible table with `_version`, or ETL `auto_create: true` | Later versions collapse with `FINAL`; raw duplicate rows may exist before merge | Queries that require exact current state should use `FINAL` or downstream materialization. Deletes rely on table design/tombstone strategy. |
+| ClickHouse | `version_mode: source_order`, stable `pk_columns`, writable `_version UInt64` + `_is_deleted UInt8`, `ReplacingMergeTree(_version, _is_deleted)` | Original source positions decide the winner even when an older event arrives later; tombstones prevent an older INSERT from reviving a deleted key | Queries that require current state use `FINAL` or a proven materialization. `append` is explicit INSERT-only `MergeTree`, not a mutable-data fallback. |
 | Doris | Doris Unique Key table with `batch_mode: upsert` and stable `pk_columns` | Stream Load retries use deterministic labels and replayed rows merge on the Unique Key | Production CDC/upsert requires the configured `pk_columns` to match the Doris Unique Key. DELETE uses the MySQL protocol; mixed write/delete batches are rejected unless `allow_mixed_cdc_non_atomic: true` is set. |
 | Kafka sink | Producer writes are at-least-once | Duplicate messages can appear | Use deterministic message keys and consumer-side idempotency. Kafka exactly-once transactions are not implemented yet. |
 | Elasticsearch | Stable document `_id` derived from primary key | Replayed documents replace the same ID | Partial bulk item errors expose failed record indexes, so the runner writes only failed records to DLQ and does not re-write accepted records. |
@@ -27,19 +27,48 @@ Path-level write mode, business key, evidence scripts, and RPO/RTO declarations 
 
 | Source | Recommended Sink Contract |
 | --- | --- |
-| `mysql_cdc` | Upsert/merge target keyed by source primary key. |
-| `mysql_snapshot_cdc` | Upsert/merge target because snapshot rows can be replayed and CDC can overlap around the captured binlog position. |
+| `mysql_cdc` | Upsert/merge target keyed by source primary key. For ClickHouse, binlog file/position supplies the version within one binlog lineage. |
+| `mysql_snapshot_cdc` | Upsert/merge target because snapshot rows can be replayed. ClickHouse versions snapshot rows with the captured binlog handoff, then uses the same order domain for CDC. |
 | `mysql_batch` | Upsert for mutable target tables; append-only file/S3 is acceptable for extracts. |
 | `file` | Depends on file semantics; if source files are reprocessed, use deterministic keys downstream. |
 | `http` | Cursor/page checkpointing reduces replay, but sink must still tolerate duplicate pages after crash. |
-| `kafka` | Use deterministic sink keys or consumer deduplication. |
+| `kafka` | Use deterministic sink keys or consumer deduplication. ClickHouse order is per partition, so the same business key must stay on one stable partition. |
+
+## ClickHouse source-order boundary
+
+`source_order` deliberately writes every replayed record; ClickHouse chooses the maximum source-owned
+version per business key. It never substitutes arrival time. This covers crash replay, DLQ replay, and
+checkpoint reset only while positions remain in one comparable domain:
+
+- MySQL `RESET MASTER`, PITR, or moving to a server whose binlog sequence/position goes backwards starts
+  a new lineage. Rebuild or switch the ClickHouse target/version domain before resuming. A checkpoint
+  reset or `cdc_on_binlog_purged: resnapshot` does not make old/new binlog coordinates comparable.
+- Kafka `(partition, offset)` is ordered only within a partition. Route a business key with a stable
+  Kafka key, keep it on the same partition, and treat partition-count changes as a target migration.
+- `mysql_snapshot_cdc` pagination keys—including text keys—are not event versions. Snapshot rows use
+  the binlog handoff captured before the consistent read, so a later snapshot in the same lineage can
+  supersede already-written CDC state.
+- Stateful derived outputs such as `window` do not own one input position. Use an explicitly INSERT-only
+  append landing table unless that transform publishes and tests a separate revision contract.
+
+Legacy tables with `Int64` wall-clock versions or one-argument ReplacingMergeTree cannot be mixed with
+this contract. Build a new two-argument table, reload from one documented source lineage, reconcile
+`FINAL` values by business key, and then switch. Keep the old table intact as the rollback boundary.
 
 ## Runtime Guarantees
 
 - Checkpoints advance after successful sink write.
 - Filtered records can advance checkpoints because they are intentionally skipped.
 - Failed records are written to DLQ with `error_class` when classification is possible.
+- New DLQ rows freeze raw payload, primary-key declaration, format contract, before-image state, and
+  source/target coordinates. Metadata-PK replay reconstructs identity only from those historical facts,
+  then validates the transformed record again; unprovable rows remain repair-required/quarantined.
+- DLQ replay persists `sink_acked` after the sink accepts a row and before deleting it. Failure before
+  that replay checkpoint may duplicate the write; failure after it is cleanup-only on retry. The replay
+  checkpoint never advances the source checkpoint.
 - Transient and unknown errors are retried; config/auth/schema/data/programming errors fail fast into DLQ or fail the operation.
+- ClickHouse source-order mode rejects missing/overflowed source positions and incompatible target
+  schemas; it does not fall back to a wall-clock counter.
 
 ## Not Yet Guaranteed
 

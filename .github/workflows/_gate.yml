@@ -68,6 +68,8 @@ jobs:
           go-version: "1.24"
       - name: Run unit tests
         run: go test -race -count=1 ./internal/etl/... ./internal/logic/...
+      - name: Plaintext-secret scanner escaping and failure cases
+        run: python3 hack/test-plaintext-secrets.py
 
   # P5: production checklist gate — release assets, profile smoke, health unit
   # coverage, and storage matrix with explicit SKIP (never silent green).
@@ -91,6 +93,26 @@ jobs:
         run: bash ./hack/e2e-runtime-smoke.sh
       - name: SQLite backup/retention smoke
         run: bash ./hack/e2e-backup-restore-sqlite.sh
+      - name: SQLite actual secret artifacts
+        env:
+          SECRET_ARTIFACT_OUTPUT: ${{ runner.temp }}/secret-artifacts
+        run: bash hack/e2e-secret-artifacts.sh sqlite
+      - name: SQLite full backup content and export memory
+        env:
+          BACKUP_VOLUME_OUTPUT: ${{ runner.temp }}/backup-volume
+        run: bash hack/e2e-backup-volume.sh sqlite
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-volume-sqlite
+          path: ${{ runner.temp }}/backup-volume/sqlite
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: secret-artifacts-sqlite
+          path: ${{ runner.temp }}/secret-artifacts/sqlite
+          if-no-files-found: error
+          retention-days: 7
 
   storage-mysql:
     name: Storage MySQL (P5 matrix)
@@ -104,6 +126,26 @@ jobs:
           go-version: "1.24"
       - name: MySQL storage e2e (self-contained container)
         run: bash ./hack/e2e-storage-mysql.sh
+      - name: MySQL actual secret artifacts
+        env:
+          SECRET_ARTIFACT_OUTPUT: ${{ runner.temp }}/secret-artifacts
+        run: bash hack/e2e-secret-artifacts.sh mysql
+      - name: MySQL full backup content and export memory
+        env:
+          BACKUP_VOLUME_OUTPUT: ${{ runner.temp }}/backup-volume
+        run: bash hack/e2e-backup-volume.sh mysql
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-volume-mysql
+          path: ${{ runner.temp }}/backup-volume/mysql
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: secret-artifacts-mysql
+          path: ${{ runner.temp }}/secret-artifacts/mysql
+          if-no-files-found: error
+          retention-days: 7
 
   storage-postgres:
     name: Storage Postgres (P5 matrix)
@@ -117,6 +159,26 @@ jobs:
           go-version: "1.24"
       - name: Postgres storage e2e (self-contained container)
         run: bash ./hack/e2e-storage-postgres.sh
+      - name: Postgres actual secret artifacts
+        env:
+          SECRET_ARTIFACT_OUTPUT: ${{ runner.temp }}/secret-artifacts
+        run: bash hack/e2e-secret-artifacts.sh postgres
+      - name: Postgres full backup content and export memory
+        env:
+          BACKUP_VOLUME_OUTPUT: ${{ runner.temp }}/backup-volume
+        run: bash hack/e2e-backup-volume.sh postgres
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-volume-postgres
+          path: ${{ runner.temp }}/backup-volume/postgres
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: secret-artifacts-postgres
+          path: ${{ runner.temp }}/secret-artifacts/postgres
+          if-no-files-found: error
+          retention-days: 7
 
   integration-test:
     name: Integration Tests
@@ -211,6 +273,38 @@ jobs:
       - name: Run connector e2e paths
         run: go test -tags=e2e -count=1 -timeout 40m ./internal/etl/e2e/... -e2e.strict -v
 
+  # IT-3/T3.7: resource-baseline regression gate. WARNING MODE for the first
+  # version cycle: valid measurements over budget warn. Failed/missing
+  # measurements fail this job and therefore the aggregated gate.
+  bench-baseline:
+    name: Resource Baseline (warning)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Verify measurement failure boundaries
+        run: PYTHONDONTWRITEBYTECODE=1 python3 hack/test_bench_baseline.py -v
+      - name: Measure packaged images, health-ready startup, RSS and offline restore
+        run: |
+          set -euo pipefail
+          CONTAINER_CLI=docker ./hack/bench-baseline.sh --out .bench-out/current 2>&1 | tee baseline-run.log
+      - name: Validate complete measurements and apply observation budgets
+        run: python3 hack/bench_baseline.py --check .bench-out/current/result.json
+      - name: Upload baseline provenance and raw measurement logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resource-baseline-${{ github.run_id }}
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            baseline-run.log
+            .bench-out/current/*.json
+            .bench-out/current/*.jsonl
+            .bench-out/current/*.log
+
   gate-passed:
     name: Gate Passed (aggregated)
     needs:
@@ -222,6 +316,7 @@ jobs:
       - storage-postgres
       - integration-test
       - connector-e2e
+      - bench-baseline
     if: always()
     runs-on: ubuntu-latest
     steps:

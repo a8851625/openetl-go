@@ -34,6 +34,46 @@ image build into an opaque or effectively unbounded upload.
 
 Priority: **CLI flags > environment variables > config.yaml > built-in defaults**.
 
+### Pipeline restore failures
+
+Stored pipelines that cannot be reconstructed at startup remain visible in
+`GET /api/v2/pipelines`, `GET /api/v2/pipelines/{id}`, and
+`GET /api/v2/health` with status `restore_failed`. The durable
+`restore_error` object contains `stage`, stable `code`, `message`,
+`remediation`, `previous_status`, and `failed_at`. Restore stages are
+`dag_yaml_parse`, `linear_yaml_parse`, `dag_connection_resolve`,
+`linear_connection_resolve`, `spec_validate`, and `runner_build`.
+
+Restore strictness is profile-aware:
+
+- production defaults to strict mode: any ordinary `restore_failed` pipeline
+  blocks startup after the complete failure list has been persisted and logged;
+- development defaults to non-strict mode: healthy pipelines remain available,
+  while health is `degraded` and includes `restore_failed_count` plus
+  `pipeline_issues` (the health endpoint therefore returns HTTP 503 under the
+  existing non-OK probe contract);
+- `ETL_RESTORE_STRICT=true|false`, `--restore-strict true|false`, or
+  `etl.restore.strict` explicitly overrides the profile default.
+
+```yaml
+etl:
+  restore:
+    strict: true
+```
+
+A restore-state update changes only the pipeline status and diagnostic column.
+It does not create a spec version or delete/reset checkpoints or DLQ entries.
+After the YAML, connection, connector registration, or runtime configuration
+is repaired, restart the service: the diagnostic is cleared, the pre-failure
+status is restored, and the existing checkpoint remains the resume boundary.
+With strict startup enabled, temporarily start once with
+`ETL_RESTORE_STRICT=false` if the repair must be submitted through the API,
+then restart with strict mode restored.
+
+Encrypted-spec authentication failures, missing keys, damaged ciphertext, and
+unsupported envelope versions remain global fail-closed errors regardless of
+this switch; they are not downgraded to per-pipeline `restore_failed` records.
+
 ### HTTP security boundary
 
 The ETL API uses an explicit origin allow-list. Development keeps the legacy
