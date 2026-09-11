@@ -27,6 +27,9 @@ func TestClickHouseSinkTypeInference(t *testing.T) {
 	chPort := 9000
 	_ = chPort
 
+	// This test writes INSERT-only records without source position metadata,
+	// which the version contract requires for source_order mode (fail-closed
+	// by design). INSERT-only data is exactly what version_mode=append covers.
 	sink, err := NewClickHouseSink(map[string]any{
 		"host":        chHost,
 		"port":        9000,
@@ -35,6 +38,7 @@ func TestClickHouseSinkTypeInference(t *testing.T) {
 		"database":    "dzh3136_go",
 		"table":       "test_etl_e2e",
 		"auto_create": true,
+		"version_mode": "append",
 	})
 	if err != nil {
 		t.Fatalf("NewClickHouseSink: %v", err)
@@ -109,9 +113,11 @@ func TestClickHouseSinkTypeInference(t *testing.T) {
 		}
 	}
 
-	// Verify _version column exists for ReplacingMergeTree.
-	if _, ok := columns["_version"]; !ok {
-		t.Error("_version column missing from ClickHouse table")
+	// version_mode=append creates a plain MergeTree: no version/tombstone
+	// columns by contract. (source_order would add UInt64 _version + UInt8
+	// _deleted, but that mode requires source position metadata.)
+	if _, ok := columns["_version"]; ok {
+		t.Error("_version column must NOT exist in version_mode=append (plain MergeTree)")
 	}
 
 	// Cleanup
