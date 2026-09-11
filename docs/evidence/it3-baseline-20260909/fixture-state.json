@@ -1,0 +1,514 @@
+[
+  {
+    "checkpoint": {
+      "id": "0e7503c3-f681-4593-8f9a-bdcbfd0d73a3",
+      "job_name": "0e7503c3-f681-4593-8f9a-bdcbfd0d73a3",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "efc03eb6edb80dfa271e14e4ea9c3ad0eaba1833b9812f5c9480652e33de8aa2",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "0e7503c3-f681-4593-8f9a-bdcbfd0d73a3",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:57.51192421Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "0e7503c3-f681-4593-8f9a-bdcbfd0d73a3",
+    "name": "restore-002"
+  },
+  {
+    "checkpoint": {
+      "id": "242ad4e7-6d1e-43c1-b3e1-886f443b890c",
+      "job_name": "242ad4e7-6d1e-43c1-b3e1-886f443b890c",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "fa055ba6666831215839e98ac1e35305803a4a5d376dcf794235c59134dc005b",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "242ad4e7-6d1e-43c1-b3e1-886f443b890c",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:59.366386832Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "242ad4e7-6d1e-43c1-b3e1-886f443b890c",
+    "name": "restore-012"
+  },
+  {
+    "checkpoint": {
+      "id": "29456618-0059-4621-9954-7b4bd8be444c",
+      "job_name": "29456618-0059-4621-9954-7b4bd8be444c",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "a18cedc53d9347348c54e0a7564e57c2710dddf7142b85471c15d814346cdc5c",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "29456618-0059-4621-9954-7b4bd8be444c",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:57.334136973Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "29456618-0059-4621-9954-7b4bd8be444c",
+    "name": "restore-001"
+  },
+  {
+    "checkpoint": {
+      "id": "3c240468-0c83-4bf5-bd4e-e256049fd0f7",
+      "job_name": "3c240468-0c83-4bf5-bd4e-e256049fd0f7",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "87665ce0feee5fdbb25c0354a95561e7a69cef6636cf986bf564a62a58883dca",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "3c240468-0c83-4bf5-bd4e-e256049fd0f7",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:59.189971016Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "3c240468-0c83-4bf5-bd4e-e256049fd0f7",
+    "name": "restore-011"
+  },
+  {
+    "checkpoint": {
+      "id": "47a11d28-03a1-4eaf-8527-b1aa495e57d9",
+      "job_name": "47a11d28-03a1-4eaf-8527-b1aa495e57d9",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "f17136d5a6a99095b34cc1dd2b37ee25418e820f7bc785663a1795c2ecaf7b06",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "47a11d28-03a1-4eaf-8527-b1aa495e57d9",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:57.153188352Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "47a11d28-03a1-4eaf-8527-b1aa495e57d9",
+    "name": "restore-000"
+  },
+  {
+    "checkpoint": {
+      "id": "5e4a14bb-ebb8-4062-a270-9803cec48e1b",
+      "job_name": "5e4a14bb-ebb8-4062-a270-9803cec48e1b",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "a7322107e8a0a68c6ac80a36d87ee76848f9fed2b11d48f2102fbed7c901a40f",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "5e4a14bb-ebb8-4062-a270-9803cec48e1b",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:58.624987551Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "5e4a14bb-ebb8-4062-a270-9803cec48e1b",
+    "name": "restore-008"
+  },
+  {
+    "checkpoint": {
+      "id": "66c802a1-541e-4df1-ba79-bbd66498ffcd",
+      "job_name": "66c802a1-541e-4df1-ba79-bbd66498ffcd",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "76fef23c5df07b862a6abb01adbf65e22b1cf919ba02d2730cfa272319ce6be4",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "66c802a1-541e-4df1-ba79-bbd66498ffcd",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:59.926096574Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "66c802a1-541e-4df1-ba79-bbd66498ffcd",
+    "name": "restore-015"
+  },
+  {
+    "checkpoint": {
+      "id": "6b199426-d29a-442d-ad70-aae104542c7d",
+      "job_name": "6b199426-d29a-442d-ad70-aae104542c7d",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "ad65c46f9d54e29e987bcf4621728829e1481eb858a19f4f17051c5405ad7fc3",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "6b199426-d29a-442d-ad70-aae104542c7d",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:58.244832051Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "6b199426-d29a-442d-ad70-aae104542c7d",
+    "name": "restore-006"
+  },
+  {
+    "checkpoint": {
+      "id": "7d1b7f66-54a1-490b-999b-ac23a88e9985",
+      "job_name": "7d1b7f66-54a1-490b-999b-ac23a88e9985",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "5802d8ec9d2dfd325e4d6c50a4ad9aeeabd07e62ccb54a7aa59ecdf0dc98a1d3",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "7d1b7f66-54a1-490b-999b-ac23a88e9985",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:57.876394167Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "7d1b7f66-54a1-490b-999b-ac23a88e9985",
+    "name": "restore-004"
+  },
+  {
+    "checkpoint": {
+      "id": "7d761bab-ec85-4f9d-9c93-e26bd7654777",
+      "job_name": "7d761bab-ec85-4f9d-9c93-e26bd7654777",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "f6283916057bee1ba892ee4f6f82f2d113bf1016ffc74b1496f4e9e18f039ae8",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "7d761bab-ec85-4f9d-9c93-e26bd7654777",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:59.739392229Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "7d761bab-ec85-4f9d-9c93-e26bd7654777",
+    "name": "restore-014"
+  },
+  {
+    "checkpoint": {
+      "id": "8d5c20bb-3fca-42a2-96ac-ff76435bda56",
+      "job_name": "8d5c20bb-3fca-42a2-96ac-ff76435bda56",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "fdb3f24356bac09169f47a5c181d8e424e5701e4dc3595d60f6cf27f4c88e1fe",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "8d5c20bb-3fca-42a2-96ac-ff76435bda56",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:58.999495036Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "8d5c20bb-3fca-42a2-96ac-ff76435bda56",
+    "name": "restore-010"
+  },
+  {
+    "checkpoint": {
+      "id": "a514462c-e1a7-44be-959f-062a9ad8c9af",
+      "job_name": "a514462c-e1a7-44be-959f-062a9ad8c9af",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "f45e82773fcff35e4cc55e1a6c177c340d60030140e1f162a49a28d628d1c0da",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "a514462c-e1a7-44be-959f-062a9ad8c9af",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:58.060799839Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "a514462c-e1a7-44be-959f-062a9ad8c9af",
+    "name": "restore-005"
+  },
+  {
+    "checkpoint": {
+      "id": "a59a1e31-70a3-4037-b7b3-3059d378d3b9",
+      "job_name": "a59a1e31-70a3-4037-b7b3-3059d378d3b9",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "58ced0971f5d464c16f6d65d500077735e28f3fcdf412239df889119bf101bdc",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "a59a1e31-70a3-4037-b7b3-3059d378d3b9",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:58.428407596Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "a59a1e31-70a3-4037-b7b3-3059d378d3b9",
+    "name": "restore-007"
+  },
+  {
+    "checkpoint": {
+      "id": "b78e48a0-f232-4871-ac8b-813ae6414fc1",
+      "job_name": "b78e48a0-f232-4871-ac8b-813ae6414fc1",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "2a31adc73ad75bd25d0c5df55725db393ee31ea5ceeb6e48b793e53d2de87733",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "b78e48a0-f232-4871-ac8b-813ae6414fc1",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:58.802482621Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "b78e48a0-f232-4871-ac8b-813ae6414fc1",
+    "name": "restore-009"
+  },
+  {
+    "checkpoint": {
+      "id": "da4d9389-a729-4135-acd6-06ee1c57e3c3",
+      "job_name": "da4d9389-a729-4135-acd6-06ee1c57e3c3",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "38782cb777fac828388745f2c1320c068f4e506ef0dfc22e82243fe9d82217ba",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "da4d9389-a729-4135-acd6-06ee1c57e3c3",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:57.697637636Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "da4d9389-a729-4135-acd6-06ee1c57e3c3",
+    "name": "restore-003"
+  },
+  {
+    "checkpoint": {
+      "id": "fe13f942-2803-46e4-b87c-908c46cfed3a",
+      "job_name": "fe13f942-2803-46e4-b87c-908c46cfed3a",
+      "position": {
+        "delivery_mode": "at_least_once",
+        "sink_commit": {
+          "acknowledged": true,
+          "last_batch_sha256": "648ea77312f5f291e535367f81a2bbe3d0afa574bec6b12663786370e9bc464e",
+          "last_record": {
+            "offset": 100,
+            "partition": 0,
+            "source": "fe13f942-2803-46e4-b87c-908c46cfed3a",
+            "table": "input"
+          },
+          "record_count": 100,
+          "sink": "file_sink"
+        },
+        "source": {
+          "byte_offset": 3680,
+          "offset": 100
+        },
+        "version": 1
+      },
+      "source": "file",
+      "timestamp": "2026-09-09T14:05:59.551872591Z"
+    },
+    "desired_state": "stopped",
+    "generation": 1,
+    "id": "fe13f942-2803-46e4-b87c-908c46cfed3a",
+    "name": "restore-013"
+  }
+]

@@ -1,0 +1,334 @@
+{
+  "recorded_at_utc": "2026-09-08T13:49:02.285720+00:00",
+  "scope": "RA-6 / IT-3 T3.3 revalidation, Round 3/5; standalone offline portable backup",
+  "git_head": "387daf07a3f38ea3f24b72060be16c16c59bcea5",
+  "worktree": "dirty; preserved user IT-2/IT-3 changes; no release commit/digest claimed",
+  "go": "go version go1.26.5 darwin/arm64",
+  "build": "CGO_ENABLED=0 go build . (native darwin/arm64); CLI is freshly built by each script",
+  "hardware": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M1 Max",
+    "memory_bytes": 68719476736,
+    "logical_cpus": 10
+  },
+  "container_cli": "podman version 5.8.2",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": {
+      "id": "b7e118f56c5963e079252e0d6e2978c9c010eb7fc7aaaec100e367796b5dd08f",
+      "repo_digests": [
+        "docker.io/library/mysql@sha256:213bbfaf699693a40a20a12bb4342d2589a15a3dc7153db698eaed252a92458e",
+        "docker.io/library/mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+      ]
+    },
+    "docker.io/library/postgres:16-alpine": {
+      "id": "c05eced0bdb41ea9b95a656472a6aa4d50cad0d8a2e33d14eb1c53fd6204f2ae",
+      "repo_digests": [
+        "docker.io/library/postgres@sha256:738d1359df5aa0b6d50a9071e989c49fdd39152a2a805c6ff131bf5e2243e0b3",
+        "docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685"
+      ]
+    }
+  },
+  "dataset": "per backend 10003 then 100037 rows EACH DLQ/audit/run; 2003 terminal/orphan tasks; four job-reference forms; tied timestamps, sparse IDs, Unicode/escaping and >2^53 integer business keys",
+  "measurements": {
+    "sqlite": {
+      "backend": "sqlite",
+      "result": "passed",
+      "rows_per_history_table": 100037,
+      "small_rows_per_history_table": 10003,
+      "export_small": {
+        "operation": "--backup-file",
+        "elapsed_seconds": 1.046088,
+        "peak_rss_bytes": 60817408,
+        "measurement": "child process getrusage ru_maxrss (not Go heap)",
+        "exit_code": 0
+      },
+      "export_large": {
+        "operation": "--backup-file",
+        "elapsed_seconds": 1.869963,
+        "peak_rss_bytes": 63537152,
+        "measurement": "child process getrusage ru_maxrss (not Go heap)",
+        "exit_code": 0
+      },
+      "restore_large": {
+        "operation": "--restore-file",
+        "elapsed_seconds": 4.922441,
+        "peak_rss_bytes": 758808576,
+        "measurement": "child process getrusage ru_maxrss (not Go heap)",
+        "exit_code": 0
+      },
+      "backup_bytes": 147281455,
+      "content_verification": "every DLQ/audit/run field versus generated input; independent raw SQL hashes before/after restore; 2003 terminal/orphan tasks",
+      "sql_inventory": {
+        "audit_logs": {
+          "rows": 100037,
+          "sha256": "03330b0654429bb709d24e63fd7995e798126dd62dbcb058ea9c4ba08a2e8e0a"
+        },
+        "checkpoints": {
+          "rows": 1,
+          "sha256": "22f3f4238b05d2628899f662feaae86096b2b50dcbd52cff63b81719274a096d"
+        },
+        "counts": {
+          "pipelines": 1,
+          "pipeline_versions": 1,
+          "checkpoints": 1,
+          "dead_letters": 100037,
+          "audit_logs": 100037,
+          "run_history": 100037,
+          "workers": 0,
+          "task_assignments": 2003,
+          "plugins": 0,
+          "connections": 0,
+          "settings": 1
+        },
+        "dead_letters": {
+          "rows": 100037,
+          "sha256": "0f4b53029e0c6763d99324dcdd04a79aa983b30fc48ba9ed5555b26eeb128366"
+        },
+        "pipeline_versions": {
+          "rows": 1,
+          "sha256": "09398d0fe8d0b5c7bc63cb70d044046c71f153f470bd2dbf7a1bf481fe9075d4"
+        },
+        "pipelines": {
+          "rows": 1,
+          "sha256": "eb2fd81ea4a268af6450307aa2f6f0bc40cf5440f1b4ba378b501ccbe720e30f"
+        },
+        "run_history": {
+          "rows": 100037,
+          "sha256": "1978da0da645b677cea11f5331722ec471f62562895345a7858770db308dbded"
+        },
+        "settings": {
+          "rows": 1,
+          "sha256": "0b00390463da88536900ae02ada8a1903f1463f9f9be87db1fc0d890c29e98a9"
+        },
+        "task_assignments": {
+          "rows": 2003,
+          "sha256": "2b4b7626814327ef1552ce8c1409c7a8ccda77e572be077c46ea24b8c3bba815"
+        }
+      },
+      "backup_sha256": "7872c0223a6b0611aae93555aaee3c6a9eb10cff5a613264e60ee266acba00f7"
+    },
+    "mysql": {
+      "backend": "mysql",
+      "result": "passed",
+      "rows_per_history_table": 100037,
+      "small_rows_per_history_table": 10003,
+      "export_small": {
+        "operation": "--backup-file",
+        "elapsed_seconds": 1.210647,
+        "peak_rss_bytes": 53952512,
+        "measurement": "child process getrusage ru_maxrss (not Go heap)",
+        "exit_code": 0
+      },
+      "export_large": {
+        "operation": "--backup-file",
+        "elapsed_seconds": 2.425364,
+        "peak_rss_bytes": 56131584,
+        "measurement": "child process getrusage ru_maxrss (not Go heap)",
+        "exit_code": 0
+      },
+      "restore_large": {
+        "operation": "--restore-file",
+        "elapsed_seconds": 231.881679,
+        "peak_rss_bytes": 744931328,
+        "measurement": "child process getrusage ru_maxrss (not Go heap)",
+        "exit_code": 0
+      },
+      "backup_bytes": 147281469,
+      "content_verification": "every DLQ/audit/run field versus generated input; independent raw SQL hashes before/after restore; 2003 terminal/orphan tasks",
+      "sql_inventory": {
+        "audit_logs": {
+          "rows": 100037,
+          "sha256": "03330b0654429bb709d24e63fd7995e798126dd62dbcb058ea9c4ba08a2e8e0a"
+        },
+        "checkpoints": {
+          "rows": 1,
+          "sha256": "935b4f180419ae8a3e819dd8d3f81ab2c3b897a57aa254f42874dfe2e9be57aa"
+        },
+        "counts": {
+          "pipelines": 1,
+          "pipeline_versions": 1,
+          "checkpoints": 1,
+          "dead_letters": 100037,
+          "audit_logs": 100037,
+          "run_history": 100037,
+          "workers": 0,
+          "task_assignments": 2003,
+          "plugins": 0,
+          "connections": 0,
+          "settings": 1
+        },
+        "dead_letters": {
+          "rows": 100037,
+          "sha256": "0f4b53029e0c6763d99324dcdd04a79aa983b30fc48ba9ed5555b26eeb128366"
+        },
+        "pipeline_versions": {
+          "rows": 1,
+          "sha256": "a2f33517d5c3ce4ed180562ceaa3c738616c333dbda70d91860f175199139c6d"
+        },
+        "pipelines": {
+          "rows": 1,
+          "sha256": "926f1e0711a034afb607ac789a21414a59dc72424c27a0561453336d14d2ca5e"
+        },
+        "run_history": {
+          "rows": 100037,
+          "sha256": "1978da0da645b677cea11f5331722ec471f62562895345a7858770db308dbded"
+        },
+        "settings": {
+          "rows": 1,
+          "sha256": "0b00390463da88536900ae02ada8a1903f1463f9f9be87db1fc0d890c29e98a9"
+        },
+        "task_assignments": {
+          "rows": 2003,
+          "sha256": "2b4b7626814327ef1552ce8c1409c7a8ccda77e572be077c46ea24b8c3bba815"
+        }
+      },
+      "backup_sha256": "3954f8d557ec13771a2769b8a52704576eb0a418617613febf6b34f66fedd8ac"
+    },
+    "postgres": {
+      "backend": "postgres",
+      "result": "passed",
+      "rows_per_history_table": 100037,
+      "small_rows_per_history_table": 10003,
+      "export_small": {
+        "operation": "--backup-file",
+        "elapsed_seconds": 1.150021,
+        "peak_rss_bytes": 56639488,
+        "measurement": "child process getrusage ru_maxrss (not Go heap)",
+        "exit_code": 0
+      },
+      "export_large": {
+        "operation": "--backup-file",
+        "elapsed_seconds": 2.029734,
+        "peak_rss_bytes": 58916864,
+        "measurement": "child process getrusage ru_maxrss (not Go heap)",
+        "exit_code": 0
+      },
+      "restore_large": {
+        "operation": "--restore-file",
+        "elapsed_seconds": 114.893074,
+        "peak_rss_bytes": 749387776,
+        "measurement": "child process getrusage ru_maxrss (not Go heap)",
+        "exit_code": 0
+      },
+      "backup_bytes": 149155848,
+      "content_verification": "every DLQ/audit/run field versus generated input; independent raw SQL hashes before/after restore; 2003 terminal/orphan tasks",
+      "sql_inventory": {
+        "audit_logs": {
+          "rows": 100037,
+          "sha256": "03330b0654429bb709d24e63fd7995e798126dd62dbcb058ea9c4ba08a2e8e0a"
+        },
+        "checkpoints": {
+          "rows": 1,
+          "sha256": "bbc58ee0522fd2c1976c1519504b885ae63f36c87691e7f5b63782a61a785f2d"
+        },
+        "counts": {
+          "pipelines": 1,
+          "pipeline_versions": 1,
+          "checkpoints": 1,
+          "dead_letters": 100037,
+          "audit_logs": 100037,
+          "run_history": 100037,
+          "workers": 0,
+          "task_assignments": 2003,
+          "plugins": 0,
+          "connections": 0,
+          "settings": 1
+        },
+        "dead_letters": {
+          "rows": 100037,
+          "sha256": "0f4b53029e0c6763d99324dcdd04a79aa983b30fc48ba9ed5555b26eeb128366"
+        },
+        "pipeline_versions": {
+          "rows": 1,
+          "sha256": "563ebf4e4cbcd391bddee6c2fec51af847a7f53bdbaf0b08ecad7a9bcf94316b"
+        },
+        "pipelines": {
+          "rows": 1,
+          "sha256": "0aec9d63ceb333d0ca29de58b2eed92585d1882f4ac826dcc8888caf800c6fd9"
+        },
+        "run_history": {
+          "rows": 100037,
+          "sha256": "1978da0da645b677cea11f5331722ec471f62562895345a7858770db308dbded"
+        },
+        "settings": {
+          "rows": 1,
+          "sha256": "0b00390463da88536900ae02ada8a1903f1463f9f9be87db1fc0d890c29e98a9"
+        },
+        "task_assignments": {
+          "rows": 2003,
+          "sha256": "2b4b7626814327ef1552ce8c1409c7a8ccda77e572be077c46ea24b8c3bba815"
+        }
+      },
+      "backup_sha256": "d3c1ade9c96ff7ef5bcc9fce5f0edcdbd2e94906a2d9237a6a9c7e909e0a6c8c"
+    }
+  },
+  "source_file_count": 378,
+  "source_fingerprint_sha256": "81abed5fc209a3ab3a92a458ae47dfbe1e87a2186d1ec47166c58b968027e51f",
+  "fingerprint_definition": "sorted unique git ls-files -co --exclude-standard internal/*.go plus go.mod/go.sum and listed drill/CI files; relative_path + NUL + file_sha256 + newline",
+  "changed_backup_files_sha256": {
+    "hack/backup-restore-e2e.sh": "7388fa00f0a9ac16cfbea0e8b04bf963cb95d391abcf893480a23310f10a598c",
+    "hack/cmd/backup-volume-fixture/main.go": "eda1f3550b93bc8f964903761ca72ebb81e8ceef3d5e7c4af702fed2c5dee133",
+    "hack/e2e-backup-volume.sh": "c90d7d094481e7ea40dd375d6627c2511ef89f487867b59529f981ea65eb1bd4",
+    "internal/cmd/backup_maintenance.go": "c8526852c387823ae6fe878a4bb98c7585680785c1d3171dabcc31b8ff8ce646",
+    "internal/cmd/backup_maintenance_test.go": "f8b3ebc6fd0765e1c9b1924a42fc310ffd58bbb0549e9d4eb75345dc5b5ba885",
+    "internal/etl/storage/adapters.go": "5e176432d9c86cc6c9927930084475bf0a3464bfb281a418af798e5312ba0bf1",
+    "internal/etl/storage/backup/artifact_validation_test.go": "9273a163a92abf142ddae2fb8e28acfd04131c5a80ebb5a8593c66a0f0fb7e7c",
+    "internal/etl/storage/backup/artifacts.go": "f71beb7d434bfa9d3f4b044a6d5bf8ec18844881f44d00bc6c6e3c6deada3bb1",
+    "internal/etl/storage/backup/backup.go": "ffe430c731c1f2ee9003fc5da2fb8be601717a6cc193a153c32eb9f24446dbc5",
+    "internal/etl/storage/backup/backup_large_test.go": "52adb8421dda7cca320a88a6d2948de27546989692136ee3ad072ccf163d18ae",
+    "internal/etl/storage/backup/backup_test.go": "6b1792e4745b3319797523137de04d449cda94602d8e09e92a6b2152527da69b",
+    "internal/etl/storage/backup/conformance_test.go": "92c991eb7c3352d0000c96423ad685d55b668c32d8834b6c026d6eabc23f95bb",
+    "internal/etl/storage/backup/export.go": "d22975b5f8f19973a06172e1c03d1fef21912c59a2070eb73cde9d6febd9c69a",
+    "internal/etl/storage/backup/plaintext_secret_backup_test.go": "51dd2fbd2fa159e67ea9c945b7c3a651583496c938b7f6415da02a579a2a6d9e",
+    "internal/etl/storage/backup/plugin_artifact_extism_test.go": "3cc488cb6f171beb5acc7d69fbb06d9e872cf5cbb0a8d126ba71df69fc6d1753",
+    "internal/etl/storage/backup/plugin_artifact_test.go": "6395fe03048bb643a6440b05249cd5725de661f23b139dfc9e621f583fd9d80c",
+    "internal/etl/storage/backup/restore.go": "89955c929398e52623c26870f2d0a985ba588f07a5d47c4aeb7fa7c829c66ab1",
+    "internal/etl/storage/backup/restore_atomic_fidelity_test.go": "497c3f6d6673ac1895a679d1b388e1a564a5b7239981d2d2c836986bd7646c97",
+    "internal/etl/storage/backup.go": "8bfe564fe8993348f23f24728a03cd168e2f76c8384fb862c7b0a9168c49f60d",
+    "internal/etl/storage/backup_reader.go": "e4297d4dfa971e0ddee0cc1cd4ded1b692288998a6353bc64e0e8d022c9d8d00",
+    "internal/etl/storage/backup_test.go": "7f98539354fd0b9c7a924df61f98d220b4722d24338a7a3e0151ee776fb63795",
+    "internal/etl/storage/sqlstore/backup.go": "089551c9e21d7e7b4f0fd59e2fccccb9fa680841c6a69d81a7c001f314761a05",
+    "internal/etl/storage/sqlstore/backup_reader.go": "0c9dcd33702a20176cb167e6bdc89935a1e8308c8477a6df1092343404356e53"
+  },
+  "checks": {
+    "three_backend_volume": "passed; every history field versus generated data + independent raw SQL hashes before/after restore",
+    "three_backend_existing_restore_scripts": "passed; v1/v2, atomic rollback, artifacts, next IDs, real offline CLI",
+    "three_backend_secret_artifacts_regression": "passed with streaming exporter",
+    "storage_and_cmd_race": "passed; optional remote tests without DSNs in the generic invocation remain skipped, dedicated scripts provide backend evidence",
+    "extism_artifact_load": "passed",
+    "vet": "passed",
+    "ci_wiring": "passed local YAML parsing; volume scripts attached to all three required backend jobs",
+    "diff_check": "passed"
+  },
+  "commands": [
+    "CONTAINER_CLI=podman bash hack/e2e-backup-volume.sh sqlite",
+    "CONTAINER_CLI=podman bash hack/e2e-backup-volume.sh mysql",
+    "CONTAINER_CLI=podman bash hack/e2e-backup-volume.sh postgres",
+    "CONTAINER_CLI=podman bash hack/e2e-backup-restore-{sqlite,mysql,postgres}.sh (one invocation each)",
+    "CONTAINER_CLI=podman bash hack/e2e-secret-artifacts.sh {sqlite,mysql,postgres} (one invocation each)",
+    "go test -race ./internal/etl/storage/... ./internal/cmd -count=1 -timeout=300s",
+    "go test -tags=extism ./internal/etl/storage/backup -run ^TestRestoredPluginLoadsWithExtism$ -count=1 -timeout=90s -v",
+    "go vet ./internal/etl/storage/... ./internal/cmd ./hack/cmd/backup-volume-fixture"
+  ],
+  "limits": [
+    "Restore/ReadFile/Export convenience API still load a full Snapshot; only ExportFile/ExportJSON are bounded.",
+    "Offline coordinated backup; count comparison cannot certify online updates with unchanged row counts.",
+    "These are fixture maintenance measurements, not release/pipeline capacity certification.",
+    "Hosted GitHub Actions was not run.",
+    "MySQL/PostgreSQL volume drills ran concurrently on the same host; restore timing is illustrative, not a controlled cross-backend ranking."
+  ],
+  "log_sha256": {
+    "extism.log": "c79544356a5d9bc454aabcbf46ca32833dd55ad7ee436a89ca87b96413f09494",
+    "mysql-regression.log": "c4578c57cb8faccdb03747f76fd7b7ebd470820aa9fd5be7491b53046f8a2e79",
+    "mysql-secrets.log": "47ae1e403054cff72a647981da3817ae9cf2fff8b2e03b1e61622f5c68a05153",
+    "mysql.log": "e0e30f2faeab4cc54f5dfb802020a4f8345aed712a1877e0dd90f9748ed8d782",
+    "postgres-regression.log": "c570066bba4bbe2970afd3c1849d6e17f1e236ad500f7e338205ad98ec2b25c8",
+    "postgres-secrets.log": "f7903af995038ec33cd2e24686822b36da265af758e527b4337b69605976dad1",
+    "postgres.log": "ca2e072607d8a875178caa7b931a3a454ecf63f7354828143ee9b37655f41cb7",
+    "sqlite-regression.log": "73abc99c6a8e16b0e65eaa80cbd32dc1ed4d76a28c779520c65ac9e321b9d4b2",
+    "sqlite-secrets.log": "f7e75f781e62856324d3cba48cee96de5556519f19c514d772255e8b04bacd39",
+    "sqlite.log": "36e5384d1bfb954ea89b3eaf7ab6bc440302f6ac816b8dc85649fc2d4c7dcb88",
+    "storage-race.log": "69e9b4dd280a24eb3651f9cbc79ac1f9162e9ccefa89b2314e6401888cbedb38",
+    "vet.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

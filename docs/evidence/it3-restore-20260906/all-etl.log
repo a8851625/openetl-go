@@ -1,0 +1,30 @@
+ok  	github.com/a8851625/openetl-go/internal/etl/alert	0.860s
+ok  	github.com/a8851625/openetl-go/internal/etl/checkpoint	1.699s
+ok  	github.com/a8851625/openetl-go/internal/etl/core	1.953s
+?   	github.com/a8851625/openetl-go/internal/etl/core/contracttest	[no test files]
+?   	github.com/a8851625/openetl-go/internal/etl/dlq	[no test files]
+?   	github.com/a8851625/openetl-go/internal/etl/e2e	[no test files]
+ok  	github.com/a8851625/openetl-go/internal/etl/e2e/harness	1.266s
+ok  	github.com/a8851625/openetl-go/internal/etl/master	1.559s
+ok  	github.com/a8851625/openetl-go/internal/etl/orchestrator	1.935s
+ok  	github.com/a8851625/openetl-go/internal/etl/pipeline	61.518s
+ok  	github.com/a8851625/openetl-go/internal/etl/plugin/pluginsystem	0.861s
+?   	github.com/a8851625/openetl-go/internal/etl/registry	[no test files]
+ok  	github.com/a8851625/openetl-go/internal/etl/retry	1.097s
+ok  	github.com/a8851625/openetl-go/internal/etl/server	38.772s
+ok  	github.com/a8851625/openetl-go/internal/etl/sink	1.065s
+ok  	github.com/a8851625/openetl-go/internal/etl/sink/ddl	2.058s
+ok  	github.com/a8851625/openetl-go/internal/etl/sink/typing	1.282s
+ok  	github.com/a8851625/openetl-go/internal/etl/source	1.901s
+ok  	github.com/a8851625/openetl-go/internal/etl/state	2.938s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage	4.046s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/backup	6.237s
+?   	github.com/a8851625/openetl-go/internal/etl/storage/factory	[no test files]
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/mysql	3.166s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/postgres	2.952s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/sqlite	4.099s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/sqlstore	3.060s
+ok  	github.com/a8851625/openetl-go/internal/etl/telemetry	3.418s
+ok  	github.com/a8851625/openetl-go/internal/etl/transform	7.747s
+ok  	github.com/a8851625/openetl-go/internal/etl/worker	6.037s
+ok  	github.com/a8851625/openetl-go/internal/cmd	3.812s

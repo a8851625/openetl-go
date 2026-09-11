@@ -1,0 +1,55 @@
+==> postgres: plaintext detection and missing-key failure
+2026-09-07T21:57:36.831+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="transform" type="dbt" field="password"
+2026-09-07T21:57:36.831+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="transform" type="enricher" field="password"
+2026-09-07T21:57:36.831+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="sink" type="jdbc" field="password"
+2026-09-07T21:57:36.831+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="transform" type="lookup" field="password"
+2026-09-07T21:57:36.831+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="" type="" field="alert.smtp_password"
+LEGACY_SEEDED: four DSNs, nested password, settings; existing ciphertext old key; portable preflight rejected without mutation
+EXPECTED_REJECTION: real legacy SQL dump contains plaintext
+EXPECTED_REJECTION: readonly secret check detects legacy rows
+EXPECTED_REJECTION: migration cannot succeed without a key
+2026-09-07T21:57:38.141+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="transform" type="dbt" field="password"
+2026-09-07T21:57:38.141+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="transform" type="enricher" field="password"
+2026-09-07T21:57:38.141+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="sink" type="jdbc" field="password"
+2026-09-07T21:57:38.141+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="transform" type="lookup" field="password"
+2026-09-07T21:57:38.142+08:00 [WARN] Secret field uses legacy name fallback; add a descriptor: kind="" type="" field="alert.smtp_password"
+{"connections":[{"name":"fixture-dbt","field":"dsn"},{"name":"fixture-dbt","field":"nested.password"},{"name":"fixture-enricher","field":"dsn"},{"name":"fixture-enricher","field":"nested.password"},{"name":"fixture-jdbc","field":"dsn"},{"name":"fixture-jdbc","field":"nested.password"},{"name":"fixture-lookup","field":"dsn"},{"name":"fixture-lookup","field":"nested.password"}],"settings":[{"name":"alert.smtp_password"}]}
+{}
+SECRET_FIDELITY_PASS: four DSNs and nested values readable; old ciphertext retained; new key used; no plaintext findings
+{}
+SEALED_STATE_UNCHANGED
+==> postgres: actual portable backup, JSONL export and vendor SQL dump
+backup complete: /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T//openetl-secret-postgres.wUPHkq/portable.json
+counts: {Pipelines:1 PipelineVersions:1 Checkpoints:0 DeadLetters:0 AuditLogs:0 RunHistory:0 Workers:0 Tasks:0 Plugins:0 Connections:5 Settings:2}
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/portable.json
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean.sql
+REAL_JSONL_EXPORT_SCAN_PASS
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/audit_logs.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/checkpoints.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/connections.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/dead_letters.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/pipeline_versions.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/pipelines.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/plugins.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/run_history.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/settings.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/task_assignments.jsonl
+OK: no known plaintext credentials in /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-secret-postgres.wUPHkq/clean-jsonl/openetl-backup-20260907T135739Z/workers.jsonl
+backup complete: /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T//openetl-secret-postgres.wUPHkq/dirty-portable.json
+counts: {Pipelines:1 PipelineVersions:1 Checkpoints:0 DeadLetters:0 AuditLogs:0 RunHistory:0 Workers:0 Tasks:0 Plugins:0 Connections:5 Settings:3}
+EXPECTED_REJECTION: real generated portable product with an injected value leak
+restore complete: /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T//openetl-secret-postgres.wUPHkq/portable.json
+pipelines: want=1 got=1
+pipeline_versions: want=1 got=1
+checkpoints: want=0 got=0
+dead_letters: want=0 got=0
+audit_logs: want=0 got=0
+run_history: want=0 got=0
+workers: want=0 got=0
+task_assignments: want=0 got=0
+plugins: want=0 got=0
+connections: want=5 got=5
+settings: want=2 got=2
+SEALED_STATE_UNCHANGED
+SECRET_FIDELITY_PASS: four DSNs and nested values readable; old ciphertext retained; new key used; no plaintext findings
+RA-5 postgres real secret-artifact e2e PASS

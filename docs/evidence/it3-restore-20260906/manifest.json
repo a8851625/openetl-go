@@ -1,0 +1,117 @@
+{
+  "recorded_at_utc": "2026-09-06T11:24:48.313310+00:00",
+  "scope": "IT-3/T3.4 restore revalidation; standalone offline maintenance; per-backend fidelity",
+  "git_head": "387daf07a3f38ea3f24b72060be16c16c59bcea5",
+  "worktree": "dirty; existing IT-2/IT-3 edits preserved",
+  "go": "go version go1.26.5 darwin/arm64",
+  "host": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "container_cli": "podman",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": {
+      "id": "b7e118f56c5963e079252e0d6e2978c9c010eb7fc7aaaec100e367796b5dd08f",
+      "repo_digests": [
+        "docker.io/library/mysql@sha256:213bbfaf699693a40a20a12bb4342d2589a15a3dc7153db698eaed252a92458e",
+        "docker.io/library/mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+      ]
+    },
+    "docker.io/library/postgres:16-alpine": {
+      "id": "c05eced0bdb41ea9b95a656472a6aa4d50cad0d8a2e33d14eb1c53fd6204f2ae",
+      "repo_digests": [
+        "docker.io/library/postgres@sha256:738d1359df5aa0b6d50a9071e989c49fdd39152a2a805c6ff131bf5e2243e0b3",
+        "docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685"
+      ]
+    },
+    "docker.io/library/redis:7-alpine": {
+      "id": "9a56851f1a97e0586f85f8d7f7652e65cb589b2409d965c5d6e275dfc2551907",
+      "repo_digests": [
+        "docker.io/library/redis@sha256:f8d15882ba108587477ce13c00ab0551933a84138427b7cc9abadfbe45ffd973",
+        "docker.io/library/redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf"
+      ]
+    }
+  },
+  "source_fingerprint_sha256": "dd88f4e97dc4da276ebe7c9f4a40a1b1b29a0663d63acd19db79d3c4e8cf4dc0",
+  "fingerprint_definition": "SHA256 of sorted relative_path + NUL + file_sha256 + newline; file set below",
+  "source_files_sha256": {
+    "go.mod": "5b24988061b0295e144d81b43942f01160d4a9d358ca15670b7279d8559392b1",
+    "go.sum": "f3012c1b8a042b42b22e0b3f301dcc1573416b9c4f9c40ca80d9bc1925400197",
+    "hack/backup-restore-e2e.sh": "70187446ed30df6969fff16ad89bd63f4b3d0c24f2bcdbb30a8466f2534df558",
+    "hack/cmd/redis-backup-drill/main.go": "57b2411679d7d6f99e552bb75879d7b5f2a29a7e48035fd0d6990b804c687c99",
+    "hack/e2e-backup-restore-mysql.sh": "b6449308501544d135fd67e07b22e1b8d1fee8d980da4043688018fee86b51af",
+    "hack/e2e-backup-restore-postgres.sh": "64a26b44315e8ea0719929e449010657c27aaa8c7a5dfefc34f1af17edc38552",
+    "hack/e2e-backup-restore-sqlite.sh": "d40bb7924335787c345a9dd6ba5faf3fd4377b2f5d2088f91383cefab05c646f",
+    "hack/e2e-backup-restore-state.sh": "1609ff56519d6e38cf5e5408377f39a131d5e2a9b7ca530bacdcf913468bd214",
+    "internal/cmd/backup_maintenance.go": "52817cb1fa02347662625cd4d71a9c8195c371e568ea81a07149a6756991120d",
+    "internal/cmd/backup_maintenance_test.go": "c0dee7fc0eb2d69f8403f643a3c6a28c94334e93cd7bfa8037fe808e4e82cf88",
+    "internal/cmd/cmd.go": "364aeac9cd30b29a3e05d511e1e0af13676c57f7d519819993a6cb2d5d80f039",
+    "internal/cmd/runtime_flags.go": "28008c34eef7410597f53bb44efdefc702aef3dd6c5167043e9f5fb688cd8975",
+    "internal/cmd/runtime_flags_test.go": "3fe87025e25b5278b94ac8a9ca332a87d7b262366792ab9b839a23c78ad0a2c7",
+    "internal/etl/storage/adapters.go": "8602d7226ba7f809bcd78f7361768d87b72026ef8a5d9b684c996266e2cfd763",
+    "internal/etl/storage/atomic_save_test.go": "038d253489d48cfe56ad3001990714e3c70e0ef76c4333e225982ee28c5c7925",
+    "internal/etl/storage/backup.go": "94b46b9950dce19c3c2df5954538458d5400de060f5181eac0cc192c9e2f4a47",
+    "internal/etl/storage/backup/artifact_validation_test.go": "9273a163a92abf142ddae2fb8e28acfd04131c5a80ebb5a8593c66a0f0fb7e7c",
+    "internal/etl/storage/backup/artifacts.go": "f71beb7d434bfa9d3f4b044a6d5bf8ec18844881f44d00bc6c6e3c6deada3bb1",
+    "internal/etl/storage/backup/backup.go": "0226e1f13c73bdac0ff359e767642fb56968b111a6cb9b22e3abda6a8cfdc11e",
+    "internal/etl/storage/backup/backup_large_test.go": "9565882d0072a6bde934c09a7f0131b6e7336b8575b04e6a6d07e10aca639286",
+    "internal/etl/storage/backup/backup_test.go": "6b1792e4745b3319797523137de04d449cda94602d8e09e92a6b2152527da69b",
+    "internal/etl/storage/backup/conformance_test.go": "0ddec960cf9ec9011d82d076f1627f9e1cdc73db281a7bfd6f5d8e3f2a27c5cb",
+    "internal/etl/storage/backup/plaintext_secret_backup_test.go": "0f3214302ad3ed32e203169544f5a4840ead91d86e4de9cc67e18005193b721a",
+    "internal/etl/storage/backup/plugin_artifact_extism_test.go": "3cc488cb6f171beb5acc7d69fbb06d9e872cf5cbb0a8d126ba71df69fc6d1753",
+    "internal/etl/storage/backup/plugin_artifact_test.go": "6395fe03048bb643a6440b05249cd5725de661f23b139dfc9e621f583fd9d80c",
+    "internal/etl/storage/backup/restore.go": "89955c929398e52623c26870f2d0a985ba588f07a5d47c4aeb7fa7c829c66ab1",
+    "internal/etl/storage/backup/restore_atomic_fidelity_test.go": "497c3f6d6673ac1895a679d1b388e1a564a5b7239981d2d2c836986bd7646c97",
+    "internal/etl/storage/backup_test.go": "7f98539354fd0b9c7a924df61f98d220b4722d24338a7a3e0151ee776fb63795",
+    "internal/etl/storage/conformance_backends_test.go": "0dc93a5d5dfc4f4196cac522a0d273640fbddfba48bb32bb5ba6b688d80cc0db",
+    "internal/etl/storage/conformance_test.go": "adeeb7f2645e8bc4297603e23907318338af6017a9391a7e3839a6eca60ad8d7",
+    "internal/etl/storage/dlq_compat.go": "4b16927f4608a1be49ef9491bca6d0088a21c253ae288c4d442cdcf14a6ed571",
+    "internal/etl/storage/dlq_hash.go": "ff78b72c9731de68f9c52d91382b26dbfbeb946bbabe31784f45ff48a84306ac",
+    "internal/etl/storage/factory/factory.go": "30472ce116e9c35c9f71a37a8d1b94d6c9274b5742e1f7baaf662b1d040af940",
+    "internal/etl/storage/factory/migrate.go": "c6486d977314a51ecabdf18c118f48305b2714b27733dd204ec311a1b263a420",
+    "internal/etl/storage/mysql/mysql.go": "8a3e89f09263f86d40a225287433d596780c94ebd9caf1a0ea5b6366e7ec1baa",
+    "internal/etl/storage/mysql/mysql_test.go": "f0f93f1fdd447edef24419566f17b52141f513dfa8f70076f9df6754588a6c0d",
+    "internal/etl/storage/postgres/postgres.go": "be70b04228f321e8086ba8b376f64073f2b0fb554c237bab2e4c978d8c4e09bd",
+    "internal/etl/storage/postgres/postgres_test.go": "7068b5ce2273f9355c9d5c9e055fc11c29da360f3188d066170192e246e293a8",
+    "internal/etl/storage/secret_fields.go": "dd66240c4fe5e5b6c25c33fb0d0c955d68898f8c6e73ffc82c3c47c9ff543e16",
+    "internal/etl/storage/secret_fields_test.go": "b0144d1834fcdc18b6f8a2374eb315774c92f37ae9ec7fb94ff4dbe6d8d2bab9",
+    "internal/etl/storage/secret_migration_test.go": "e11765d7d1f0be6d7d85109107480056c9edd4c2573bc2db1cad37b0bf630b9e",
+    "internal/etl/storage/secret_resolver_test.go": "d8b67500d233340ad668c0a4ae6a59003cffe8ebdbc1606c9a757e3ea675514a",
+    "internal/etl/storage/spec_crypto.go": "61d5b57d593a79bbc9178ccfbaa8d4e8b3c7eb22da1b4ac1c5a694d37325e895",
+    "internal/etl/storage/sqlite/checkpoint_inflection_bench_test.go": "86e507619d157dda4d778ce539fd63887ecd5499d27de904054a412c4a5f48ea",
+    "internal/etl/storage/sqlite/sqlite.go": "82917a53f545c2b52f3d47160bc20d8f985c29c928f2f9b0467109d7eb1b9827",
+    "internal/etl/storage/sqlite/sqlite_test.go": "12b22e1ece90fa705d9137538defd64e2f75b995992c64c1a7a38738e22c04b3",
+    "internal/etl/storage/sqlstore/backup.go": "089551c9e21d7e7b4f0fd59e2fccccb9fa680841c6a69d81a7c001f314761a05",
+    "internal/etl/storage/sqlstore/dialect.go": "3015fc2e00842a2aeefc752b2ef23afb08f46e4a51b272fe6b17f8530ad7633e",
+    "internal/etl/storage/sqlstore/migration_lock.go": "fc09b8c6c40fa244ed1cb9f9d5acb92c8322e291eb20071f4ff645559ac3ab19",
+    "internal/etl/storage/sqlstore/migration_lock_test.go": "1fce65f1bfd31876690445257989fae8b0f3206f947867c68b3b941adc7fcada",
+    "internal/etl/storage/sqlstore/readwrite_split_test.go": "1ec053444fda9ef429a56e3f4bdc74a8afaf3a962e80f339fc273ff57c8c47c7",
+    "internal/etl/storage/sqlstore/store.go": "5ce6e571ad376f4dcd0c6ce4dfd0a42cc9889ade16b05b397569a142653e3270",
+    "internal/etl/storage/sqlstore/task_fence_test.go": "22fbcda9a561101a625ea0f645d7f98e8cc80d33bad3cf3c1e62d1bb2db0d52f",
+    "internal/etl/storage/sqlstore/transaction_test.go": "3243f45c46553c4cff0318ac28b17dd5c255731a6f5efaafc9a12856e0af525c",
+    "internal/etl/storage/sqlstore/version_alloc_test.go": "be9afa35a71f2d8e57a0a7f3c9a6266baf55389af7d2289228c94e785798c8c3",
+    "internal/etl/storage/storage.go": "1b9b1e76b6268b7ea4f6525666f5d4c0d6f159e483cb7208e067699cbb617520",
+    "internal/etl/storage/upgrade_test.go": "00fc517c01d0eabef90936b017914c17701e32d420c899ba9f9ad179c948fabb"
+  },
+  "checks": {
+    "sqlite_script": "passed",
+    "mysql_script": "passed",
+    "postgres_script": "passed after generic env DSN was resolved using final CLI storage selection",
+    "redis_rdb_script": "passed: metadata generation/offset plus 3 state values, indexes and TTL",
+    "targeted_race": "passed",
+    "all_etl_and_cmd": "passed; optional remote connector tests without their DSNs remain skipped, not newly certified",
+    "extism_plugin_load": "passed: go test -tags=extism ./internal/etl/storage/backup -run ^TestRestoredPluginLoadsWithExtism$ -count=1 -timeout=90s -v",
+    "final_sqlite_cli_reconcile_regression": "passed"
+  },
+  "not_certified": [
+    "large-data export memory and content (RA-6)",
+    "plaintext scan over both actual portable backup and vendor SQL dumps (RA-5)",
+    "release capacity or distributed profile",
+    "container Go fallback (local Go available; etl-go-dev image absent)"
+  ],
+  "log_sha256": {
+    "all-etl.log": "3e19bd6512e59a1be61ec2f622949498a1b7a409b6c54539a61e0460dbc89e1b",
+    "mysql.log": "c18612b880a59059317de8ab6fee76e8403d40e184f1e2a8de6ede145a8ae406",
+    "postgres.log": "d08e1b3d054737a83cc10f9becd74678c4c3acf48181f1e9b0e2eb424ab6ef52",
+    "redis-state.log": "446b33a5ffb30e6134c0e6d39aabf5f875dc894963b35bf2783a4d275eca1c65",
+    "sqlite.log": "e4252ac0767bbfa7baf840436c189b3a6196f042e1a37635f207077741069186",
+    "targeted-race.log": "b431fada88658424c35c144f5f3232f4216eed37d4e95f312c4c9c211403a0fe"
+  }
+}

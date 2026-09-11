@@ -1,0 +1,7 @@
+QUIESCED_SQL_AND_REDIS_SEEDED generation=7 offset=42 state_entries=3
+sending REPLCONF capa eof
+sending REPLCONF rdb-only 1
+SYNC sent to master, writing bytes of bulk transfer until EOF marker to '/tmp/state.rdb'
+Transfer finished with success after 740 bytes
+SQL_AND_REDIS_RDB_RESTORE_PASS generation=7 offset=42 bytes_and_indexes_and_ttl=3
+PR-1.3 offline SQL + Redis RDB backup/restore drill PASS

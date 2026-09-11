@@ -1,0 +1,8 @@
+=== RUN   TestChildMemoryProbe
+--- PASS: TestChildMemoryProbe (0.00s)
+=== RUN   TestKernelPeakRSSUnitMatchesChildSelfReport
+--- PASS: TestKernelPeakRSSUnitMatchesChildSelfReport (0.01s)
+=== RUN   TestChildFailureAndMissingExecutableRemainFailures
+--- PASS: TestChildFailureAndMissingExecutableRemainFailures (0.00s)
+PASS
+ok  	command-line-arguments	0.014s

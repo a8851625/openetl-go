@@ -1,0 +1,8 @@
+ok  	github.com/a8851625/openetl-go/internal/etl/storage	6.542s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/backup	25.612s
+?   	github.com/a8851625/openetl-go/internal/etl/storage/factory	[no test files]
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/mysql	1.797s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/postgres	2.119s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/sqlite	12.002s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/sqlstore	4.443s
+ok  	github.com/a8851625/openetl-go/internal/cmd	8.546s

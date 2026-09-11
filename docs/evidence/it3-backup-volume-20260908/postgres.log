@@ -1,0 +1,27 @@
+==> postgres: small streaming export (10003 rows per history table)
+SEEDED: each of DLQ/audit/run=10003; terminal/orphan tasks=2003
+backup complete: /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T//openetl-volume-postgres.tzjvQm/small.json
+counts: {Pipelines:1 PipelineVersions:1 Checkpoints:1 DeadLetters:10003 AuditLogs:10003 RunHistory:10003 Workers:0 Tasks:2003 Plugins:0 Connections:0 Settings:1}
+{"operation": "--backup-file", "elapsed_seconds": 1.150021, "peak_rss_bytes": 56639488, "measurement": "child process getrusage ru_maxrss (not Go heap)", "exit_code": 0}
+VERIFIED_FILE: all fields of 10003 DLQ + 10003 audit + 10003 run rows, counts and 2003 retained tasks
+==> postgres: full-content acceptance (100037 rows EACH DLQ/audit/run)
+SEEDED: each of DLQ/audit/run=100037; terminal/orphan tasks=2003
+backup complete: /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T//openetl-volume-postgres.tzjvQm/large.json
+counts: {Pipelines:1 PipelineVersions:1 Checkpoints:1 DeadLetters:100037 AuditLogs:100037 RunHistory:100037 Workers:0 Tasks:2003 Plugins:0 Connections:0 Settings:1}
+{"operation": "--backup-file", "elapsed_seconds": 2.029734, "peak_rss_bytes": 58916864, "measurement": "child process getrusage ru_maxrss (not Go heap)", "exit_code": 0}
+VERIFIED_FILE: all fields of 100037 DLQ + 100037 audit + 100037 run rows, counts and 2003 retained tasks
+restore complete: /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T//openetl-volume-postgres.tzjvQm/large.json
+pipelines: want=1 got=1
+pipeline_versions: want=1 got=1
+checkpoints: want=1 got=1
+dead_letters: want=100037 got=100037
+audit_logs: want=100037 got=100037
+run_history: want=100037 got=100037
+workers: want=0 got=0
+task_assignments: want=2003 got=2003
+plugins: want=0 got=0
+connections: want=0 got=0
+settings: want=1 got=1
+{"operation": "--restore-file", "elapsed_seconds": 114.893074, "peak_rss_bytes": 749387776, "measurement": "child process getrusage ru_maxrss (not Go heap)", "exit_code": 0}
+{"backend": "postgres", "result": "passed", "rows_per_history_table": 100037, "small_rows_per_history_table": 10003, "export_small": {"operation": "--backup-file", "elapsed_seconds": 1.150021, "peak_rss_bytes": 56639488, "measurement": "child process getrusage ru_maxrss (not Go heap)", "exit_code": 0}, "export_large": {"operation": "--backup-file", "elapsed_seconds": 2.029734, "peak_rss_bytes": 58916864, "measurement": "child process getrusage ru_maxrss (not Go heap)", "exit_code": 0}, "restore_large": {"operation": "--restore-file", "elapsed_seconds": 114.893074, "peak_rss_bytes": 749387776, "measurement": "child process getrusage ru_maxrss (not Go heap)", "exit_code": 0}, "backup_bytes": 149155848, "content_verification": "every DLQ/audit/run field versus generated input; independent raw SQL hashes before/after restore; 2003 terminal/orphan tasks", "sql_inventory": {"audit_logs": {"rows": 100037, "sha256": "03330b0654429bb709d24e63fd7995e798126dd62dbcb058ea9c4ba08a2e8e0a"}, "checkpoints": {"rows": 1, "sha256": "bbc58ee0522fd2c1976c1519504b885ae63f36c87691e7f5b63782a61a785f2d"}, "counts": {"pipelines": 1, "pipeline_versions": 1, "checkpoints": 1, "dead_letters": 100037, "audit_logs": 100037, "run_history": 100037, "workers": 0, "task_assignments": 2003, "plugins": 0, "connections": 0, "settings": 1}, "dead_letters": {"rows": 100037, "sha256": "0f4b53029e0c6763d99324dcdd04a79aa983b30fc48ba9ed5555b26eeb128366"}, "pipeline_versions": {"rows": 1, "sha256": "563ebf4e4cbcd391bddee6c2fec51af847a7f53bdbaf0b08ecad7a9bcf94316b"}, "pipelines": {"rows": 1, "sha256": "0aec9d63ceb333d0ca29de58b2eed92585d1882f4ac826dcc8888caf800c6fd9"}, "run_history": {"rows": 100037, "sha256": "1978da0da645b677cea11f5331722ec471f62562895345a7858770db308dbded"}, "settings": {"rows": 1, "sha256": "0b00390463da88536900ae02ada8a1903f1463f9f9be87db1fc0d890c29e98a9"}, "task_assignments": {"rows": 2003, "sha256": "2b4b7626814327ef1552ce8c1409c7a8ccda77e572be077c46ea24b8c3bba815"}}, "backup_sha256": "d3c1ade9c96ff7ef5bcc9fce5f0edcdbd2e94906a2d9237a6a9c7e909e0a6c8c"}
+RA-6 postgres volume backup/restore e2e PASS

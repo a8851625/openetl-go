@@ -1,0 +1,192 @@
+{"log": "command-001.log", "argv": ["rg", "--files", "--hidden", "--no-ignore", "-g", "!.bench-out", "-g", "!.git", "-g", "!.pi", "-g", "!.pi-subagents", "-g", "!__pycache__", "-g", "!data", "-g", "!log", "-g", "!logs", "-g", "!node_modules", "-g", "!screenshots", "Dockerfile", ".dockerignore", "go.mod", "go.sum", "main.go", "internal", "resource", "manifest", "web", "hack/pack.sh", "hack/container-cli.sh"]}
+{"log": "command-002.log", "argv": ["git", "rev-parse", "HEAD"]}
+{"log": "command-003.log", "argv": ["git", "status", "--porcelain"]}
+{"log": "command-004.log", "argv": ["podman", "info", "--format", "{{json .}}"]}
+{"log": "command-005.log", "argv": ["podman", "ps", "-q"]}
+{"log": "command-006.log", "argv": ["podman", "image", "inspect", "docker.io/library/node:20-alpine"]}
+{"log": "command-007.log", "argv": ["podman", "image", "inspect", "docker.io/library/node:20-alpine"]}
+{"log": "command-008.log", "argv": ["podman", "image", "inspect", "docker.io/library/golang:1.24-alpine"]}
+{"log": "command-009.log", "argv": ["podman", "image", "inspect", "docker.io/library/golang:1.24-alpine"]}
+{"log": "command-010.log", "argv": ["podman", "image", "inspect", "docker.io/library/alpine:3.19"]}
+{"log": "command-011.log", "argv": ["podman", "image", "inspect", "docker.io/library/alpine:3.19"]}
+{"log": "command-012.log", "argv": ["podman", "build", "--pull=false", "--format", "docker", "--build-arg", "GO_BUILD_TAGS=", "-t", "localhost/openetl-baseline-987912a48f9b:default", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/source"]}
+{"log": "command-013.log", "argv": ["podman", "image", "inspect", "localhost/openetl-baseline-987912a48f9b:default"]}
+{"log": "command-014.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-extract-default", "localhost/openetl-baseline-987912a48f9b:default"]}
+{"log": "command-015.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-extract-default:/app/main", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/default-main"]}
+{"log": "command-016.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-extract-default:/app/resource/public", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/default-public"]}
+{"log": "command-017.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-extract-default"]}
+{"log": "command-018.log", "argv": ["podman", "build", "--pull=false", "--format", "docker", "--build-arg", "GO_BUILD_TAGS=extism", "-t", "localhost/openetl-baseline-987912a48f9b:extism", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/source"]}
+{"log": "command-019.log", "argv": ["podman", "image", "inspect", "localhost/openetl-baseline-987912a48f9b:extism"]}
+{"log": "command-020.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-extract-extism", "localhost/openetl-baseline-987912a48f9b:extism"]}
+{"log": "command-021.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-extract-extism:/app/main", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/extism-main"]}
+{"log": "command-022.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-extract-extism:/app/resource/public", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/extism-public"]}
+{"log": "command-023.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-extract-extism"]}
+{"log": "command-024.log", "argv": ["podman", "build", "--pull=false", "--format", "docker", "--build-arg", "GO_BUILD_TAGS=nolua", "-t", "localhost/openetl-baseline-987912a48f9b:nolua", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/source"]}
+{"log": "command-025.log", "argv": ["podman", "image", "inspect", "localhost/openetl-baseline-987912a48f9b:nolua"]}
+{"log": "command-026.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-extract-nolua", "localhost/openetl-baseline-987912a48f9b:nolua"]}
+{"log": "command-027.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-extract-nolua:/app/main", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/nolua-main"]}
+{"log": "command-028.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-extract-nolua:/app/resource/public", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/nolua-public"]}
+{"log": "command-029.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-extract-nolua"]}
+{"log": "command-030.log", "argv": ["podman", "build", "--pull=false", "--format", "docker", "--build-arg", "GO_BUILD_TAGS=extism,nolua", "-t", "localhost/openetl-baseline-987912a48f9b:extism-nolua", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/source"]}
+{"log": "command-031.log", "argv": ["podman", "image", "inspect", "localhost/openetl-baseline-987912a48f9b:extism-nolua"]}
+{"log": "command-032.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-extract-extism-nolua", "localhost/openetl-baseline-987912a48f9b:extism-nolua"]}
+{"log": "command-033.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-extract-extism-nolua:/app/main", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/extism-nolua-main"]}
+{"log": "command-034.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-extract-extism-nolua:/app/resource/public", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/extism-nolua-public"]}
+{"log": "command-035.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-extract-extism-nolua"]}
+{"log": "command-036.log", "argv": ["podman", "build", "--pull=false", "--format", "docker", "--target", "builder", "-t", "localhost/openetl-baseline-987912a48f9b:builder", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/source"]}
+{"log": "command-037.log", "argv": ["podman", "image", "inspect", "localhost/openetl-baseline-987912a48f9b:builder"]}
+{"log": "command-038.log", "argv": ["podman", "run", "--rm", "--entrypoint", "go", "localhost/openetl-baseline-987912a48f9b:builder", "version"]}
+{"log": "command-039.log", "argv": ["podman", "run", "--rm", "--entrypoint", "go", "localhost/openetl-baseline-987912a48f9b:builder", "version", "-m", "/app/main"]}
+{"log": "command-040.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-packed", "localhost/openetl-baseline-987912a48f9b:builder"]}
+{"log": "command-041.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-packed:/app/internal/packed/packed.go", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/packed.go"]}
+{"log": "command-042.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-packed"]}
+{"log": "command-043.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-process-measure", "--entrypoint", "sh", "localhost/openetl-baseline-987912a48f9b:builder", "-c", "CGO_ENABLED=0 go test -count=1 -v /tmp/measure.go /tmp/measure_test.go && CGO_ENABLED=0 go build -ldflags='-s -w' -o /tmp/process-measure /tmp/measure.go"]}
+{"log": "command-044.log", "argv": ["podman", "cp", "/Users/Admin/Documents/workspace/sync-canal-go/hack/cmd/process-measure/main.go", "openetl-baseline-987912a48f9b-process-measure:/tmp/measure.go"]}
+{"log": "command-045.log", "argv": ["podman", "cp", "/Users/Admin/Documents/workspace/sync-canal-go/hack/cmd/process-measure/main_test.go", "openetl-baseline-987912a48f9b-process-measure:/tmp/measure_test.go"]}
+{"log": "command-046.log", "argv": ["podman", "start", "-a", "openetl-baseline-987912a48f9b-process-measure"]}
+{"log": "command-047.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-process-measure:/tmp/process-measure", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/fixture/process-measure"]}
+{"log": "command-048.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-process-measure"]}
+{"log": "command-049.log", "argv": ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1", "-keyout", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/fixture/tls.key", "-out", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/fixture/tls.crt"]}
+{"log": "command-050.log", "argv": ["podman", "volume", "create", "openetl-baseline-987912a48f9b-cold-0"]}
+{"log": "command-051.log", "argv": ["podman", "run", "--rm", "--user", "0", "-v", "openetl-baseline-987912a48f9b-cold-0:/bench", "-v", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/fixture:/fixture:ro", "--entrypoint", "sh", "localhost/openetl-baseline-987912a48f9b:default", "-c", "cp /fixture/* /bench/ && mkdir -p /bench/pipes /bench/data /bench/output /bench/logs && chown -R 1001:1001 /bench"]}
+{"log": "command-052.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-app-0", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-cold-0:/bench", "-p", "127.0.0.1::8000", "--entrypoint", "/app/main", "localhost/openetl-baseline-987912a48f9b:default", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost"]}
+{"log": "command-053.log", "argv": ["podman", "start", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-054.log", "argv": ["podman", "port", "openetl-baseline-987912a48f9b-app-0", "8000/tcp"]}
+{"log": "command-055.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-056.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-057.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-0", "id", "-u"]}
+{"log": "command-058.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-059.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-060.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-0", "cat", "/proc/1/status"]}
+{"log": "command-061.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-062.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-0", "cat", "/proc/1/status"]}
+{"log": "command-063.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-064.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-0", "cat", "/proc/1/status"]}
+{"log": "command-065.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-066.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-0", "cat", "/proc/1/status"]}
+{"log": "command-067.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-068.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-0", "cat", "/proc/1/status"]}
+{"log": "command-069.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-app-0"]}
+{"log": "command-070.log", "argv": ["podman", "volume", "create", "openetl-baseline-987912a48f9b-cold-1"]}
+{"log": "command-071.log", "argv": ["podman", "run", "--rm", "--user", "0", "-v", "openetl-baseline-987912a48f9b-cold-1:/bench", "-v", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/fixture:/fixture:ro", "--entrypoint", "sh", "localhost/openetl-baseline-987912a48f9b:default", "-c", "cp /fixture/* /bench/ && mkdir -p /bench/pipes /bench/data /bench/output /bench/logs && chown -R 1001:1001 /bench"]}
+{"log": "command-072.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-app-1", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-cold-1:/bench", "-p", "127.0.0.1::8000", "--entrypoint", "/app/main", "localhost/openetl-baseline-987912a48f9b:default", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost"]}
+{"log": "command-073.log", "argv": ["podman", "start", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-074.log", "argv": ["podman", "port", "openetl-baseline-987912a48f9b-app-1", "8000/tcp"]}
+{"log": "command-075.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-076.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-077.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-1", "id", "-u"]}
+{"log": "command-078.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-079.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-080.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-1", "cat", "/proc/1/status"]}
+{"log": "command-081.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-082.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-1", "cat", "/proc/1/status"]}
+{"log": "command-083.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-084.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-1", "cat", "/proc/1/status"]}
+{"log": "command-085.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-086.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-1", "cat", "/proc/1/status"]}
+{"log": "command-087.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-088.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-1", "cat", "/proc/1/status"]}
+{"log": "command-089.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-app-1"]}
+{"log": "command-090.log", "argv": ["podman", "volume", "create", "openetl-baseline-987912a48f9b-cold-2"]}
+{"log": "command-091.log", "argv": ["podman", "run", "--rm", "--user", "0", "-v", "openetl-baseline-987912a48f9b-cold-2:/bench", "-v", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/fixture:/fixture:ro", "--entrypoint", "sh", "localhost/openetl-baseline-987912a48f9b:default", "-c", "cp /fixture/* /bench/ && mkdir -p /bench/pipes /bench/data /bench/output /bench/logs && chown -R 1001:1001 /bench"]}
+{"log": "command-092.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-app-2", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-cold-2:/bench", "-p", "127.0.0.1::8000", "--entrypoint", "/app/main", "localhost/openetl-baseline-987912a48f9b:default", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost"]}
+{"log": "command-093.log", "argv": ["podman", "start", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-094.log", "argv": ["podman", "port", "openetl-baseline-987912a48f9b-app-2", "8000/tcp"]}
+{"log": "command-095.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-096.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-097.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-2", "id", "-u"]}
+{"log": "command-098.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-099.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-100.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-2", "cat", "/proc/1/status"]}
+{"log": "command-101.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-102.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-2", "cat", "/proc/1/status"]}
+{"log": "command-103.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-104.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-2", "cat", "/proc/1/status"]}
+{"log": "command-105.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-106.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-2", "cat", "/proc/1/status"]}
+{"log": "command-107.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-108.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-2", "cat", "/proc/1/status"]}
+{"log": "command-109.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-000", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-000-output"]}
+{"log": "command-110.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-001", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-001-output"]}
+{"log": "command-111.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-002", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-002-output"]}
+{"log": "command-112.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-003", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-003-output"]}
+{"log": "command-113.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-004", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-004-output"]}
+{"log": "command-114.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-005", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-005-output"]}
+{"log": "command-115.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-006", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-006-output"]}
+{"log": "command-116.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-007", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-007-output"]}
+{"log": "command-117.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-008", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-008-output"]}
+{"log": "command-118.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-009", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-009-output"]}
+{"log": "command-119.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-010", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-010-output"]}
+{"log": "command-120.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-011", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-011-output"]}
+{"log": "command-121.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-012", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-012-output"]}
+{"log": "command-122.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-013", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-013-output"]}
+{"log": "command-123.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-014", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-014-output"]}
+{"log": "command-124.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-app-2:/bench/output/restore-015", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/restore-015-output"]}
+{"log": "command-125.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-app-2", "cat", "/proc/1/status"]}
+{"log": "command-126.log", "argv": ["podman", "stop", "-t", "30", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-127.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-128.log", "argv": ["podman", "logs", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-129.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-backup", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-cold-2:/bench", "--entrypoint", "/bench/process-measure", "localhost/openetl-baseline-987912a48f9b:default", "--output", "/bench/backup-resource.json", "--", "/app/main", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost", "--backup-file", "/bench/backup.json"]}
+{"log": "command-130.log", "argv": ["podman", "start", "-a", "openetl-baseline-987912a48f9b-backup"]}
+{"log": "command-131.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-backup"]}
+{"log": "command-132.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-backup:/bench/backup-resource.json", "/private/tmp/openetl-baseline-20260909-verified/backup-resource.json"]}
+{"log": "command-133.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-backup:/bench/backup.json", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/backup.json"]}
+{"log": "command-134.log", "argv": ["podman", "volume", "create", "openetl-baseline-987912a48f9b-restore-0"]}
+{"log": "command-135.log", "argv": ["podman", "run", "--rm", "--user", "0", "-v", "openetl-baseline-987912a48f9b-restore-0:/bench", "-v", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/fixture:/fixture:ro", "--entrypoint", "sh", "localhost/openetl-baseline-987912a48f9b:default", "-c", "cp /fixture/* /bench/ && mkdir -p /bench/pipes /bench/data /bench/output /bench/logs && chown -R 1001:1001 /bench"]}
+{"log": "command-136.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-restore-cli-0", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-restore-0:/bench", "--entrypoint", "/bench/process-measure", "localhost/openetl-baseline-987912a48f9b:default", "--output", "/bench/restore-cli-0-resource.json", "--", "/app/main", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost", "--restore-file", "/bench/backup.json"]}
+{"log": "command-137.log", "argv": ["podman", "start", "-a", "openetl-baseline-987912a48f9b-restore-cli-0"]}
+{"log": "command-138.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restore-cli-0"]}
+{"log": "command-139.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-restore-cli-0:/bench/restore-cli-0-resource.json", "/private/tmp/openetl-baseline-20260909-verified/restore-cli-0-resource.json"]}
+{"log": "command-140.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-restored-app-0", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-restore-0:/bench", "-p", "127.0.0.1::8000", "--entrypoint", "/app/main", "localhost/openetl-baseline-987912a48f9b:default", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost"]}
+{"log": "command-141.log", "argv": ["podman", "start", "openetl-baseline-987912a48f9b-restored-app-0"]}
+{"log": "command-142.log", "argv": ["podman", "port", "openetl-baseline-987912a48f9b-restored-app-0", "8000/tcp"]}
+{"log": "command-143.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restored-app-0"]}
+{"log": "command-144.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restored-app-0"]}
+{"log": "command-145.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-restored-app-0", "id", "-u"]}
+{"log": "command-146.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restored-app-0"]}
+{"log": "command-147.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-restored-app-0", "cat", "/proc/1/status"]}
+{"log": "command-148.log", "argv": ["podman", "logs", "openetl-baseline-987912a48f9b-restored-app-0"]}
+{"log": "command-149.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-restored-app-0"]}
+{"log": "command-150.log", "argv": ["podman", "volume", "create", "openetl-baseline-987912a48f9b-restore-1"]}
+{"log": "command-151.log", "argv": ["podman", "run", "--rm", "--user", "0", "-v", "openetl-baseline-987912a48f9b-restore-1:/bench", "-v", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/fixture:/fixture:ro", "--entrypoint", "sh", "localhost/openetl-baseline-987912a48f9b:default", "-c", "cp /fixture/* /bench/ && mkdir -p /bench/pipes /bench/data /bench/output /bench/logs && chown -R 1001:1001 /bench"]}
+{"log": "command-152.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-restore-cli-1", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-restore-1:/bench", "--entrypoint", "/bench/process-measure", "localhost/openetl-baseline-987912a48f9b:default", "--output", "/bench/restore-cli-1-resource.json", "--", "/app/main", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost", "--restore-file", "/bench/backup.json"]}
+{"log": "command-153.log", "argv": ["podman", "start", "-a", "openetl-baseline-987912a48f9b-restore-cli-1"]}
+{"log": "command-154.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restore-cli-1"]}
+{"log": "command-155.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-restore-cli-1:/bench/restore-cli-1-resource.json", "/private/tmp/openetl-baseline-20260909-verified/restore-cli-1-resource.json"]}
+{"log": "command-156.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-restored-app-1", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-restore-1:/bench", "-p", "127.0.0.1::8000", "--entrypoint", "/app/main", "localhost/openetl-baseline-987912a48f9b:default", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost"]}
+{"log": "command-157.log", "argv": ["podman", "start", "openetl-baseline-987912a48f9b-restored-app-1"]}
+{"log": "command-158.log", "argv": ["podman", "port", "openetl-baseline-987912a48f9b-restored-app-1", "8000/tcp"]}
+{"log": "command-159.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restored-app-1"]}
+{"log": "command-160.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restored-app-1"]}
+{"log": "command-161.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-restored-app-1", "id", "-u"]}
+{"log": "command-162.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restored-app-1"]}
+{"log": "command-163.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-restored-app-1", "cat", "/proc/1/status"]}
+{"log": "command-164.log", "argv": ["podman", "logs", "openetl-baseline-987912a48f9b-restored-app-1"]}
+{"log": "command-165.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-restored-app-1"]}
+{"log": "command-166.log", "argv": ["podman", "volume", "create", "openetl-baseline-987912a48f9b-restore-2"]}
+{"log": "command-167.log", "argv": ["podman", "run", "--rm", "--user", "0", "-v", "openetl-baseline-987912a48f9b-restore-2:/bench", "-v", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/fixture:/fixture:ro", "--entrypoint", "sh", "localhost/openetl-baseline-987912a48f9b:default", "-c", "cp /fixture/* /bench/ && mkdir -p /bench/pipes /bench/data /bench/output /bench/logs && chown -R 1001:1001 /bench"]}
+{"log": "command-168.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-restore-cli-2", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-restore-2:/bench", "--entrypoint", "/bench/process-measure", "localhost/openetl-baseline-987912a48f9b:default", "--output", "/bench/restore-cli-2-resource.json", "--", "/app/main", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost", "--restore-file", "/bench/backup.json"]}
+{"log": "command-169.log", "argv": ["podman", "start", "-a", "openetl-baseline-987912a48f9b-restore-cli-2"]}
+{"log": "command-170.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restore-cli-2"]}
+{"log": "command-171.log", "argv": ["podman", "cp", "openetl-baseline-987912a48f9b-restore-cli-2:/bench/restore-cli-2-resource.json", "/private/tmp/openetl-baseline-20260909-verified/restore-cli-2-resource.json"]}
+{"log": "command-172.log", "argv": ["podman", "create", "--name", "openetl-baseline-987912a48f9b-restored-app-2", "--cpus", "2", "--memory", "1g", "--log-driver", "k8s-file", "--env-file", "/var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-baseline-8pds7czw/runtime.env", "-v", "openetl-baseline-987912a48f9b-restore-2:/bench", "-p", "127.0.0.1::8000", "--entrypoint", "/app/main", "localhost/openetl-baseline-987912a48f9b:default", "--config", "/bench/config.yaml", "--profile", "production", "--insecure-dev=false", "--audit-enabled=true", "--restore-strict=true", "--role", "standalone", "--data-dir", "/bench/data", "--sqlite-path", "/bench/data/etl.db", "--storage", "sqlite", "--specs-dir", "/bench/pipes", "--log-dir", "/bench/logs", "--host", "0.0.0.0", "--port", "8000", "--etl-api-host", "0.0.0.0", "--etl-api-port", "8001", "--tls-cert", "/bench/tls.crt", "--tls-key", "/bench/tls.key", "--tls-server-name", "localhost"]}
+{"log": "command-173.log", "argv": ["podman", "start", "openetl-baseline-987912a48f9b-restored-app-2"]}
+{"log": "command-174.log", "argv": ["podman", "port", "openetl-baseline-987912a48f9b-restored-app-2", "8000/tcp"]}
+{"log": "command-175.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restored-app-2"]}
+{"log": "command-176.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restored-app-2"]}
+{"log": "command-177.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-restored-app-2", "id", "-u"]}
+{"log": "command-178.log", "argv": ["podman", "container", "inspect", "--format", "{{json .State}}", "openetl-baseline-987912a48f9b-restored-app-2"]}
+{"log": "command-179.log", "argv": ["podman", "exec", "openetl-baseline-987912a48f9b-restored-app-2", "cat", "/proc/1/status"]}
+{"log": "command-180.log", "argv": ["podman", "logs", "openetl-baseline-987912a48f9b-restored-app-2"]}
+{"log": "command-181.log", "argv": ["podman", "rm", "-f", "openetl-baseline-987912a48f9b-restored-app-2"]}
+{"log": "command-182.log", "argv": ["podman", "container", "rm", "-f", "openetl-baseline-987912a48f9b-restore-cli-2"]}
+{"log": "command-183.log", "argv": ["podman", "container", "rm", "-f", "openetl-baseline-987912a48f9b-restore-cli-1"]}
+{"log": "command-184.log", "argv": ["podman", "container", "rm", "-f", "openetl-baseline-987912a48f9b-restore-cli-0"]}
+{"log": "command-185.log", "argv": ["podman", "container", "rm", "-f", "openetl-baseline-987912a48f9b-backup"]}
+{"log": "command-186.log", "argv": ["podman", "container", "rm", "-f", "openetl-baseline-987912a48f9b-app-2"]}
+{"log": "command-187.log", "argv": ["podman", "volume", "rm", "-f", "openetl-baseline-987912a48f9b-restore-2"]}
+{"log": "command-188.log", "argv": ["podman", "volume", "rm", "-f", "openetl-baseline-987912a48f9b-restore-1"]}
+{"log": "command-189.log", "argv": ["podman", "volume", "rm", "-f", "openetl-baseline-987912a48f9b-restore-0"]}
+{"log": "command-190.log", "argv": ["podman", "volume", "rm", "-f", "openetl-baseline-987912a48f9b-cold-2"]}
+{"log": "command-191.log", "argv": ["podman", "volume", "rm", "-f", "openetl-baseline-987912a48f9b-cold-1"]}
+{"log": "command-192.log", "argv": ["podman", "volume", "rm", "-f", "openetl-baseline-987912a48f9b-cold-0"]}

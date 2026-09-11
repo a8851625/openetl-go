@@ -1,0 +1,5 @@
+=== RUN   TestRestoredPluginLoadsWithExtism
+2026-09-08T21:31:51.706+08:00 [INFO] Loaded plugin: parser
+--- PASS: TestRestoredPluginLoadsWithExtism (0.13s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/backup	1.056s

@@ -1,0 +1,41 @@
+==> sqlite: exact row fidelity, v1/v2, SQL failure rollback, artifact relocation, next IDs
+=== RUN   TestBackupRestoreConformance
+=== RUN   TestBackupRestoreConformance/sqlite
+=== RUN   TestBackupRestoreConformance/sqlite/id_keyed_and_legacy_history_export
+=== RUN   TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=false
+=== RUN   TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=false/backup.wipe.pipelines
+=== RUN   TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=false/backup.restore.checkpoints
+=== RUN   TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=false/backup.restore.connections
+=== RUN   TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=true
+=== RUN   TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=true/backup.wipe.pipelines
+=== RUN   TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=true/backup.restore.checkpoints
+=== RUN   TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=true/backup.restore.connections
+=== RUN   TestBackupRestoreConformance/sqlite/legacy_v1_and_unversioned
+--- PASS: TestBackupRestoreConformance (0.60s)
+    --- PASS: TestBackupRestoreConformance/sqlite (0.60s)
+        --- PASS: TestBackupRestoreConformance/sqlite/id_keyed_and_legacy_history_export (0.04s)
+        --- PASS: TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=false (0.19s)
+            --- PASS: TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=false/backup.wipe.pipelines (0.02s)
+            --- PASS: TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=false/backup.restore.checkpoints (0.03s)
+            --- PASS: TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=false/backup.restore.connections (0.03s)
+        --- PASS: TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=true (0.18s)
+            --- PASS: TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=true/backup.wipe.pipelines (0.02s)
+            --- PASS: TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=true/backup.restore.checkpoints (0.02s)
+            --- PASS: TestBackupRestoreConformance/sqlite/fidelity_and_rollback/wrapped=true/backup.restore.connections (0.03s)
+        --- PASS: TestBackupRestoreConformance/sqlite/legacy_v1_and_unversioned (0.06s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/backup	2.291s
+==> sqlite: fresh executable offline backup/restore and failed restore recovery
+=== RUN   TestBackupMaintenanceCLI
+--- PASS: TestBackupMaintenanceCLI (1.29s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/cmd	1.934s
+==> sqlite: existing backup/restore and retention regression
+=== RUN   TestBackupRestoreUpgradePath
+=== RUN   TestBackupRestoreUpgradePath/sqlite
+--- PASS: TestBackupRestoreUpgradePath (0.05s)
+    --- PASS: TestBackupRestoreUpgradePath/sqlite (0.05s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/etl/storage	0.373s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage	0.333s
+PR-1.3 sqlite backup/restore e2e PASS

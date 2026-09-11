@@ -1,0 +1,10 @@
+test_chunk_boundary (__main__.SecretScannerTest.test_chunk_boundary) ... ok
+test_clean_artifact (__main__.SecretScannerTest.test_clean_artifact) ... ok
+test_control_character_in_legacy_cli_argument (__main__.SecretScannerTest.test_control_character_in_legacy_cli_argument) ... ok
+test_invalid_inputs_fail_instead_of_passing (__main__.SecretScannerTest.test_invalid_inputs_fail_instead_of_passing) ... ok
+test_literal_and_serialized_credentials (__main__.SecretScannerTest.test_literal_and_serialized_credentials) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.515s
+
+OK

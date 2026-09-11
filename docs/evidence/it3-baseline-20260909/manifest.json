@@ -1,0 +1,228 @@
+{
+  "checks": {
+    "16_pipeline_1600_record_reconciliation": "passed",
+    "four_dockerfile_build_variants": "passed",
+    "hosted_github_actions": "not_run",
+    "kernel_maxrss_unit_crosscheck_linux": "passed",
+    "measurement_parser_12_tests": "passed",
+    "three_offline_restore_and_restart_trials": "passed",
+    "three_production_cold_start_trials": "passed"
+  },
+  "files": {
+    "backup-resource.json": {
+      "bytes": 171,
+      "sha256": "7e7033afabb20408285e1b7790abbba1b337bad83003b2d138a8d9cbdf015699"
+    },
+    "commands.jsonl": {
+      "bytes": 38256,
+      "sha256": "051bc89111a71dc7426102c5b1c700c9f48a5976d949be0c8334072e3159b601"
+    },
+    "fixture-state.json": {
+      "bytes": 15090,
+      "sha256": "9c80afd9e5680b1785564f67a36bfe73a98ee0831d4dafd33e3add95472d6a34"
+    },
+    "linux-meter-tests.log": {
+      "bytes": 356,
+      "sha256": "35b6239b1e1c0ce2439cfbc0e0a18c2e94c55907549ec575471e0a8b704ac1ea"
+    },
+    "pack-build.log": {
+      "bytes": 4579,
+      "sha256": "878fec35f94658b32385ee7792ca97585251fdcd41646242765cc3e9e6063371"
+    },
+    "parser-tests.log": {
+      "bytes": 1709,
+      "sha256": "99a6765678d50666ed05f119ccaeb662c689ca9f702ca241f772067faa0fb055"
+    },
+    "raw-logs.zip": {
+      "bytes": 215540,
+      "sha256": "76cb10dbd3d285bfbf701ec7665b50b87af69f413c1c9a543e4bbc8bafbc5f1d"
+    },
+    "restore-cli-0-resource.json": {
+      "bytes": 172,
+      "sha256": "69540cb6630aba0505597de7d7e009c3b582fc32813e1a83512b1339aad8d892"
+    },
+    "restore-cli-1-resource.json": {
+      "bytes": 172,
+      "sha256": "2d4316b5bde299fba432351cdb66bd36728ecfcbe44f0c166fa1100d2d725bfb"
+    },
+    "restore-cli-2-resource.json": {
+      "bytes": 172,
+      "sha256": "10edcd2277b2737aec9087affd8b9fef11c8610e12ac904ca33e692734400cd7"
+    },
+    "result.json": {
+      "bytes": 34515,
+      "sha256": "5a2602a2545754937372e8f6a69bb33d0bbbf68344c17189d170dd8e70cc32ea"
+    },
+    "source-files.json": {
+      "bytes": 85590,
+      "sha256": "64b2709a97a314fca433576731c5bd930effc636078e4af046735544a9c9b074"
+    }
+  },
+  "hardware": {
+    "architecture": "arm64",
+    "client_platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "cpus": 5,
+    "kernel": "7.0.11-200.fc44.aarch64",
+    "memory_bytes": 16717205504,
+    "os": "linux",
+    "other_running_containers": 20,
+    "runtime_version": "5.8.4"
+  },
+  "images": {
+    "default": {
+      "architecture": "arm64",
+      "binary_bytes": 63307960,
+      "binary_sha256": "724155033c5388eafca00c480c8be82daac2efb19a01c41354ee496a9db42796",
+      "build_tags": "",
+      "bytes": 139648892,
+      "cgo_enabled": false,
+      "frontend_bytes": 1071884,
+      "frontend_sha256": "2514ef6fa534f42f11d283695dae13c54128d7a5250756d392974c0c6f614f2d",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "image_id": "sha256:1e6a458706d0e5e37744e2088fa02ce991958bd7c1ef56162805763c830e49ce",
+      "manifest_digest": "sha256:b6cad625c71eb7187ac6abd244baed753bae0e6c1f14c248a865b5d1f09cd0ed",
+      "os": "linux",
+      "packed_bytes": 420234,
+      "packed_sha256": "37c7efb3662437c7f2dfe81fdfff91244cd4ba5313d02d53616ebeb51d4ceead",
+      "repo_digests": [
+        "localhost/openetl-baseline-294c1e9a08fc@sha256:b6cad625c71eb7187ac6abd244baed753bae0e6c1f14c248a865b5d1f09cd0ed",
+        "localhost/openetl-baseline-69471ed4f728@sha256:b6cad625c71eb7187ac6abd244baed753bae0e6c1f14c248a865b5d1f09cd0ed",
+        "localhost/openetl-baseline-8182552832c4@sha256:b6cad625c71eb7187ac6abd244baed753bae0e6c1f14c248a865b5d1f09cd0ed",
+        "localhost/openetl-baseline-987912a48f9b@sha256:b6cad625c71eb7187ac6abd244baed753bae0e6c1f14c248a865b5d1f09cd0ed",
+        "localhost/openetl-baseline-e6f237d85e0b@sha256:b6cad625c71eb7187ac6abd244baed753bae0e6c1f14c248a865b5d1f09cd0ed",
+        "localhost/openetl-baseline-ed6eaf86c603@sha256:b6cad625c71eb7187ac6abd244baed753bae0e6c1f14c248a865b5d1f09cd0ed"
+      ],
+      "tag": "localhost/openetl-baseline-987912a48f9b:default"
+    },
+    "extism": {
+      "architecture": "arm64",
+      "binary_bytes": 66846904,
+      "binary_sha256": "7a6fa2949cc2cb293cd5a2e2d8ac8b4d73e8fff63183de1d87aa32f1baabba56",
+      "build_tags": "extism",
+      "bytes": 146726777,
+      "cgo_enabled": false,
+      "frontend_bytes": 1071884,
+      "frontend_sha256": "2514ef6fa534f42f11d283695dae13c54128d7a5250756d392974c0c6f614f2d",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "image_id": "sha256:7d92a259847a6bd8e3537036ff97c66a9c7c946cc24d3cf4b1f8c3f97d5f6c14",
+      "manifest_digest": "sha256:ecc74b2c624bc06ba88306226c24e2ab3932254affda46562ff04324cd3d5637",
+      "os": "linux",
+      "packed_bytes": 420234,
+      "packed_sha256": "37c7efb3662437c7f2dfe81fdfff91244cd4ba5313d02d53616ebeb51d4ceead",
+      "repo_digests": [
+        "localhost/openetl-baseline-294c1e9a08fc@sha256:ecc74b2c624bc06ba88306226c24e2ab3932254affda46562ff04324cd3d5637",
+        "localhost/openetl-baseline-69471ed4f728@sha256:ecc74b2c624bc06ba88306226c24e2ab3932254affda46562ff04324cd3d5637",
+        "localhost/openetl-baseline-8182552832c4@sha256:ecc74b2c624bc06ba88306226c24e2ab3932254affda46562ff04324cd3d5637",
+        "localhost/openetl-baseline-987912a48f9b@sha256:ecc74b2c624bc06ba88306226c24e2ab3932254affda46562ff04324cd3d5637",
+        "localhost/openetl-baseline-e6f237d85e0b@sha256:ecc74b2c624bc06ba88306226c24e2ab3932254affda46562ff04324cd3d5637"
+      ],
+      "tag": "localhost/openetl-baseline-987912a48f9b:extism"
+    },
+    "extism-nolua": {
+      "architecture": "arm64",
+      "binary_bytes": 65994936,
+      "binary_sha256": "bcf475cc4ef360694fc0223556642412b8d300bc431b38cbbf2ef3f7fb4f3390",
+      "build_tags": "extism,nolua",
+      "bytes": 145022842,
+      "cgo_enabled": false,
+      "frontend_bytes": 1071884,
+      "frontend_sha256": "2514ef6fa534f42f11d283695dae13c54128d7a5250756d392974c0c6f614f2d",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "image_id": "sha256:df54c084577556ab190eb6771d53f52b0e8b3f5ee348d040311decf4b9a01986",
+      "manifest_digest": "sha256:4d6c87397a00765fdf6046257356c0e1bec0038aaceabcd754833dec6e4800d0",
+      "os": "linux",
+      "packed_bytes": 420234,
+      "packed_sha256": "37c7efb3662437c7f2dfe81fdfff91244cd4ba5313d02d53616ebeb51d4ceead",
+      "repo_digests": [
+        "localhost/openetl-baseline-294c1e9a08fc@sha256:4d6c87397a00765fdf6046257356c0e1bec0038aaceabcd754833dec6e4800d0",
+        "localhost/openetl-baseline-69471ed4f728@sha256:4d6c87397a00765fdf6046257356c0e1bec0038aaceabcd754833dec6e4800d0",
+        "localhost/openetl-baseline-8182552832c4@sha256:4d6c87397a00765fdf6046257356c0e1bec0038aaceabcd754833dec6e4800d0",
+        "localhost/openetl-baseline-987912a48f9b@sha256:4d6c87397a00765fdf6046257356c0e1bec0038aaceabcd754833dec6e4800d0",
+        "localhost/openetl-baseline-e6f237d85e0b@sha256:4d6c87397a00765fdf6046257356c0e1bec0038aaceabcd754833dec6e4800d0"
+      ],
+      "tag": "localhost/openetl-baseline-987912a48f9b:extism-nolua"
+    },
+    "nolua": {
+      "architecture": "arm64",
+      "binary_bytes": 62521528,
+      "binary_sha256": "ca3f853ed458d3d630f0cfe0f434cc6bef7877f82d44b612327b6f805b90ffd8",
+      "build_tags": "nolua",
+      "bytes": 138076028,
+      "cgo_enabled": false,
+      "frontend_bytes": 1071884,
+      "frontend_sha256": "2514ef6fa534f42f11d283695dae13c54128d7a5250756d392974c0c6f614f2d",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "image_id": "sha256:bd63d27ddf4a4e6c35d04b4f889370ef108483d98712ee7e5000106d36d94a8b",
+      "manifest_digest": "sha256:8ba9ab140a16f8bc8fbacaea296b6080124ed2ba88547d0b778e5ca4dda0ce23",
+      "os": "linux",
+      "packed_bytes": 420234,
+      "packed_sha256": "37c7efb3662437c7f2dfe81fdfff91244cd4ba5313d02d53616ebeb51d4ceead",
+      "repo_digests": [
+        "localhost/openetl-baseline-294c1e9a08fc@sha256:8ba9ab140a16f8bc8fbacaea296b6080124ed2ba88547d0b778e5ca4dda0ce23",
+        "localhost/openetl-baseline-69471ed4f728@sha256:8ba9ab140a16f8bc8fbacaea296b6080124ed2ba88547d0b778e5ca4dda0ce23",
+        "localhost/openetl-baseline-8182552832c4@sha256:8ba9ab140a16f8bc8fbacaea296b6080124ed2ba88547d0b778e5ca4dda0ce23",
+        "localhost/openetl-baseline-987912a48f9b@sha256:8ba9ab140a16f8bc8fbacaea296b6080124ed2ba88547d0b778e5ca4dda0ce23",
+        "localhost/openetl-baseline-e6f237d85e0b@sha256:8ba9ab140a16f8bc8fbacaea296b6080124ed2ba88547d0b778e5ca4dda0ce23"
+      ],
+      "tag": "localhost/openetl-baseline-987912a48f9b:nolua"
+    }
+  },
+  "limitations": [
+    "Fresh process and SQLite volume, cached image/OS pages; not a host reboot cold start.",
+    "Start timer includes container start, port discovery and health polling overhead.",
+    "Runtime image uses Dockerfile, not a published GoReleaser release asset.",
+    "CGO/QuickJS is not published by .goreleaser.yml and is not measured here.",
+    "Loaded control-plane peak is not sustained pipeline throughput/concurrency evidence.",
+    "ClickHouse specialty scope is pending; no specialty benchmark is run.",
+    "This is T3.6-A only; RA-8 and IT-3 remain active pending real data-path/concurrency evidence and CH scope decision.",
+    "Pack-build.log is the original successful image build log for identical source and default image ID; runtime measurements from that earlier failed harness attempt were not used.",
+    "Old schema v1 BusyBox-time peak measurements are withdrawn; only v2 direct wait4 values are accepted."
+  ],
+  "measured_at": "2026-09-09T14:04:45Z",
+  "result": "delivered",
+  "roadmap_item": "RA-8 / T3.6-A",
+  "round": "4/5",
+  "scope": "packaging-startup-restore",
+  "source": {
+    "commit": "387daf07a3f38ea3f24b72060be16c16c59bcea5",
+    "dirty": true,
+    "files": 479,
+    "sha256": "ab64d73d7bab31cbfedf108bb81207a5abc31d7524c5df67eb028237f064229a"
+  }
+}

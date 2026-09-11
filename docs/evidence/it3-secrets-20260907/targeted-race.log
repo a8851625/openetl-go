@@ -1,0 +1,4 @@
+ok  	github.com/a8851625/openetl-go/internal/etl/storage	7.607s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/backup	67.609s
+ok  	github.com/a8851625/openetl-go/internal/etl/server	121.589s
+ok  	github.com/a8851625/openetl-go/internal/cmd	7.861s

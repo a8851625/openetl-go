@@ -1,0 +1,42 @@
+==> postgres: exact row fidelity, v1/v2, SQL failure rollback, artifact relocation, next IDs
+=== RUN   TestBackupRestoreConformance
+=== RUN   TestBackupRestoreConformance/postgres
+=== RUN   TestBackupRestoreConformance/postgres/id_keyed_and_legacy_history_export
+=== RUN   TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=false
+=== RUN   TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=false/backup.wipe.pipelines
+=== RUN   TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=false/backup.restore.checkpoints
+=== RUN   TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=false/backup.restore.connections
+=== RUN   TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=true
+=== RUN   TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=true/backup.wipe.pipelines
+=== RUN   TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=true/backup.restore.checkpoints
+=== RUN   TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=true/backup.restore.connections
+=== RUN   TestBackupRestoreConformance/postgres/legacy_v1_and_unversioned
+--- PASS: TestBackupRestoreConformance (0.54s)
+    --- PASS: TestBackupRestoreConformance/postgres (0.54s)
+        --- PASS: TestBackupRestoreConformance/postgres/id_keyed_and_legacy_history_export (0.05s)
+        --- PASS: TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=false (0.16s)
+            --- PASS: TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=false/backup.wipe.pipelines (0.02s)
+            --- PASS: TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=false/backup.restore.checkpoints (0.02s)
+            --- PASS: TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=false/backup.restore.connections (0.02s)
+        --- PASS: TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=true (0.15s)
+            --- PASS: TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=true/backup.wipe.pipelines (0.02s)
+            --- PASS: TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=true/backup.restore.checkpoints (0.02s)
+            --- PASS: TestBackupRestoreConformance/postgres/fidelity_and_rollback/wrapped=true/backup.restore.connections (0.02s)
+        --- PASS: TestBackupRestoreConformance/postgres/legacy_v1_and_unversioned (0.06s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/backup	2.437s
+==> postgres: fresh executable offline backup/restore and failed restore recovery
+=== RUN   TestBackupMaintenanceCLI
+--- PASS: TestBackupMaintenanceCLI (1.15s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/cmd	1.786s
+==> postgres: existing backup/restore and retention regression
+=== RUN   TestBackupRestoreUpgradePath
+=== RUN   TestBackupRestoreUpgradePath/postgres
+--- PASS: TestBackupRestoreUpgradePath (0.13s)
+    --- PASS: TestBackupRestoreUpgradePath/postgres (0.13s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/etl/storage	0.441s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage	0.332s
+PG_BACKUP_OK /var/folders/8g/vzwt595j07q_3mvm7g2xj_340000gp/T/openetl-backup-postgres.pqRM1y/logical/openetl-backup-20260906T102346Z pipelines 2 secret_hits 1
+PR-1.3 postgres backup/restore e2e PASS
