@@ -87,7 +87,7 @@ func (h *HotReloader) reload(ctx context.Context) {
 			runner, ok := h.server.pipelines[name]
 			h.server.mu.RUnlock()
 			if ok {
-				if err := runner.Start(ctx); err != nil {
+				if err := h.server.startManagedPipeline(ctx, name, runner); err != nil {
 					g.Log().Warningf(ctx, "Hot reload: failed to start pipeline %s: %v", name, err)
 				} else {
 					g.Log().Infof(ctx, "Hot reload: started pipeline %s", name)

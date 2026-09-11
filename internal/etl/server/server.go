@@ -46,6 +46,8 @@ type Server struct {
 	dagSpecs          map[string]*orchestrator.PipelineSpec
 	pipelineNames     map[string]string
 	pipelineNameRefs  map[string]map[string]struct{}
+	restoreFailures   map[string]RestoreFailure
+	lifecycleStore    storage.PipelineLifecycleStore
 	cpAdapter         *storage.CheckpointStoreAdapter
 	dlqWriter         *storage.DLQCompatWriter
 	auditAdapter      *storage.AuditWriterAdapter
@@ -53,6 +55,8 @@ type Server struct {
 	alertManager      *alert.Manager
 	httpServer        *http.Server
 	mu                sync.RWMutex
+	lifecycleLocksMu  sync.Mutex
+	lifecycleLocks    map[string]*sync.Mutex
 	specsDir          string
 	apiToken          string
 	runtimeProfile    RuntimeProfileConfig
@@ -181,6 +185,7 @@ func (s *Server) registerPipelineLocked(id, name string, runner pipeline.RunnerI
 		s.pipelineNameRefs[name] = map[string]struct{}{}
 	}
 	s.pipelineNameRefs[name][id] = struct{}{}
+	delete(s.restoreFailures, id)
 }
 
 func (s *Server) unregisterPipelineLocked(id string) {
@@ -191,6 +196,7 @@ func (s *Server) unregisterPipelineLocked(id string) {
 		s.removeNameRefLocked(name, id)
 	}
 	delete(s.pipelineNames, id)
+	delete(s.restoreFailures, id)
 	delete(s.restartAttempts, id)
 }
 
@@ -284,6 +290,14 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if secrets, ok := store.(*storage.SecretFieldStore); ok {
+		report, scanErr := secrets.DetectPlaintextSecrets(ctx)
+		if scanErr != nil {
+			g.Log().Warning(ctx, "Startup plaintext secret scan failed; inspect secret_encryption health")
+		} else if len(report.Connections)+len(report.Settings) > 0 {
+			g.Log().Warningf(ctx, "Startup detected plaintext secrets: connections=%d settings=%d; stop writers and run --remediate-secrets with the encryption key configured", len(report.Connections), len(report.Settings))
+		}
+	}
 	specStore, err := newEncryptedSpecStore(store)
 	if err != nil {
 		return nil, err
@@ -291,6 +305,10 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 
 	if specsDir == "" {
 		specsDir = "./pipes"
+	}
+	lifecycleStore, ok := store.(storage.PipelineLifecycleStore)
+	if !ok {
+		return nil, fmt.Errorf("storage %T does not implement pipeline lifecycle fencing", store)
 	}
 
 	s := &Server{
@@ -300,6 +318,9 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 		dagSpecs:          make(map[string]*orchestrator.PipelineSpec),
 		pipelineNames:     make(map[string]string),
 		pipelineNameRefs:  make(map[string]map[string]struct{}),
+		restoreFailures:   make(map[string]RestoreFailure),
+		lifecycleStore:    lifecycleStore,
+		lifecycleLocks:    make(map[string]*sync.Mutex),
 		cpAdapter:         storage.NewCheckpointStoreAdapter(store),
 		dlqWriter:         storage.NewDLQCompatWriter(store),
 		auditAdapter:      storage.NewAuditWriterAdapter(store),
@@ -321,6 +342,7 @@ func NewServer(store storage.Storage, specsDir string) (*Server, error) {
 	// both StartAll (DB-loaded specs) and runtime API/reload paths can register
 	// pipelines against it. Run(ctx) is launched in StartAll.
 	s.scheduler = orchestrator.NewScheduler(store)
+	s.scheduler.SetRunnerStarter(s.startManagedPipeline)
 	// In standalone mode, shard tasks are already executed by the
 	// ParallelRunner in-process. The worker poll loop's executor is a no-op so
 	// it doesn't double-execute; it just marks claimed tasks completed so they
@@ -479,8 +501,9 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list pipelines from db: %w", err)
 	}
+	failures := make([]RestoreFailure, 0)
 	for _, row := range rows {
-		if row.SpecYAML == "" {
+		if row == nil {
 			continue
 		}
 		if row.ID == "" {
@@ -496,7 +519,12 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 			// DAG format
 			var dagSpec orchestrator.PipelineSpec
 			if err := yaml.Unmarshal(yamlBytes, &dagSpec); err != nil {
-				g.Log().Warningf(ctx, "Skip pipeline %s from DB: dag yaml parse error: %v", row.Name, err)
+				failure := newRestoreFailure(row, row.Name, restoreStageDAGYAMLParse, err)
+				if persistErr := s.recordRestoreFailure(ctx, failure, row); persistErr != nil {
+					return persistErr
+				}
+				failures = append(failures, failure)
+				g.Log().Warningf(ctx, "Pipeline %s (%s) restore failed at %s: %v", failure.PipelineName, failure.PipelineID, failure.Stage, err)
 				continue
 			}
 
@@ -506,20 +534,37 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 			_, exists := s.pipelines[row.ID]
 			s.mu.RUnlock()
 			if exists {
+				if err := s.clearPersistedRestoreFailure(ctx, row); err != nil {
+					return err
+				}
 				continue
 			}
 
 			if err := s.resolveDAGConnections(ctx, &dagSpec); err != nil {
-				g.Log().Warningf(ctx, "Skip DAG pipeline %s from DB: %v", displayName, err)
+				failure := newRestoreFailure(row, displayName, restoreStageDAGConnectionResolve, err)
+				if persistErr := s.recordRestoreFailure(ctx, failure, row); persistErr != nil {
+					return persistErr
+				}
+				failures = append(failures, failure)
+				g.Log().Warningf(ctx, "Pipeline %s (%s) restore failed at %s: %v", failure.PipelineName, failure.PipelineID, failure.Stage, err)
 				continue
 			}
 			runtime := runtimeDAGSpec(&dagSpec, row.ID)
 			exec, err := orchestrator.NewDAGExecutor(runtime, s.cpAdapter, s.dlqWriter, s.alertManager)
 			if err != nil {
-				g.Log().Warningf(ctx, "Skip DAG pipeline %s from DB: %v", displayName, err)
+				failure := newRestoreFailure(row, displayName, restoreStageRunnerBuild, err)
+				if persistErr := s.recordRestoreFailure(ctx, failure, row); persistErr != nil {
+					return persistErr
+				}
+				failures = append(failures, failure)
+				g.Log().Warningf(ctx, "Pipeline %s (%s) restore failed at %s: %v", failure.PipelineName, failure.PipelineID, failure.Stage, err)
 				continue
 			}
 			runner := orchestrator.NewDAGRunnerWrapper(exec)
+			if err := s.clearPersistedRestoreFailure(ctx, row); err != nil {
+				_ = runner.Stop()
+				return err
+			}
 
 			s.mu.Lock()
 			s.registerPipelineLocked(row.ID, displayName, runner, nil, &dagSpec)
@@ -532,18 +577,33 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 		// Linear format
 		var spec pipeline.Spec
 		if err := yaml.Unmarshal(yamlBytes, &spec); err != nil {
-			g.Log().Warningf(ctx, "Skip pipeline %s from DB: yaml parse error: %v", row.Name, err)
+			failure := newRestoreFailure(row, row.Name, restoreStageLinearYAMLParse, err)
+			if persistErr := s.recordRestoreFailure(ctx, failure, row); persistErr != nil {
+				return persistErr
+			}
+			failures = append(failures, failure)
+			g.Log().Warningf(ctx, "Pipeline %s (%s) restore failed at %s: %v", failure.PipelineName, failure.PipelineID, failure.Stage, err)
 			continue
 		}
 		pipeline.ApplyDefaults(&spec)
 		displayName := pipelineDisplayName(&spec, nil, row.Name)
 		if err := s.resolvePipelineConnections(ctx, &spec); err != nil {
-			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", spec.Name, err)
+			failure := newRestoreFailure(row, displayName, restoreStageLinearConnectionResolve, err)
+			if persistErr := s.recordRestoreFailure(ctx, failure, row); persistErr != nil {
+				return persistErr
+			}
+			failures = append(failures, failure)
+			g.Log().Warningf(ctx, "Pipeline %s (%s) restore failed at %s: %v", failure.PipelineName, failure.PipelineID, failure.Stage, err)
 			continue
 		}
 		runtime := runtimeSpec(&spec, row.ID)
 		if err := pipeline.ValidateSpec(runtime); err != nil {
-			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", spec.Name, err)
+			failure := newRestoreFailure(row, displayName, restoreStageSpecValidate, err)
+			if persistErr := s.recordRestoreFailure(ctx, failure, row); persistErr != nil {
+				return persistErr
+			}
+			failures = append(failures, failure)
+			g.Log().Warningf(ctx, "Pipeline %s (%s) restore failed at %s: %v", failure.PipelineName, failure.PipelineID, failure.Stage, err)
 			continue
 		}
 
@@ -551,13 +611,25 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 		_, exists := s.pipelines[row.ID]
 		s.mu.RUnlock()
 		if exists {
+			if err := s.clearPersistedRestoreFailure(ctx, row); err != nil {
+				return err
+			}
 			continue
 		}
 
 		runner, err := s.newRunner(runtime)
 		if err != nil {
-			g.Log().Warningf(ctx, "Skip pipeline %s from DB: %v", displayName, err)
+			failure := newRestoreFailure(row, displayName, restoreStageRunnerBuild, err)
+			if persistErr := s.recordRestoreFailure(ctx, failure, row); persistErr != nil {
+				return persistErr
+			}
+			failures = append(failures, failure)
+			g.Log().Warningf(ctx, "Pipeline %s (%s) restore failed at %s: %v", failure.PipelineName, failure.PipelineID, failure.Stage, err)
 			continue
+		}
+		if err := s.clearPersistedRestoreFailure(ctx, row); err != nil {
+			_ = runner.Stop()
+			return err
 		}
 
 		if !isDeferredSchedule(orchestratorSchedule(runtime.Schedule)) {
@@ -569,6 +641,9 @@ func (s *Server) RestoreFromDB(ctx context.Context) error {
 		s.mu.Unlock()
 
 		g.Log().Infof(ctx, "Restored pipeline from DB: %s (%s)", displayName, row.ID)
+	}
+	if s.runtimeProfile.RestoreStrict && len(failures) > 0 {
+		return &RestoreFailuresError{Failures: failures}
 	}
 	return nil
 }
@@ -734,6 +809,18 @@ func (s *Server) loadSpecs(ctx context.Context, skipExisting bool) (specReloadRe
 func (s *Server) StartAll(ctx context.Context) error {
 	s.ctx = ctx
 	s.scheduler.SetContext(ctx)
+	rows, err := s.store.ListPipelines(ctx)
+	if err != nil {
+		return fmt.Errorf("load pipeline lifecycle state: %w", err)
+	}
+	lifecycleRows := make(map[string]*storage.PipelineRow, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		storage.NormalizePipelineLifecycle(row)
+		lifecycleRows[row.ID] = row
+	}
 	s.mu.RLock()
 	runners := make(map[string]pipeline.RunnerInterface)
 	names := make(map[string]string, len(s.pipelines))
@@ -745,6 +832,11 @@ func (s *Server) StartAll(ctx context.Context) error {
 
 	for id, runner := range runners {
 		name := names[id]
+		row := lifecycleRows[id]
+		desired := storage.PipelineDesiredRunning
+		if row != nil {
+			desired = row.DesiredState
+		}
 		// Pipelines with a cron/periodic/dependency schedule are handed to the
 		// scheduler instead of being started immediately. The scheduler starts
 		// them on each tick; nil/streaming/once schedules still start now.
@@ -752,42 +844,34 @@ func (s *Server) StartAll(ctx context.Context) error {
 		if isDeferredSchedule(orchSched) {
 			if err := s.scheduler.RegisterExecutor(id, runner, orchSched); err != nil {
 				g.Log().Warningf(ctx, "Failed to schedule pipeline %s (%s): %v", name, id, err)
-				_ = s.store.UpdatePipelineStatus(ctx, id, "failed")
+				_ = s.lifecycleStore.UpdatePipelineObservedState(ctx, id, 0, "failed")
 				continue
 			}
-			g.Log().Infof(ctx, "Registered pipeline %s (%s) with scheduler (type=%s)", name, id, orchSched.Type)
-			_ = s.store.UpdatePipelineStatus(ctx, id, "scheduled")
+			if desired == storage.PipelineDesiredRunning {
+				g.Log().Infof(ctx, "Registered pipeline %s (%s) with scheduler (type=%s)", name, id, orchSched.Type)
+				if err := s.lifecycleStore.UpdatePipelineObservedState(ctx, id, 0, "scheduled"); err != nil {
+					return fmt.Errorf("persist scheduled observed state for %s: %w", id, err)
+				}
+			} else {
+				g.Log().Infof(ctx, "Pipeline %s (%s) schedule registered but suppressed by desired_state=%s", name, id, desired)
+				if err := s.lifecycleStore.UpdatePipelineObservedState(ctx, id, 0, desired); err != nil {
+					return fmt.Errorf("persist quiescent observed state for %s: %w", id, err)
+				}
+			}
 			continue
 		}
-		if err := runner.Start(ctx); err != nil {
+		if desired != storage.PipelineDesiredRunning {
+			if err := s.lifecycleStore.UpdatePipelineObservedState(ctx, id, 0, desired); err != nil {
+				return fmt.Errorf("persist quiescent observed state for %s: %w", id, err)
+			}
+			g.Log().Infof(ctx, "Pipeline %s (%s) not started because desired_state=%s", name, id, desired)
+			continue
+		}
+		if err := s.startManagedPipeline(ctx, id, runner); err != nil {
 			g.Log().Warningf(ctx, "Failed to start pipeline %s (%s): %v", name, id, err)
-			_ = s.store.UpdatePipelineStatus(ctx, id, "failed")
 			continue
 		}
 		g.Log().Infof(ctx, "Started pipeline: %s (%s)", name, id)
-
-		_ = s.store.UpdatePipelineStatus(ctx, id, "running")
-		runID, _ := s.store.RecordRunStart(ctx, id)
-
-		id := id
-		runner := runner
-		go func() {
-			<-runner.Done()
-			bg := context.Background()
-			stats := runner.Stats()
-			dur := runner.Duration()
-			status := string(runner.Status())
-			if status == "" || status == "running" {
-				status = "completed"
-			}
-			_ = s.store.UpdatePipelineStatus(bg, id, status)
-			_ = s.store.RecordRunEnd(bg, runID, status, stats.RecordsRead, stats.RecordsWritten, stats.RecordsFailed, stats.RecordsDLQ, dur.Milliseconds())
-			// Fire dependency-scheduled downstream pipelines once this
-			// streaming/once upstream finishes (Post-Commit Trigger, scheme A).
-			if s.scheduler != nil {
-				s.scheduler.NotifyDependents(id)
-			}
-		}()
 	}
 
 	// Start the cron/periodic/dependency scheduler engine. Blocks until ctx
@@ -1066,33 +1150,18 @@ func (s *Server) restartPipeline(ctx context.Context, id string, rp *pipeline.Re
 		s.dispatchIfParallel(ctx, runner, runtimeSpec(spec, id))
 	}
 
-	if err := runner.Start(ctx); err != nil {
+	if err := s.startManagedPipeline(ctx, id, runner); err != nil {
 		g.Log().Errorf(ctx, "[reconciler] restart pipeline %s (%s) failed: %v", name, id, err)
-		_ = s.store.UpdatePipelineStatus(ctx, id, "failed")
 		return
 	}
 
 	g.Log().Infof(ctx, "[reconciler] pipeline %s (%s) restarted successfully", name, id)
-	_ = s.store.UpdatePipelineStatus(ctx, id, "running")
 
 	// Reset attempt counter on successful restart.
 	s.mu.Lock()
 	s.restartAttempts[id] = 0
 	s.mu.Unlock()
 
-	// Watch for the next failure.
-	go func() {
-		<-runner.Done()
-		bg := context.Background()
-		stats := runner.Stats()
-		dur := runner.Duration()
-		status := string(runner.Status())
-		if status == "" || status == "running" {
-			status = "completed"
-		}
-		_ = s.store.UpdatePipelineStatus(bg, id, status)
-		_ = s.store.RecordRunEnd(bg, 0, status, stats.RecordsRead, stats.RecordsWritten, stats.RecordsFailed, stats.RecordsDLQ, dur.Milliseconds())
-	}()
 }
 
 func powFloat(base, exp float64) float64 {
@@ -1540,9 +1609,30 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		tagFilter := r.URL.Query().Get("tag")
+		rows, err := s.store.ListPipelines(r.Context())
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": "load pipeline lifecycle state: " + err.Error()})
+			return
+		}
+		lifecycleRows := make(map[string]*storage.PipelineRow, len(rows))
+		for _, row := range rows {
+			if row != nil {
+				storage.NormalizePipelineLifecycle(row)
+				lifecycleRows[row.ID] = row
+			}
+		}
 		s.mu.RLock()
-		ids := make([]string, 0, len(s.pipelines))
+		ids := make([]string, 0, len(s.pipelines)+len(s.restoreFailures))
+		seenIDs := make(map[string]struct{}, len(s.pipelines)+len(s.restoreFailures))
 		for id := range s.pipelines {
+			ids = append(ids, id)
+			seenIDs[id] = struct{}{}
+		}
+		for id := range s.restoreFailures {
+			if _, seen := seenIDs[id]; seen {
+				continue
+			}
 			ids = append(ids, id)
 		}
 		sort.Slice(ids, func(i, j int) bool {
@@ -1558,6 +1648,35 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			spec := s.specs[id]
 			dagSpec := s.dagSpecs[id]
 			name := s.pipelineNames[id]
+			restoreFailure, restoreFailed := s.restoreFailures[id]
+			lifecycle := lifecycleRows[id]
+
+			if restoreFailed && runner == nil {
+				// A malformed/unresolved spec cannot provide trustworthy tags, so
+				// only include it in the unfiltered control-plane inventory.
+				if tagFilter != "" {
+					continue
+				}
+				info := map[string]any{
+					"id":             id,
+					"name":           name,
+					"status":         pipelineStatusRestoreFailed,
+					"observed_state": pipelineStatusRestoreFailed,
+					"stats": pipeline.Stats{
+						LastError:            restoreFailure.Message,
+						LastErrorCode:        restoreFailure.Code,
+						LastErrorRemediation: restoreFailure.Remediation,
+					},
+					"dag":           strings.HasPrefix(restoreFailure.Stage, "dag_"),
+					"restore_error": restoreFailure,
+				}
+				if lifecycle != nil {
+					info["desired_state"] = lifecycle.DesiredState
+					info["generation"] = lifecycle.Generation
+				}
+				result = append(result, info)
+				continue
+			}
 
 			if tagFilter != "" {
 				hasTag := false
@@ -1588,6 +1707,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				"status": runner.Status(),
 				"stats":  runner.Stats(),
 				"dag":    dagSpec != nil,
+			}
+			if lifecycle != nil {
+				info["desired_state"] = lifecycle.DesiredState
+				info["observed_state"] = lifecycle.ObservedState
+				info["generation"] = lifecycle.Generation
 			}
 			if spec != nil && spec.Parallelism != nil {
 				spec.Parallelism.ApplyDefaults()
@@ -1915,7 +2039,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := s.specStore.SaveWithIDAndCheckpointReset(r.Context(), id, dagSpec.Name, string(yamlBytes), "updated", req.ResetCheckpoint); err != nil {
 				s.rollbackRuntimeSchedule(activation, runner)
-				w.WriteHeader(http.StatusInternalServerError)
+				if errors.Is(err, storage.ErrPipelineNotQuiescent) {
+					w.WriteHeader(http.StatusConflict)
+				} else {
+					w.WriteHeader(http.StatusInternalServerError)
+				}
 				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist DAG pipeline update: %v", err)})
 				return
 			}
@@ -2041,7 +2169,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.specStore.SaveWithIDAndCheckpointReset(r.Context(), id, spec.Name, string(yamlBytes), "updated", req.ResetCheckpoint); err != nil {
 			s.rollbackRuntimeSchedule(activation, runner)
-			w.WriteHeader(http.StatusInternalServerError)
+			if errors.Is(err, storage.ErrPipelineNotQuiescent) {
+				w.WriteHeader(http.StatusConflict)
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
 			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist pipeline update: %v", err)})
 			return
 		}
@@ -2410,9 +2542,10 @@ func (s *Server) handlePipelineDelete(w http.ResponseWriter, r *http.Request, na
 	runner, hasRunner := s.pipelines[name]
 	_, hasSpec := s.specs[name]
 	_, hasDagSpec := s.dagSpecs[name]
+	_, hasRestoreFailure := s.restoreFailures[name]
 	s.mu.RUnlock()
 
-	if !hasRunner && !hasSpec && !hasDagSpec {
+	if !hasRunner && !hasSpec && !hasDagSpec && !hasRestoreFailure {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]any{"error": "pipeline not found"})
 		return
@@ -3118,6 +3251,7 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	runner, ok := s.pipelines[id]
 	spec := s.specs[id]
+	restoreFailure, restoreFailed := s.restoreFailures[id]
 	s.mu.RUnlock()
 
 	// Actions that don't require a running pipeline
@@ -3126,7 +3260,18 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 		"history": true, "export": true, "dag": true, "delete": true, "schedule": true,
 	}
 	if !ok && !standaloneActions[action] {
-		w.WriteHeader(404)
+		if restoreFailed {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":         "pipeline cannot run because restore failed",
+				"code":          restoreFailure.Code,
+				"remediation":   restoreFailure.Remediation,
+				"status":        pipelineStatusRestoreFailed,
+				"restore_error": restoreFailure,
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
 		msg := "pipeline not found"
 		if resolveErr != nil {
 			msg = resolveErr.Error()
@@ -3138,7 +3283,7 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "start":
 		if r.Method == http.MethodPost {
-			if err := runner.Start(s.ctx); err != nil {
+			if err := s.requestPipelineStart(s.ctx, id, runner); err != nil {
 				// A previous generation may still be flushing its durable boundary.
 				// This is retryable, not a failed pipeline startup.
 				if errors.Is(err, pipeline.ErrRunnerStopping) {
@@ -3169,7 +3314,15 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 			}
 			s.audit(r, "pipeline.start", id)
 			g.Log().Infof(s.ctx, "Pipeline started via API: %s (%s)", name, id)
-			json.NewEncoder(w).Encode(map[string]any{"id": id, "name": name, "status": runner.Status(), "stats": runner.Stats()})
+			row, _ := s.pipelineLifecycle(r.Context(), id)
+			response := map[string]any{
+				"id": id, "name": name, "status": runner.Status(), "stats": runner.Stats(),
+				"desired_state": storage.PipelineDesiredRunning, "observed_state": "running",
+			}
+			if row != nil {
+				response["generation"] = row.Generation
+			}
+			json.NewEncoder(w).Encode(response)
 			return
 		}
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -3177,20 +3330,47 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	case "":
 		switch r.Method {
 		case http.MethodGet:
-			if resolveErr != nil || runner == nil {
+			if resolveErr != nil {
 				w.WriteHeader(http.StatusNotFound)
-				msg := "pipeline not found"
-				if resolveErr != nil {
-					msg = resolveErr.Error()
-				}
-				json.NewEncoder(w).Encode(map[string]any{"error": msg})
+				json.NewEncoder(w).Encode(map[string]any{"error": resolveErr.Error()})
+				return
+			}
+			lifecycle, lifecycleErr := s.pipelineLifecycle(r.Context(), id)
+			if lifecycleErr != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": lifecycleErr.Error()})
+				return
+			}
+			if restoreFailed && runner == nil {
+				json.NewEncoder(w).Encode(map[string]any{
+					"id":             id,
+					"name":           name,
+					"status":         pipelineStatusRestoreFailed,
+					"desired_state":  lifecycle.DesiredState,
+					"observed_state": pipelineStatusRestoreFailed,
+					"generation":     lifecycle.Generation,
+					"stats": pipeline.Stats{
+						LastError:            restoreFailure.Message,
+						LastErrorCode:        restoreFailure.Code,
+						LastErrorRemediation: restoreFailure.Remediation,
+					},
+					"restore_error": restoreFailure,
+				})
+				return
+			}
+			if runner == nil {
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]any{"error": "pipeline not found"})
 				return
 			}
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":     id,
-				"name":   name,
-				"status": runner.Status(),
-				"stats":  runner.Stats(),
+				"id":             id,
+				"name":           name,
+				"status":         runner.Status(),
+				"stats":          runner.Stats(),
+				"desired_state":  lifecycle.DesiredState,
+				"observed_state": lifecycle.ObservedState,
+				"generation":     lifecycle.Generation,
 			})
 		case http.MethodDelete:
 			s.handlePipelineDelete(w, r, id)
@@ -3200,27 +3380,33 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 
 	case "stop":
 		if r.Method == http.MethodPost {
-			runner.Stop()
+			if err := s.requestPipelineQuiesce(r.Context(), id, storage.PipelineDesiredStopped, runner); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "code": "pipeline_lifecycle_persistence"})
+				return
+			}
 			s.audit(r, "pipeline.stop", id)
-			json.NewEncoder(w).Encode(map[string]any{"status": "stopped"})
+			json.NewEncoder(w).Encode(map[string]any{"id": id, "name": name, "status": "stopped", "desired_state": "stopped", "observed_state": "stopped"})
+			return
 		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
 
 	case "pause":
 		if r.Method == http.MethodPost {
-			if err := runner.Pause(); err != nil {
+			if err := s.requestPipelineQuiesce(r.Context(), id, storage.PipelineDesiredPaused, runner); err != nil {
+				w.WriteHeader(http.StatusConflict)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-			_ = s.store.UpdatePipelineStatus(r.Context(), id, "paused")
 			s.audit(r, "pipeline.pause", id)
-			json.NewEncoder(w).Encode(map[string]any{"id": id, "name": name, "status": "paused"})
+			json.NewEncoder(w).Encode(map[string]any{"id": id, "name": name, "status": "paused", "desired_state": "paused", "observed_state": "paused"})
 			return
 		}
 		w.WriteHeader(http.StatusMethodNotAllowed)
 
 	case "resume":
 		if r.Method == http.MethodPost {
-			if err := runner.Resume(s.ctx); err != nil {
+			if err := s.requestPipelineStart(s.ctx, id, runner); err != nil {
 				if errors.Is(err, pipeline.ErrRunnerStopping) {
 					w.WriteHeader(http.StatusConflict)
 					json.NewEncoder(w).Encode(map[string]any{
@@ -3234,9 +3420,13 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-			_ = s.store.UpdatePipelineStatus(r.Context(), id, "running")
 			s.audit(r, "pipeline.resume", id)
-			json.NewEncoder(w).Encode(map[string]any{"id": id, "name": name, "status": "running"})
+			row, _ := s.pipelineLifecycle(r.Context(), id)
+			response := map[string]any{"id": id, "name": name, "status": "running", "desired_state": "running", "observed_state": "running"}
+			if row != nil {
+				response["generation"] = row.Generation
+			}
+			json.NewEncoder(w).Encode(response)
 			return
 		}
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -3251,13 +3441,27 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 
 	case "checkpoint/reset":
 		if r.Method == http.MethodPost {
-			if err := s.cpAdapter.Delete(r.Context(), id); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
+			generation, err := s.resetManagedCheckpoint(r.Context(), id, runner)
+			if err != nil {
+				if errors.Is(err, storage.ErrPipelineNotQuiescent) {
+					w.WriteHeader(http.StatusConflict)
+					json.NewEncoder(w).Encode(map[string]any{
+						"error":       fmt.Sprintf("reset checkpoint: %v", err),
+						"code":        "pipeline_not_quiescent",
+						"remediation": "Stop or pause the pipeline and wait for it to quiesce before resetting its checkpoint.",
+					})
+					return
+				} else {
+					w.WriteHeader(http.StatusInternalServerError)
+				}
 				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("reset checkpoint: %v", err)})
 				return
 			}
 			s.audit(r, "checkpoint.reset", id)
-			json.NewEncoder(w).Encode(map[string]any{"status": "reset"})
+			json.NewEncoder(w).Encode(map[string]any{
+				"status": "reset", "generation": generation,
+				"reset_semantics": checkpointResetSemantics(spec),
+			})
 		}
 
 	case "checkpoint/set":
@@ -3274,13 +3478,30 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-			if err := s.cpAdapter.Save(r.Context(), cp); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
+			record := &storage.CheckpointRecord{
+				JobName: cp.JobName, Source: cp.Source, Position: cp.Position, Timestamp: cp.Timestamp,
+			}
+			generation, err := s.setManagedCheckpoint(r.Context(), id, runner, record)
+			if err != nil {
+				if errors.Is(err, storage.ErrPipelineNotQuiescent) {
+					w.WriteHeader(http.StatusConflict)
+					json.NewEncoder(w).Encode(map[string]any{
+						"error":       err.Error(),
+						"code":        "pipeline_not_quiescent",
+						"remediation": "Stop or pause the pipeline and wait for it to quiesce before setting its checkpoint.",
+					})
+					return
+				} else {
+					w.WriteHeader(http.StatusInternalServerError)
+				}
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
 			s.audit(r, "checkpoint.set", id)
-			resp := map[string]any{"status": "set", "source": cp.Source, "position": cp.Position}
+			resp := map[string]any{
+				"status": "set", "source": cp.Source, "position": cp.Position,
+				"generation": generation, "reset_semantics": checkpointResetSemantics(spec),
+			}
 			for k, v := range details {
 				resp[k] = v
 			}
@@ -3566,17 +3787,29 @@ func (s *Server) handleCheckpointAction(w http.ResponseWriter, r *http.Request) 
 	if id, err := s.resolvePipelineRefLocked(ref); err == nil {
 		name = id
 	}
+	runner := s.pipelines[name]
 	s.mu.RUnlock()
 
 	switch r.Method {
 	case http.MethodDelete:
-		if err := s.cpAdapter.Delete(r.Context(), name); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+		generation, err := s.resetManagedCheckpoint(r.Context(), name, runner)
+		if err != nil {
+			if errors.Is(err, storage.ErrPipelineNotQuiescent) {
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]any{
+					"error":       err.Error(),
+					"code":        "pipeline_not_quiescent",
+					"remediation": "Stop or pause the pipeline and wait for it to quiesce before deleting its checkpoint.",
+				})
+				return
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
 		s.audit(r, "checkpoint.delete", name)
-		json.NewEncoder(w).Encode(map[string]any{"status": "deleted"})
+		json.NewEncoder(w).Encode(map[string]any{"status": "deleted", "generation": generation})
 	default:
 		cp, err := s.cpAdapter.Load(r.Context(), name)
 		if err != nil {
@@ -4284,6 +4517,33 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 			runner.IncrementDLQReplay(int64(count))
 		}
 		json.NewEncoder(w).Encode(map[string]any{"replayed": count})
+	case r.Method == http.MethodPut && strings.HasSuffix(action, "/identity"):
+		id, ok := parseDLQIdentityIDAction(action)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid dlq identity repair id"})
+			return
+		}
+		var request dlqIdentityRepairRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid identity repair request: " + err.Error()})
+			return
+		}
+		item, err := s.repairLegacyDLQIdentity(r.Context(), name, id, request)
+		if err != nil {
+			writeDLQIdentityRepairError(w, err)
+			return
+		}
+		if item == nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"error": "dlq record not found"})
+			return
+		}
+		s.audit(r, "dlq.identity.repair", fmt.Sprintf("%s:%d", name, id))
+		json.NewEncoder(w).Encode(map[string]any{"item": item})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]any{"error": "dlq action not found"})
@@ -4293,6 +4553,27 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 func writeDLQReplayError(w http.ResponseWriter, err error, replayed int) {
 	status := http.StatusBadRequest
 	body := map[string]any{"error": err.Error(), "replayed": replayed}
+	var gateErr *dlqReplayGateError
+	if errors.As(err, &gateErr) {
+		status = http.StatusConflict
+		body["id"] = gateErr.ID
+		body["replay_state"] = gateErr.State
+		body["reason"] = gateErr.Reason
+	}
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(body)
+}
+
+func writeDLQIdentityRepairError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	body := map[string]any{"error": err.Error()}
+	var gateErr *dlqReplayGateError
+	if errors.As(err, &gateErr) {
+		status = http.StatusConflict
+		body["id"] = gateErr.ID
+		body["replay_state"] = gateErr.State
+		body["reason"] = gateErr.Reason
+	}
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
 }
@@ -4307,6 +4588,14 @@ func parseDLQIDAction(action string) (int64, bool) {
 
 func parseDLQReplayIDAction(action string) (int64, bool) {
 	idPart, ok := strings.CutSuffix(action, "/replay")
+	if !ok {
+		return 0, false
+	}
+	return parseDLQIDAction(idPart)
+}
+
+func parseDLQIdentityIDAction(action string) (int64, bool) {
+	idPart, ok := strings.CutSuffix(action, "/identity")
 	if !ok {
 		return 0, false
 	}
@@ -4409,6 +4698,23 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 		return 0, nil
 	}
 
+	replayed := 0
+	pending := make([]storage.DeadLetter, 0, len(items))
+	for _, item := range items {
+		if item.IdentityContext.ReplayState != core.DLQReplayStateSinkAcked {
+			pending = append(pending, item)
+			continue
+		}
+		if err := s.deleteReplayedDLQItem(ctx, name, item); err != nil {
+			s.markDLQReplayFailure(ctx, item, err)
+			return replayed, err
+		}
+		replayed++
+	}
+	if len(pending) == 0 {
+		return replayed, nil
+	}
+
 	var transforms core.TransformChain
 	for _, tc := range spec.Transforms {
 		t, err := registry.BuildTransform(tc.Type, tc.Config)
@@ -4433,16 +4739,30 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 		cfg.MaxInterval = time.Duration(spec.Retry.MaxIntervalMs) * time.Millisecond
 	}
 
-	replayed := 0
-	for _, item := range items {
-		rec, err := transforms.Apply(ctx, item.Record)
+	for _, item := range pending {
+		prepared, err := s.prepareLinearDLQReplay(ctx, spec, item)
 		if err != nil {
-			return replayed, fmt.Errorf("transform dlq record: %w", err)
-		}
-		if err := retry.Do(ctx, cfg, core.IsRetryableError, func() error { return sink.Write(ctx, []core.Record{rec}) }); err != nil {
 			return replayed, err
 		}
-		if err := s.deleteReplayedDLQItem(ctx, name, item); err != nil {
+		rec, err := transforms.Apply(ctx, prepared.Record)
+		if err != nil {
+			replayErr := fmt.Errorf("transform dlq record: %w", err)
+			s.markDLQReplayFailure(ctx, prepared, replayErr)
+			return replayed, replayErr
+		}
+		if err := s.validateLinearReplayIdentity(ctx, spec, prepared, rec); err != nil {
+			return replayed, err
+		}
+		if err := retry.Do(ctx, cfg, core.IsRetryableError, func() error { return sink.Write(ctx, []core.Record{rec}) }); err != nil {
+			s.markDLQReplayFailure(ctx, prepared, err)
+			return replayed, err
+		}
+		if err := s.checkpointDLQReplay(ctx, &prepared); err != nil {
+			s.markDLQReplayFailure(ctx, prepared, err)
+			return replayed, err
+		}
+		if err := s.deleteReplayedDLQItem(ctx, name, prepared); err != nil {
+			s.markDLQReplayFailure(ctx, prepared, err)
 			return replayed, err
 		}
 		replayed++
@@ -4458,6 +4778,23 @@ func (s *Server) replayDAGDLQItems(ctx context.Context, name string, dagSpec *or
 		return 0, nil
 	}
 
+	replayed := 0
+	pending := make([]storage.DeadLetter, 0, len(items))
+	for _, item := range items {
+		if item.IdentityContext.ReplayState != core.DLQReplayStateSinkAcked {
+			pending = append(pending, item)
+			continue
+		}
+		if err := s.deleteReplayedDLQItem(ctx, name, item); err != nil {
+			s.markDLQReplayFailure(ctx, item, err)
+			return replayed, err
+		}
+		replayed++
+	}
+	if len(pending) == 0 {
+		return replayed, nil
+	}
+
 	runtime := runtimeDAGSpec(dagSpec, name)
 	replayer, err := orchestrator.NewDAGReplayer(runtime)
 	if err != nil {
@@ -4468,16 +4805,22 @@ func (s *Server) replayDAGDLQItems(ctx context.Context, name string, dagSpec *or
 	}
 	defer replayer.Close()
 
-	replayed := 0
-	for _, item := range items {
+	for _, item := range pending {
 		nodeID := strings.TrimSpace(item.DAGNode)
 		if nodeID == "" {
 			return replayed, fmt.Errorf("dag dlq record %s has no dag_node; replay requires node context", dlqItemRef(item))
 		}
 		if err := replayer.Replay(ctx, nodeID, item.Record); err != nil {
-			return replayed, fmt.Errorf("replay dag dlq record %s from node %s: %w", dlqItemRef(item), nodeID, err)
+			replayErr := fmt.Errorf("replay dag dlq record %s from node %s: %w", dlqItemRef(item), nodeID, err)
+			s.markDLQReplayFailure(ctx, item, replayErr)
+			return replayed, replayErr
+		}
+		if err := s.checkpointDLQReplay(ctx, &item); err != nil {
+			s.markDLQReplayFailure(ctx, item, err)
+			return replayed, err
 		}
 		if err := s.deleteReplayedDLQItem(ctx, name, item); err != nil {
+			s.markDLQReplayFailure(ctx, item, err)
 			return replayed, err
 		}
 		replayed++
@@ -4555,36 +4898,37 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 			CircuitBreakerState:  cbState,
 		}, healthThresholdsFromEnv())
 		metrics = append(metrics, telemetry.PipelineMetrics{
-			ID:                   id,
-			Name:                 names[id],
-			Status:               string(runner.Status()),
-			Health:               string(health),
-			RecordsRead:          stats.RecordsRead,
-			RecordsWritten:       stats.RecordsWritten,
-			RecordsFailed:        stats.RecordsFailed,
-			RecordsDLQ:           stats.RecordsDLQ,
-			DLQFileCount:         dlqFileCount,
-			DLQReplayCount:       stats.DLQReplayCount,
-			DLQDeleteCount:       stats.DLQDeleteCount,
-			LastError:            stats.LastError,
-			LastErrorCode:        stats.LastErrorCode,
-			LastErrorRemediation: stats.LastErrorRemediation,
-			LastCheckpoint:       stats.LastCheckpoint,
-			CheckpointAgeSeconds: checkpointAgeSeconds,
-			SourceReadLatencyMs:  pipelineMetrics.SourceReadLatencyMs,
-			SinkWriteLatencyMs:   pipelineMetrics.SinkWriteLatencyMs,
-			LastBatchSize:        pipelineMetrics.LastBatchSize,
-			AvgBatchSize:         pipelineMetrics.AvgBatchSize,
-			BatchCount:           pipelineMetrics.BatchCount,
-			CDCLagMs:             pipelineMetrics.CDCLagMs,
-			BackpressureDepth:    pipelineMetrics.BackpressureDepth,
-			BackpressureCapacity: pipelineMetrics.BackpressureCapacity,
-			CircuitBreakerState:  cbState,
-			SinkMetrics:          convertSinkMetrics(runner.SinkMetrics()),
-			StateMetrics:         convertStateMetrics(runner.StateMetrics()),
-			TransformMetrics:     convertTransformMetrics(runner.TransformMetrics()),
-			StartedAt:            stats.StartedAt,
-			Uptime:               stats.Uptime,
+			ID:                    id,
+			Name:                  names[id],
+			Status:                string(runner.Status()),
+			Health:                string(health),
+			RecordsRead:           stats.RecordsRead,
+			RecordsWritten:        stats.RecordsWritten,
+			RecordsFailed:         stats.RecordsFailed,
+			RecordsDLQ:            stats.RecordsDLQ,
+			DLQFileCount:          dlqFileCount,
+			DLQReplayCount:        stats.DLQReplayCount,
+			DLQDeleteCount:        stats.DLQDeleteCount,
+			LastError:             stats.LastError,
+			LastErrorCode:         stats.LastErrorCode,
+			LastErrorRemediation:  stats.LastErrorRemediation,
+			LastCheckpoint:        stats.LastCheckpoint,
+			CheckpointAgeSeconds:  checkpointAgeSeconds,
+			CheckpointFencedTotal: pipelineMetrics.CheckpointFencedTotal,
+			SourceReadLatencyMs:   pipelineMetrics.SourceReadLatencyMs,
+			SinkWriteLatencyMs:    pipelineMetrics.SinkWriteLatencyMs,
+			LastBatchSize:         pipelineMetrics.LastBatchSize,
+			AvgBatchSize:          pipelineMetrics.AvgBatchSize,
+			BatchCount:            pipelineMetrics.BatchCount,
+			CDCLagMs:              pipelineMetrics.CDCLagMs,
+			BackpressureDepth:     pipelineMetrics.BackpressureDepth,
+			BackpressureCapacity:  pipelineMetrics.BackpressureCapacity,
+			CircuitBreakerState:   cbState,
+			SinkMetrics:           convertSinkMetrics(runner.SinkMetrics()),
+			StateMetrics:          convertStateMetrics(runner.StateMetrics()),
+			TransformMetrics:      convertTransformMetrics(runner.TransformMetrics()),
+			StartedAt:             stats.StartedAt,
+			Uptime:                stats.Uptime,
 		})
 	}
 	return metrics
@@ -4661,6 +5005,11 @@ func (s *Server) getHealthStatus() map[string]string {
 	// Redis state backend — only required when configured; missing config is not unhealthy.
 	components = append(components, s.redisStateHealth())
 
+	// Plaintext secret detection is read-only visibility (IT-3/T3.2): rows
+	// written before descriptor-based marking are reported so operators can
+	// remediate explicitly; the health surface never rewrites storage.
+	components = append(components, s.plaintextSecretsHealth())
+
 	// Scheduler process presence.
 	if s.scheduler != nil {
 		components = append(components, telemetry.ComponentHealth{
@@ -4709,10 +5058,17 @@ func (s *Server) getHealthStatus() map[string]string {
 	ids := make([]string, 0, len(s.pipelines))
 	runners := make(map[string]pipeline.RunnerInterface, len(s.pipelines))
 	names := make(map[string]string, len(s.pipelines))
+	restoreFailures := make(map[string]RestoreFailure, len(s.restoreFailures))
 	for id, runner := range s.pipelines {
 		ids = append(ids, id)
 		runners[id] = runner
 		names[id] = s.pipelineNames[id]
+	}
+	for id, failure := range s.restoreFailures {
+		restoreFailures[id] = failure
+		if _, ok := names[id]; !ok {
+			names[id] = s.pipelineNames[id]
+		}
 	}
 	s.mu.RUnlock()
 	sort.Strings(ids)
@@ -4763,6 +5119,25 @@ func (s *Server) getHealthStatus() map[string]string {
 			}
 		}
 	}
+	for id, failure := range restoreFailures {
+		if _, hasRunner := runners[id]; hasRunner {
+			continue
+		}
+		display := names[id]
+		if display == "" {
+			display = id
+		}
+		pipelineHealth[display] = telemetry.PipelineRestoreFailed
+		pipelineIssues[display] = map[string]string{
+			"status":      pipelineStatusRestoreFailed,
+			"stage":       failure.Stage,
+			"error_code":  failure.Code,
+			"message":     failure.Message,
+			"remediation": failure.Remediation,
+			"failed_at":   failure.FailedAt.Format(time.RFC3339),
+		}
+	}
+	extra["restore_failed_count"] = strconv.Itoa(len(restoreFailures))
 	if len(pipelineIssues) > 0 {
 		if raw, err := json.Marshal(pipelineIssues); err == nil {
 			extra["pipeline_issues"] = string(raw)
@@ -4799,6 +5174,40 @@ func healthThresholdsFromEnv() telemetry.HealthThresholds {
 		}
 	}
 	return th
+}
+
+// plaintextSecretsHealth surfaces legacy plaintext secret rows in health.
+// Detection failures degrade (not unhealthy) because the runtime path still
+// functions; the remediation itself is an explicit operator action.
+func (s *Server) plaintextSecretsHealth() telemetry.ComponentHealth {
+	sfs, ok := s.store.(*storage.SecretFieldStore)
+	if !ok {
+		return telemetry.ComponentHealth{
+			Name: "secret_encryption", Status: "skipped", Level: telemetry.HealthOK,
+			Detail: "field-level secret store not active",
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	report, err := sfs.DetectPlaintextSecrets(ctx)
+	if err != nil {
+		return telemetry.ComponentHealth{
+			Name: "secret_encryption", Status: telemetry.HealthDegraded, Level: telemetry.HealthDegraded,
+			Detail: "plaintext secret scan failed: " + err.Error(),
+		}
+	}
+	n := len(report.Connections) + len(report.Settings)
+	if n == 0 {
+		return telemetry.ComponentHealth{
+			Name: "secret_encryption", Status: telemetry.HealthOK, Level: telemetry.HealthOK,
+		}
+	}
+	detail := fmt.Sprintf("%d plaintext secret row(s) detected (connections=%d, settings=%d); run the remediation path or re-save to re-encrypt",
+		n, len(report.Connections), len(report.Settings))
+	return telemetry.ComponentHealth{
+		Name: "secret_encryption", Status: telemetry.HealthDegraded, Level: telemetry.HealthDegraded,
+		Detail: detail,
+	}
 }
 
 func (s *Server) redisStateHealth() telemetry.ComponentHealth {

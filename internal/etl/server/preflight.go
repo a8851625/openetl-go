@@ -115,6 +115,8 @@ func (s *Server) RunPreflight(ctx context.Context, spec *pipeline.Spec) *Preflig
 
 	s.checkRuntimeStateRequirements(spec, result)
 	s.checkTransformConfigRequirements(spec, result)
+	checkMetadataIdentityCompatibility(spec, result)
+	checkMetadataPKTargetCompatibility(spec, result)
 
 	// Source checks
 	if s.checkStaticSourceConfig(spec, result) {
@@ -133,7 +135,24 @@ func (s *Server) RunPreflight(ctx context.Context, spec *pipeline.Spec) *Preflig
 	if spec == nil || strings.ToLower(spec.Sink.Type) != "kafka" {
 		if sink, ok := s.checkSinkReachable(ctx, spec, result); ok {
 			defer func() { _ = sink.Close() }()
-			s.checkSchemaCompatibility(ctx, spec, sink, result)
+			if validator, implements := sink.(core.TargetContractValidator); implements {
+				probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				err := validator.ValidateTargetContract(probeCtx)
+				cancel()
+				if err != nil {
+					result.Issues = append(result.Issues, PreflightIssue{
+						Level:       "error",
+						Check:       "sink-target-contract",
+						Message:     fmt.Sprintf("sink %q target contract is incompatible: %v", spec.Sink.Type, err),
+						Remediation: "migrate or recreate the target using the connector's documented engine and reserved-column contract before starting the pipeline",
+					})
+					result.Passed = false
+				} else {
+					s.checkSchemaCompatibility(ctx, spec, sink, result)
+				}
+			} else {
+				s.checkSchemaCompatibility(ctx, spec, sink, result)
+			}
 		}
 	}
 
@@ -719,12 +738,85 @@ func sinkDerivesPKFromMetadata(spec *pipeline.Spec) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(spec.Sink.Type)) {
-	case "mysql", "doris":
+	case "mysql", "postgres", "postgresql", "clickhouse", "doris":
 		return boolField(spec.Sink.Config, "pk_columns_from_metadata", false)
 	default:
 		// The flag is not implemented by the other relational sinks yet. Do
 		// not let an unknown field suppress a required stable-key check.
 		return false
+	}
+}
+
+func checkMetadataIdentityCompatibility(spec *pipeline.Spec, result *PreflightResult) {
+	if result == nil {
+		return
+	}
+	issue := pipeline.CheckMetadataIdentityCompatibility(spec)
+	if issue == nil {
+		return
+	}
+	addStaticFieldError(result, "metadata-identity-capability", issue.Field, issue.Message, issue.Remediation)
+}
+
+// checkMetadataPKTargetCompatibility verifies the routing half of the
+// per-record identity contract. A source may be capable of producing a key
+// while still being incapable of naming a dynamic target; accepting that
+// combination would defer a deterministic configuration error until after the
+// pipeline starts reading and checkpointing data.
+func checkMetadataPKTargetCompatibility(spec *pipeline.Spec, result *PreflightResult) {
+	if spec == nil || result == nil || !sinkDerivesPKFromMetadata(spec) {
+		return
+	}
+	cfg := spec.Sink.Config
+	fixedTable := strings.TrimSpace(stringField(cfg, "table", ""))
+	template := strings.TrimSpace(stringField(cfg, "table_template", ""))
+	if fixedTable == "" && template == "" && !metadataPKSourceProvidesTable(spec) {
+		addStaticFieldError(result, "metadata-pk-target-table", "sink.config.table",
+			fmt.Sprintf("source %q does not guarantee Metadata.Table, so sink %q cannot resolve a metadata-PK target table", spec.Source.Type, spec.Sink.Type),
+			"set sink.config.table, or use a CDC/Kafka envelope format that supplies Metadata.Table for every record")
+	}
+	if strings.Contains(template, "{table}") && !metadataPKSourceProvidesTable(spec) {
+		addStaticFieldError(result, "metadata-pk-target-table", "sink.config.table_template",
+			fmt.Sprintf("sink.config.table_template %q requires Metadata.Table, but source %q does not guarantee it", template, spec.Source.Type),
+			"use a source/format that supplies Metadata.Table, remove {table}, or configure one fixed sink.config.table")
+	}
+	if strings.Contains(template, "{db}") && !metadataPKSourceProvidesDatabase(spec) {
+		addStaticFieldError(result, "metadata-pk-target-database", "sink.config.table_template",
+			fmt.Sprintf("sink.config.table_template %q requires Metadata.Database, but source %q does not guarantee it", template, spec.Source.Type),
+			"use a source/format that supplies Metadata.Database, remove {db}, or route databases through separate fixed-target pipelines")
+	}
+}
+
+func metadataPKSourceProvidesTable(spec *pipeline.Spec) bool {
+	if spec == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(spec.Source.Type)) {
+	case "mysql_cdc", "mysql_snapshot_cdc", "postgres_cdc", "mysql_batch":
+		return true
+	case "kafka":
+		format := strings.ToLower(strings.TrimSpace(stringField(spec.Source.Config, "format", "json")))
+		return format == "canal_json" || format == "envelope" || hasDebeziumCDCTransform(spec)
+	default:
+		return hasDebeziumCDCTransform(spec)
+	}
+}
+
+func metadataPKSourceProvidesDatabase(spec *pipeline.Spec) bool {
+	if spec == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(spec.Source.Type)) {
+	case "mysql_cdc", "mysql_snapshot_cdc", "postgres_cdc", "mysql_batch":
+		return true
+	case "kafka":
+		format := strings.ToLower(strings.TrimSpace(stringField(spec.Source.Config, "format", "json")))
+		// Canal's registered flat-message contract includes database. The
+		// legacy OpenETL envelope includes table but no database field, so the
+		// broader format=envelope setting cannot prove a {db} substitution.
+		return format == "canal_json" || hasDebeziumCDCTransform(spec)
+	default:
+		return hasDebeziumCDCTransform(spec)
 	}
 }
 
@@ -738,7 +830,7 @@ func checkRelationalSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 	// Debezium CDC pipelines derive the target table from record metadata when
 	// auto_create is enabled, so the static table requirement is relaxed.
 	requireFields := []string{"host", "user", "database"}
-	if !sinkDerivesTableFromMetadata(spec) {
+	if !sinkDerivesTableFromMetadata(spec) && !(sinkDerivesPKFromMetadata(spec) && metadataPKSourceProvidesTable(spec)) {
 		requireFields = append(requireFields, "table")
 	}
 	for _, field := range requireFields {
@@ -786,6 +878,11 @@ func checkRelationalSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 				fmt.Sprintf("%s sink increment mode requires sink.config.increment_columns", sinkType),
 				"set sink.config.increment_columns to {target_col: source_field} for accumulator columns")
 		}
+	}
+	if clickHouseSourceMayEmitMutableRecords(spec) && !pkFromMetadata && len(stringSliceField(cfg, "pk_columns")) == 0 && batchMode != "upsert" {
+		addStaticSinkFieldError(result, label+"-sink-mutable-keys", "sink.config.pk_columns",
+			fmt.Sprintf("%s sink receives mutable CDC records but has no explicit business key", sinkType),
+			"set sink.config.pk_columns to the complete target business key, or enable pk_columns_from_metadata with a compatible source format")
 	}
 	if schemaDrift := strings.ToLower(strings.TrimSpace(stringField(cfg, "schema_drift", "ignore"))); schemaDrift != "" && !isSupportedRelationalSchemaDrift(schemaDrift) {
 		addStaticSinkFieldError(result, label+"-sink-schema-drift", "sink.config.schema_drift",
@@ -900,6 +997,12 @@ func checkClickHouseSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 				fmt.Sprintf("set sink.config.%s before starting the pipeline", field))
 		}
 	}
+	if strings.TrimSpace(stringField(cfg, "table", "")) == "" && strings.TrimSpace(stringField(cfg, "table_template", "")) == "" &&
+		!(sinkDerivesPKFromMetadata(spec) && metadataPKSourceProvidesTable(spec)) {
+		addStaticSinkFieldError(result, "clickhouse-sink-required-config", "sink.config.table",
+			"clickhouse sink requires sink.config.table unless a compatible metadata-PK source supplies Metadata.Table for every record",
+			"set sink.config.table/table_template, or enable pk_columns_from_metadata with a CDC/Kafka envelope source that supplies table metadata")
+	}
 	if port := intField(cfg, "port", 9000); port <= 0 || port > 65535 {
 		addStaticSinkFieldError(result, "clickhouse-sink-port", "sink.config.port",
 			fmt.Sprintf("clickhouse sink port must be between 1 and 65535, got %d", port),
@@ -948,6 +1051,104 @@ func checkClickHouseSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 			"clickhouse sink version_column cannot be empty when configured",
 			"remove sink.config.version_column to use _version, or set a non-empty version column")
 	}
+
+	versionMode := strings.ToLower(strings.TrimSpace(stringField(cfg, "version_mode", "source_order")))
+	if versionMode == "" {
+		versionMode = "source_order"
+	}
+	if versionMode != "source_order" && versionMode != "append" {
+		addStaticSinkFieldError(result, "clickhouse-sink-version-mode", "sink.config.version_mode",
+			fmt.Sprintf("clickhouse sink version_mode %q is not supported", versionMode),
+			"set sink.config.version_mode to source_order (mutable/replay-safe) or append (INSERT-only)")
+		return
+	}
+	if versionMode == "source_order" {
+		versionColumn := strings.TrimSpace(stringField(cfg, "version_column", "_version"))
+		deleteColumn := strings.TrimSpace(stringField(cfg, "delete_column", "_is_deleted"))
+		if deleteColumn == "" {
+			addStaticSinkFieldError(result, "clickhouse-sink-delete-column", "sink.config.delete_column",
+				"clickhouse source_order mode requires a non-empty delete_column",
+				"remove sink.config.delete_column to use _is_deleted, or set a non-empty UInt8 tombstone column")
+		}
+		if versionColumn != "" && strings.EqualFold(versionColumn, deleteColumn) {
+			addStaticSinkFieldError(result, "clickhouse-sink-order-columns", "sink.config.delete_column",
+				"clickhouse version_column and delete_column must be different",
+				"use separate UInt64 version and UInt8 tombstone columns")
+		}
+		if clickHouseSourceMayEmitMutableRecords(spec) && !sinkDerivesPKFromMetadata(spec) && len(stringSliceField(cfg, "pk_columns")) == 0 {
+			addStaticSinkFieldError(result, "clickhouse-sink-primary-key", "sink.config.pk_columns",
+				"clickhouse source_order receives mutable records but no explicit replacement/ORDER BY business key is configured",
+				"set sink.config.pk_columns to the complete business key, or enable pk_columns_from_metadata with a compatible source identity contract")
+		}
+		checkClickHouseSourceOrderCapability(spec, result)
+		return
+	}
+
+	if clickHouseSourceMayEmitMutableRecords(spec) {
+		addStaticFieldError(result, "clickhouse-append-mutable-source", "sink.config.version_mode",
+			fmt.Sprintf("clickhouse version_mode=append is INSERT-only, but source %q can emit UPDATE/DELETE records", spec.Source.Type),
+			"use version_mode=source_order with source position metadata, or change the source/transform contract to a proven INSERT-only stream")
+	}
+}
+
+func checkClickHouseSourceOrderCapability(spec *pipeline.Spec, result *PreflightResult) {
+	for index, transform := range spec.Transforms {
+		switch strings.ToLower(strings.TrimSpace(transform.Type)) {
+		case "window":
+			addStaticFieldError(result, "clickhouse-source-order-transform", fmt.Sprintf("transforms[%d].type", index),
+				"window emits derived aggregate records without one connector-owned source position that can order replacements",
+				"set sink.config.version_mode=append for an INSERT-only aggregate landing table, or materialize a source-owned revision contract before using source_order")
+			return
+		}
+	}
+	sourceType := strings.ToLower(strings.TrimSpace(spec.Source.Type))
+	switch sourceType {
+	case "mysql_cdc", "mysql_snapshot_cdc", "kafka", "mysql_batch":
+		return
+	case "postgres_cdc":
+		if boolField(spec.Source.Config, "enable_snapshot", false) {
+			addStaticFieldError(result, "clickhouse-source-order-capability", "source.config.enable_snapshot",
+				"postgres_cdc initial snapshot rows do not expose metadata.lsn or another durable numeric row cursor required by ClickHouse source_order mode",
+				"disable enable_snapshot and seed the target separately, or use an INSERT-only append target for the snapshot in a separate pipeline")
+		}
+		return
+	case "file", "http", "rest", "rest_source", "salesforce", "github", "hubspot", "stripe", "notion", "redis", "demo":
+		addStaticFieldError(result, "clickhouse-source-order-capability", "source.type",
+			fmt.Sprintf("source %q does not produce connector-owned metadata required for ClickHouse version_mode=source_order", spec.Source.Type),
+			"set sink.config.version_mode=append only for an INSERT-only target, or use a source that supplies metadata.source_type plus a numeric durable position (binlog file/pos, LSN, Kafka partition/offset, or numeric cursor)")
+	default:
+		addStaticFieldError(result, "clickhouse-source-order-capability", "source.type",
+			fmt.Sprintf("source %q has no registered numeric source-order contract for ClickHouse version_mode=source_order", spec.Source.Type),
+			"implement the shared core.SourceOrder contract with metadata.source_type plus a connector-owned numeric durable position, or use version_mode=append only when the path is provably INSERT-only")
+	}
+}
+
+func clickHouseSourceMayEmitMutableRecords(spec *pipeline.Spec) bool {
+	if spec == nil {
+		return false
+	}
+	mutable := false
+	switch strings.ToLower(strings.TrimSpace(spec.Source.Type)) {
+	case "mysql_cdc", "mysql_snapshot_cdc", "postgres_cdc":
+		mutable = true
+	case "kafka":
+		format := strings.ToLower(strings.TrimSpace(stringField(spec.Source.Config, "format", "json")))
+		if format == "envelope" || format == "canal_json" || format == "debezium" {
+			mutable = true
+		}
+	}
+	for _, transform := range spec.Transforms {
+		switch strings.ToLower(strings.TrimSpace(transform.Type)) {
+		case "debezium_cdc", "debezium_envelope", "normalize_envelope":
+			mutable = true
+		case "window":
+			// Window materializes derived aggregates as OpInsert records. It does
+			// not preserve a scalar connector position, so source_order is rejected
+			// separately while explicit append mode remains available.
+			mutable = false
+		}
+	}
+	return mutable
 }
 
 func isSupportedClickHouseSchemaDrift(value string) bool {
@@ -971,7 +1172,7 @@ func isSupportedClickHouseSourceDialect(value string) bool {
 func checkDorisSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 	cfg := spec.Sink.Config
 	requireFields := []string{"host", "database"}
-	if !sinkDerivesTableFromMetadata(spec) {
+	if !sinkDerivesTableFromMetadata(spec) && !(sinkDerivesPKFromMetadata(spec) && metadataPKSourceProvidesTable(spec)) {
 		requireFields = append(requireFields, "table")
 	}
 	for _, field := range requireFields {
@@ -1013,6 +1214,11 @@ func checkDorisSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 		addStaticSinkFieldError(result, "doris-sink-upsert-keys", "sink.config.pk_columns",
 			"doris sink upsert mode requires sink.config.pk_columns for a stable UNIQUE KEY model",
 			"set sink.config.pk_columns to stable business key columns before relying on replay absorption, or set pk_columns_from_metadata: true for CDC multi-table sync")
+	}
+	if clickHouseSourceMayEmitMutableRecords(spec) && !sinkDerivesPKFromMetadata(spec) && len(stringSliceField(cfg, "pk_columns")) == 0 && batchMode != "upsert" {
+		addStaticSinkFieldError(result, "doris-sink-mutable-keys", "sink.config.pk_columns",
+			"doris sink receives mutable CDC records but has no explicit UNIQUE KEY business key",
+			"set sink.config.pk_columns to the complete Doris UNIQUE KEY, or enable pk_columns_from_metadata with a compatible source format")
 	}
 	format := strings.ToLower(strings.TrimSpace(stringField(cfg, "stream_load_format", "json")))
 	if format == "" {
@@ -2632,7 +2838,6 @@ func (s *Server) checkMySQLMultiTableSchemaCompatibility(ctx context.Context, sp
 		result.DDLPreview = nil
 		return true
 	}
-
 	tableNames := make([]string, 0, len(report.Tables))
 	for _, table := range report.Tables {
 		tableNames = append(tableNames, table.qualifiedName())
@@ -3047,9 +3252,73 @@ func (s *Server) checkSchemaCompatibility(ctx context.Context, spec *pipeline.Sp
 	if len(schema.Columns) == 0 {
 		return
 	}
+	checkClickHouseSourceOrderSchema(spec, schema, result)
 
 	result.DDLPreview = buildPreflightDDLPreview(spec, schema)
 	validatePreflightSchema(probeCtx, spec, validator, schema, result)
+}
+
+func checkClickHouseSourceOrderSchema(spec *pipeline.Spec, schema core.SchemaInfo, result *PreflightResult) {
+	if !clickHouseUsesSourceOrder(spec) {
+		return
+	}
+	sourceType := strings.ToLower(strings.TrimSpace(spec.Source.Type))
+	var cursorColumn string
+	switch sourceType {
+	case "mysql_batch":
+		cursorColumn = strings.TrimSpace(stringField(spec.Source.Config, "cursor_column", stringField(spec.Source.Config, "pk_column", "id")))
+	default:
+		return
+	}
+	if cursorColumn == "" {
+		return
+	}
+	column, ok := findPreflightColumn(schema.Columns, cursorColumn)
+	if !ok {
+		// Existing source preflight owns missing-column diagnostics. Do not infer
+		// an order from a different sample field here.
+		return
+	}
+	if isMySQLIntegerCursorType(column.DataType) {
+		return
+	}
+	field := "source.config.pk_column"
+	if strings.TrimSpace(stringField(spec.Source.Config, "cursor_column", "")) != "" {
+		field = "source.config.cursor_column"
+	}
+	addStaticFieldError(result, "clickhouse-source-order-cursor", field,
+		fmt.Sprintf("source %q cursor column %q has type %q and produces metadata.cursor_kind=ordered without a UInt64 version required by ClickHouse source_order mode", spec.Source.Type, cursorColumn, column.DataType),
+		"use an integer keyset cursor, or set sink.config.version_mode=append only for an INSERT-only target; text cursors are retained but never hashed into fake numeric order")
+}
+
+func clickHouseUsesSourceOrder(spec *pipeline.Spec) bool {
+	return spec != nil && strings.EqualFold(strings.TrimSpace(spec.Sink.Type), "clickhouse") &&
+		strings.EqualFold(strings.TrimSpace(stringField(spec.Sink.Config, "version_mode", "source_order")), "source_order")
+}
+
+func findPreflightColumn(columns []core.ColumnInfo, name string) (core.ColumnInfo, bool) {
+	for _, column := range columns {
+		if strings.EqualFold(column.Name, name) {
+			return column, true
+		}
+	}
+	return core.ColumnInfo{}, false
+}
+
+func isMySQLIntegerCursorType(dataType string) bool {
+	typeName := strings.ToLower(strings.TrimSpace(dataType))
+	if index := strings.IndexByte(typeName, '('); index >= 0 {
+		typeName = typeName[:index]
+	}
+	if index := strings.IndexByte(typeName, ' '); index >= 0 {
+		typeName = typeName[:index]
+	}
+	switch typeName {
+	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "bit":
+		return true
+	default:
+		return false
+	}
 }
 
 func validatePreflightSchema(ctx context.Context, spec *pipeline.Spec, validator core.SchemaValidator, schema core.SchemaInfo, result *PreflightResult) {
@@ -3745,7 +4014,7 @@ func replayAbsorptionGuidance(spec *pipeline.Spec) PreflightGuidance {
 			}
 		}
 	case "clickhouse":
-		if len(stringSliceField(spec.Sink.Config, "pk_columns")) == 0 {
+		if !sinkDerivesPKFromMetadata(spec) && len(stringSliceField(spec.Sink.Config, "pk_columns")) == 0 {
 			return PreflightGuidance{
 				Level:    "warning",
 				Category: "delivery",
@@ -3901,14 +4170,21 @@ func createRelationalDDLPreview(dialect, table string, columns []core.ColumnInfo
 
 func createClickHouseDDLPreview(table string, columns []core.ColumnInfo, cfg map[string]any) string {
 	versionCol := stringField(cfg, "version_column", "_version")
-	defs := make([]string, 0, len(columns)+1)
+	deleteCol := stringField(cfg, "delete_column", "_is_deleted")
+	versionMode := strings.ToLower(strings.TrimSpace(stringField(cfg, "version_mode", "source_order")))
+	defs := make([]string, 0, len(columns)+2)
 	fieldSet := map[string]bool{}
 	for _, col := range columns {
 		fieldSet[strings.ToLower(col.Name)] = true
 		defs = append(defs, fmt.Sprintf("%s %s", quoteQualifiedIdentifier(col.Name, "`", "`"), preflightDDLType("clickhouse", col.DataType)))
 	}
-	if !fieldSet[strings.ToLower(versionCol)] {
-		defs = append(defs, fmt.Sprintf("%s Int64", quoteQualifiedIdentifier(versionCol, "`", "`")))
+	if versionMode != "append" {
+		if !fieldSet[strings.ToLower(versionCol)] {
+			defs = append(defs, fmt.Sprintf("%s UInt64", quoteQualifiedIdentifier(versionCol, "`", "`")))
+		}
+		if !fieldSet[strings.ToLower(deleteCol)] {
+			defs = append(defs, fmt.Sprintf("%s UInt8", quoteQualifiedIdentifier(deleteCol, "`", "`")))
+		}
 	}
 	orderBy := "tuple()"
 	pkCols := stringSliceField(cfg, "pk_columns")
@@ -3922,8 +4198,12 @@ func createClickHouseDDLPreview(table string, columns []core.ColumnInfo, cfg map
 		}
 		orderBy = strings.Join(quoted, ", ")
 	}
-	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n) ENGINE = ReplacingMergeTree(%s) ORDER BY (%s);",
-		quoteQualifiedIdentifier(table, "`", "`"), strings.Join(defs, ",\n  "), quoteQualifiedIdentifier(versionCol, "`", "`"), orderBy)
+	engine := "MergeTree"
+	if versionMode != "append" {
+		engine = fmt.Sprintf("ReplacingMergeTree(%s, %s)", quoteQualifiedIdentifier(versionCol, "`", "`"), quoteQualifiedIdentifier(deleteCol, "`", "`"))
+	}
+	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n) ENGINE = %s ORDER BY (%s);",
+		quoteQualifiedIdentifier(table, "`", "`"), strings.Join(defs, ",\n  "), engine, orderBy)
 }
 
 func createMaxComputeDDLPreview(table string, columns []core.ColumnInfo, cfg map[string]any) string {

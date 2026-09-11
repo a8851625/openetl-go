@@ -117,6 +117,34 @@ func TestProductionProfileAcceptsCompletePinnedRuntimeSecrets(t *testing.T) {
 	}
 }
 
+func TestRestoreStrictProfileDefaultsAndOverrides(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		strict  string
+		want    bool
+	}{
+		{name: "development default", profile: RuntimeProfileDevelopment, want: false},
+		{name: "production default", profile: RuntimeProfileProduction, want: true},
+		{name: "development explicit strict", profile: RuntimeProfileDevelopment, strict: "true", want: true},
+		{name: "production explicit non-strict", profile: RuntimeProfileProduction, strict: "false", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ETL_PROFILE", tt.profile)
+			t.Setenv("ETL_INSECURE_DEV", "true")
+			t.Setenv("ETL_RESTORE_STRICT", tt.strict)
+			cfg, err := ValidateRuntimeProfile(context.Background(), "standalone")
+			if err != nil {
+				t.Fatalf("ValidateRuntimeProfile: %v", err)
+			}
+			if cfg.RestoreStrict != tt.want {
+				t.Fatalf("RestoreStrict=%v want=%v (profile=%s override=%q)", cfg.RestoreStrict, tt.want, tt.profile, tt.strict)
+			}
+		})
+	}
+}
+
 func writeTestTLSKeyPair(t *testing.T, dir string) (string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

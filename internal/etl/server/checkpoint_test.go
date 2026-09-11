@@ -12,6 +12,7 @@ import (
 func TestPipelineCheckpointSetKeepsRawPositionCompatibility(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()
+	saveLifecycleTestPipeline(t, s, "raw-job", "raw-job", "stopped")
 
 	body := []byte(`{"position":{"file":"mysql-bin.000001","pos":123}}`)
 	resp, err := http.Post(ts.URL+"/api/v2/pipelines/raw-job/checkpoint/set", "application/json", bytes.NewReader(body))
@@ -35,6 +36,7 @@ func TestPipelineCheckpointSetKeepsRawPositionCompatibility(t *testing.T) {
 func TestPipelineCheckpointSetKafkaReplayFromOffset(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()
+	saveLifecycleTestPipeline(t, s, "kafka-job", "kafka-job", "stopped")
 
 	body := []byte(`{"source":"kafka","topic":"debezium.orders","partition":0,"offset":42}`)
 	resp, err := http.Post(ts.URL+"/api/v2/pipelines/kafka-job/checkpoint/set", "application/json", bytes.NewReader(body))
@@ -65,6 +67,7 @@ func TestPipelineCheckpointSetKafkaReplayFromOffset(t *testing.T) {
 func TestPipelineCheckpointSetKafkaOffsetsInferTopicFromSpec(t *testing.T) {
 	s, ts := newTestHTTPServer(t)
 	defer ts.Close()
+	saveLifecycleTestPipeline(t, s, "saved-kafka", "saved-kafka", "stopped")
 
 	s.mu.Lock()
 	s.specs["saved-kafka"] = &pipeline.Spec{

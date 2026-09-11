@@ -65,6 +65,7 @@ func TestPipelineAPIAndHealthExposeCheckpointRemediation(t *testing.T) {
 	s.mu.Lock()
 	s.registerPipelineLocked("checkpoint-visibility", "checkpoint-visibility", runner, nil, nil)
 	s.mu.Unlock()
+	saveLifecycleTestPipeline(t, s, "checkpoint-visibility", "checkpoint-visibility", "failed")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/pipelines/checkpoint-visibility", nil)
 	rec := httptest.NewRecorder()
@@ -110,6 +111,7 @@ func TestPipelineStartReturnsConflictWhilePreviousRunStops(t *testing.T) {
 	s.mu.Lock()
 	s.registerPipelineLocked("pipeline-stopping", "pipeline-stopping", runner, nil, nil)
 	s.mu.Unlock()
+	saveLifecycleTestPipeline(t, s, "pipeline-stopping", "pipeline-stopping", "stopped")
 
 	mux := http.NewServeMux()
 	s.RegisterHTTPRoutes(mux)
@@ -140,6 +142,7 @@ func TestPipelineStartReturnsNon2xxWithCheckpointRemediation(t *testing.T) {
 	s.mu.Lock()
 	s.registerPipelineLocked("checkpoint-start-error", "checkpoint-start-error", runner, nil, nil)
 	s.mu.Unlock()
+	saveLifecycleTestPipeline(t, s, "checkpoint-start-error", "checkpoint-start-error", "stopped")
 
 	mux := http.NewServeMux()
 	s.RegisterHTTPRoutes(mux)

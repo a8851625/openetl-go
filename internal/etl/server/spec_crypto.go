@@ -25,13 +25,54 @@ func newEncryptedSpecStore(store storage.Storage) (*storage.PipelineSpecStore, e
 }
 
 // wrapSecretFieldStore applies field-level encryption for connection catalog
-// and settings secrets using the same key material as pipeline specs.
+// and settings secrets using the same key material as pipeline specs. The
+// connector descriptor Secret marking is the single source of truth for which
+// config fields are secret; the key-pattern matcher is only a fallback.
 func wrapSecretFieldStore(store storage.Storage) (storage.Storage, error) {
 	cipher, err := storage.NewSpecCipherFromEnv()
 	if err != nil {
 		return nil, fmt.Errorf("initialize secret field encryption: %w", err)
 	}
-	return storage.NewSecretFieldStore(store, cipher), nil
+	wrapped := storage.NewSecretFieldStore(store, cipher)
+	if sfs, ok := wrapped.(*storage.SecretFieldStore); ok {
+		sfs.WithSecretFieldResolver(NewDescriptorSecretFieldResolver())
+	}
+	return wrapped, nil
+}
+
+// NewDescriptorSecretFieldResolver exposes the descriptor-backed secret
+// predicate so worker/headless processes share the same source of truth as the
+// control plane.
+func NewDescriptorSecretFieldResolver() storage.SecretFieldResolver {
+	return descriptorSecretFieldResolver()
+}
+
+// descriptorSecretFieldResolver derives a kind/type-aware secret predicate
+// from connector descriptors. Fields not covered by any descriptor (custom or
+// future connectors) fall back to key-pattern matching so they are not left
+// unprotected; that fallback is observable via storage.FallbackSecretWrites.
+func descriptorSecretFieldResolver() storage.SecretFieldResolver {
+	secretByType := map[string]map[string]bool{}
+	for _, d := range connectorDescriptors() {
+		fields, ok := secretByType[d.Kind+"/"+d.Type]
+		if !ok {
+			fields = map[string]bool{}
+			secretByType[d.Kind+"/"+d.Type] = fields
+		}
+		for _, f := range d.Fields {
+			fields[f.Name] = f.Secret
+		}
+	}
+	return func(kind, typ, field string) bool {
+		if fields, ok := secretByType[kind+"/"+typ]; ok {
+			if secret, declared := fields[field]; declared {
+				return secret
+			}
+		}
+		// No descriptor for this connector: fall back to pattern matching and
+		// make the decision observable.
+		return storage.FallbackSecretField(kind, typ, field)
+	}
 }
 
 // GenerateEncryptionKey generates a random base64-encoded 32-byte AES key for

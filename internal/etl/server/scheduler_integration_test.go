@@ -149,6 +149,7 @@ func TestStartAllPeriodicScheduleTriggersRunner(t *testing.T) {
 	s.mu.Lock()
 	s.registerPipelineLocked("pipe-periodic", spec.Name, runner, spec, nil)
 	s.mu.Unlock()
+	saveLifecycleTestPipeline(t, s, "pipe-periodic", spec.Name, "created")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -172,7 +173,7 @@ func TestStartAllDependencyTriggerFiresDownstream(t *testing.T) {
 
 	upstream := newTestScheduledRunner()
 	upstreamSpec := &pipeline.Spec{
-		Name: "dep-upstream",
+		Name:   "dep-upstream",
 		Source: pipeline.SourceSpec{Type: "file", Config: map[string]any{"path": "u.jsonl", "format": "json"}},
 		Sink:   pipeline.SinkSpec{Type: "file_sink", Config: map[string]any{"output_dir": "./out", "format": "jsonl"}},
 	}
@@ -185,14 +186,15 @@ func TestStartAllDependencyTriggerFiresDownstream(t *testing.T) {
 
 	downstream := newTestScheduledRunner()
 	downstreamSpec := &pipeline.Spec{
-		Name: "dep-downstream",
+		Name:     "dep-downstream",
 		Schedule: &pipeline.ScheduleConfig{Type: "dependency", DependsOn: []string{"pipe-upstream"}},
-		Source: pipeline.SourceSpec{Type: "file", Config: map[string]any{"path": "d.jsonl", "format": "json"}},
-		Sink:   pipeline.SinkSpec{Type: "file_sink", Config: map[string]any{"output_dir": "./out", "format": "jsonl"}},
+		Source:   pipeline.SourceSpec{Type: "file", Config: map[string]any{"path": "d.jsonl", "format": "json"}},
+		Sink:     pipeline.SinkSpec{Type: "file_sink", Config: map[string]any{"output_dir": "./out", "format": "jsonl"}},
 	}
 	s.mu.Lock()
 	s.registerPipelineLocked("pipe-downstream", downstreamSpec.Name, downstream, downstreamSpec, nil)
 	s.mu.Unlock()
+	saveLifecycleTestPipeline(t, s, "pipe-downstream", downstreamSpec.Name, "created")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -210,5 +212,3 @@ func TestStartAllDependencyTriggerFiresDownstream(t *testing.T) {
 		}
 	}
 }
-
-

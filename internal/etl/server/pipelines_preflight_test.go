@@ -55,8 +55,9 @@ func init() {
 			return nil, err
 		}
 		return &schemaPreflightSink{
-			openErr:     configuredError(config, "open_error"),
-			validateErr: configuredError(config, "validation_error"),
+			openErr:           configuredError(config, "open_error"),
+			validateErr:       configuredError(config, "validation_error"),
+			targetContractErr: configuredError(config, "target_contract_error"),
 		}, nil
 	})
 }
@@ -127,8 +128,9 @@ func (s plainPreflightSource) Open(context.Context, *core.Checkpoint) (core.Reco
 }
 
 type schemaPreflightSink struct {
-	openErr     error
-	validateErr error
+	openErr           error
+	validateErr       error
+	targetContractErr error
 }
 
 func (s *schemaPreflightSink) Name() string { return testSchemaPreflightSink }
@@ -141,6 +143,9 @@ func (s *schemaPreflightSink) Write(context.Context, []core.Record) error {
 func (s *schemaPreflightSink) Close() error { return nil }
 func (s *schemaPreflightSink) ValidateSchema(context.Context, core.SchemaInfo) error {
 	return s.validateErr
+}
+func (s *schemaPreflightSink) ValidateTargetContract(context.Context) error {
+	return s.targetContractErr
 }
 
 func configuredError(config map[string]any, key string) error {

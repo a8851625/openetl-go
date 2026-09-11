@@ -19,6 +19,7 @@ const (
 type RuntimeProfileConfig struct {
 	Name                string
 	InsecureDevelopment bool
+	RestoreStrict       bool
 	Role                string
 	APIToken            string
 	TLSCert             string
@@ -38,6 +39,7 @@ func ValidateRuntimeProfile(ctx context.Context, role string) (RuntimeProfileCon
 	cfg := RuntimeProfileConfig{
 		Name:                profile,
 		InsecureDevelopment: configBool(ctx, "ETL_INSECURE_DEV", "etl.insecureDevelopment", false),
+		RestoreStrict:       configBool(ctx, "ETL_RESTORE_STRICT", "etl.restore.strict", profile == RuntimeProfileProduction),
 		Role:                role,
 		APIToken:            configString(ctx, "ETL_API_TOKEN", "etl.apiToken", ""),
 		TLSCert:             configString(ctx, "ETL_TLS_CERT", "etl.tls.cert", ""),
