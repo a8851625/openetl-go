@@ -1999,6 +1999,16 @@ PR-1.3 恢复残留已在复核 Round 1/5 重新交付；RA-6 于 2026-09-08 复
 > 全部闭合，IT-1 `complete`。Doris 镜像（be-2.1.11）拉取 3 次 EOF 记 blocked，
 > 留 `hack/e2e-doris.sh` 手动路径。（明细与 run URL 见 IT-1 tasks.md。）
 >
+> v0.2.12-beta.19 发布记录（2026-09-11）：IT-2/IT-3 复核交付体合入后全量重认证
+> ——认证 commit `81ab3d8`、镜像 `3e63238d`（linux/arm64，podman 5.8.4），14 个 shell
+> 认证脚本 + 2 条 Go 路径 e2e 全绿（含本轮 Doris BE arm64 拉取成功补齐）。发布过程
+> 修复 3 项：shell e2e 在 409 静默契约下需先 stop 再 reset（4 个脚本）、CH 集成测试
+> 对齐 `append` 契约、resource-baseline 门禁补装 ripgrep（`81ab3d8`，触发工作流变更
+> 重认证一轮）。tag `v0.2.12-beta.19`（`5c9fe24`）三 workflow 全绿：Test gate
+> https://github.com/a8851625/openetl-go/actions/runs/34614181153、Release
+> https://github.com/a8851625/openetl-go/actions/runs/34614195014（11 资产）、Beta
+> Container https://github.com/a8851625/openetl-go/actions/runs/34614195007。
+>
 > Round 3/5 实施记录（2026-08-31）：T1.5 验收 1/2/3 本地闭合 —— 两条主路径
 > 实跑产出 `docs/evidence/<path_id>.json`（`result:passed`，commit 绑定运行时
 > HEAD cf98441，检查项覆盖全部 case 断言）；校验器新增路径证据校验（commit
