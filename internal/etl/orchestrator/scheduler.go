@@ -28,6 +28,19 @@ type Scheduler struct {
 	runners                 map[string]pipeline.RunnerInterface
 	ctx                     context.Context
 	registerFailureInjector func(string, *ScheduleConfig) error
+	// runnerStarter lets the control plane allocate a durable execution
+	// generation and bind checkpoint fencing before the scheduler starts a run.
+	// Nil preserves the standalone scheduler behaviour used by focused tests.
+	runnerStarter func(context.Context, string, pipeline.RunnerInterface) error
+}
+
+// SetRunnerStarter installs the lifecycle-aware start boundary. When set, the
+// callback owns observed-state/run-history completion bookkeeping as well as
+// runner.Start; scheduler trigger code must not duplicate those writes.
+func (s *Scheduler) SetRunnerStarter(starter func(context.Context, string, pipeline.RunnerInterface) error) {
+	s.mu.Lock()
+	s.runnerStarter = starter
+	s.mu.Unlock()
 }
 
 type pipelineSchedule struct {
@@ -381,6 +394,12 @@ func (s *Scheduler) Unregister(scheduleName string) {
 
 // startRunnerLocked starts the runner immediately (streaming/once mode).
 func (s *Scheduler) startRunnerLocked(name string, runner pipeline.RunnerInterface) error {
+	if s.runnerStarter != nil {
+		if err := s.runnerStarter(s.ctx, name, runner); err != nil {
+			return fmt.Errorf("start pipeline %s: %w", name, err)
+		}
+		return nil
+	}
 	if err := runner.Start(s.ctx); err != nil {
 		return fmt.Errorf("start pipeline %s: %w", name, err)
 	}
@@ -404,13 +423,29 @@ func (s *Scheduler) triggerPipeline(name string, runner pipeline.RunnerInterface
 	}
 
 	g.Log().Infof(s.ctx, "Triggering pipeline %s", name)
-	if err := runner.Start(s.ctx); err != nil {
-		if errors.Is(err, pipeline.ErrRunnerStopping) {
+	s.mu.Lock()
+	starter := s.runnerStarter
+	s.mu.Unlock()
+	var startErr error
+	if starter != nil {
+		startErr = starter(s.ctx, name, runner)
+	} else {
+		startErr = runner.Start(s.ctx)
+	}
+	if startErr != nil {
+		if errors.Is(startErr, pipeline.ErrRunnerStopping) {
 			g.Log().Warningf(s.ctx, "Pipeline %s is still cleaning up its previous run; skipping trigger", name)
 			return
 		}
-		g.Log().Errorf(s.ctx, "Failed to start pipeline %s: %v", name, err)
+		if errors.Is(startErr, storage.ErrPipelineNotRunnable) {
+			g.Log().Debugf(s.ctx, "Pipeline %s schedule skipped because desired state is not running", name)
+			return
+		}
+		g.Log().Errorf(s.ctx, "Failed to start pipeline %s: %v", name, startErr)
 		_ = s.store.UpdatePipelineStatus(s.ctx, name, "failed")
+		return
+	}
+	if starter != nil {
 		return
 	}
 	_ = s.store.UpdatePipelineStatus(s.ctx, name, "running")

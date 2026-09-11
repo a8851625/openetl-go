@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
+	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/schema"
 )
 
@@ -12,10 +13,10 @@ import (
 // pk_columns_from_metadata sinks (esp. on DELETE events).
 func TestMetadataKeyJSONMulti(t *testing.T) {
 	cases := []struct {
-		name    string
-		pkCols  []string
-		row     map[string]any
-		want    string
+		name   string
+		pkCols []string
+		row    map[string]any
+		want   string
 	}{
 		{"single pk", []string{"session_id"}, map[string]any{"session_id": "de2aaedd", "data": "x"}, `{"session_id":"de2aaedd"}`},
 		{"composite pk", []string{"tenant_id", "id"}, map[string]any{"tenant_id": 3, "id": 42, "name": "a"}, `{"id":42,"tenant_id":3}`},
@@ -36,7 +37,7 @@ func TestMetadataKeyJSONMulti(t *testing.T) {
 // TestPkColumnNames verifies canal schema.Table PK index → name resolution.
 func TestPkColumnNames(t *testing.T) {
 	tbl := &schema.Table{
-		Columns: []schema.TableColumn{{Name: "tenant_id"}, {Name: "id"}, {Name: "data"}},
+		Columns:   []schema.TableColumn{{Name: "tenant_id"}, {Name: "id"}, {Name: "data"}},
 		PKColumns: []int{0, 1},
 	}
 	got := pkColumnNames(tbl)
@@ -70,5 +71,42 @@ func TestMysqlCDCHandlerFillsMetadataKey(t *testing.T) {
 		if key == "" {
 			t.Errorf("op %v: metadata key empty, want per-table PK JSON", c.op)
 		}
+	}
+}
+
+func TestMySQLCDCHandlerEmitsSharedRecordContract(t *testing.T) {
+	reader := &mysqlCDCRecordReader{
+		source:      &MySQLCDCSource{name: "orders-west", database: "shop"},
+		records:     make(chan core.Record, 1),
+		done:        make(chan struct{}),
+		lastPosName: "mysql-bin.000007",
+		lastPos:     88,
+	}
+	table := &schema.Table{
+		Name:      "orders",
+		Columns:   []schema.TableColumn{{Name: "tenant_id"}, {Name: "id"}, {Name: "value"}},
+		PKColumns: []int{0, 1},
+	}
+	handler := &mysqlCDCHandler{reader: reader}
+	if err := handler.OnRow(&canal.RowsEvent{
+		Table: table, Action: canal.InsertAction,
+		Rows: [][]interface{}{{int64(3), int64(42), "new"}},
+	}); err != nil {
+		t.Fatalf("OnRow: %v", err)
+	}
+	record := <-reader.records
+	if record.Metadata.Source != "orders-west" || record.Metadata.SourceType != core.SourceTypeMySQLCDC || record.Metadata.SourcePhase != core.SourcePhaseCDC {
+		t.Fatalf("source contract = %+v", record.Metadata)
+	}
+	if len(record.Metadata.PrimaryKeyColumns) != 2 || record.Metadata.PrimaryKeyColumns[0] != "tenant_id" || record.Metadata.PrimaryKeyColumns[1] != "id" {
+		t.Fatalf("primary key declaration = %v", record.Metadata.PrimaryKeyColumns)
+	}
+	if identity := core.RecordIdentity(record); !identity.Complete {
+		t.Fatalf("record identity = %+v, want complete", identity)
+	}
+	order := core.SourceOrder(record)
+	wantVersion := uint64(1)<<63 | uint64(7)<<32 | 88
+	if !order.VersionAvailable || order.Version != wantVersion {
+		t.Fatalf("source order = %+v, want %d", order, wantVersion)
 	}
 }

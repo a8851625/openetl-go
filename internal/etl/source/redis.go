@@ -255,9 +255,10 @@ func (r *redisReader) readKey(ctx context.Context, key string) (core.Record, err
 		Operation: core.OpInsert,
 		Data:      map[string]any{},
 		Metadata: core.Metadata{
-			Source:    "redis",
-			Table:     t,
-			Timestamp: time.Now(),
+			Source:     core.SourceTypeRedis,
+			SourceType: core.SourceTypeRedis,
+			Table:      t,
+			Timestamp:  time.Now(),
 		},
 	}
 	rec.Data[r.source.keyField] = key

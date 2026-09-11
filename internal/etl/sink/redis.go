@@ -53,7 +53,7 @@ type RedisSink struct {
 
 	skipCounter uint64
 
-	client *redis.Client
+	client       *redis.Client
 	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
@@ -183,7 +183,11 @@ func (s *RedisSink) Open(ctx context.Context) error {
 }
 
 func (s *RedisSink) Write(ctx context.Context, records []core.Record) (err error) {
-	defer func() { if err != nil { s.recordError() } }() // P5-12: count write failures
+	defer func() {
+		if err != nil {
+			s.recordError()
+		}
+	}() // P5-12: count write failures
 	start := time.Now()
 	chunkSize := s.pipelineChunkSize
 	if chunkSize <= 0 {

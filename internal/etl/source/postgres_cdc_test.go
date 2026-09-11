@@ -252,6 +252,7 @@ func TestParseInsertMsgUsesCatalog(t *testing.T) {
 		{Name: "name", TypeOID: 25},
 		{Name: "active", TypeOID: 16},
 	})
+	r.catalog.setTablePKs("users", []string{"id"})
 
 	msg := buildInsertMsg(1, []any{42, "alice", true})
 	r.parseInsertMsg(msg[1:], "1/1")
@@ -260,6 +261,20 @@ func TestParseInsertMsgUsesCatalog(t *testing.T) {
 	case rec := <-r.records:
 		if rec.Metadata.Table != "users" {
 			t.Errorf("table = %q, want users", rec.Metadata.Table)
+		}
+		if rec.Metadata.SourceType != core.SourceTypePostgresCDC || rec.Metadata.SourcePhase != core.SourcePhaseCDC {
+			t.Errorf("source contract = %q/%q, want postgres_cdc/cdc", rec.Metadata.SourceType, rec.Metadata.SourcePhase)
+		}
+		if len(rec.Metadata.PrimaryKeyColumns) != 1 || rec.Metadata.PrimaryKeyColumns[0] != "id" {
+			t.Errorf("primary key declaration = %v, want [id]", rec.Metadata.PrimaryKeyColumns)
+		}
+		order := core.SourceOrder(rec)
+		if !order.VersionAvailable || order.Version != uint64(1)<<32|1 {
+			t.Errorf("source order = %+v, want PostgreSQL LSN 1/1", order)
+		}
+		identity := core.RecordIdentity(rec)
+		if !identity.Complete {
+			t.Errorf("record identity = %+v, want complete", identity)
 		}
 		if got := rec.Data["id"]; got != int32(42) {
 			t.Errorf("id = %v(%T), want int32 42", got, got)

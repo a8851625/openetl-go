@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -353,12 +355,17 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 			rec := core.Record{
 				Operation: core.OpInsert,
 				Metadata: core.Metadata{
-					Source:    h.reader.source.name,
-					Table:     h.reader.source.topic,
-					Timestamp: msg.Timestamp,
-					Partition: msg.Partition,
-					Offset:    msg.Offset,
+					Source:      h.reader.source.name,
+					SourceType:  core.SourceTypeKafka,
+					SourcePhase: "stream",
+					Table:       h.reader.source.topic,
+					Timestamp:   msg.Timestamp,
+					Partition:   msg.Partition,
+					Offset:      msg.Offset,
 				},
+			}
+			if msg.Value != nil {
+				rec.Metadata.RawPayload = append([]byte(nil), msg.Value...)
 			}
 
 			data := make(map[string]any)
@@ -367,6 +374,7 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 			}
 			if msg.Key != nil {
 				rec.Metadata.Key = string(msg.Key)
+				rec.Metadata.PrimaryKeyColumns = primaryKeyColumnsFromKafkaKey(msg.Key)
 			}
 
 			if msg.Value == nil {
@@ -407,15 +415,18 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 					// populated above
 				} else {
 					var env struct {
-						EventID     string            `json:"event_id"`
-						Op          string            `json:"op"`
-						Table       string            `json:"table"`
-						Key         string            `json:"key"`
-						Data        map[string]any    `json:"data"`
-						Timestamp   string            `json:"timestamp"`
-						ColumnTypes map[string]string `json:"column_types"`
+						EventID           string            `json:"event_id"`
+						Op                string            `json:"op"`
+						Table             string            `json:"table"`
+						Key               string            `json:"key"`
+						Data              map[string]any    `json:"data"`
+						Before            map[string]any    `json:"before"`
+						Timestamp         string            `json:"timestamp"`
+						ColumnTypes       map[string]string `json:"column_types"`
+						PrimaryKeyColumns []string          `json:"primary_key_columns"`
 					}
 					if err := json.Unmarshal(msg.Value, &env); err == nil && env.Data != nil {
+						rec.Metadata.FormatContractID = core.FormatContractOpenETLEnvelopeV1
 						switch env.Op {
 						case "UPDATE":
 							rec.Operation = core.OpUpdate
@@ -429,6 +440,16 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 						}
 						if env.Key != "" {
 							rec.Metadata.Key = env.Key
+							if len(env.PrimaryKeyColumns) == 0 {
+								rec.Metadata.PrimaryKeyColumns = primaryKeyColumnsFromKafkaKey([]byte(env.Key))
+							}
+						}
+						if len(env.PrimaryKeyColumns) > 0 {
+							rec.Metadata.PrimaryKeyColumns = append([]string(nil), env.PrimaryKeyColumns...)
+						}
+						if env.Before != nil {
+							rec.Before = env.Before
+							rec.Metadata.BeforeImageState = core.BeforeImageStateFull
 						}
 						if len(env.ColumnTypes) > 0 {
 							rec.Metadata.ColumnTypes = env.ColumnTypes
@@ -460,13 +481,13 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 				case "skip":
 					continue
 				case "dlq":
-					err := fmt.Errorf("kafka message parse failed (format %s, topic %s partition %d offset %d): rerun with on_parse_error=raw to pass the raw payload through, or fix the producer format", h.reader.source.format, msg.Topic, msg.Partition, msg.Offset)
-					select {
-					case h.reader.errors <- err:
-					case <-session.Context().Done():
-					case <-h.reader.done:
+					data["value"] = string(msg.Value)
+					rec.Rejection = &core.RecordRejection{
+						Code:        "kafka_message_parse_failed",
+						Message:     fmt.Sprintf("kafka message parse failed (format %s, topic %s partition %d offset %d)", h.reader.source.format, msg.Topic, msg.Partition, msg.Offset),
+						Class:       core.ErrorClassData,
+						Remediation: "fix the producer payload for the configured format, then inspect or replay the durable DLQ item; use on_parse_error=raw only for an explicitly append-only raw path",
 					}
-					continue
 				default: // raw: pre-existing behavior
 					data["value"] = string(msg.Value)
 				}
@@ -843,7 +864,7 @@ func tryCanalJSON(raw []byte, rec *core.Record, data map[string]any) bool {
 		SQLType   map[string]int32  `json:"sqlType"`
 		MySQLType map[string]string `json:"mysqlType"`
 		Data      []map[string]any  `json:"data"`
-		Old       []map[string]any  `json:"old"`
+		Old       json.RawMessage   `json:"old"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return false
@@ -869,6 +890,7 @@ func tryCanalJSON(raw []byte, rec *core.Record, data map[string]any) bool {
 	if len(env.Data) > 1 {
 		return false
 	}
+	rec.Metadata.FormatContractID = core.FormatContractCanalJSONV1
 	for k, v := range env.Data[0] {
 		data[k] = v
 	}
@@ -878,8 +900,10 @@ func tryCanalJSON(raw []byte, rec *core.Record, data map[string]any) bool {
 	if env.Table != "" {
 		rec.Metadata.Table = env.Table
 	}
-	if rec.Operation == core.OpUpdate && len(env.Old) > 0 {
-		rec.Before = env.Old[0]
+	if rec.Operation == core.OpUpdate {
+		before, state := parseCanalBeforeImage(env.Old, env.PKs)
+		rec.Before = before
+		rec.Metadata.BeforeImageState = state
 	}
 	// mysqlType carries declared column types (e.g. "bigint", "varchar(32)") —
 	// the same ColumnTypes contract mysql_batch/canal-driven sources fill, so
@@ -888,9 +912,16 @@ func tryCanalJSON(raw []byte, rec *core.Record, data map[string]any) bool {
 		rec.Metadata.ColumnTypes = env.MySQLType
 	}
 	if len(env.PKs) > 0 {
+		rec.Metadata.PrimaryKeyColumns = append([]string(nil), env.PKs...)
 		key := make(map[string]any, len(env.PKs))
 		for _, pk := range env.PKs {
-			if v, ok := data[pk]; ok {
+			v, ok := data[pk]
+			if rec.Operation == core.OpUpdate && canalBeforeStateUsable(rec.Metadata.BeforeImageState) {
+				if oldValue, exists := rec.Before[pk]; exists {
+					v, ok = oldValue, true
+				}
+			}
+			if ok {
 				key[pk] = v
 			}
 		}
@@ -901,6 +932,46 @@ func tryCanalJSON(raw []byte, rec *core.Record, data map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// parseCanalBeforeImage preserves the original old-array state. Canal v1 old
+// maps contain only changed columns; an explicit empty/partial object is
+// therefore usable, while an absent/null/empty-array/invalid old value cannot
+// prove UPDATE identity and must fail closed in core.RecordIdentity.
+func parseCanalBeforeImage(raw json.RawMessage, primaryKeys []string) (map[string]any, core.BeforeImageState) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return nil, core.BeforeImageStateAbsent
+	}
+	if trimmed == "null" {
+		return nil, core.BeforeImageStateNull
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err != nil || len(rows) > 1 {
+		return nil, core.BeforeImageStateInvalid
+	}
+	if len(rows) == 0 {
+		return nil, core.BeforeImageStateEmptyArray
+	}
+	before := rows[0]
+	if len(before) == 0 {
+		return before, core.BeforeImageStatePresentEmpty
+	}
+	for _, primaryKey := range primaryKeys {
+		if _, ok := before[primaryKey]; !ok {
+			return before, core.BeforeImageStatePartial
+		}
+	}
+	return before, core.BeforeImageStateFull
+}
+
+func canalBeforeStateUsable(state core.BeforeImageState) bool {
+	switch state {
+	case core.BeforeImageStatePresentEmpty, core.BeforeImageStatePartial, core.BeforeImageStateFull:
+		return true
+	default:
+		return false
+	}
 }
 
 // tryDebeziumEnvelope parses a Debezium-style envelope written by the kafka
@@ -919,6 +990,7 @@ func tryDebeziumEnvelope(raw []byte, rec *core.Record, data map[string]any) bool
 	if _, ok := payload["op"]; !ok {
 		return false
 	}
+	rec.Metadata.FormatContractID = core.FormatContractDebeziumEnvelopeV1
 	rec.Operation = debeziumOp(payload["op"])
 	if after, ok := asMapKV(payload["after"]); ok {
 		for k, v := range after {
@@ -927,6 +999,7 @@ func tryDebeziumEnvelope(raw []byte, rec *core.Record, data map[string]any) bool
 	}
 	if before, ok := asMapKV(payload["before"]); len(before) > 0 && ok {
 		rec.Before = before
+		rec.Metadata.BeforeImageState = core.BeforeImageStateFull
 	}
 	if src, ok := asMapKV(payload["source"]); ok {
 		if db, ok := src["db"].(string); ok && db != "" {
@@ -940,13 +1013,16 @@ func tryDebeziumEnvelope(raw []byte, rec *core.Record, data map[string]any) bool
 		// travels in the Kafka message key (msg.Key), which ConsumeClaim already
 		// restored into rec.Metadata.Key at line ~331. Overwriting it here with
 		// event_id would break pk_columns_from_metadata downstream (DELETE
-		// records would lose their PK and fall back to the static pk_columns,
-		// producing "delete record missing primary-key column" errors).
+		// records would lose their complete identity and fail closed before
+		// reaching a metadata-PK sink).
 		if file, ok := src["file"].(string); ok && file != "" {
 			rec.Metadata.BinlogFile = file
 		}
 		if pos, ok := src["pos"].(float64); ok {
 			rec.Metadata.BinlogPos = uint32(pos)
+		}
+		if columns := stringSliceKV(src["primary_key_columns"]); len(columns) > 0 {
+			rec.Metadata.PrimaryKeyColumns = columns
 		}
 	}
 	if schema, ok := asMapKV(root["schema"]); ok {
@@ -958,4 +1034,81 @@ func tryDebeziumEnvelope(raw []byte, rec *core.Record, data map[string]any) bool
 		data["value"] = string(raw)
 	}
 	return true
+}
+
+func stringSliceKV(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		if strings, ok := value.([]string); ok {
+			return append([]string(nil), strings...)
+		}
+		return nil
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		text, ok := item.(string)
+		if !ok {
+			return nil
+		}
+		result = append(result, text)
+	}
+	return result
+}
+
+// primaryKeyColumnsFromKafkaKey extracts the complete field declaration from
+// the JSON-object key used by Debezium/OpenETL envelopes. Schemaful Kafka
+// Connect keys prefer schema.fields; schemaless keys use the payload/object
+// field set. Scalar keys cannot prove a metadata-PK declaration.
+func primaryKeyColumnsFromKafkaKey(raw []byte) []string {
+	value := strings.TrimSpace(string(raw))
+	if value == "" {
+		return nil
+	}
+	var decoded any
+	for attempts := 0; attempts < 2; attempts++ {
+		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+			return nil
+		}
+		if nested, ok := decoded.(string); ok {
+			value = strings.TrimSpace(nested)
+			continue
+		}
+		break
+	}
+	object, ok := decoded.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if schema, ok := object["schema"].(map[string]any); ok {
+		if fields, ok := schema["fields"].([]any); ok {
+			columns := make([]string, 0, len(fields))
+			for _, fieldValue := range fields {
+				field, ok := fieldValue.(map[string]any)
+				if !ok {
+					return nil
+				}
+				name, ok := field["field"].(string)
+				if !ok || strings.TrimSpace(name) == "" {
+					return nil
+				}
+				columns = append(columns, name)
+			}
+			if len(columns) > 0 {
+				return columns
+			}
+		}
+	}
+	if payload, ok := object["payload"].(map[string]any); ok {
+		object = payload
+	} else if key, ok := object["key"].(map[string]any); ok && len(object) == 1 {
+		object = key
+	}
+	columns := make([]string, 0, len(object))
+	for column := range object {
+		if strings.TrimSpace(column) != "" && column != "schema" {
+			columns = append(columns, column)
+		}
+	}
+	sort.Strings(columns)
+	return columns
 }

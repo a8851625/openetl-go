@@ -19,6 +19,8 @@ etl:
   enabled: true
   profile: "production" # ETL_PROFILE; requires token, spec key, TLS and audit
   insecureDevelopment: false
+  restore:
+    strict: true          # ETL_RESTORE_STRICT / --restore-strict; fail closed on any restore_failed pipeline
   cors:
     origins: "" # set explicit https:// UI origins when cross-origin access is required
   trustedProxyCIDRs: "" # set reverse-proxy CIDRs before trusting forwarded IPs

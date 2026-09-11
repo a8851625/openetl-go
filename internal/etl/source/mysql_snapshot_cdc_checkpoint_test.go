@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
@@ -204,6 +206,103 @@ func TestSnapshotStartPositionReusesRestoredHandoff(t *testing.T) {
 	}
 	if got.Name != "binlog.000001" || got.Pos != 4 {
 		t.Fatalf("handoff = %s:%d, want binlog.000001:4", got.Name, got.Pos)
+	}
+}
+
+func TestResnapshotReplacesOldHandoffAndCheckpointCandidate(t *testing.T) {
+	r := newSnapshotCheckpointTestReader()
+	r.phase = "cdc"
+	r.checkpointPhase = "cdc"
+	r.checkpointFile = "mysql-bin.000009"
+	r.checkpointPos = 900
+	r.snapshotHandoffFile = "mysql-bin.000001"
+	r.snapshotHandoffPos = 4
+	r.snapshotHandoffValid = true
+
+	r.requestResnapshot()
+	if r.phase != "snapshot" || !r.resnapshotRequested {
+		t.Fatalf("resnapshot state = phase=%q requested=%v", r.phase, r.resnapshotRequested)
+	}
+	if _, _, valid := r.getSnapshotHandoffPosition(); valid {
+		t.Fatal("resnapshot retained the old source-order handoff")
+	}
+	// Durable cursors remain available for the documented resume-from-last-key
+	// policy; only the new in-memory checkpoint candidate changes here.
+	if r.tableLastIDs["orders"] != 1 || r.tableLastStr["users"] != "a" {
+		t.Fatalf("resnapshot discarded durable table cursors: ids=%v strs=%v", r.tableLastIDs, r.tableLastStr)
+	}
+
+	r.installSnapshotHandoff("mysql-bin.000010", 4)
+	file, pos, valid := r.getSnapshotHandoffPosition()
+	if !valid || file != "mysql-bin.000010" || pos != 4 {
+		t.Fatalf("new handoff = %s:%d valid=%v", file, pos, valid)
+	}
+	checkpointFile, checkpointPos := r.getDurableBinlogPos()
+	if r.checkpointPhase != "snapshot" || checkpointFile != file || checkpointPos != pos {
+		t.Fatalf("checkpoint candidate = phase=%q %s:%d", r.checkpointPhase, checkpointFile, checkpointPos)
+	}
+
+	order := core.SourceOrder(core.Record{Metadata: core.Metadata{
+		SourceType: core.SourceTypeMySQLSnapshotCDC, SourcePhase: core.SourcePhaseSnapshot,
+		SnapshotHandoffFile: file, SnapshotHandoffPos: pos,
+	}})
+	prior := core.SourceOrder(core.Record{Metadata: core.Metadata{
+		SourceType: core.SourceTypeMySQLSnapshotCDC, SourcePhase: core.SourcePhaseCDC,
+		BinlogFile: "mysql-bin.000009", BinlogPos: 900,
+	}})
+	if !order.VersionAvailable || order.Version <= prior.Version {
+		t.Fatalf("new resnapshot order=%+v did not supersede prior=%+v", order, prior)
+	}
+}
+
+func TestSnapshotRecordCarriesSourceOrderHandoffForTextCursor(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	mock.ExpectQuery("SELECT column_name, column_type FROM information_schema.columns").
+		WithArgs("shop", "customers").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type"}).
+			AddRow("customer_code", "varchar(64)").AddRow("name", "varchar(64)"))
+	query := regexp.QuoteMeta("SELECT * FROM `customers` WHERE `customer_code` > ? ORDER BY `customer_code` LIMIT 2")
+	mock.ExpectQuery(query).WithArgs("").
+		WillReturnRows(sqlmock.NewRows([]string{"customer_code", "name"}).AddRow("C-1", "Alice"))
+	mock.ExpectQuery(query).WithArgs("C-1").
+		WillReturnRows(sqlmock.NewRows([]string{"customer_code", "name"}))
+	mock.ExpectRollback()
+
+	r := &snapshotCDCReader{
+		source:              &MySQLSnapshotCDCSource{name: "snapshot-customers", database: "shop", limit: 2},
+		records:             make(chan core.Record, 1),
+		snapshotReadStr:     map[string]string{},
+		snapshotHandoffFile: "mysql-bin.000010", snapshotHandoffPos: 88, snapshotHandoffValid: true,
+	}
+	if err := r.snapshotTable(context.Background(), tx, "customers", resolvedPK{column: "customer_code", kind: pkKindOrdered}); err != nil {
+		t.Fatalf("snapshotTable: %v", err)
+	}
+	record := <-r.records
+	if record.Metadata.Cursor != "C-1" || record.Metadata.CursorKind != core.SourceCursorOrdered {
+		t.Fatalf("snapshot cursor metadata = %+v", record.Metadata)
+	}
+	if record.Metadata.SnapshotHandoffFile != "mysql-bin.000010" || record.Metadata.SnapshotHandoffPos != 88 {
+		t.Fatalf("snapshot handoff metadata = %+v", record.Metadata)
+	}
+	order := core.SourceOrder(record)
+	want := uint64(1)<<63 | uint64(10)<<32 | 88
+	if !order.VersionAvailable || order.Version != want || order.Phase != core.SourcePhaseSnapshot {
+		t.Fatalf("snapshot SourceOrder = %+v, want version %d", order, want)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
 	}
 }
 

@@ -157,8 +157,9 @@ func (w *DAGRunnerWrapper) Stats() pipeline.Stats {
 func (w *DAGRunnerWrapper) MetricsSnapshot() pipeline.MetricsSnapshot {
 	s := w.exec.Stats()
 	return pipeline.MetricsSnapshot{
-		LastBatchSize: int(s.RecordsWritten),
-		BatchCount:    s.RecordsRead,
+		LastBatchSize:         int(s.RecordsWritten),
+		BatchCount:            s.RecordsRead,
+		CheckpointFencedTotal: s.CheckpointFencedTotal,
 	}
 }
 

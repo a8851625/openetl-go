@@ -318,6 +318,9 @@ func (a *sApp) startWorkerRole(ctx context.Context, store storage.Storage) {
 	// Match control-plane secret field encryption so workers can read encrypted
 	// connection catalog / settings values if a path needs them.
 	store = storage.NewSecretFieldStore(store, specCipher)
+	if sfs, ok := store.(*storage.SecretFieldStore); ok {
+		sfs.WithSecretFieldResolver(etlserver.NewDescriptorSecretFieldResolver())
+	}
 	specStore := storage.NewPipelineSpecStore(store, specCipher)
 	if err := specStore.ValidateReadable(ctx); err != nil {
 		g.Log().Fatalf(ctx, "Validate worker pipeline specs failed: %v", err)

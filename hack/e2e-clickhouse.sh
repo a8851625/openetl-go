@@ -57,7 +57,8 @@ echo "==> Wait ClickHouse HTTP"
 wait_http "http://127.0.0.1:8123/ping"
 
 echo "==> Prepare ClickHouse target"
-"$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --multiquery < testdata/clickhouse/init/01-init.sql
+"$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "DROP TABLE IF EXISTS dzh3136_go.customers"
+"$CONTAINER_CLI" exec -i "$CH_CONTAINER" clickhouse-client --password dzh123456 --multiquery < testdata/clickhouse/init/01-init.sql
 "$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "TRUNCATE TABLE dzh3136_go.customers"
 
 echo "==> Reset test row in MySQL"
@@ -110,5 +111,7 @@ test "$copied" = "1"
 body="$(curl -fsS http://127.0.0.1:8003/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep '"name":"mysql-cdc-to-clickhouse"' | grep '"records_written"'
+
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
 
 echo "ClickHouse CDC E2E passed"

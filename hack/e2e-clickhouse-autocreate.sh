@@ -23,7 +23,11 @@ wait_http() {
 }
 
 echo "==> Build image"
-"$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
+if [ "${E2E_SKIP_BUILD:-0}" = "1" ]; then
+  echo "    (E2E_SKIP_BUILD=1, using $IMAGE)"
+else
+  "$CONTAINER_CLI" build -t "$IMAGE" -f Dockerfile .
+fi
 
 echo "==> Start ClickHouse"
 compose -f docker-compose.dev.yml up -d clickhouse
@@ -71,13 +75,13 @@ body="$(curl -fsS http://127.0.0.1:8006/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep '"records_written":2'
 
-count="$("$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM dzh3136_go.auto_customers FINAL" | tr -d '[:space:]')"
+count="$("$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM dzh3136_go.auto_customers" | tr -d '[:space:]')"
 test "$count" = "2"
 
 level_count="$("$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM system.columns WHERE database='dzh3136_go' AND table='auto_customers' AND name='level'" | tr -d '[:space:]')"
 test "$level_count" = "1"
 
-gold="$("$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM dzh3136_go.auto_customers FINAL WHERE id=2 AND level='gold'" | tr -d '[:space:]')"
+gold="$("$CONTAINER_CLI" exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM dzh3136_go.auto_customers WHERE id=2 AND level='gold'" | tr -d '[:space:]')"
 test "$gold" = "1"
 
 echo "ClickHouse auto-create E2E passed"

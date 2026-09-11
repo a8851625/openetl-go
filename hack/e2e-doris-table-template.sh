@@ -112,11 +112,11 @@ produce_envelope() {
 # Unique run tag in each message body keeps the Doris Stream Load label (a hash
 # of db.table|body) unique across e2e runs; otherwise Doris rejects the load
 # with LABEL_ALREADY_EXISTS (its idempotent-load protection).
-produce_envelope "{\"event_id\":\"${RUN_TAG}-e1\",\"op\":\"INSERT\",\"table\":\"orders\",\"key\":\"{\\\"order_id\\\":5001}\",\"data\":{\"order_id\":5001,\"amount\":11.00,\"run\":\"$RUN_TAG\"}}"
-produce_envelope "{\"event_id\":\"${RUN_TAG}-e2\",\"op\":\"UPDATE\",\"table\":\"orders\",\"key\":\"{\\\"order_id\\\":5001}\",\"data\":{\"order_id\":5001,\"amount\":15.00,\"run\":\"$RUN_TAG\"}}"
-produce_envelope "{\"event_id\":\"${RUN_TAG}-e3\",\"op\":\"INSERT\",\"table\":\"orders\",\"key\":\"{\\\"order_id\\\":5002}\",\"data\":{\"order_id\":5002,\"amount\":22.00,\"run\":\"$RUN_TAG\"}}"
-produce_envelope "{\"event_id\":\"${RUN_TAG}-e4\",\"op\":\"INSERT\",\"table\":\"users\",\"key\":\"{\\\"user_no\\\":\\\"TMPL_U1\\\"}\",\"data\":{\"user_no\":\"TMPL_U1\",\"name\":\"Alice\",\"run\":\"$RUN_TAG\"}}"
-produce_envelope "{\"event_id\":\"${RUN_TAG}-e5\",\"op\":\"INSERT\",\"table\":\"users\",\"key\":\"{\\\"user_no\\\":\\\"TMPL_U2\\\"}\",\"data\":{\"user_no\":\"TMPL_U2\",\"name\":\"Bob\",\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e1\",\"op\":\"INSERT\",\"table\":\"orders\",\"primary_key_columns\":[\"order_id\"],\"key\":\"{\\\"order_id\\\":5001}\",\"data\":{\"order_id\":5001,\"amount\":11.00,\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e2\",\"op\":\"UPDATE\",\"table\":\"orders\",\"primary_key_columns\":[\"order_id\"],\"key\":\"{\\\"order_id\\\":5001}\",\"before\":{\"order_id\":5001,\"amount\":11.00,\"run\":\"$RUN_TAG\"},\"data\":{\"order_id\":5001,\"amount\":15.00,\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e3\",\"op\":\"INSERT\",\"table\":\"orders\",\"primary_key_columns\":[\"order_id\"],\"key\":\"{\\\"order_id\\\":5002}\",\"data\":{\"order_id\":5002,\"amount\":22.00,\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e4\",\"op\":\"INSERT\",\"table\":\"users\",\"primary_key_columns\":[\"user_no\"],\"key\":\"{\\\"user_no\\\":\\\"TMPL_U1\\\"}\",\"data\":{\"user_no\":\"TMPL_U1\",\"name\":\"Alice\",\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e5\",\"op\":\"INSERT\",\"table\":\"users\",\"primary_key_columns\":[\"user_no\"],\"key\":\"{\\\"user_no\\\":\\\"TMPL_U2\\\"}\",\"data\":{\"user_no\":\"TMPL_U2\",\"name\":\"Bob\",\"run\":\"$RUN_TAG\"}}"
 
 
 echo "==> Reset data + pipes"
@@ -157,7 +157,7 @@ done
 [ "$amount" = "15.00" ] || { echo "TIMEOUT waiting for metadata-key update, last=$amount" >&2; exit 1; }
 
 echo "==> Verify metadata-key DELETE"
-produce_envelope "{\"event_id\":\"${RUN_TAG}-e6\",\"op\":\"DELETE\",\"table\":\"users\",\"key\":\"{\\\"user_no\\\":\\\"TMPL_U2\\\"}\",\"data\":{\"user_no\":\"TMPL_U2\",\"name\":\"Bob\",\"run\":\"$RUN_TAG\"}}"
+produce_envelope "{\"event_id\":\"${RUN_TAG}-e6\",\"op\":\"DELETE\",\"table\":\"users\",\"primary_key_columns\":[\"user_no\"],\"key\":\"{\\\"user_no\\\":\\\"TMPL_U2\\\"}\",\"data\":{\"user_no\":\"TMPL_U2\",\"name\":\"Bob\",\"run\":\"$RUN_TAG\"}}"
 wait_doris_count "users" 1
 
 body="$(curl -fsS http://127.0.0.1:${API_PORT}/api/v2/pipelines)"

@@ -13,8 +13,9 @@ CREATE TABLE IF NOT EXISTS customers (
     created_at Nullable(DateTime),
     updated_at Nullable(DateTime),
     deleted_at Nullable(DateTime),
-    _version Int64
-) ENGINE = ReplacingMergeTree(_version)
+    _version UInt64,
+    _is_deleted UInt8
+) ENGINE = ReplacingMergeTree(_version, _is_deleted)
 ORDER BY id
 SETTINGS index_granularity = 8192;
 
@@ -29,8 +30,9 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at Nullable(DateTime),
     updated_at Nullable(DateTime),
     deleted_at Nullable(DateTime),
-    _version Int64
-) ENGINE = ReplacingMergeTree(_version)
+    _version UInt64,
+    _is_deleted UInt8
+) ENGINE = ReplacingMergeTree(_version, _is_deleted)
 ORDER BY id
 SETTINGS index_granularity = 8192;
 
@@ -44,7 +46,8 @@ CREATE TABLE IF NOT EXISTS products (
     created_at Nullable(DateTime),
     updated_at Nullable(DateTime),
     deleted_at Nullable(DateTime),
-    _version Int64
-) ENGINE = ReplacingMergeTree(_version)
+    _version UInt64,
+    _is_deleted UInt8
+) ENGINE = ReplacingMergeTree(_version, _is_deleted)
 ORDER BY id
 SETTINGS index_granularity = 8192;

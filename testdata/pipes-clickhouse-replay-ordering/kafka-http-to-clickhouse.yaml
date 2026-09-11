@@ -1,0 +1,39 @@
+name: kafka-clickhouse-replay-ordering
+source:
+  type: kafka
+  config:
+    brokers:
+      - redpanda:9092
+    topic: clickhouse-replay-ordering
+    group_id: kafka-clickhouse-replay-ordering
+    initial_offset: oldest
+    format: envelope
+
+sink:
+  type: clickhouse
+  config:
+    host: etl-clickhouse
+    port: 8123
+    protocol: http
+    user: default
+    password: dzh123456
+    database: dzh3136_go
+    table: replay_ordering_http
+    pk_columns:
+      - id
+    version_mode: source_order
+    version_column: _version
+    delete_column: _is_deleted
+    auto_create: false
+
+schedule:
+  type: streaming
+batch_size: 1
+flush_interval_ms: 100
+checkpoint_interval_sec: 1
+retry:
+  max_attempts: 1
+  initial_interval_ms: 100
+  max_interval_ms: 100
+dlq:
+  enable: true

@@ -112,8 +112,8 @@ func TestDorisResolveTableTemplateTakesPrecedenceOverStatic(t *testing.T) {
 // from the config map.
 func TestDorisConfigParsesTableTemplate(t *testing.T) {
 	s, err := NewDorisSink(map[string]any{
-		"host":          "fe",
-		"database":      "ods",
+		"host":           "fe",
+		"database":       "ods",
 		"table_template": "ods_{table}",
 	})
 	if err != nil {

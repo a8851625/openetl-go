@@ -1,13 +1,14 @@
 #!/bin/sh
 
-# PR-0.2 control-plane persistence gate. Covers atomic current/version/
-# checkpoint/delete storage transactions plus API fault-injection rollback.
+# PR-0.2 + IT-2/T2.1 control-plane persistence gate. Covers atomic current/
+# version/checkpoint/delete transactions, API fault rollback, and durable
+# restore_failed visibility/repair without checkpoint or encrypted-spec drift.
 set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TEST_REGEX='TestPipeline(CreateStorageFailureLeavesNoRuntimeOrRows|UpdateStorageFailureKeepsLastSuccessfulRuntimeAndDB|UpdateCheckpointFailureRollsBackSpecAndCheckpoint|RollbackStorageFailureKeepsCurrentVersion|DeleteStorageFailureKeepsRuntimeRowsVersionsAndCheckpoint)|TestCheckpointResetFailureReturnsNon2xxAndKeepsCheckpoint|TestSpecImportStorageFailureKeepsExistingRuntimeAndDB|TestScheduleStorageFailureKeepsInMemoryScheduleUnchanged|TestPipelineSpecStoreAtomic'
+TEST_REGEX='TestPipeline(CreateStorageFailureLeavesNoRuntimeOrRows|UpdateStorageFailureKeepsLastSuccessfulRuntimeAndDB|UpdateCheckpointFailureRollsBackSpecAndCheckpoint|RollbackStorageFailureKeepsCurrentVersion|DeleteStorageFailureKeepsRuntimeRowsVersionsAndCheckpoint)|TestCheckpointResetFailureReturnsNon2xxAndKeepsCheckpoint|TestSpecImportStorageFailureKeepsExistingRuntimeAndDB|TestScheduleStorageFailureKeepsInMemoryScheduleUnchanged|TestPipelineSpecStoreAtomic|TestRestore(FailuresPersistAndRemainVisible|FailureRepairPreservesCheckpointAndEncryptedSpec|StrictProfileDefaultsAndOverrides)'
 
 if command -v go >/dev/null 2>&1; then
   echo "==> control-plane persistence (local Go)"

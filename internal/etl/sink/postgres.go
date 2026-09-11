@@ -282,6 +282,21 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 			dataRecords = append(dataRecords, rec)
 		}
 	}
+	if s.pkColumnsFromMetadata {
+		validationStarted := time.Now()
+		validation, validationErr := validateMetadataPKBatch(s.name, dataRecords, s.pkColumns, func(record core.Record) (metadataPKTarget, error) {
+			return metadataPKTarget{Database: s.database, Table: s.targetTable(record)}, nil
+		})
+		if validationErr != nil {
+			recordMetadataPKFailure(s.tableMetrics, validationErr, time.Since(validationStarted))
+			return validationErr
+		}
+		s.pkByTable = validation.ColumnsByTable
+		dataRecords, _ = expandMetadataPKKeyChanges(dataRecords, validation)
+	}
+
+	// Validate metadata identity and destination before applying DDL; malformed
+	// row data must not leave a schema-only side effect behind.
 	if err := ApplyDDLRecords(ctx, ddlRecords, s.ddLPolicy, func(ctx context.Context, ddl, table string) error {
 		_, err := s.pool.Exec(ctx, ddl)
 		return err
@@ -297,20 +312,6 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 	// Snapshot per-table PKs for this batch BEFORE schema ensure/auto-create:
 	// auto-created tables must carry the derived PRIMARY KEY constraint, or
 	// later upserts with ON CONFLICT(per-table pk) fail with SQLSTATE 42P10.
-	if s.pkColumnsFromMetadata {
-		s.pkByTable = make(map[string][]string)
-		for _, rec := range records {
-			if rec.Metadata.Table == "" {
-				continue
-			}
-			if _, ok := s.pkByTable[rec.Metadata.Table]; ok {
-				continue
-			}
-			if pk := derivePKFromMetadataShared(rec.Metadata.Table, records); len(pk) > 0 {
-				s.pkByTable[rec.Metadata.Table] = pk
-			}
-		}
-	}
 	if err := s.ensureSchemaForBatch(ctx, records); err != nil {
 		return err
 	}
@@ -331,8 +332,8 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 		targetTable := s.table
 		if targetTable == "" {
 			for _, rec := range records {
-				if rec.Metadata.Table != "" {
-					targetTable = rec.Metadata.Table
+				if resolved := s.targetTable(rec); resolved != "" {
+					targetTable = resolved
 					break
 				}
 			}
@@ -350,9 +351,10 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 	// Compact by (table, PK) in source order to preserve CDC semantics.
 	records = CompactRecordsByPK(records, func(table string) []string {
 		if s.pkColumnsFromMetadata {
-			if pk := derivePKFromMetadataShared(table, records); len(pk) > 0 {
+			if pk := s.pkByTable[table]; len(pk) > 0 {
 				return pk
 			}
+			return nil
 		}
 		if len(s.pkColumns) > 0 {
 			return s.pkColumns
@@ -378,10 +380,7 @@ func (s *PostgresSink) Write(ctx context.Context, records []core.Record) (err er
 	var groupOrder []groupKey
 
 	for _, rec := range records {
-		tableName := s.table
-		if rec.Metadata.Table != "" {
-			tableName = rec.Metadata.Table
-		}
+		tableName := s.targetTable(rec)
 		// Skip GENERATED columns — they cannot be written.
 		genSet := s.generatedColumnsFor(ctx, tableName)
 		var cols []string
@@ -646,12 +645,8 @@ func (s *PostgresSink) batchDelete(ctx context.Context, tx pgx.Tx, table string,
 func (s *PostgresSink) deleteValues(cols []string, rec core.Record) ([]any, error) {
 	pkCols := s.pkColumns
 	if s.pkColumnsFromMetadata {
-		if pk := parseMetadataKeyColumns(rec.Metadata.Key); len(pk) > 0 {
-			pkCols = pk
-		} else if s.pkByTable != nil {
-			if pks, ok := s.pkByTable[rec.Metadata.Table]; ok && len(pks) > 0 {
-				pkCols = pks
-			}
+		if pks, ok := s.pkByTable[s.targetTable(rec)]; ok && len(pks) > 0 {
+			pkCols = pks
 		}
 	}
 	if len(pkCols) == 0 {
@@ -666,6 +661,28 @@ func (s *PostgresSink) deleteValues(cols []string, rec core.Record) ([]any, erro
 		row = append(row, keys[pk])
 	}
 	return row, nil
+}
+
+func (s *PostgresSink) targetTable(record core.Record) string {
+	if strings.TrimSpace(record.Metadata.Table) != "" {
+		return strings.TrimSpace(record.Metadata.Table)
+	}
+	return strings.TrimSpace(s.table)
+}
+
+func (s *PostgresSink) pkColumnsByTable(records []core.Record) (map[string][]string, error) {
+	if !s.pkColumnsFromMetadata {
+		return map[string][]string{}, nil
+	}
+	started := time.Now()
+	validation, err := validateMetadataPKBatch(s.name, records, s.pkColumns, func(record core.Record) (metadataPKTarget, error) {
+		return metadataPKTarget{Database: s.database, Table: s.targetTable(record)}, nil
+	})
+	if err != nil {
+		recordMetadataPKFailure(s.tableMetrics, err, time.Since(started))
+		return nil, err
+	}
+	return validation.ColumnsByTable, nil
 }
 
 func (s *PostgresSink) qualifiedTable() string {
@@ -703,10 +720,7 @@ func (s *PostgresSink) ensureSchemaForBatch(ctx context.Context, records []core.
 	}
 	tableMeta := make(map[string]*colInfo)
 	for _, rec := range records {
-		tableName := s.table
-		if rec.Metadata.Table != "" {
-			tableName = rec.Metadata.Table
-		}
+		tableName := s.targetTable(rec)
 		if tableName == "" {
 			continue
 		}

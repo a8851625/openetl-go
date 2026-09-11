@@ -41,6 +41,25 @@ wait_http_down() {
   return 1
 }
 
+cleanup() {
+  # An assertion can fire while the outage scenario has ClickHouse stopped.
+  # Restore shared dependencies and remove only this script's app/state
+  # containers so later certification paths do not inherit our runtime.
+  "$CONTAINER_CLI" start "$CH_CONTAINER" >/dev/null 2>&1 || true
+  "$CONTAINER_CLI" rm -f "$APP_CONTAINER" "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+ensure_dev_container() {
+  container="$1"
+  service="$2"
+  if "$CONTAINER_CLI" inspect "$container" >/dev/null 2>&1; then
+    "$CONTAINER_CLI" start "$container" >/dev/null
+  else
+    compose -f docker-compose.dev.yml up -d "$service"
+  fi
+}
+
 run_wide_app() {
   "$CONTAINER_CLI" run -d \
     --add-host host.docker.internal:host-gateway \
@@ -64,7 +83,9 @@ else
 fi
 
 echo "==> Start Redpanda, MySQL, and ClickHouse"
-compose -f docker-compose.dev.yml up -d redpanda mysql-source clickhouse
+ensure_dev_container "$REDPANDA_CONTAINER" redpanda
+ensure_dev_container "$MYSQL_CONTAINER" mysql-source
+ensure_dev_container "$CH_CONTAINER" clickhouse
 
 echo "==> Start Redis state backend"
 "$CONTAINER_CLI" rm -f "$REDIS_CONTAINER" >/dev/null 2>&1 || true
@@ -140,8 +161,9 @@ DROP TABLE IF EXISTS wide.lookup_miss_dlq_sink;
 DROP TABLE IF EXISTS wide.lookup_refresh_failure_sink;
 CREATE TABLE wide.clickhouse_write_failure_sink (
   id Int64,
-  _version Int64
-) ENGINE = ReplacingMergeTree(_version) ORDER BY id;
+  _version UInt64,
+  _is_deleted UInt8
+) ENGINE = ReplacingMergeTree(_version, _is_deleted) ORDER BY id;
 "
 
 echo "==> Reset ETL data"
@@ -176,9 +198,9 @@ test "$detail_count" = "2"
 echo "==> Verify ClickHouse aggregate wide table"
 i=0
 while [ "$i" -lt 90 ]; do
-  aggregate_count="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_minute_aggregate FINAL" 2>/dev/null | tr -d '[:space:]' || true)"
-  aggregate_east="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT concat(toString(order_count), '|', toString(total_amount)) FROM wide.order_minute_aggregate FINAL WHERE region = 'east' AND tier = 'vip' ORDER BY window_start DESC LIMIT 1" 2>/dev/null | tr -d '[:space:]' || true)"
-  aggregate_west="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT concat(toString(order_count), '|', toString(total_amount)) FROM wide.order_minute_aggregate FINAL WHERE region = 'west' AND tier = 'standard' ORDER BY window_start DESC LIMIT 1" 2>/dev/null | tr -d '[:space:]' || true)"
+  aggregate_count="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_minute_aggregate" 2>/dev/null | tr -d '[:space:]' || true)"
+  aggregate_east="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT concat(toString(order_count), '|', toString(total_amount)) FROM wide.order_minute_aggregate WHERE region = 'east' AND tier = 'vip' ORDER BY window_start DESC LIMIT 1" 2>/dev/null | tr -d '[:space:]' || true)"
+  aggregate_west="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT concat(toString(order_count), '|', toString(total_amount)) FROM wide.order_minute_aggregate WHERE region = 'west' AND tier = 'standard' ORDER BY window_start DESC LIMIT 1" 2>/dev/null | tr -d '[:space:]' || true)"
   if [ "$aggregate_count" != "" ] && [ "$aggregate_count" -ge 2 ] && [ "$aggregate_east" = "1|12.5" ] && [ "$aggregate_west" = "1|20" ]; then
     break
   fi
@@ -211,6 +233,13 @@ detail_count_after_duplicate="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse
 test "$detail_count_after_duplicate" = "2"
 
 echo "==> Verify stateful deduplicate/window recovery after app crash"
+# Start this scenario at the beginning of a wall-clock minute. Using an event
+# timestamp captured in the last seconds of a minute is racy: by the time the
+# window transform receives it, the minute may already be closed and emitted,
+# defeating the intended "persist buffered state, then crash" assertion.
+now_epoch="$(date +%s)"
+sleep_for=$((61 - now_epoch % 60))
+sleep "$sleep_for"
 crash_ms="$(date +%s)000"
 cat <<JSON | "$CONTAINER_CLI" exec -i "$REDPANDA_CONTAINER" rpk topic produce orders.cdc --brokers localhost:9092 >/dev/null
 {"payload":{"op":"c","ts_ms":${crash_ms},"source":{"table":"orders"},"after":{"id":30001,"user_id":1001,"amount":77.77,"_version":1}}}
@@ -227,7 +256,7 @@ while [ "$i" -lt 90 ]; do
 done
 test "$crash_detail_count" = "1"
 
-pre_crash_aggregate_count="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_minute_aggregate FINAL WHERE region = 'east' AND tier = 'vip' AND order_count = 1 AND abs(total_amount - 77.77) < 0.001" | tr -d '[:space:]')"
+pre_crash_aggregate_count="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_minute_aggregate WHERE region = 'east' AND tier = 'vip' AND order_count = 1 AND abs(total_amount - 77.77) < 0.001" | tr -d '[:space:]')"
 test "$pre_crash_aggregate_count" = "0"
 
 i=0
@@ -273,7 +302,7 @@ JSON
 
 i=0
 while [ "$i" -lt 90 ]; do
-  recovered_count="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_minute_aggregate FINAL WHERE region = 'east' AND tier = 'vip' AND order_count = 1 AND abs(total_amount - 77.77) < 0.001" 2>/dev/null | tr -d '[:space:]' || true)"
+  recovered_count="$("$CONTAINER_CLI" exec "$CH_CONTAINER" clickhouse-client --password dzh123456 --query "SELECT count() FROM wide.order_minute_aggregate WHERE region = 'east' AND tier = 'vip' AND order_count = 1 AND abs(total_amount - 77.77) < 0.001" 2>/dev/null | tr -d '[:space:]' || true)"
   if [ "$recovered_count" = "1" ]; then
     break
   fi
@@ -397,7 +426,7 @@ clickhouse_down_dlq_id="$(echo "$dlq_body" | grep -o '"id":[0-9][0-9]*' | head -
 test "$clickhouse_down_dlq_id" != ""
 
 echo "==> Restart ClickHouse and replay infrastructure-failure DLQ by stable ID"
-compose -f docker-compose.dev.yml up -d clickhouse
+"$CONTAINER_CLI" start "$CH_CONTAINER" >/dev/null
 wait_http "http://127.0.0.1:8123/ping"
 replay_body="$(curl -fsS -X POST "http://127.0.0.1:8018/api/v2/dlq/kafka-orders-detail-clickhouse/${clickhouse_down_dlq_id}/replay")"
 echo "$replay_body"

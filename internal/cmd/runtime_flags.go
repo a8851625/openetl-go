@@ -15,34 +15,39 @@ import (
 )
 
 type runtimeFlags struct {
-	config        string
-	dataDir       string
-	logDir        string
-	pluginsDir    string
-	schemasDir    string
-	specsDir      string
-	host          string
-	port          string
-	etlAPIHost    string
-	etlAPIPort    string
-	storageType   string
-	storageDSN    string
-	sqlitePath    string
-	apiToken      string
-	profile       string
-	insecureDev   string
-	tlsCert       string
-	tlsKey        string
-	tlsServerName string
-	role          string
-	masterURL     string
-	workerID      string
-	workerSlots   string
-	workerLabels  string
-	auditEnabled  string
-	loggerFormat  string
-	printHelp     bool
-	seen          map[string]bool
+	config           string
+	dataDir          string
+	logDir           string
+	pluginsDir       string
+	schemasDir       string
+	specsDir         string
+	host             string
+	port             string
+	etlAPIHost       string
+	etlAPIPort       string
+	storageType      string
+	storageDSN       string
+	sqlitePath       string
+	backupFile       string
+	restoreFile      string
+	checkSecrets     bool
+	remediateSecrets bool
+	apiToken         string
+	profile          string
+	insecureDev      string
+	restoreStrict    string
+	tlsCert          string
+	tlsKey           string
+	tlsServerName    string
+	role             string
+	masterURL        string
+	workerID         string
+	workerSlots      string
+	workerLabels     string
+	auditEnabled     string
+	loggerFormat     string
+	printHelp        bool
+	seen             map[string]bool
 }
 
 func applyRuntimeFlags() (*runtimeFlags, error) {
@@ -88,9 +93,14 @@ func parseRuntimeFlags(args []string, output io.Writer) (*runtimeFlags, error) {
 	fs.StringVar(&opts.storageType, "storage", "", "storage backend: sqlite|mysql|postgresql")
 	fs.StringVar(&opts.storageDSN, "storage-dsn", "", "MySQL/PostgreSQL storage DSN")
 	fs.StringVar(&opts.sqlitePath, "sqlite-path", "", "SQLite metadata database path")
+	fs.StringVar(&opts.backupFile, "backup-file", "", "export portable backup and exit; stop all writers first")
+	fs.StringVar(&opts.restoreFile, "restore-file", "", "replace control plane from portable backup and exit; stop all writers first")
+	fs.BoolVar(&opts.checkSecrets, "check-secrets", false, "check persisted connection/settings plaintext secrets and exit")
+	fs.BoolVar(&opts.remediateSecrets, "remediate-secrets", false, "encrypt legacy connection/settings secrets and exit; stop writers first")
 	fs.StringVar(&opts.apiToken, "api-token", "", "ETL API token")
 	fs.StringVar(&opts.profile, "profile", "", "runtime profile: development|production")
 	fs.StringVar(&opts.insecureDev, "insecure-dev", "", "explicit production-gate bypass: true|false")
+	fs.StringVar(&opts.restoreStrict, "restore-strict", "", "fail startup when any stored pipeline cannot be restored: true|false")
 	fs.StringVar(&opts.tlsCert, "tls-cert", "", "UI/API TLS certificate file")
 	fs.StringVar(&opts.tlsKey, "tls-key", "", "UI/API TLS key file")
 	fs.StringVar(&opts.tlsServerName, "tls-server-name", "", "TLS server name used by the local UI-to-API proxy")
@@ -137,7 +147,6 @@ func applyRuntimeEnvOverrides(flagSeen map[string]bool) {
 	envString(flagSeen, "etl-api-host", "ETL_API_HOST", func(v string) { mustSetConfig("etl.address", joinHostPort(v, configPort("etl.address", "8001"))) })
 	envString(flagSeen, "etl-api-port", "ETL_API_PORT", func(v string) { mustSetConfig("etl.address", joinHostPort(configHost("etl.address"), v)) })
 	envString(flagSeen, "storage", "ETL_STORAGE_TYPE", func(v string) { mustSetConfig("etl.storage.type", v) })
-	envString(flagSeen, "storage-dsn", "ETL_STORAGE_DSN", applyStorageDSN)
 	envString(flagSeen, "sqlite-path", "ETL_SQLITE_PATH", func(v string) { mustSetConfig("etl.storage.sqlite.path", v) })
 	envString(flagSeen, "role", "ETL_ROLE", func(v string) { mustSetConfig("etl.role", v) })
 	envString(flagSeen, "master-url", "ETL_MASTER_URL", func(v string) { mustSetConfig("etl.masterURL", v) })
@@ -147,6 +156,7 @@ func applyRuntimeEnvOverrides(flagSeen map[string]bool) {
 	envString(flagSeen, "api-token", "ETL_API_TOKEN", func(v string) { mustSetConfig("etl.apiToken", v) })
 	envString(flagSeen, "profile", "ETL_PROFILE", func(v string) { mustSetConfig("etl.profile", v) })
 	envString(flagSeen, "insecure-dev", "ETL_INSECURE_DEV", func(v string) { mustSetConfig("etl.insecureDevelopment", atobOrString(v)) })
+	envString(flagSeen, "restore-strict", "ETL_RESTORE_STRICT", func(v string) { mustSetConfig("etl.restore.strict", atobOrString(v)) })
 	envString(flagSeen, "tls-cert", "ETL_TLS_CERT", func(v string) { mustSetConfig("etl.tls.cert", v) })
 	envString(flagSeen, "tls-key", "ETL_TLS_KEY", func(v string) { mustSetConfig("etl.tls.key", v) })
 	envString(flagSeen, "tls-server-name", "ETL_TLS_SERVER_NAME", func(v string) { mustSetConfig("etl.tls.serverName", v) })
@@ -169,11 +179,16 @@ func applyRuntimeFlagOverrides(opts *runtimeFlags) error {
 	if opts.storageDSN != "" {
 		applyStorageDSN(opts.storageDSN)
 		_ = os.Setenv("ETL_STORAGE_DSN", opts.storageDSN)
+	} else {
+		// Resolve a generic env DSN after the final backend selection. A CLI
+		// --storage postgresql must not route ETL_STORAGE_DSN into mysql config.
+		envString(opts.seen, "storage-dsn", "ETL_STORAGE_DSN", applyStorageDSN)
 	}
 	setStringFlag(opts, "sqlite-path", opts.sqlitePath, "etl.storage.sqlite.path", "ETL_SQLITE_PATH")
 	setStringFlag(opts, "api-token", opts.apiToken, "etl.apiToken", "ETL_API_TOKEN")
 	setStringFlag(opts, "profile", opts.profile, "etl.profile", "ETL_PROFILE")
 	setStringFlag(opts, "insecure-dev", opts.insecureDev, "etl.insecureDevelopment", "ETL_INSECURE_DEV")
+	setStringFlag(opts, "restore-strict", opts.restoreStrict, "etl.restore.strict", "ETL_RESTORE_STRICT")
 	setStringFlag(opts, "tls-cert", opts.tlsCert, "etl.tls.cert", "ETL_TLS_CERT")
 	setStringFlag(opts, "tls-key", opts.tlsKey, "etl.tls.key", "ETL_TLS_KEY")
 	setStringFlag(opts, "tls-server-name", opts.tlsServerName, "etl.tls.serverName", "ETL_TLS_SERVER_NAME")
@@ -219,6 +234,20 @@ func applyRuntimeFlagOverrides(opts *runtimeFlags) error {
 }
 
 func validateRuntimeFlags(opts *runtimeFlags) error {
+	maintenanceModes := 0
+	for _, mode := range []bool{opts.backupFile != "", opts.restoreFile != "", opts.checkSecrets, opts.remediateSecrets} {
+		if mode {
+			maintenanceModes++
+		}
+	}
+	if maintenanceModes > 1 {
+		return fmt.Errorf("--backup-file, --restore-file, --check-secrets and --remediate-secrets are mutually exclusive")
+	}
+	for _, flag := range []struct{ name, path string }{{"backup-file", opts.backupFile}, {"restore-file", opts.restoreFile}} {
+		if opts.seen[flag.name] && strings.TrimSpace(flag.path) == "" {
+			return fmt.Errorf("--%s requires a file path", flag.name)
+		}
+	}
 	role := opts.role
 	if role == "" {
 		role = g.Cfg().MustGet(context.Background(), "etl.role", "standalone").String()
@@ -243,6 +272,11 @@ func validateRuntimeFlags(opts *runtimeFlags) error {
 	if opts.insecureDev != "" {
 		if _, err := strconv.ParseBool(opts.insecureDev); err != nil {
 			return fmt.Errorf("invalid --insecure-dev %q: must be true or false", opts.insecureDev)
+		}
+	}
+	if opts.restoreStrict != "" {
+		if _, err := strconv.ParseBool(opts.restoreStrict); err != nil {
+			return fmt.Errorf("invalid --restore-strict %q: must be true or false", opts.restoreStrict)
 		}
 	}
 	if opts.profile != "" {
@@ -395,6 +429,7 @@ func logRuntimeSummary() {
 		"api_auth":       g.Cfg().MustGet(ctx, "etl.apiToken", "").String() != "",
 		"profile":        g.Cfg().MustGet(ctx, "etl.profile", "development").String(),
 		"insecure_dev":   g.Cfg().MustGet(ctx, "etl.insecureDevelopment", false).Bool(),
+		"restore_strict": g.Cfg().MustGet(ctx, "etl.restore.strict", strings.EqualFold(g.Cfg().MustGet(ctx, "etl.profile", "development").String(), "production")).Bool(),
 		"worker_labels":  g.Cfg().MustGet(ctx, "etl.workerLabels", "").String(),
 	}
 	g.Log().Infof(ctx, "Runtime config: %+v", summary)
@@ -423,9 +458,16 @@ Flags:
   --storage TYPE             Storage backend: sqlite, mysql, postgresql. Env: ETL_STORAGE_TYPE
   --storage-dsn DSN          MySQL/PostgreSQL storage DSN. Env: ETL_STORAGE_DSN
   --sqlite-path PATH         SQLite metadata DB path. Env: ETL_SQLITE_PATH
+  --backup-file PATH         Export portable control-plane backup and exit (offline).
+  --restore-file PATH        Replace control plane from backup and exit (offline).
+                            Stop every process using the metadata DB and Redis first.
+  --check-secrets            Check stored connection/settings secrets; exit 1 if plaintext remains.
+  --remediate-secrets        Encrypt legacy connection/settings secrets and exit (offline).
+                            Requires ETL_SPEC_ENCRYPTION_KEY; safe to retry after interruption.
   --api-token TOKEN          ETL API token. Env: ETL_API_TOKEN. Sensitive.
   --profile PROFILE          development or production. Env: ETL_PROFILE
   --insecure-dev BOOL        Explicit production-gate bypass for development only. Env: ETL_INSECURE_DEV
+  --restore-strict BOOL      Fail startup if any stored pipeline cannot be restored. Env: ETL_RESTORE_STRICT
   --tls-cert PATH            UI/API TLS certificate. Env: ETL_TLS_CERT
   --tls-key PATH             UI/API TLS key. Env: ETL_TLS_KEY. Sensitive path.
   --tls-server-name NAME     TLS name used by the local UI-to-API proxy. Env: ETL_TLS_SERVER_NAME
@@ -441,6 +483,8 @@ Flags:
 Examples:
   openetl-go --config /etc/openetl/config.yaml --port 8080 --etl-api-port 8081
   openetl-go --data-dir /var/lib/openetl --specs-dir /etc/openetl/pipes
+  openetl-go --config /etc/openetl/config.yaml --backup-file /backup/control-plane.json
+  openetl-go --config /etc/openetl/config.yaml --restore-file /backup/control-plane.json
   openetl-go --role master --storage mysql --storage-dsn 'user:pass@tcp(db:3306)/etl?parseTime=true'
    openetl-go --role worker --master-url http://openetl-master:8001 --worker-id worker-a
    openetl-go --role worker --master-url http://openetl-master:8001 --worker-id worker-a --worker-labels zone=us-east-1,gpu=true

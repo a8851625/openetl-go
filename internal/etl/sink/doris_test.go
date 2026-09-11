@@ -182,10 +182,11 @@ func TestDorisWriteCompactsUsingEnvelopeMetadataKey(t *testing.T) {
 		insertChunkSize:       500,
 		streamLoadTimeout:     time.Second,
 		schemaCache:           core.NewSchemaCache(),
+		tableMetrics:          newTableMetricsSet(),
 	}
 	records := []core.Record{
-		{Operation: core.OpUpdate, Data: map[string]any{"id": 1, "value": "old"}, Metadata: core.Metadata{Table: "orders", Key: `{"id":1}`}},
-		{Operation: core.OpUpdate, Data: map[string]any{"id": 1, "value": "new"}, Metadata: core.Metadata{Table: "orders", Key: `{"id":1}`}},
+		{Operation: core.OpUpdate, Before: map[string]any{"id": 1, "value": "before"}, Data: map[string]any{"id": 1, "value": "old"}, Metadata: core.Metadata{Table: "orders", Key: `{"id":1}`, PrimaryKeyColumns: []string{"id"}, FormatContractID: core.FormatContractOpenETLEnvelopeV1}},
+		{Operation: core.OpUpdate, Before: map[string]any{"id": 1, "value": "old"}, Data: map[string]any{"id": 1, "value": "new"}, Metadata: core.Metadata{Table: "orders", Key: `{"id":1}`, PrimaryKeyColumns: []string{"id"}, FormatContractID: core.FormatContractOpenETLEnvelopeV1}},
 	}
 	if err := s.Write(context.Background(), records); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -231,10 +232,11 @@ func TestDorisWriteCompactsMetadataKeyWithStaticTargetAndEmptySourceTable(t *tes
 		insertChunkSize:       500,
 		streamLoadTimeout:     time.Second,
 		schemaCache:           core.NewSchemaCache(),
+		tableMetrics:          newTableMetricsSet(),
 	}
 	records := []core.Record{
-		{Operation: core.OpUpdate, Data: map[string]any{"order_id": 1, "value": "old"}, Metadata: core.Metadata{Key: `{"order_id":1}`}},
-		{Operation: core.OpUpdate, Data: map[string]any{"order_id": 1, "value": "new"}, Metadata: core.Metadata{Key: `{"order_id":1}`}},
+		{Operation: core.OpUpdate, Before: map[string]any{"order_id": 1, "value": "before"}, Data: map[string]any{"order_id": 1, "value": "old"}, Metadata: core.Metadata{Key: `{"order_id":1}`, PrimaryKeyColumns: []string{"order_id"}, FormatContractID: core.FormatContractOpenETLEnvelopeV1}},
+		{Operation: core.OpUpdate, Before: map[string]any{"order_id": 1, "value": "old"}, Data: map[string]any{"order_id": 1, "value": "new"}, Metadata: core.Metadata{Key: `{"order_id":1}`, PrimaryKeyColumns: []string{"order_id"}, FormatContractID: core.FormatContractOpenETLEnvelopeV1}},
 	}
 	if err := s.Write(context.Background(), records); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -452,9 +454,10 @@ func TestDorisMetadataKeyColumnsFromEnvelope(t *testing.T) {
 		t.Fatalf("NewDorisSink: %v", err)
 	}
 	pkByTable, err := s.pkColumnsByTable([]core.Record{{
+		Operation: core.OpInsert,
 		Metadata: core.Metadata{
-			Table: "orders",
-			Key:   `{"tenant_id":"t1","order_id":42}`,
+			Table: "orders", Key: `{"tenant_id":"t1","order_id":42}`,
+			PrimaryKeyColumns: []string{"tenant_id", "order_id"},
 		},
 		Data: map[string]any{"tenant_id": "t1", "order_id": 42, "amount": 10},
 	}})
@@ -463,16 +466,6 @@ func TestDorisMetadataKeyColumnsFromEnvelope(t *testing.T) {
 	}
 	if got := pkByTable["orders"]; !sameIdentifierSet(got, []string{"order_id", "tenant_id"}) {
 		t.Fatalf("metadata pk columns = %v, want [order_id tenant_id]", got)
-	}
-	nestedPK, err := s.pkColumnsByTable([]core.Record{{
-		Metadata: core.Metadata{Table: "orders", Key: `{"schema":{},"payload":{"order_id":42}}`},
-		Data:     map[string]any{"order_id": 42},
-	}})
-	if err != nil {
-		t.Fatalf("nested metadata key: %v", err)
-	}
-	if got := nestedPK["orders"]; !sameIdentifierSet(got, []string{"order_id"}) {
-		t.Fatalf("nested metadata pk columns = %v, want [order_id]", got)
 	}
 	ddl, err := s.buildCreateTableDDLWithPK("ods_orders", []string{"tenant_id", "order_id", "amount"}, map[string]any{
 		"tenant_id": "t1",
@@ -492,10 +485,11 @@ func TestDorisMetadataKeyColumnsFromSnapshotCDCSource(t *testing.T) {
 	// (see source.metadataKeyJSON). Doris pk_columns_from_metadata must derive
 	// the key column name from it so the snapshot_cdc -> kafka -> doris path
 	// auto-detects the PK without a static pk_columns config.
-	s := &DorisSink{tableTemplate: "ods_cct_{table}", pkColumnsFromMetadata: true}
+	s := &DorisSink{name: "doris", database: "ods", tableTemplate: "ods_cct_{table}", pkColumnsFromMetadata: true}
 	pkByTable, err := s.pkColumnsByTable([]core.Record{{
-		Metadata: core.Metadata{Table: "address", Key: `{"address_id":12345}`},
-		Data:     map[string]any{"address_id": int64(12345), "city": "sh"},
+		Operation: core.OpInsert,
+		Metadata:  core.Metadata{Table: "address", Key: `{"address_id":12345}`, PrimaryKeyColumns: []string{"address_id"}},
+		Data:      map[string]any{"address_id": int64(12345), "city": "sh"},
 	}})
 	if err != nil {
 		t.Fatalf("pkColumnsByTable: %v", err)
@@ -506,10 +500,10 @@ func TestDorisMetadataKeyColumnsFromSnapshotCDCSource(t *testing.T) {
 }
 
 func TestDorisMetadataKeyColumnsRejectScalarEnvelopeKey(t *testing.T) {
-	s := &DorisSink{tableTemplate: "ods_{table}", pkColumnsFromMetadata: true}
-	_, err := s.pkColumnsByTable([]core.Record{{Metadata: core.Metadata{Table: "orders", Key: `"42"`}}})
-	if err == nil || !strings.Contains(err.Error(), "non-empty JSON object") {
-		t.Fatalf("scalar metadata key error = %v, want actionable JSON-object error", err)
+	s := &DorisSink{name: "doris", database: "ods", tableTemplate: "ods_{table}", pkColumnsFromMetadata: true}
+	_, err := s.pkColumnsByTable([]core.Record{{Operation: core.OpInsert, Data: map[string]any{"id": 42}, Metadata: core.Metadata{Table: "orders", Key: `"42"`, PrimaryKeyColumns: []string{"id"}}}})
+	if err == nil || !strings.Contains(err.Error(), string(core.RecordIdentityReasonKeyNotObject)) {
+		t.Fatalf("scalar metadata key error = %v, want key_not_object", err)
 	}
 }
 
@@ -521,6 +515,7 @@ func TestDorisValidateSchemaAllowsMetadataPKAutoCreate(t *testing.T) {
 	defer db.Close()
 
 	s := &DorisSink{
+		name:                  "doris",
 		db:                    db,
 		database:              "ods",
 		table:                 "orders",
@@ -528,6 +523,7 @@ func TestDorisValidateSchemaAllowsMetadataPKAutoCreate(t *testing.T) {
 		autoCreate:            true,
 		pkColumnsFromMetadata: true,
 		schemaCache:           core.NewSchemaCache(),
+		tableMetrics:          newTableMetricsSet(),
 	}
 	expectation := mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?"))
 	expectation.WithArgs("ods", "orders").WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(0))
@@ -549,11 +545,14 @@ func TestDorisDeleteUsesEnvelopeMetadataKey(t *testing.T) {
 	defer db.Close()
 
 	s := &DorisSink{
+		name:                  "doris",
 		db:                    db,
+		database:              "ods",
 		tableTemplate:         "ods_{table}",
 		pkColumnsFromMetadata: true,
 		insertChunkSize:       500,
 		schemaCache:           core.NewSchemaCache(),
+		tableMetrics:          newTableMetricsSet(),
 	}
 	expectation := mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `ods_orders` WHERE (`order_id`=? AND `tenant_id`=?)"))
 	expectation.WithArgs(int64(42), "t1").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -565,8 +564,8 @@ func TestDorisDeleteUsesEnvelopeMetadataKey(t *testing.T) {
 			"order_id":  int64(42),
 		},
 		Metadata: core.Metadata{
-			Table: "orders",
-			Key:   `{"tenant_id":"t1","order_id":42}`,
+			Table: "orders", Key: `{"tenant_id":"t1","order_id":42}`,
+			PrimaryKeyColumns: []string{"tenant_id", "order_id"},
 		},
 	}})
 	if err != nil {
@@ -574,6 +573,64 @@ func TestDorisDeleteUsesEnvelopeMetadataKey(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("delete expectation: %v", err)
+	}
+}
+
+func TestDorisMetadataPKKeyChangeWritesNewThenDeletesOld(t *testing.T) {
+	var body string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Errorf("read stream body: %v", readErr)
+		}
+		body = string(payload)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Status":"Success","StatusCode":200,"NumberTotalRows":1,"NumberLoadedRows":1}`))
+	}))
+	defer server.Close()
+	host, portText, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatalf("parse HTTP server: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse HTTP port: %v", err)
+	}
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	s := &DorisSink{
+		name: "doris", host: host, httpPort: port, database: "ods", tableTemplate: "ods_{table}",
+		writeMode: "stream_load", streamLoadScheme: "http", streamLoadFormat: "json", streamLoadTimeout: time.Second,
+		pkColumnsFromMetadata: true, insertChunkSize: 500, db: db, httpClient: server.Client(),
+		schemaCache: core.NewSchemaCache(), tableMetrics: newTableMetricsSet(),
+	}
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `ods_orders` WHERE (`id`=? AND `tenant_id`=?)")).
+		WithArgs(int64(1), "acme").WillReturnResult(sqlmock.NewResult(0, 1))
+	record := core.Record{
+		Operation: core.OpUpdate,
+		Before:    map[string]any{"tenant_id": "acme", "id": int64(1), "value": "old"},
+		Data:      map[string]any{"tenant_id": "acme", "id": int64(2), "value": "new"},
+		Metadata: core.Metadata{
+			Table: "orders", Key: `{"tenant_id":"acme","id":1}`,
+			PrimaryKeyColumns: []string{"tenant_id", "id"}, FormatContractID: core.FormatContractOpenETLEnvelopeV1,
+		},
+	}
+	if err := s.Write(context.Background(), []core.Record{record}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !strings.Contains(body, `"id":2`) || strings.Contains(body, `"id":1`) {
+		t.Fatalf("stream load body=%q, want only new-key live row", body)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("SQL expectations: %v", err)
+	}
+	stats := s.TableWriteStats()
+	if len(stats) != 1 || stats[0].RowsWritten != 2 || stats[0].Errors != 0 {
+		t.Fatalf("per-target stats=%+v, want live write + old-key delete", stats)
 	}
 }
 

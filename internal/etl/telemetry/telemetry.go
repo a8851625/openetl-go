@@ -58,31 +58,32 @@ func (r *MetricsRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 type PipelineMetrics struct {
-	ID                   string     `json:"id,omitempty"`
-	Name                 string     `json:"name"`
-	Status               string     `json:"status"`
-	RecordsRead          int64      `json:"records_read"`
-	RecordsWritten       int64      `json:"records_written"`
-	RecordsFailed        int64      `json:"records_failed"`
-	RecordsDLQ           int64      `json:"records_dlq"`
-	DLQFileCount         int        `json:"dlq_file_count"`
-	DLQReplayCount       int64      `json:"dlq_replay_count"`
-	DLQDeleteCount       int64      `json:"dlq_delete_count"`
-	LastError            string     `json:"last_error,omitempty"`
-	LastErrorCode        string     `json:"last_error_code,omitempty"`
-	LastErrorRemediation string     `json:"last_error_remediation,omitempty"`
-	LastCheckpoint       time.Time  `json:"last_checkpoint"`
-	CheckpointAgeSeconds int64      `json:"checkpoint_age_seconds"`
-	SourceReadLatencyMs  float64    `json:"source_read_latency_ms"`
-	SinkWriteLatencyMs   float64    `json:"sink_write_latency_ms"`
-	LastBatchSize        int        `json:"last_batch_size"`
-	AvgBatchSize         int64      `json:"avg_batch_size"`
-	BatchCount           int64      `json:"batch_count"`
-	CDCLagMs             int64      `json:"cdc_lag_ms,omitempty"`
-	BackpressureDepth    int        `json:"backpressure_depth"`
-	BackpressureCapacity int        `json:"backpressure_capacity"`
-	StartedAt            *time.Time `json:"started_at,omitempty"`
-	Uptime               string     `json:"uptime"`
+	ID                    string     `json:"id,omitempty"`
+	Name                  string     `json:"name"`
+	Status                string     `json:"status"`
+	RecordsRead           int64      `json:"records_read"`
+	RecordsWritten        int64      `json:"records_written"`
+	RecordsFailed         int64      `json:"records_failed"`
+	RecordsDLQ            int64      `json:"records_dlq"`
+	DLQFileCount          int        `json:"dlq_file_count"`
+	DLQReplayCount        int64      `json:"dlq_replay_count"`
+	DLQDeleteCount        int64      `json:"dlq_delete_count"`
+	LastError             string     `json:"last_error,omitempty"`
+	LastErrorCode         string     `json:"last_error_code,omitempty"`
+	LastErrorRemediation  string     `json:"last_error_remediation,omitempty"`
+	LastCheckpoint        time.Time  `json:"last_checkpoint"`
+	CheckpointAgeSeconds  int64      `json:"checkpoint_age_seconds"`
+	CheckpointFencedTotal int64      `json:"checkpoint_fenced_total"`
+	SourceReadLatencyMs   float64    `json:"source_read_latency_ms"`
+	SinkWriteLatencyMs    float64    `json:"sink_write_latency_ms"`
+	LastBatchSize         int        `json:"last_batch_size"`
+	AvgBatchSize          int64      `json:"avg_batch_size"`
+	BatchCount            int64      `json:"batch_count"`
+	CDCLagMs              int64      `json:"cdc_lag_ms,omitempty"`
+	BackpressureDepth     int        `json:"backpressure_depth"`
+	BackpressureCapacity  int        `json:"backpressure_capacity"`
+	StartedAt             *time.Time `json:"started_at,omitempty"`
+	Uptime                string     `json:"uptime"`
 	// CircuitBreakerState: 0=closed, 1=open, 2=half_open
 	CircuitBreakerState int `json:"circuit_breaker_state"`
 	// Derived business health (healthy/degraded/failed/…); mirrors UI rules.
@@ -171,6 +172,8 @@ func PrometheusHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 # TYPE etl_dlq_delete_total counter
 # HELP etl_checkpoint_age_seconds Age of the last committed checkpoint.
 # TYPE etl_checkpoint_age_seconds gauge
+# HELP etl_checkpoint_fenced_total Checkpoint writes rejected because their pipeline generation was stale.
+# TYPE etl_checkpoint_fenced_total counter
 # HELP etl_source_read_latency_ms Source read latency in milliseconds (average).
 # TYPE etl_source_read_latency_ms gauge
 # HELP etl_source_read_latency_ms_sum Cumulative source read latency in milliseconds.
@@ -226,6 +229,7 @@ func PrometheusHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 			fmt.Fprintf(w, "etl_dlq_replay_total{pipeline=\"%s\"} %d\n", p, m.DLQReplayCount)
 			fmt.Fprintf(w, "etl_dlq_delete_total{pipeline=\"%s\"} %d\n", p, m.DLQDeleteCount)
 			fmt.Fprintf(w, "etl_checkpoint_age_seconds{pipeline=\"%s\"} %d\n", p, m.CheckpointAgeSeconds)
+			fmt.Fprintf(w, "etl_checkpoint_fenced_total{pipeline=\"%s\"} %d\n", p, m.CheckpointFencedTotal)
 			fmt.Fprintf(w, "etl_source_read_latency_ms{pipeline=\"%s\"} %.2f\n", p, m.SourceReadLatencyMs)
 			fmt.Fprintf(w, "etl_sink_write_latency_ms{pipeline=\"%s\"} %.2f\n", p, m.SinkWriteLatencyMs)
 			fmt.Fprintf(w, "etl_last_batch_size{pipeline=\"%s\"} %d\n", p, m.LastBatchSize)

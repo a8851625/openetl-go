@@ -312,6 +312,9 @@ func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error
 			"ts_ms":     srcTS.UnixMilli(),
 			"event_id":  eventID,
 		}
+		if len(rec.Metadata.PrimaryKeyColumns) > 0 {
+			srcMeta["primary_key_columns"] = append([]string(nil), rec.Metadata.PrimaryKeyColumns...)
+		}
 		if rec.Metadata.BinlogFile != "" {
 			srcMeta["file"] = rec.Metadata.BinlogFile
 			srcMeta["pos"] = rec.Metadata.BinlogPos
@@ -341,6 +344,7 @@ func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error
 						{Field: "file", Type: "string"},
 						{Field: "pos", Type: "int64"},
 						{Field: "offset", Type: "int64"},
+						{Field: "primary_key_columns", Type: "array"},
 					}},
 					{Field: "op", Type: "string"},
 					{Field: "ts_ms", Type: "int64"},

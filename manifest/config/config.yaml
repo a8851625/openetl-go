@@ -23,6 +23,9 @@ etl:
   enabled: true
   profile: "development"  # production|development; ETL_PROFILE overrides
   insecureDevelopment: false # ETL_INSECURE_DEV=true is an explicit bypass only
+  # restore.strict defaults to false in development and true in production
+  # when omitted. ETL_RESTORE_STRICT / --restore-strict explicitly override it.
+  restore: {}
   cors:
     origins: "" # comma-separated origins; production empty means same-origin only
   trustedProxyCIDRs: "" # only these proxies may supply X-Forwarded-For

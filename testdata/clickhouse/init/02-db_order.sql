@@ -12,8 +12,9 @@ CREATE TABLE IF NOT EXISTS order_denormalized (
     status Nullable(String),
     created_at Nullable(DateTime),
     updated_at Nullable(DateTime),
-    _version Int64
-) ENGINE = ReplacingMergeTree(_version)
+    _version UInt64,
+    _is_deleted UInt8
+) ENGINE = ReplacingMergeTree(_version, _is_deleted)
 ORDER BY id
 SETTINGS index_granularity = 8192;
 
@@ -25,7 +26,8 @@ CREATE TABLE IF NOT EXISTS dayliy_order (
     price Nullable(Decimal(12,2)),
     created_at Nullable(DateTime),
     updated_at Nullable(DateTime),
-    _version Int64
-) ENGINE = ReplacingMergeTree(_version)
+    _version UInt64,
+    _is_deleted UInt8
+) ENGINE = ReplacingMergeTree(_version, _is_deleted)
 ORDER BY id
 SETTINGS index_granularity = 8192;

@@ -7,8 +7,10 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 
+	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/schema"
 
+	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/sink/typing"
 )
 
@@ -407,6 +409,44 @@ func TestSnapshotCDCCompositePKKeyDerivation(t *testing.T) {
 	deleteKey := metadataKeyJSONMulti(pkCols, deleteRow)
 	if deleteKey != `{"code":"ABC","customer_id":130201}` {
 		t.Fatalf("composite delete metadataKeyJSONMulti = %q", deleteKey)
+	}
+}
+
+func TestSnapshotCDCHandlerEmitsSharedRecordContract(t *testing.T) {
+	reader := &snapshotCDCReader{
+		source:      &MySQLSnapshotCDCSource{name: "snapshot-orders", database: "shop"},
+		records:     make(chan core.Record, 1),
+		done:        make(chan struct{}),
+		resolvedPKs: map[string]resolvedPK{"orders": {column: "id", kind: pkKindNumeric}},
+		file:        "mysql-bin.000009",
+		pos:         120,
+	}
+	table := &schema.Table{
+		Name:      "orders",
+		Columns:   []schema.TableColumn{{Name: "id"}, {Name: "value"}},
+		PKColumns: []int{0},
+	}
+	handler := &snapshotCDCHandler{reader: reader}
+	if err := handler.OnRow(&canal.RowsEvent{
+		Table: table, Action: canal.InsertAction,
+		Rows: [][]interface{}{{int64(42), "new"}},
+	}); err != nil {
+		t.Fatalf("OnRow: %v", err)
+	}
+	record := <-reader.records
+	if record.Metadata.SourceType != core.SourceTypeMySQLSnapshotCDC || record.Metadata.SourcePhase != core.SourcePhaseCDC {
+		t.Fatalf("source contract = %+v", record.Metadata)
+	}
+	if len(record.Metadata.PrimaryKeyColumns) != 1 || record.Metadata.PrimaryKeyColumns[0] != "id" {
+		t.Fatalf("primary key declaration = %v", record.Metadata.PrimaryKeyColumns)
+	}
+	if identity := core.RecordIdentity(record); !identity.Complete {
+		t.Fatalf("record identity = %+v, want complete", identity)
+	}
+	order := core.SourceOrder(record)
+	wantVersion := uint64(1)<<63 | uint64(9)<<32 | 120
+	if !order.VersionAvailable || order.Version != wantVersion {
+		t.Fatalf("source order = %+v, want %d", order, wantVersion)
 	}
 }
 

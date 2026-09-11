@@ -238,9 +238,11 @@ func (r *csvReader) record(row []string) core.Record {
 		Operation: core.OpInsert,
 		Data:      data,
 		Metadata: core.Metadata{
-			Table:     r.tableName,
-			Timestamp: time.Now(),
-			Offset:    r.offset,
+			Source:     core.SourceTypeFile,
+			SourceType: core.SourceTypeFile,
+			Table:      r.tableName,
+			Timestamp:  time.Now(),
+			Offset:     r.offset,
 		},
 	}
 }
@@ -293,9 +295,11 @@ func (r *jsonReader) Read(ctx context.Context) (core.Record, error) {
 		Operation: core.OpInsert,
 		Data:      data,
 		Metadata: core.Metadata{
-			Table:     r.tableName,
-			Timestamp: time.Now(),
-			Offset:    r.offset,
+			Source:     core.SourceTypeFile,
+			SourceType: core.SourceTypeFile,
+			Table:      r.tableName,
+			Timestamp:  time.Now(),
+			Offset:     r.offset,
 		},
 	}, nil
 }

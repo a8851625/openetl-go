@@ -120,6 +120,12 @@ wait_mysql_healthy
 echo "==> Wait ClickHouse HTTP"
 wait_http "http://127.0.0.1:8123/ping"
 
+# e2e-clickhouse.sh historically left its CDC process running. That source can
+# observe this test's MySQL DDL before table filtering and apply it to the same
+# ClickHouse database, racing auto-create. Remove both app identities before
+# changing the source schema; the previous script now also cleans itself up.
+"$CONTAINER_CLI" rm -f "$APP_CONTAINER" etl-openetl-go-clickhouse >/dev/null 2>&1 || true
+
 echo "==> Prepare MySQL source table"
 "$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "
 DROP TABLE IF EXISTS dzh3136_go.$TABLE;
@@ -191,15 +197,24 @@ run_app
 wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL WHERE id = 8 AND loyalty = 'silver'" "1"
 wait_checkpoint_cdc
 
-echo "==> Verify checkpoint reset replay is absorbed by ReplacingMergeTree"
+echo "==> Verify checkpoint reset re-snapshot supersedes prior CDC versions"
 before_raw_total="$(ch_query "SELECT count() FROM dzh3136_go.$TABLE" || echo 0)"
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/stop" >/dev/null
+# Change a row while the pipeline is stopped. mysql_snapshot_cdc reset starts a
+# new current-state snapshot instead of replaying old binlog history. The
+# snapshot row must therefore use its newly captured binlog handoff as the
+# ClickHouse version; a primary-key cursor version would be lower than the
+# already-written CDC version and leave 222.22 visible forever.
+"$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 dzh3136_go -e "
+UPDATE $TABLE SET amount = 333.33 WHERE id = 2;
+"
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/checkpoint/reset" >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/start" >/dev/null
 wait_pipeline_running
 # FINAL business-key state must remain correct (no silent loss / no inflated keys).
 wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL" "7"
 wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL WHERE id = 1" "1"
+wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL WHERE id = 2 AND amount = 333.33" "1"
 wait_ch_value "SELECT count() FROM dzh3136_go.$TABLE FINAL WHERE id = 8 AND loyalty = 'silver'" "1"
 # Prefer observing raw duplicate parts, but accept immediate merge as long as
 # FINAL count stays correct and pipeline advanced (at-least-once + RMT absorb).

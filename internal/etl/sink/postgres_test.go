@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-
 func TestBuildPgCreateTableDDLDerivedPK(t *testing.T) {
 	// GAP-3: auto-created tables must carry the derived PRIMARY KEY so the
 	// upsert path's ON CONFLICT(per-table pk) has a matching constraint

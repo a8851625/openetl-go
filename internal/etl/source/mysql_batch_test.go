@@ -88,6 +88,16 @@ func TestMySQLBatchReaderFillsDatabaseMetadata(t *testing.T) {
 	if rec.Operation != core.OpInsert {
 		t.Errorf("Operation = %q, want INSERT", rec.Operation)
 	}
+	if rec.Metadata.SourceType != core.SourceTypeMySQLBatch || rec.Metadata.SourcePhase != core.SourcePhaseBatch {
+		t.Errorf("source contract = %q/%q, want mysql_batch/batch", rec.Metadata.SourceType, rec.Metadata.SourcePhase)
+	}
+	if len(rec.Metadata.PrimaryKeyColumns) != 1 || rec.Metadata.PrimaryKeyColumns[0] != "id" {
+		t.Errorf("primary key declaration = %v, want [id]", rec.Metadata.PrimaryKeyColumns)
+	}
+	order := core.SourceOrder(rec)
+	if !order.Available || !order.VersionAvailable || order.Version != 1 {
+		t.Errorf("source order = %+v, want numeric cursor 1", order)
+	}
 	if got := rec.Data["id"]; got != int64(1) {
 		t.Errorf("Data.id = %#v, want 1", got)
 	}

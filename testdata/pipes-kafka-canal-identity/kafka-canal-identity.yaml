@@ -1,0 +1,41 @@
+name: kafka-canal-identity
+source:
+  type: kafka
+  config:
+    brokers:
+      - redpanda:9092
+    topic: canal-identity
+    group_id: kafka-canal-identity
+    initial_offset: oldest
+    format: canal_json
+    on_parse_error: dlq
+
+sink:
+  type: clickhouse
+  config:
+    host: etl-clickhouse
+    user: default
+    password: dzh123456
+    database: dzh3136_go
+    table: canal_identity
+    pk_columns_from_metadata: true
+    # Static keys are used only by the explicit legacy DLQ repair gate. Normal
+    # traffic and contract-aware replay still require complete Metadata.Key.
+    pk_columns:
+      - tenant_id
+      - id
+    version_mode: source_order
+    auto_create: true
+    schema_drift: add_columns
+
+schedule:
+  type: streaming
+batch_size: 1
+flush_interval_ms: 100
+checkpoint_interval_sec: 1
+retry:
+  max_attempts: 1
+  initial_interval_ms: 100
+  max_interval_ms: 100
+dlq:
+  enable: true

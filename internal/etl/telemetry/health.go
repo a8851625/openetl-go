@@ -26,15 +26,16 @@ const (
 type PipelineHealth string
 
 const (
-	PipelineHealthy   PipelineHealth = "healthy"
-	PipelineDegraded  PipelineHealth = "degraded"
-	PipelineFailed    PipelineHealth = "failed"
-	PipelinePaused    PipelineHealth = "paused"
-	PipelineScheduled PipelineHealth = "scheduled"
-	PipelineCompleted PipelineHealth = "completed"
-	PipelineStopped   PipelineHealth = "stopped"
-	PipelineStarting  PipelineHealth = "starting"
-	PipelineUnknown   PipelineHealth = "unknown"
+	PipelineHealthy       PipelineHealth = "healthy"
+	PipelineDegraded      PipelineHealth = "degraded"
+	PipelineFailed        PipelineHealth = "failed"
+	PipelinePaused        PipelineHealth = "paused"
+	PipelineScheduled     PipelineHealth = "scheduled"
+	PipelineCompleted     PipelineHealth = "completed"
+	PipelineStopped       PipelineHealth = "stopped"
+	PipelineStarting      PipelineHealth = "starting"
+	PipelineRestoreFailed PipelineHealth = "restore_failed"
+	PipelineUnknown       PipelineHealth = "unknown"
 )
 
 // HealthThresholds controls degraded/unhealthy transitions for running pipelines.
@@ -96,6 +97,8 @@ func DerivePipelineHealth(in PipelineHealthInput, th HealthThresholds) PipelineH
 		return PipelineStarting
 	case "stopped":
 		return PipelineStopped
+	case "restore_failed":
+		return PipelineRestoreFailed
 	case "running":
 		if in.RecordsFailed > 0 ||
 			in.RecordsDLQ > 0 ||
@@ -114,10 +117,10 @@ func DerivePipelineHealth(in PipelineHealthInput, th HealthThresholds) PipelineH
 
 // ComponentHealth is one named subsystem entry in /api/v2/health.
 type ComponentHealth struct {
-	Name    string
-	Status  string // ok | degraded | unhealthy | skipped
-	Detail  string
-	Level   string // ok | degraded | unhealthy (for aggregation)
+	Name   string
+	Status string // ok | degraded | unhealthy | skipped
+	Detail string
+	Level  string // ok | degraded | unhealthy (for aggregation)
 }
 
 // AggregateHealth folds component + pipeline signals into overall status.
@@ -154,7 +157,7 @@ func AggregateHealth(components []ComponentHealth, pipelineHealth map[string]Pip
 		switch h {
 		case PipelineFailed:
 			failed++
-		case PipelineDegraded:
+		case PipelineDegraded, PipelineRestoreFailed:
 			degraded++
 		}
 	}

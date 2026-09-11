@@ -66,6 +66,17 @@ func TestAggregateHealth(t *testing.T) {
 	}
 }
 
+func TestRestoreFailedHealthIsVisibleAndDegraded(t *testing.T) {
+	health := DerivePipelineHealth(PipelineHealthInput{Status: "restore_failed"}, DefaultHealthThresholds())
+	if health != PipelineRestoreFailed {
+		t.Fatalf("health=%q want=%q", health, PipelineRestoreFailed)
+	}
+	overall, reasons := AggregateHealth(nil, map[string]PipelineHealth{"broken": health})
+	if overall != HealthDegraded {
+		t.Fatalf("overall=%q reasons=%v want degraded", overall, reasons)
+	}
+}
+
 func TestEscapePrometheusLabel(t *testing.T) {
 	in := `pipe"name\with
 newline`

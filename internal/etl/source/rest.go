@@ -570,9 +570,10 @@ func (r *restReader) fetchPage(ctx context.Context) ([]core.Record, error) {
 				Operation: core.OpInsert,
 				Data:      data,
 				Metadata: core.Metadata{
-					Source:    r.source.name,
-					Table:     r.source.name,
-					Timestamp: ts,
+					Source:     r.source.name,
+					SourceType: core.SourceTypeREST,
+					Table:      r.source.name,
+					Timestamp:  ts,
 				},
 			})
 		}

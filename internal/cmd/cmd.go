@@ -7,6 +7,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcmd"
@@ -26,8 +27,12 @@ var (
 			return nil
 		},
 		Func: func(ctx context.Context, parser *gcmd.Parser) (err error) {
-			if _, err := applyRuntimeFlags(); err != nil {
+			opts, err := applyRuntimeFlags()
+			if err != nil {
 				return err
+			}
+			if opts.backupFile != "" || opts.restoreFile != "" || opts.checkSecrets || opts.remediateSecrets {
+				return runBackupMaintenance(ctx, opts, os.Stdout)
 			}
 			// Structured (JSON stdout) logging before any g.Log() call (P5-16).
 			app.ConfigureStructuredLogging()

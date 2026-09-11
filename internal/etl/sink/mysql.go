@@ -4,11 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -301,6 +299,22 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 			dataRecords = append(dataRecords, rec)
 		}
 	}
+	pkColumnsByTable := map[string][]string{}
+	if s.pkColumnsFromMetadata {
+		validationStarted := time.Now()
+		validation, validationErr := validateMetadataPKBatch(s.name, dataRecords, s.pkColumns, func(record core.Record) (metadataPKTarget, error) {
+			return metadataPKTarget{Database: s.database, Table: s.targetTable(record)}, nil
+		})
+		if validationErr != nil {
+			recordMetadataPKFailure(s.tableMetrics, validationErr, time.Since(validationStarted))
+			return validationErr
+		}
+		pkColumnsByTable = validation.ColumnsByTable
+		dataRecords, _ = expandMetadataPKKeyChanges(dataRecords, validation)
+	}
+
+	// Identity and target routing are validated before DDL so a malformed data
+	// record cannot produce a schema side effect and then fail closed.
 	if err := ApplyDDLRecords(ctx, ddlRecords, s.ddLPolicy, func(ctx context.Context, ddl, table string) error {
 		_, err := s.db.ExecContext(ctx, ddl)
 		return err
@@ -313,7 +327,7 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 	}
 
 	// Auto-create missing tables and handle schema drift before writing.
-	if err := s.ensureTablesAndColumns(ctx, records); err != nil {
+	if err := s.ensureTablesAndColumns(ctx, records, pkColumnsByTable); err != nil {
 		return err
 	}
 
@@ -336,8 +350,8 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 		if targetTable == "" {
 			// best-effort: use first record's table
 			for _, rec := range records {
-				if rec.Metadata.Table != "" {
-					targetTable = rec.Metadata.Table
+				if resolved := s.targetTable(rec); resolved != "" {
+					targetTable = resolved
 					break
 				}
 			}
@@ -354,9 +368,10 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 	// would reorder DELETE(pk=1)→INSERT(pk=1) into INSERT→DELETE.
 	pkColumnsForTable := func(table string) []string {
 		if s.pkColumnsFromMetadata {
-			if pk := s.derivePKFromMetadata(table, records); len(pk) > 0 {
+			if pk := pkColumnsByTable[table]; len(pk) > 0 {
 				return pk
 			}
+			return nil
 		}
 		if len(s.pkColumns) > 0 {
 			return s.pkColumns
@@ -384,10 +399,7 @@ func (s *MySQLSink) Write(ctx context.Context, records []core.Record) (err error
 	var groupOrder []groupKey
 
 	for _, rec := range records {
-		tableName := s.table
-		if rec.Metadata.Table != "" {
-			tableName = rec.Metadata.Table
-		}
+		tableName := s.targetTable(rec)
 		// Skip GENERATED columns (VIRTUAL/STORED) — they cannot be written.
 		genSet := s.generatedColumnsFor(ctx, tableName)
 		// Sort column names for a deterministic signature.
@@ -671,7 +683,7 @@ func (s *MySQLSink) EnsureSchema(ctx context.Context, tableName string, fields [
 
 // ensureTablesAndColumns auto-creates missing tables and adds missing columns
 // based on the record data. This is called before each Write batch.
-func (s *MySQLSink) ensureTablesAndColumns(ctx context.Context, records []core.Record) error {
+func (s *MySQLSink) ensureTablesAndColumns(ctx context.Context, records []core.Record, pkColumnsByTable map[string][]string) error {
 	if !s.autoCreate && s.schemaDrift != "add_columns" && s.schemaDrift != "fail" {
 		return nil
 	}
@@ -684,10 +696,7 @@ func (s *MySQLSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 	}
 	tableMeta := make(map[string]*colInfo)
 	for _, rec := range records {
-		tableName := s.table
-		if rec.Metadata.Table != "" {
-			tableName = rec.Metadata.Table
-		}
+		tableName := s.targetTable(rec)
 		if tableName == "" {
 			continue
 		}
@@ -736,7 +745,18 @@ func (s *MySQLSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 			}
 			samples["__column_types__"] = ti.declared
 		}
-		if err := s.EnsureSchema(ctx, tableName, ti.cols, samples); err != nil {
+		pkColumns := s.pkColumns
+		if s.pkColumnsFromMetadata {
+			pkColumns = pkColumnsByTable[tableName]
+		}
+		if err := core.EnsureSchemaGeneric(ctx, s.schemaCache, tableName, ti.cols, samples,
+			s.autoCreate, core.SchemaDriftMode(s.schemaDrift),
+			s.tableExists,
+			func(ctx context.Context, table string, columns []string, values map[string]any) error {
+				return s.createTableFromFieldsWithPK(ctx, table, columns, values, pkColumns)
+			},
+			s.getExistingColumns, s.addColumn,
+		); err != nil {
 			return err
 		}
 	}
@@ -824,58 +844,24 @@ func (s *MySQLSink) generatedColumnsFor(ctx context.Context, table string) map[s
 	return genSet
 }
 
-// pkFromMetadataCache caches per-table pk_columns derived from Debezium key payloads.
-// Key format expected in rec.Metadata.Key: JSON object like {"id": 123} or
-// {"tenant_id": "x", "seq": 5}. The field names become the pk_columns.
-type pkMetadataCache struct {
-	mu   sync.Mutex
-	pkBy map[string][]string // table -> pk columns
-}
-
-var pkMetaCache = &pkMetadataCache{pkBy: map[string][]string{}}
-
-// derivePKFromMetadata extracts pk_columns for the given table from the first
-// record whose Metadata.Key is a JSON object. Cached per table. Returns nil
-// when no usable key is found (caller falls back to configured pk_columns).
-func (s *MySQLSink) derivePKFromMetadata(table string, records []core.Record) []string {
-	pkMetaCache.mu.Lock()
-	if cached, ok := pkMetaCache.pkBy[table]; ok {
-		pkMetaCache.mu.Unlock()
-		return cached
-	}
-	pkMetaCache.mu.Unlock()
-	for _, rec := range records {
-		if rec.Metadata.Table != table && rec.Metadata.Table != "" {
-			continue
-		}
-		if rec.Metadata.Key == "" {
-			continue
-		}
-		var keyObj map[string]any
-		if err := json.Unmarshal([]byte(rec.Metadata.Key), &keyObj); err != nil {
-			continue
-		}
-		if len(keyObj) == 0 {
-			continue
-		}
-		pk := make([]string, 0, len(keyObj))
-		for k := range keyObj {
-			pk = append(pk, k)
-		}
-		sort.Strings(pk)
-		pkMetaCache.mu.Lock()
-		pkMetaCache.pkBy[table] = pk
-		pkMetaCache.mu.Unlock()
-		return pk
-	}
-	return nil
-}
-
 // createTableFromFields creates a target table with columns resolved via
 // column_types override → source/Debezium declared types → sample inference.
 func (s *MySQLSink) createTableFromFields(ctx context.Context, table string, columns []string, fieldValues map[string]any) error {
+	return s.createTableFromFieldsWithPK(ctx, table, columns, fieldValues, s.pkColumns)
+}
+
+func (s *MySQLSink) createTableFromFieldsWithPK(ctx context.Context, table string, columns []string, fieldValues map[string]any, pkColumns []string) error {
+	ddl, err := s.buildCreateTableDDLWithPK(table, columns, fieldValues, pkColumns)
+	if err != nil || ddl == "" {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, ddl)
+	return err
+}
+
+func (s *MySQLSink) buildCreateTableDDLWithPK(table string, columns []string, fieldValues map[string]any, pkColumns []string) (string, error) {
 	if len(columns) == 0 {
-		return nil
+		return "", nil
 	}
 
 	sort.Strings(columns)
@@ -885,13 +871,29 @@ func (s *MySQLSink) createTableFromFields(ctx context.Context, table string, col
 	b.WriteString(quoteIdentMySQL(table))
 	b.WriteString(" (")
 
-	// Determine PK column (default "id" if present).
-	pkCol := ""
-	for _, c := range columns {
-		if c == "id" || c == "ID" || c == "Id" {
-			pkCol = c
-			break
+	columnSet := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		columnSet[column] = true
+	}
+	for _, pk := range pkColumns {
+		if !columnSet[pk] {
+			return "", fmt.Errorf("create mysql table %s: primary-key column %q is not present in source fields %v", table, pk, columns)
 		}
+	}
+	// Preserve the legacy auto-increment id heuristic only when no explicit or
+	// metadata-derived key contract exists.
+	legacyIDPK := ""
+	if len(pkColumns) == 0 {
+		for _, c := range columns {
+			if strings.EqualFold(c, "id") {
+				legacyIDPK = c
+				break
+			}
+		}
+	}
+	pkSet := make(map[string]bool, len(pkColumns))
+	for _, pk := range pkColumns {
+		pkSet[pk] = true
 	}
 
 	// Optional per-batch declared types attached under reserved key.
@@ -909,17 +911,50 @@ func (s *MySQLSink) createTableFromFields(ctx context.Context, table string, col
 		b.WriteString(quoteIdentMySQL(c))
 		b.WriteString(" ")
 
-		if c == pkCol {
+		if c == legacyIDPK {
 			b.WriteString("BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY")
 		} else {
 			colType := s.resolveColumnDDL(c, fieldValues[c], recordDeclared)
 			b.WriteString(colType)
+			if pkSet[c] {
+				b.WriteString(" NOT NULL")
+			}
 		}
+	}
+	if len(pkColumns) > 0 {
+		quoted := make([]string, len(pkColumns))
+		for index, column := range pkColumns {
+			quoted[index] = quoteIdentMySQL(column)
+		}
+		b.WriteString(", PRIMARY KEY (")
+		b.WriteString(strings.Join(quoted, ", "))
+		b.WriteString(")")
 	}
 	b.WriteString(") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
 
-	_, err := s.db.ExecContext(ctx, b.String())
-	return err
+	return b.String(), nil
+}
+
+func (s *MySQLSink) targetTable(record core.Record) string {
+	if strings.TrimSpace(record.Metadata.Table) != "" {
+		return strings.TrimSpace(record.Metadata.Table)
+	}
+	return strings.TrimSpace(s.table)
+}
+
+func (s *MySQLSink) pkColumnsByTable(records []core.Record) (map[string][]string, error) {
+	if !s.pkColumnsFromMetadata {
+		return map[string][]string{}, nil
+	}
+	started := time.Now()
+	validation, err := validateMetadataPKBatch(s.name, records, s.pkColumns, func(record core.Record) (metadataPKTarget, error) {
+		return metadataPKTarget{Database: s.database, Table: s.targetTable(record)}, nil
+	})
+	if err != nil {
+		recordMetadataPKFailure(s.tableMetrics, err, time.Since(started))
+		return nil, err
+	}
+	return validation.ColumnsByTable, nil
 }
 
 // addColumn adds a single column to an existing table using the same type

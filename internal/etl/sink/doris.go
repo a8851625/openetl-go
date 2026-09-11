@@ -99,6 +99,7 @@ type DorisSink struct {
 	httpClient   *http.Client
 	schemaCache  *core.SchemaCache
 	sinkCounters // P4-20: per-sink write metrics (SK-4)
+	tableMetrics *tableMetricsSet
 }
 
 func NewDorisSink(config map[string]any) (*DorisSink, error) {
@@ -114,6 +115,7 @@ func NewDorisSink(config map[string]any) (*DorisSink, error) {
 		streamLoadScheme:  "http",
 		insertChunkSize:   500,
 	}
+	s.tableMetrics = newTableMetricsSet()
 	if v, ok := config["name"]; ok {
 		s.name = v.(string)
 	}
@@ -333,8 +335,33 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) (err error
 			dataRecords = append(dataRecords, rec)
 		}
 	}
+	originalHasWrites := false
+	originalHasDeletes := false
+	for _, record := range dataRecords {
+		if record.Operation == core.OpDelete {
+			originalHasDeletes = true
+		} else {
+			originalHasWrites = true
+		}
+	}
 
-	// Apply DDL first according to ddl_policy (schema changes precede data).
+	pkColumnsByTable := map[string][]string{}
+	if s.pkColumnsFromMetadata {
+		validationStarted := time.Now()
+		validation, validationErr := validateMetadataPKBatch(s.name, dataRecords, s.pkColumns, func(record core.Record) (metadataPKTarget, error) {
+			table, resolveErr := s.resolveTable(record)
+			return metadataPKTarget{Database: s.database, Table: table}, resolveErr
+		})
+		if validationErr != nil {
+			recordMetadataPKFailure(s.tableMetrics, validationErr, time.Since(validationStarted))
+			return validationErr
+		}
+		pkColumnsByTable = validation.ColumnsByTable
+		dataRecords, _ = expandMetadataPKKeyChanges(dataRecords, validation)
+	}
+
+	// Validate data identity and target routing before DDL so a malformed row
+	// cannot leave a schema-only side effect.
 	if err := ApplyDDLRecords(ctx, ddlRecords, s.ddLPolicy, func(ctx context.Context, ddl, table string) error {
 		if err := validateDorisApplyDDL(ddl); err != nil {
 			return err
@@ -350,11 +377,6 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) (err error
 
 	if len(dataRecords) == 0 {
 		return nil
-	}
-
-	pkColumnsByTable, err := s.pkColumnsByTable(dataRecords)
-	if err != nil {
-		return err
 	}
 
 	// Compact by (table, PK) in source order so mixed CDC batches on the same
@@ -392,7 +414,11 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) (err error
 			writes = append(writes, rec)
 		}
 	}
-	if len(writes) > 0 && len(deletes) > 0 && !s.allowMixedCDCNonAtomic {
+	// A key-changing UPDATE necessarily expands to write-new then delete-old.
+	// That sequence is safe for at-least-once replay (a crash can leave a stale
+	// old row until retry, but cannot silently lose the new row). Continue to
+	// require the explicit opt-in for an originally mixed write/delete batch.
+	if originalHasWrites && originalHasDeletes && !s.allowMixedCDCNonAtomic {
 		return fmt.Errorf("doris sink refuses mixed write/delete CDC batch because Stream Load and MySQL DELETE are not atomic together; set allow_mixed_cdc_non_atomic=true to accept at-least-once non-atomic semantics")
 	}
 
@@ -419,36 +445,23 @@ func (s *DorisSink) Write(ctx context.Context, records []core.Record) (err error
 	return nil
 }
 
-// pkColumnsByTable derives the key columns used by a batch when the sink is
-// configured for metadata-driven keys. Kafka envelope sources preserve the
-// original Debezium key in Metadata.Key; the key must be a JSON object because
-// its property names are the only available column names. A scalar key is
-// deliberately rejected instead of silently falling back to id.
+// pkColumnsByTable applies the shared complete-identity contract before Doris
+// schema or row operations. Ordinary metadata-driven records never fall back
+// to static pk_columns or id.
 func (s *DorisSink) pkColumnsByTable(records []core.Record) (map[string][]string, error) {
-	result := make(map[string][]string)
 	if !s.pkColumnsFromMetadata {
-		return result, nil
+		return map[string][]string{}, nil
 	}
-	for _, rec := range records {
-		targetTable, err := s.resolveTable(rec)
-		if err != nil {
-			return nil, err
-		}
-		pk := parseMetadataKeyColumns(rec.Metadata.Key)
-		if len(pk) == 0 {
-			return nil, fmt.Errorf("doris sink: pk_columns_from_metadata requires Metadata.Key to be a non-empty JSON object for table %q; use pk_columns for scalar keys", targetTable)
-		}
-		for _, table := range []string{targetTable, rec.Metadata.Table} {
-			if table == "" {
-				continue
-			}
-			if existing, ok := result[table]; ok && !sameIdentifierSet(existing, pk) {
-				return nil, fmt.Errorf("doris sink: metadata key columns for table %q changed within one batch (%v -> %v)", table, existing, pk)
-			}
-			result[table] = pk
-		}
+	started := time.Now()
+	validation, err := validateMetadataPKBatch(s.name, records, s.pkColumns, func(record core.Record) (metadataPKTarget, error) {
+		table, resolveErr := s.resolveTable(record)
+		return metadataPKTarget{Database: s.database, Table: table}, resolveErr
+	})
+	if err != nil {
+		recordMetadataPKFailure(s.tableMetrics, err, time.Since(started))
+		return nil, err
 	}
-	return result, nil
+	return validation.ColumnsByTable, nil
 }
 
 // applyDDL executes a DDL statement on the Doris target via MySQL protocol
@@ -482,9 +495,12 @@ func (s *DorisSink) writeViaStreamLoad(ctx context.Context, records []core.Recor
 	}
 
 	for tableName, recs := range tableGroups {
+		started := time.Now()
 		if err := s.streamLoad(ctx, tableName, recs); err != nil {
+			s.tableMetrics.record(tableName, 0, time.Since(started), true)
 			return fmt.Errorf("stream load to %s: %w", tableName, err)
 		}
+		s.tableMetrics.record(tableName, len(recs), time.Since(started), false)
 	}
 	return nil
 }
@@ -742,15 +758,23 @@ func (s *DorisSink) writeViaInsert(ctx context.Context, records []core.Record) e
 
 	for _, key := range order {
 		g := groups[key]
+		started := time.Now()
 		if err := s.batchInsert(ctx, tx, key.table, g.cols, g.rows); err != nil {
+			s.tableMetrics.record(key.table, 0, time.Since(started), true)
 			return err
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
+		for _, key := range order {
+			s.tableMetrics.record(key.table, 0, 0, true)
+		}
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+	for _, key := range order {
+		s.tableMetrics.record(key.table, len(groups[key].rows), 0, false)
+	}
 	return nil
 }
 
@@ -809,6 +833,7 @@ func (s *DorisSink) batchDeleteRecords(ctx context.Context, records []core.Recor
 	}
 
 	for tableName, recs := range tableGroups {
+		started := time.Now()
 		pkCols := s.pkColumns
 		if derived, ok := pkColumnsByTable[tableName]; ok {
 			pkCols = derived
@@ -837,6 +862,7 @@ func (s *DorisSink) batchDeleteRecords(ctx context.Context, records []core.Recor
 					args = append(args, keys[pkCols[0]])
 				}
 				if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+					s.tableMetrics.record(tableName, 0, time.Since(started), true)
 					return fmt.Errorf("batch delete %s (rows=%d): %w", tableName, len(chunk), err)
 				}
 				continue
@@ -866,9 +892,11 @@ func (s *DorisSink) batchDeleteRecords(ctx context.Context, records []core.Recor
 				}
 			}
 			if _, err := s.db.ExecContext(ctx, b.String(), args...); err != nil {
+				s.tableMetrics.record(tableName, 0, time.Since(started), true)
 				return fmt.Errorf("batch delete %s (rows=%d): %w", tableName, len(chunk), err)
 			}
 		}
+		s.tableMetrics.record(tableName, len(recs), time.Since(started), false)
 	}
 	return nil
 }
@@ -910,6 +938,7 @@ func (s *DorisSink) ensureTablesAndColumns(ctx context.Context, records []core.R
 func (s *DorisSink) collectSchemaInputs(records []core.Record) (map[string][]string, map[string]map[string]any, error) {
 	tableCols := make(map[string][]string)
 	tableValues := make(map[string]map[string]any)
+	tableDeclared := make(map[string]map[string]string)
 	for _, rec := range records {
 		tableName, err := s.resolveTable(rec)
 		if err != nil {
@@ -920,6 +949,9 @@ func (s *DorisSink) collectSchemaInputs(records []core.Record) (map[string][]str
 		}
 		if tableValues[tableName] == nil {
 			tableValues[tableName] = make(map[string]any)
+		}
+		if tableDeclared[tableName] == nil {
+			tableDeclared[tableName] = make(map[string]string)
 		}
 		for k := range rec.Data {
 			found := false
@@ -935,6 +967,19 @@ func (s *DorisSink) collectSchemaInputs(records []core.Record) (map[string][]str
 			if _, ok := tableValues[tableName][k]; !ok && rec.Data[k] != nil {
 				tableValues[tableName][k] = rec.Data[k]
 			}
+		}
+		for column, declaredType := range rec.Metadata.ColumnTypes {
+			if strings.TrimSpace(column) == "" || strings.TrimSpace(declaredType) == "" {
+				continue
+			}
+			if _, exists := tableDeclared[tableName][column]; !exists {
+				tableDeclared[tableName][column] = declaredType
+			}
+		}
+	}
+	for tableName, declared := range tableDeclared {
+		if len(declared) > 0 {
+			tableValues[tableName]["__column_types__"] = declared
 		}
 	}
 	return tableCols, tableValues, nil
@@ -1190,6 +1235,12 @@ func (s *DorisSink) buildCreateTableDDLWithPK(table string, columns []string, fi
 	for _, c := range keyCols {
 		keySet[normalizeIdentifier(c)] = true
 	}
+	var recordDeclared map[string]string
+	if fieldValues != nil {
+		if declared, ok := fieldValues["__column_types__"].(map[string]string); ok {
+			recordDeclared = declared
+		}
+	}
 
 	var b strings.Builder
 	b.WriteString("CREATE TABLE IF NOT EXISTS ")
@@ -1205,10 +1256,10 @@ func (s *DorisSink) buildCreateTableDDLWithPK(table string, columns []string, fi
 		b.WriteString(" ")
 
 		if keySet[normalizeIdentifier(c)] {
-			b.WriteString(inferDorisKeyType(c, fieldValues[c]))
+			b.WriteString(inferDorisKeyTypeDeclared(c, fieldValues[c], recordDeclared[c]))
 			b.WriteString(" NOT NULL")
 		} else {
-			b.WriteString(inferDorisType(c, fieldValues[c]))
+			b.WriteString(inferDorisTypeDeclared(c, fieldValues[c], recordDeclared[c]))
 		}
 	}
 
@@ -1235,8 +1286,14 @@ func (s *DorisSink) buildCreateTableDDLWithPK(table string, columns []string, fi
 // addColumn adds a column to an existing Doris table.
 // Doris supports lightweight schema changes for ADD COLUMN.
 func (s *DorisSink) addColumn(ctx context.Context, table, column string, fieldValues map[string]any) error {
+	declaredType := ""
+	if fieldValues != nil {
+		if declared, ok := fieldValues["__column_types__"].(map[string]string); ok {
+			declaredType = declared[column]
+		}
+	}
 	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
-		quoteIdentMySQL(table), quoteIdentMySQL(column), inferDorisType(column, fieldValues[column]))
+		quoteIdentMySQL(table), quoteIdentMySQL(column), inferDorisTypeDeclared(column, fieldValues[column], declaredType))
 	_, err := s.db.ExecContext(ctx, ddl)
 	return err
 }
@@ -1246,11 +1303,19 @@ func (s *DorisSink) addColumn(ctx context.Context, table, column string, fieldVa
 // DECIMAL, _at→DATETIME, …) consistent with the other relational sinks,
 // instead of the old name-only local inference (P4-22, SK-1).
 func inferDorisType(colName string, v any) string {
-	return typing.InferFromValue(typing.DialectDoris, colName, v)
+	return inferDorisTypeDeclared(colName, v, "")
+}
+
+func inferDorisTypeDeclared(colName string, value any, declared string) string {
+	return typing.ResolveColumnDDL(typing.DialectDoris, colName, value, declared, "")
 }
 
 func inferDorisKeyType(colName string, v any) string {
-	t := inferDorisType(colName, v)
+	return inferDorisKeyTypeDeclared(colName, v, "")
+}
+
+func inferDorisKeyTypeDeclared(colName string, value any, declared string) string {
+	t := inferDorisTypeDeclared(colName, value, declared)
 	// Doris UNIQUE KEY columns should avoid non-comparable or oversized types.
 	switch t {
 	case "JSON", "STRING":

@@ -20,6 +20,9 @@ sink:
     table: "auto_customers"
     pk_columns:
       - "id"
+    # File records have no durable numeric source order. This path is
+    # intentionally INSERT-only and therefore opts into plain MergeTree.
+    version_mode: "append"
     auto_create: true
     schema_drift: "add_columns"
 

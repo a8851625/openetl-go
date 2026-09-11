@@ -111,14 +111,15 @@ type DAGExecutor struct {
 
 // ExecutorStats tracks per-pipeline execution metrics.
 type ExecutorStats struct {
-	RecordsRead          int64      `json:"records_read"`
-	RecordsWritten       int64      `json:"records_written"`
-	RecordsFailed        int64      `json:"records_failed"`
-	RecordsDLQ           int64      `json:"records_dlq"`
-	LastError            string     `json:"last_error,omitempty"`
-	LastErrorCode        string     `json:"last_error_code,omitempty"`
-	LastErrorRemediation string     `json:"last_error_remediation,omitempty"`
-	StartedAt            *time.Time `json:"started_at,omitempty"`
+	RecordsRead           int64      `json:"records_read"`
+	RecordsWritten        int64      `json:"records_written"`
+	RecordsFailed         int64      `json:"records_failed"`
+	RecordsDLQ            int64      `json:"records_dlq"`
+	CheckpointFencedTotal int64      `json:"checkpoint_fenced_total"`
+	LastError             string     `json:"last_error,omitempty"`
+	LastErrorCode         string     `json:"last_error_code,omitempty"`
+	LastErrorRemediation  string     `json:"last_error_remediation,omitempty"`
+	StartedAt             *time.Time `json:"started_at,omitempty"`
 }
 
 // NewDAGExecutor builds all plugins from the spec and returns an executor.
@@ -261,14 +262,15 @@ func (e *DAGExecutor) Stats() ExecutorStats {
 	lastErrorRemediation := e.stats.LastErrorRemediation
 	e.mu.RUnlock()
 	return ExecutorStats{
-		RecordsRead:          atomic.LoadInt64(&e.stats.RecordsRead),
-		RecordsWritten:       atomic.LoadInt64(&e.stats.RecordsWritten),
-		RecordsFailed:        atomic.LoadInt64(&e.stats.RecordsFailed),
-		RecordsDLQ:           atomic.LoadInt64(&e.stats.RecordsDLQ),
-		LastError:            lastError,
-		LastErrorCode:        lastErrorCode,
-		LastErrorRemediation: lastErrorRemediation,
-		StartedAt:            started,
+		RecordsRead:           atomic.LoadInt64(&e.stats.RecordsRead),
+		RecordsWritten:        atomic.LoadInt64(&e.stats.RecordsWritten),
+		RecordsFailed:         atomic.LoadInt64(&e.stats.RecordsFailed),
+		RecordsDLQ:            atomic.LoadInt64(&e.stats.RecordsDLQ),
+		CheckpointFencedTotal: atomic.LoadInt64(&e.stats.CheckpointFencedTotal),
+		LastError:             lastError,
+		LastErrorCode:         lastErrorCode,
+		LastErrorRemediation:  lastErrorRemediation,
+		StartedAt:             started,
 	}
 }
 
@@ -980,6 +982,13 @@ func (e *DAGExecutor) writeToSink(ctx context.Context, sinkID string, batch []co
 				cp.Position = wrapped
 			}
 			if saveErr := e.cpAdapter.Save(ctx, cp); saveErr != nil {
+				if errors.Is(saveErr, core.ErrCheckpointFenced) {
+					atomic.AddInt64(&e.stats.CheckpointFencedTotal, 1)
+					e.mu.Lock()
+					e.stats.LastErrorCode = "checkpoint_generation_fenced"
+					e.stats.LastErrorRemediation = "Do not retry this stale checkpoint. Inspect the newer lifecycle generation and restart only from its durable checkpoint."
+					e.mu.Unlock()
+				}
 				// Checkpoint save failed — records already written to the sink
 				// will be re-delivered on restart (at-least-once). Trip the
 				// breaker and alert so the failure is not silent. Mirror the

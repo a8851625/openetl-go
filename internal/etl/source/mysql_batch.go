@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -22,11 +23,12 @@ func init() {
 }
 
 type mysqlBatchReader struct {
-	db       *sql.DB
-	database string
-	table    string
-	columns  []string
-	pkCol    string
+	db         *sql.DB
+	sourceName string
+	database   string
+	table      string
+	columns    []string
+	pkCol      string
 	// lastCursor is the current cursor value: int64 for numeric PKs,
 	// string for string/varchar PKs (BUG-1). Kept as any so the same
 	// parameterized `WHERE pk > ?` query works for both; comparison itself
@@ -201,6 +203,7 @@ func (s *MySQLBatchSource) Open(ctx context.Context, cp *core.Checkpoint) (core.
 
 	return &mysqlBatchReader{
 		db:           db,
+		sourceName:   s.name,
 		database:     s.database,
 		table:        s.table,
 		columns:      s.columns,
@@ -312,28 +315,45 @@ func (r *mysqlBatchReader) ReadBatch(ctx context.Context, n int) ([]core.Record,
 			data[name] = normalizeValue(values[i])
 		}
 
+		cursorColumn := r.pkCol
 		if r.customQuery != "" {
-			if id, ok := data[r.cursorCol]; ok {
-				r.updateCursor(id)
+			cursorColumn = r.cursorCol
+			if cursorValue, ok := data[cursorColumn]; ok {
+				r.updateCursor(cursorValue)
 			} else {
 				return nil, fmt.Errorf("custom query result missing cursor_column %q", r.cursorCol)
 			}
-		} else if id, ok := data[r.pkCol]; ok {
-			r.updateCursor(id)
+		} else if cursorValue, ok := data[cursorColumn]; ok {
+			r.updateCursor(cursorValue)
 		}
 
 		tableName := r.table
 		if tableName == "" {
 			tableName = "custom_query"
 		}
+		sourceName := r.sourceName
+		if sourceName == "" {
+			sourceName = core.SourceTypeMySQLBatch
+		}
+		cursor, cursorKind := mysqlBatchCursorMetadata(data[cursorColumn], colTypes[cursorColumn])
+		var primaryKeyColumns []string
+		if r.pkCol != "" {
+			primaryKeyColumns = []string{r.pkCol}
+		}
 		records = append(records, core.Record{
 			Operation: core.OpInsert,
 			Data:      data,
 			Metadata: core.Metadata{
-				Database:    r.database,
-				Table:       tableName,
-				Timestamp:   time.Now(),
-				ColumnTypes: colTypes,
+				Source:            sourceName,
+				SourceType:        core.SourceTypeMySQLBatch,
+				SourcePhase:       core.SourcePhaseBatch,
+				Database:          r.database,
+				Table:             tableName,
+				Timestamp:         time.Now(),
+				Cursor:            cursor,
+				CursorKind:        cursorKind,
+				PrimaryKeyColumns: primaryKeyColumns,
+				ColumnTypes:       colTypes,
 			},
 		})
 	}
@@ -348,6 +368,26 @@ func (r *mysqlBatchReader) ReadBatch(ctx context.Context, n int) ([]core.Record,
 		}
 	}
 	return records, nil
+}
+
+func mysqlBatchCursorMetadata(value any, declaredType string) (string, core.SourceCursorKind) {
+	if value == nil {
+		return "", ""
+	}
+	kind := core.SourceCursorOrdered
+	if strings.TrimSpace(declaredType) != "" {
+		if pkKindForType(declaredType) == pkKindNumeric {
+			kind = core.SourceCursorNumeric
+		}
+	} else {
+		switch value.(type) {
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			kind = core.SourceCursorNumeric
+		case float32, float64:
+			kind = core.SourceCursorNumeric
+		}
+	}
+	return cursorString(value), kind
 }
 
 // updateCursor advances the batch cursor from a scanned row value.

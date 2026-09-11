@@ -65,11 +65,13 @@ sink:
     table: order_minute_aggregate
     auto_create: true
     schema_drift: add_columns
+    # Window outputs are derived INSERT-only aggregates and intentionally do
+    # not claim one input connector offset as their replacement order.
+    version_mode: append
     pk_columns:
       - window_start
       - region
       - tier
-    version_column: _version
 
 batch_size: 100
 checkpoint_interval_sec: 5

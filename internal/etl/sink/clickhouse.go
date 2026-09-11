@@ -42,6 +42,8 @@ type ClickHouseSink struct {
 	table       string
 	pkColumns   []string
 	versionCol  string
+	deleteCol   string
+	versionMode string
 	autoCreate  bool
 	schemaDrift string
 	ddLPolicy   DDLPolicy
@@ -50,6 +52,10 @@ type ClickHouseSink struct {
 	// engineCache stores the table engine per table name
 	engineCache     map[string]string
 	localTableCache map[string]string
+	// versionSchemaCache records tables whose source-order RMT contract was
+	// verified against system.columns + system.tables.engine_full. The cache is
+	// invalidated together with the schema/engine caches after DDL.
+	versionSchemaCache map[string]bool
 	// tableTemplate, when set (e.g. "ods_{table}"), fans out records to
 	// per-record target tables derived from metadata ({table}/{db}); when
 	// empty the static configured table (or metadata table) is used.
@@ -99,9 +105,14 @@ type ClickHouseSink struct {
 	// tableMetricsImpl gives per-table write metrics (GAP-6: which target
 	// table drags a multi-table batch).
 	tableMetricsImpl *tableMetricsSet
-	// versionCounter ensures monotonic _version values even with clock drift.
-	versionCounter atomic.Int64
 }
+
+const (
+	clickHouseVersionModeSourceOrder = "source_order"
+	clickHouseVersionModeAppend      = "append"
+	defaultClickHouseVersionColumn   = "_version"
+	defaultClickHouseDeleteColumn    = "_is_deleted"
+)
 
 type clickhouseColumn struct {
 	Name           string
@@ -114,11 +125,14 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 		name:               "clickhouse",
 		port:               9000,
 		user:               "default",
-		versionCol:         "_version",
+		versionCol:         defaultClickHouseVersionColumn,
+		deleteCol:          defaultClickHouseDeleteColumn,
+		versionMode:        clickHouseVersionModeSourceOrder,
 		schemaDrift:        "ignore",
 		schemas:            make(map[string][]clickhouseColumn),
 		engineCache:        make(map[string]string),
 		localTableCache:    make(map[string]string),
+		versionSchemaCache: make(map[string]bool),
 		tableMetricsImpl:   newTableMetricsSet(),
 		protocol:           "native",
 		compressionMethod:  "LZ4",
@@ -161,7 +175,19 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 	}
 	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
 	if v, ok := config["version_column"]; ok {
-		s.versionCol = v.(string)
+		if value, ok := v.(string); ok {
+			s.versionCol = strings.TrimSpace(value)
+		}
+	}
+	if v, ok := config["delete_column"]; ok {
+		if value, ok := v.(string); ok {
+			s.deleteCol = strings.TrimSpace(value)
+		}
+	}
+	if v, ok := config["version_mode"]; ok {
+		if value, ok := v.(string); ok {
+			s.versionMode = strings.ToLower(strings.TrimSpace(value))
+		}
 	}
 	if v, ok := config["auto_create"]; ok {
 		if b, ok := v.(bool); ok {
@@ -257,6 +283,23 @@ func NewClickHouseSink(config map[string]any) (*ClickHouseSink, error) {
 			}
 		}
 	}
+	if s.versionMode == "" {
+		s.versionMode = clickHouseVersionModeSourceOrder
+	}
+	if s.versionMode != clickHouseVersionModeSourceOrder && s.versionMode != clickHouseVersionModeAppend {
+		return nil, fmt.Errorf("clickhouse version_mode must be source_order or append, got %q", s.versionMode)
+	}
+	if s.versionMode == clickHouseVersionModeSourceOrder {
+		if s.versionCol == "" {
+			return nil, fmt.Errorf("clickhouse version_column cannot be empty in version_mode=source_order")
+		}
+		if s.deleteCol == "" {
+			return nil, fmt.Errorf("clickhouse delete_column cannot be empty in version_mode=source_order")
+		}
+		if strings.EqualFold(s.versionCol, s.deleteCol) {
+			return nil, fmt.Errorf("clickhouse version_column and delete_column must be different in version_mode=source_order")
+		}
+	}
 	return s, nil
 }
 
@@ -313,6 +356,35 @@ func (s *ClickHouseSink) ValidateSchema(ctx context.Context, schema core.SchemaI
 		allowTypeSync:  s.schemaDrift == "sync",
 		typeSyncRemedy: "enable schema_drift=sync, change the target column type, or add a transform/type_convert before the sink",
 	})
+}
+
+// ValidateTargetContract checks a configured static target before a source is
+// opened. Dynamic table/template targets are checked on their first write.
+func (s *ClickHouseSink) ValidateTargetContract(ctx context.Context) error {
+	if strings.TrimSpace(s.table) == "" {
+		return nil
+	}
+	columns, err := s.columns(ctx, s.table)
+	if err != nil {
+		return fmt.Errorf("read clickhouse target contract for %s.%s: %w", s.database, s.table, err)
+	}
+	if len(columns) == 0 {
+		if s.autoCreate {
+			return nil
+		}
+		return fmt.Errorf("clickhouse target %s.%s does not exist; enable auto_create or create it before startup", s.database, s.table)
+	}
+	if s.effectiveVersionMode() == clickHouseVersionModeSourceOrder {
+		return s.validateSourceOrderTable(ctx, s.table, columns)
+	}
+	engine, err := s.getEngine(ctx, s.table)
+	if err != nil {
+		return fmt.Errorf("read clickhouse append target engine for %s.%s: %w", s.database, s.table, err)
+	}
+	if strings.Contains(strings.ToLower(engine), "replacingmergetree") {
+		return fmt.Errorf("clickhouse version_mode=append requires a non-replacing MergeTree target, but %s.%s uses %s", s.database, s.table, engine)
+	}
+	return nil
 }
 
 func (s *ClickHouseSink) Open(ctx context.Context) error {
@@ -479,6 +551,14 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 		}
 	}
 
+	// Validate and normalize the complete data batch before executing DDL or
+	// writing any row. This keeps an unavailable source position or an UPDATE /
+	// DELETE in append mode from producing a partial target-side side effect.
+	dataRecords, err = s.prepareDataRecords(dataRecords)
+	if err != nil {
+		return err
+	}
+
 	// Apply DDL first according to ddl_policy (schema changes precede data).
 	if err := ApplyDDLRecords(ctx, ddlRecords, s.ddLPolicy, func(ctx context.Context, ddlStmt, table string) error {
 		execDDL := ddlStmt
@@ -499,35 +579,23 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 			if strings.Contains(msg, "already exists") || strings.Contains(msg, "column with this name already exists") {
 				delete(s.schemas, table)
 				delete(s.engineCache, table)
+				delete(s.versionSchemaCache, table)
 				return nil
 			}
 			return fmt.Errorf("execute DDL %q: %w", execDDL, err)
 		}
 		delete(s.schemas, table)
 		delete(s.engineCache, table)
+		delete(s.versionSchemaCache, table)
 		return nil
 	}); err != nil {
 		return err
 	}
 
-	// Compact by (table, PK) in source order so multiple events on the same key
-	// collapse to the final operation before grouping by op type. With
-	// pk_columns_from_metadata the key columns are derived per table from
-	// envelope metadata; otherwise the static pk_columns (or id) is used.
-	pkByTable, err := s.pkColumnsByTable(dataRecords)
-	if err != nil {
-		return err
-	}
-	s.pkByTable = pkByTable
-	dataRecords = CompactRecordsByPK(dataRecords, func(table string) []string {
-		if pk, ok := s.pkByTable[table]; ok {
-			return pk
-		}
-		if len(s.pkColumns) > 0 {
-			return s.pkColumns
-		}
-		return []string{"id"}
-	})
+	// Do not compact by arrival order. In source_order mode every source
+	// version must reach ReplacingMergeTree so a replayed old event cannot win
+	// merely because it arrived last. In append mode every INSERT is likewise
+	// an intentional append and must not be collapsed.
 
 	// Group data records by operation type and table for efficient batch processing.
 	type tableBatch struct {
@@ -591,6 +659,177 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 	return nil
 }
 
+// prepareDataRecords establishes the ClickHouse delivery contract before any
+// target-side effect. source_order injects source-owned UInt64 versions and a
+// delete flag; append accepts INSERT-only records and never fabricates order.
+func (s *ClickHouseSink) prepareDataRecords(records []core.Record) ([]core.Record, error) {
+	pkByTable, err := s.pkColumnsByTable(records)
+	if err != nil {
+		return nil, err
+	}
+	s.pkByTable = pkByTable
+	if len(records) == 0 {
+		return records, nil
+	}
+
+	mode := s.effectiveVersionMode()
+	out := make([]core.Record, 0, len(records)+1)
+	for _, rec := range records {
+		if mode == clickHouseVersionModeAppend {
+			if rec.Operation != "" && rec.Operation != core.OpInsert {
+				return nil, fmt.Errorf("clickhouse version_mode=append accepts INSERT-only records; got operation %s for %s.%s; use version_mode=source_order with source position metadata for mutable CDC data", rec.Operation, rec.Metadata.Database, rec.Metadata.Table)
+			}
+			out = append(out, cloneClickHouseRecord(rec))
+			continue
+		}
+
+		order := core.SourceOrder(rec)
+		if !order.Available || !order.VersionAvailable {
+			return nil, clickHouseSourceOrderError(rec, order)
+		}
+		prepared := cloneClickHouseRecord(rec)
+		prepared.Data[s.effectiveVersionColumn()] = order.Version
+		prepared.Data[s.effectiveDeleteColumn()] = uint8(0)
+
+		switch prepared.Operation {
+		case core.OpDelete:
+			prepared.Data[s.effectiveDeleteColumn()] = uint8(1)
+			out = append(out, prepared)
+		case core.OpUpdate:
+			changed, tombstone, err := s.keyChangeTombstone(prepared, order.Version)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, prepared)
+			if changed {
+				out = append(out, tombstone)
+			}
+		default:
+			out = append(out, prepared)
+		}
+	}
+	return out, nil
+}
+
+func (s *ClickHouseSink) effectiveVersionMode() string {
+	if s.versionMode == "" {
+		return clickHouseVersionModeSourceOrder
+	}
+	return s.versionMode
+}
+
+func (s *ClickHouseSink) effectiveVersionColumn() string {
+	if s.versionCol == "" {
+		return defaultClickHouseVersionColumn
+	}
+	return s.versionCol
+}
+
+func (s *ClickHouseSink) effectiveDeleteColumn() string {
+	if s.deleteCol == "" {
+		return defaultClickHouseDeleteColumn
+	}
+	return s.deleteCol
+}
+
+func cloneClickHouseRecord(rec core.Record) core.Record {
+	clone := rec
+	clone.Data = make(map[string]any, len(rec.Data)+2)
+	for key, value := range rec.Data {
+		clone.Data[key] = value
+	}
+	if rec.Before != nil {
+		clone.Before = make(map[string]any, len(rec.Before))
+		for key, value := range rec.Before {
+			clone.Before[key] = value
+		}
+	}
+	return clone
+}
+
+func clickHouseSourceOrderError(rec core.Record, order core.SourceOrderResult) error {
+	fields := "metadata.source_type and a connector-owned durable position"
+	sourceType := strings.ToLower(strings.TrimSpace(rec.Metadata.SourceType))
+	if sourceType == "" {
+		sourceType = strings.ToLower(strings.TrimSpace(rec.Metadata.Source))
+	}
+	switch sourceType {
+	case core.SourceTypeMySQLCDC:
+		fields = "metadata.binlog_file and metadata.binlog_pos"
+	case core.SourceTypeMySQLSnapshotCDC:
+		if strings.EqualFold(rec.Metadata.SourcePhase, core.SourcePhaseSnapshot) || rec.Metadata.BinlogFile == "" {
+			fields = "metadata.snapshot_handoff_file and metadata.snapshot_handoff_pos for snapshot rows"
+		} else {
+			fields = "metadata.binlog_file and metadata.binlog_pos for CDC rows"
+		}
+	case core.SourceTypePostgresCDC:
+		fields = "metadata.lsn (PostgreSQL initial snapshot rows currently have no numeric source order)"
+	case core.SourceTypeKafka:
+		fields = "metadata.partition and metadata.offset"
+	case core.SourceTypeMySQLBatch:
+		fields = "metadata.cursor and metadata.cursor_kind=numeric"
+	}
+	return fmt.Errorf("clickhouse version_mode=source_order cannot derive a UInt64 version for source_type=%q table=%q: reason=%s; required fields: %s; do not fall back to wall clock, and use version_mode=append only for INSERT-only data", sourceType, rec.Metadata.Table, order.Reason, fields)
+}
+
+// keyChangeTombstone expands UPDATE(old PK -> new PK) into a tombstone for the
+// old sorting key plus the live row for the new key, both at the same source
+// version. Canal-style partial before images are merged over the full after
+// image so unchanged components of a composite key remain available.
+func (s *ClickHouseSink) keyChangeTombstone(rec core.Record, version uint64) (bool, core.Record, error) {
+	table, err := s.resolveTable(rec)
+	if err != nil {
+		return false, core.Record{}, err
+	}
+	pkCols := s.primaryKeyColumns(table)
+	if len(pkCols) == 0 {
+		return false, core.Record{}, fmt.Errorf("clickhouse source_order UPDATE for table %q has no primary key columns; configure pk_columns or pk_columns_from_metadata", table)
+	}
+
+	oldData := make(map[string]any, len(rec.Data)+len(rec.Before)+2)
+	for key, value := range rec.Data {
+		oldData[key] = value
+	}
+	for key, value := range rec.Before {
+		oldData[key] = value
+	}
+	changed := false
+	for _, column := range pkCols {
+		after, afterOK := rec.Data[column]
+		before, beforeOK := oldData[column]
+		if !afterOK || after == nil || !beforeOK || before == nil {
+			return false, core.Record{}, fmt.Errorf("clickhouse source_order UPDATE for table %q cannot compare primary-key column %q across before/after images", table, column)
+		}
+		if original, explicitlyBefore := rec.Before[column]; explicitlyBefore && !clickHouseKeyValueEqual(original, after) {
+			changed = true
+		}
+	}
+	if !changed {
+		return false, core.Record{}, nil
+	}
+
+	tombstone := cloneClickHouseRecord(rec)
+	tombstone.Operation = core.OpDelete
+	tombstone.Data = oldData
+	tombstone.Data[s.effectiveVersionColumn()] = version
+	tombstone.Data[s.effectiveDeleteColumn()] = uint8(1)
+	return true, tombstone, nil
+}
+
+func clickHouseKeyValueEqual(left, right any) bool {
+	return fmt.Sprint(left) == fmt.Sprint(right)
+}
+
+func (s *ClickHouseSink) primaryKeyColumns(table string) []string {
+	if byTable, ok := s.pkByTable[table]; ok && len(byTable) > 0 {
+		return byTable
+	}
+	if len(s.pkColumns) > 0 {
+		return s.pkColumns
+	}
+	return []string{"id"}
+}
+
 // checkWritableEngine rejects writes to table engines that don't support INSERT.
 // This prevents confusing errors when users accidentally target read-only tables.
 var readOnlyEngines = map[string]bool{
@@ -643,52 +882,24 @@ func (s *ClickHouseSink) resolveTable(rec core.Record) (string, error) {
 	return table, nil
 }
 
-// pkColumnsByTable derives the per-table primary key columns used by a batch
-// when pk_columns_from_metadata is enabled. Each record's Metadata.Key must
-// be a non-empty JSON object; its property names become the key columns for
-// that record's target table (and source metadata table, so compaction and
-// auto-create lookups work for both). A key change within one batch for the
-// same table is rejected rather than silently mixing key schemes.
+// pkColumnsByTable validates and derives the per-table primary key columns
+// used by a metadata-driven batch. The shared contract verifies the declared
+// complete identity; this sink never falls back to static pk_columns or id for
+// an ordinary record whose metadata identity is missing or incomplete.
 func (s *ClickHouseSink) pkColumnsByTable(records []core.Record) (map[string][]string, error) {
-	result := make(map[string][]string)
 	if !s.pkColumnsFromMetadata {
-		return result, nil
+		return map[string][]string{}, nil
 	}
-	for _, rec := range records {
-		targetTable, err := s.resolveTable(rec)
-		if err != nil {
-			return nil, err
-		}
-		pk := parseMetadataKeyColumns(rec.Metadata.Key)
-		if len(pk) == 0 {
-			// GAP-3 replay hardening: fall back to the static pk_columns (or
-			// the default) instead of failing the whole batch. Records with
-			// empty keys — DLQ replays produced before a metadata-key fix,
-			// sources that never fill Metadata.Key — still fail loudly at the
-			// delete/update key-resolution stage when the key column is
-			// genuinely missing from the row, so at-least-once semantics are
-			// preserved (a wrong-but-present static PK may mis-target rows;
-			// the fallback is therefore best-effort and logged).
-			if len(s.pkColumns) > 0 {
-				pk = append([]string(nil), s.pkColumns...)
-			} else {
-				pk = []string{"id"}
-			}
-			g.Log().Warningf(context.Background(),
-				"clickhouse sink: pk_columns_from_metadata found empty Metadata.Key for table %q; falling back to static pk %v (record offset=%d op=%v)",
-				targetTable, pk, rec.Metadata.Offset, rec.Operation)
-		}
-		for _, table := range []string{targetTable, rec.Metadata.Table} {
-			if table == "" {
-				continue
-			}
-			if existing, ok := result[table]; ok && !sameIdentifierSet(existing, pk) {
-				return nil, fmt.Errorf("clickhouse sink: metadata key columns for table %q changed within one batch (%v -> %v)", table, existing, pk)
-			}
-			result[table] = pk
-		}
+	started := time.Now()
+	validation, err := validateMetadataPKBatch(s.name, records, s.pkColumns, func(record core.Record) (metadataPKTarget, error) {
+		table, resolveErr := s.resolveTable(record)
+		return metadataPKTarget{Database: s.database, Table: table}, resolveErr
+	})
+	if err != nil {
+		recordMetadataPKFailure(s.tableMetricsImpl, err, time.Since(started))
+		return nil, err
 	}
-	return result, nil
+	return validation.ColumnsByTable, nil
 }
 
 // resolveLocalTable checks if the given table is a Distributed engine table
@@ -814,6 +1025,7 @@ func (s *ClickHouseSink) applyDDL(ctx context.Context, ddlRec core.Record) error
 		if strings.Contains(msg, "already exists") || strings.Contains(msg, "column with this name already exists") {
 			delete(s.schemas, ddlRec.Metadata.Table)
 			delete(s.engineCache, ddlRec.Metadata.Table)
+			delete(s.versionSchemaCache, ddlRec.Metadata.Table)
 			return nil
 		}
 		return fmt.Errorf("execute DDL %q: %w", ddl, err)
@@ -823,11 +1035,20 @@ func (s *ClickHouseSink) applyDDL(ctx context.Context, ddlRec core.Record) error
 	// re-queries system.columns.
 	delete(s.schemas, ddlRec.Metadata.Table)
 	delete(s.engineCache, ddlRec.Metadata.Table)
+	delete(s.versionSchemaCache, ddlRec.Metadata.Table)
 
 	return nil
 }
 
 func (s *ClickHouseSink) writeInsert(ctx context.Context, tableName string, records []core.Record) error {
+	return s.writeInsertSelected(ctx, tableName, records, nil)
+}
+
+// writeInsertSelected writes all table columns when selected is nil. A
+// tombstone supplies selected={PKs,version,delete}; omitted non-key columns
+// then receive ClickHouse defaults and cannot make a delete fail merely
+// because the source only retained its business key.
+func (s *ClickHouseSink) writeInsertSelected(ctx context.Context, tableName string, records []core.Record, selected map[string]bool) error {
 	if tableName == "" {
 		return fmt.Errorf("cannot write records without a table name")
 	}
@@ -846,7 +1067,7 @@ func (s *ClickHouseSink) writeInsert(ctx context.Context, tableName string, reco
 	// and must not be included in INSERT statements.
 	writableCols := make([]clickhouseColumn, 0, len(columns))
 	for _, col := range columns {
-		if !col.IsMaterialized {
+		if !col.IsMaterialized && (selected == nil || selected[col.Name]) {
 			writableCols = append(writableCols, col)
 		}
 	}
@@ -875,13 +1096,11 @@ func (s *ClickHouseSink) writeInsert(ctx context.Context, tableName string, reco
 	for _, rec := range records {
 		values := make([]any, 0, len(writableCols))
 		for _, col := range writableCols {
-			if col.Name == s.versionCol {
-				values = append(values, s.nextVersion())
-			} else if v, ok := rec.Data[col.Name]; ok {
-				values = append(values, convertClickHouseValue(v, col.Type))
-			} else {
-				values = append(values, nil)
+			value, valueErr := s.clickHouseColumnValue(rec, col, false)
+			if valueErr != nil {
+				return valueErr
 			}
+			values = append(values, value)
 		}
 		if err := batch.Append(values...); err != nil {
 			return fmt.Errorf("append batch: %w", err)
@@ -907,15 +1126,16 @@ func (s *ClickHouseSink) writeInsertHTTP(ctx context.Context, tableName string, 
 			if col.IsMaterialized {
 				continue
 			}
-			if col.Name == s.versionCol {
-				row[col.Name] = s.nextVersion()
-			} else if v, ok := rec.Data[col.Name]; ok {
-				row[col.Name] = convertClickHouseHTTPValue(v, col.Type)
-			} else {
-				row[col.Name] = nil
+			value, err := s.clickHouseColumnValue(rec, col, true)
+			if err != nil {
+				return err
 			}
+			row[col.Name] = value
 		}
-		data, _ := json.Marshal(row)
+		data, err := json.Marshal(row)
+		if err != nil {
+			return fmt.Errorf("marshal clickhouse JSONEachRow for %s.%s: %w", s.database, tableName, err)
+		}
 		buf.Write(data)
 		buf.WriteByte('\n')
 	}
@@ -979,6 +1199,39 @@ func (s *ClickHouseSink) writeInsertHTTP(ctx context.Context, tableName string, 
 	return lastErr
 }
 
+func (s *ClickHouseSink) clickHouseColumnValue(rec core.Record, col clickhouseColumn, httpValue bool) (any, error) {
+	value, ok := rec.Data[col.Name]
+	if !ok {
+		return nil, nil
+	}
+	if s.effectiveVersionMode() == clickHouseVersionModeSourceOrder {
+		switch col.Name {
+		case s.effectiveVersionColumn():
+			version, ok := value.(uint64)
+			if !ok {
+				return nil, fmt.Errorf("clickhouse reserved version column %q requires uint64, got %T", col.Name, value)
+			}
+			return version, nil
+		case s.effectiveDeleteColumn():
+			switch deleted := value.(type) {
+			case uint8:
+				return deleted, nil
+			case bool:
+				if deleted {
+					return uint8(1), nil
+				}
+				return uint8(0), nil
+			default:
+				return nil, fmt.Errorf("clickhouse reserved tombstone column %q requires uint8/bool, got %T", col.Name, value)
+			}
+		}
+	}
+	if httpValue {
+		return convertClickHouseHTTPValue(value, col.Type), nil
+	}
+	return convertClickHouseValue(value, col.Type), nil
+}
+
 // recordMetrics updates write counters and latency.
 func (s *ClickHouseSink) recordMetrics(rows int, latency time.Duration) {
 	atomic.AddInt64(&s.rowsWritten, int64(rows))
@@ -1006,6 +1259,13 @@ func (s *ClickHouseSink) ensureColumns(ctx context.Context, tableName string, re
 	}
 	if len(columns) == 0 {
 		return columns, nil
+	}
+	if s.effectiveVersionMode() == clickHouseVersionModeSourceOrder {
+		if err := s.validateSourceOrderTable(ctx, tableName, columns); err != nil {
+			return nil, err
+		}
+	} else if engine, engineErr := s.getEngine(ctx, tableName); engineErr == nil && strings.Contains(strings.ToLower(engine), "replacingmergetree") {
+		return nil, fmt.Errorf("clickhouse version_mode=append requires a non-replacing MergeTree target, but %s.%s uses %s; use a plain MergeTree table or version_mode=source_order with the UInt64 version/tombstone contract", s.database, tableName, engine)
 	}
 
 	existing := map[string]clickhouseColumn{}
@@ -1088,6 +1348,7 @@ func (s *ClickHouseSink) ensureColumns(ctx context.Context, tableName string, re
 	}
 
 	delete(s.schemas, tableName)
+	delete(s.versionSchemaCache, tableName)
 	return s.columns(ctx, tableName)
 }
 
@@ -1106,7 +1367,7 @@ func (s *ClickHouseSink) createTable(ctx context.Context, tableName string, reco
 	}
 	for _, rec := range records {
 		for name, value := range rec.Data {
-			if name == s.versionCol {
+			if s.effectiveVersionMode() == clickHouseVersionModeSourceOrder && (name == s.effectiveVersionColumn() || name == s.effectiveDeleteColumn()) {
 				continue
 			}
 			if _, ok := types[name]; !ok {
@@ -1122,11 +1383,20 @@ func (s *ClickHouseSink) createTable(ctx context.Context, tableName string, reco
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	defs := make([]string, 0, len(names)+1)
+	reservedColumns := 0
+	if s.effectiveVersionMode() == clickHouseVersionModeSourceOrder {
+		reservedColumns = 2
+	}
+	defs := make([]string, 0, len(names)+reservedColumns)
 	for _, name := range names {
 		defs = append(defs, fmt.Sprintf("%s %s", quoteIdent(name), types[name]))
 	}
-	defs = append(defs, fmt.Sprintf("%s Int64", quoteIdent(s.versionCol)))
+	if s.effectiveVersionMode() == clickHouseVersionModeSourceOrder {
+		defs = append(defs,
+			fmt.Sprintf("%s UInt64", quoteIdent(s.effectiveVersionColumn())),
+			fmt.Sprintf("%s UInt8", quoteIdent(s.effectiveDeleteColumn())),
+		)
+	}
 
 	orderBy := "tuple()"
 	pkCols := s.pkColumns
@@ -1146,8 +1416,12 @@ func (s *ClickHouseSink) createTable(ctx context.Context, tableName string, reco
 		orderBy = strings.Join(quoted, ",")
 	}
 
-	sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s (%s) ENGINE = ReplacingMergeTree(%s) ORDER BY (%s)",
-		quoteIdent(s.database), quoteIdent(tableName), strings.Join(defs, ","), quoteIdent(s.versionCol), orderBy)
+	engine := "MergeTree"
+	if s.effectiveVersionMode() == clickHouseVersionModeSourceOrder {
+		engine = fmt.Sprintf("ReplacingMergeTree(%s, %s)", quoteIdent(s.effectiveVersionColumn()), quoteIdent(s.effectiveDeleteColumn()))
+	}
+	sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s (%s) ENGINE = %s ORDER BY (%s)",
+		quoteIdent(s.database), quoteIdent(tableName), strings.Join(defs, ","), engine, orderBy)
 	// Optional TTL expression (e.g. "toDateTime(created_at) + INTERVAL 30 DAY")
 	if s.ttlExpr != "" {
 		sql += " TTL " + s.ttlExpr
@@ -1188,6 +1462,135 @@ func (s *ClickHouseSink) columns(ctx context.Context, tableName string) ([]click
 	return cols, nil
 }
 
+func (s *ClickHouseSink) validateSourceOrderTable(ctx context.Context, tableName string, columns []clickhouseColumn) error {
+	if s.versionSchemaCache != nil && s.versionSchemaCache[tableName] {
+		return nil
+	}
+	engine, err := s.getEngine(ctx, tableName)
+	if err != nil {
+		return fmt.Errorf("validate clickhouse source-order table %s.%s engine: %w", s.database, tableName, err)
+	}
+	var engineFull string
+	if err := s.queryRowContext(ctx,
+		`SELECT engine_full FROM system.tables WHERE database = ? AND name = ?`,
+		s.database, tableName).Scan(&engineFull); err != nil {
+		return fmt.Errorf("validate clickhouse source-order table %s.%s engine definition: %w", s.database, tableName, err)
+	}
+	if err := validateClickHouseSourceOrderSchema(engine, engineFull, columns, s.effectiveVersionColumn(), s.effectiveDeleteColumn()); err != nil {
+		return fmt.Errorf("clickhouse source-order table %s.%s is incompatible: %w; migrate by creating a new table with %s UInt64, %s UInt8 and ReplacingMergeTree(%s, %s), backfill current rows with a documented source version, then atomically switch the pipeline; legacy wall-clock Int64 versions cannot be compared safely with source positions",
+			s.database, tableName, err,
+			quoteIdent(s.effectiveVersionColumn()), quoteIdent(s.effectiveDeleteColumn()),
+			quoteIdent(s.effectiveVersionColumn()), quoteIdent(s.effectiveDeleteColumn()))
+	}
+	if s.versionSchemaCache == nil {
+		s.versionSchemaCache = make(map[string]bool)
+	}
+	s.versionSchemaCache[tableName] = true
+	return nil
+}
+
+func validateClickHouseSourceOrderSchema(engine, engineFull string, columns []clickhouseColumn, versionCol, deleteCol string) error {
+	if !strings.Contains(strings.ToLower(engine), "replacingmergetree") {
+		return fmt.Errorf("engine %q is not ReplacingMergeTree-compatible", engine)
+	}
+	columnTypes := make(map[string]clickhouseColumn, len(columns))
+	for _, column := range columns {
+		columnTypes[column.Name] = column
+	}
+	version, ok := columnTypes[versionCol]
+	if !ok {
+		return fmt.Errorf("missing version column %q", versionCol)
+	}
+	if version.IsMaterialized || !strings.EqualFold(strings.TrimSpace(version.Type), "UInt64") {
+		return fmt.Errorf("version column %q has type %q, want writable UInt64", versionCol, version.Type)
+	}
+	deleted, ok := columnTypes[deleteCol]
+	if !ok {
+		return fmt.Errorf("missing tombstone column %q", deleteCol)
+	}
+	if deleted.IsMaterialized || !strings.EqualFold(strings.TrimSpace(deleted.Type), "UInt8") {
+		return fmt.Errorf("tombstone column %q has type %q, want writable UInt8", deleteCol, deleted.Type)
+	}
+
+	args, err := clickHouseEngineArguments(engineFull)
+	if err != nil {
+		return err
+	}
+	if len(args) < 2 || !strings.EqualFold(normalizeClickHouseEngineIdentifier(args[len(args)-2]), versionCol) || !strings.EqualFold(normalizeClickHouseEngineIdentifier(args[len(args)-1]), deleteCol) {
+		return fmt.Errorf("engine definition %q must use version/tombstone as its final arguments (%s, %s)", engineFull, versionCol, deleteCol)
+	}
+	return nil
+}
+
+func clickHouseEngineArguments(engineFull string) ([]string, error) {
+	open := strings.IndexByte(engineFull, '(')
+	if open < 0 {
+		return nil, fmt.Errorf("engine definition %q has no argument list", engineFull)
+	}
+	// system.tables.engine_full contains the complete engine clause, for
+	// example:
+	//
+	//   ReplacingMergeTree(_version, _is_deleted) ORDER BY (id, tenant_id)
+	//
+	// The final ')' therefore belongs to ORDER BY, not to the engine argument
+	// list. Parse until the ')' matching the first '(' instead of slicing at
+	// LastIndexByte, which incorrectly folds the trailing clause into the
+	// engine arguments and reports a valid auto-created table as unbalanced.
+	input := engineFull[open+1:]
+	var args []string
+	start := 0
+	depth := 0
+	var quote rune
+	escaped := false
+	for index, r := range input {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' && quote != 0 {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '\'', '"', '`':
+			quote = r
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				args = append(args, strings.TrimSpace(input[start:index]))
+				return args, nil
+			}
+			depth--
+		case ',':
+			if depth == 0 {
+				args = append(args, strings.TrimSpace(input[start:index]))
+				start = index + 1
+			}
+		}
+	}
+	return nil, fmt.Errorf("engine definition %q has unbalanced arguments", engineFull)
+}
+
+func normalizeClickHouseEngineIdentifier(value string) string {
+	value = strings.TrimSpace(value)
+	for len(value) >= 2 {
+		first, last := value[0], value[len(value)-1]
+		if (first == '`' && last == '`') || (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+			value = strings.TrimSpace(value[1 : len(value)-1])
+			continue
+		}
+		break
+	}
+	return value
+}
+
 // queryContext abstracts querying for both native and HTTP protocols.
 func (s *ClickHouseSink) queryContext(ctx context.Context, sql string, args ...any) (rows interface {
 	Next() bool
@@ -1202,14 +1605,6 @@ func (s *ClickHouseSink) queryContext(ctx context.Context, sql string, args ...a
 		return s.httpConn.QueryContext(ctx, sql, args...)
 	}
 	return nil, fmt.Errorf("no clickhouse connection available")
-}
-
-// nextVersion returns a monotonically increasing version number for ReplacingMergeTree.
-// Uses (millisecond timestamp << 20) | atomic counter to guarantee monotonicity
-// even under clock drift or high-frequency concurrent writes.
-func (s *ClickHouseSink) nextVersion() int64 {
-	counter := s.versionCounter.Add(1)
-	return (time.Now().UnixMilli() << 20) | (counter & 0xFFFFF)
 }
 
 func columnList(columns []clickhouseColumn) string {
@@ -1509,140 +1904,38 @@ func chTypeCompatible(chType string, desiredType string, value any) bool {
 	}
 }
 
-// writeUpdates applies UPDATE operations using ALTER TABLE UPDATE.
-// For ReplacingMergeTree tables, UPDATE can also be achieved by inserting
-// a new row with a higher _version (the default behavior), but explicit
-// ALTER TABLE UPDATE is more correct for non-RMT tables.
-// We batch all updates for the same table into a single ALTER statement.
+// writeUpdates writes source-ordered replacement rows. append mode rejects
+// UPDATE during prepareDataRecords, so reaching this method outside
+// source_order is a defensive configuration failure.
 func (s *ClickHouseSink) writeUpdates(ctx context.Context, tableName string, records []core.Record) error {
-	localTable, err := s.resolveLocalTable(ctx, tableName)
-	if err != nil {
-		return fmt.Errorf("resolve local table for update %s: %w", tableName, err)
+	if s.effectiveVersionMode() != clickHouseVersionModeSourceOrder {
+		return fmt.Errorf("clickhouse version_mode=%s cannot write UPDATE records", s.effectiveVersionMode())
 	}
-
-	pkCols := s.pkColumns
-	if byTable, ok := s.pkByTable[tableName]; ok {
-		pkCols = byTable
-	}
-	if len(pkCols) == 0 {
-		pkCols = []string{"id"}
-	}
-
-	// Check the table engine. For ReplacingMergeTree, INSERT with new _version
-	// is the idiomatic way to handle UPDATEs (CH deduplicates on merge).
-	engine, _ := s.getEngine(ctx, localTable)
-	if engine != "" && (strings.Contains(engine, "Replacing") || strings.Contains(engine, "MergeTree")) {
-		// For MergeTree-family tables, insert the updated record as a new version.
-		// This is the ClickHouse-recommended approach and works with dedup.
-		return s.writeInsert(ctx, tableName, records)
-	}
-
-	// For non-MergeTree tables, use ALTER TABLE UPDATE with CASE WHEN for batch efficiency.
-	// Build: ALTER TABLE UPDATE col1 = CASE WHEN pk=1 THEN val1 WHEN pk=2 THEN val2 END, ... WHERE pk IN (1,2,...)
-	for _, rec := range records {
-		var setClauses []string
-		var pkConditions []string
-		var allArgs []any
-
-		for col, val := range rec.Data {
-			isPK := false
-			for _, pk := range pkCols {
-				if col == pk {
-					isPK = true
-					break
-				}
-			}
-			if isPK {
-				continue
-			}
-			setClauses = append(setClauses, fmt.Sprintf("%s = ?", quoteIdent(col)))
-			allArgs = append(allArgs, val)
-		}
-
-		for _, pk := range pkCols {
-			if v, ok := rec.Data[pk]; ok {
-				pkConditions = append(pkConditions, fmt.Sprintf("%s = ?", quoteIdent(pk)))
-				allArgs = append(allArgs, v)
-			}
-		}
-
-		if len(setClauses) == 0 || len(pkConditions) == 0 {
-			continue
-		}
-
-		sql := fmt.Sprintf("ALTER TABLE %s.%s UPDATE %s WHERE %s SETTINGS mutations_sync=2",
-			quoteIdent(s.database), quoteIdent(localTable),
-			strings.Join(setClauses, ", "),
-			strings.Join(pkConditions, " AND "))
-
-		if err := s.execContext(ctx, sql, allArgs...); err != nil {
-			return fmt.Errorf("clickhouse update %s.%s: %w", s.database, localTable, err)
-		}
-	}
-
-	return nil
+	return s.writeInsert(ctx, tableName, records)
 }
 
-// writeDeletes performs batch DELETE using ALTER TABLE DELETE with IN clause.
-// Groups all PKs into a single statement: ALTER TABLE DELETE WHERE pk IN (v1, v2, ...)
+// writeDeletes persists source-ordered tombstones. ReplacingMergeTree's
+// two-argument deleted-row contract keeps a high-version delete present in
+// merge state, so a late replay of an older INSERT cannot resurrect the row.
 func (s *ClickHouseSink) writeDeletes(ctx context.Context, tableName string, records []core.Record) error {
-	localTable, err := s.resolveLocalTable(ctx, tableName)
-	if err != nil {
-		return fmt.Errorf("resolve local table for delete %s: %w", tableName, err)
+	if s.effectiveVersionMode() != clickHouseVersionModeSourceOrder {
+		return fmt.Errorf("clickhouse version_mode=%s cannot write DELETE records", s.effectiveVersionMode())
 	}
-
-	pkCols := s.pkColumns
-	if byTable, ok := s.pkByTable[tableName]; ok {
-		pkCols = byTable
+	selected := map[string]bool{
+		s.effectiveVersionColumn(): true,
+		s.effectiveDeleteColumn():  true,
 	}
-	if len(pkCols) == 0 {
-		pkCols = []string{"id"}
+	for _, column := range s.primaryKeyColumns(tableName) {
+		selected[column] = true
 	}
-
-	if len(pkCols) == 1 {
-		// Single PK: batch all values in one DELETE ... WHERE pk IN (...)
-		pk := pkCols[0]
-		placeholders := make([]string, len(records))
-		args := make([]any, len(records))
-		for i, rec := range records {
-			keys, err := ResolveDeleteKeys(rec, pkCols)
-			if err != nil {
-				return fmt.Errorf("clickhouse delete %s.%s: %w", s.database, localTable, err)
-			}
-			placeholders[i] = "?"
-			args[i] = keys[pk]
-		}
-		sql := fmt.Sprintf("ALTER TABLE %s.%s DELETE WHERE %s IN (%s) SETTINGS mutations_sync=2",
-			quoteIdent(s.database), quoteIdent(localTable),
-			quoteIdent(pk), strings.Join(placeholders, ","))
-		if err := s.execContext(ctx, sql, args...); err != nil {
-			return fmt.Errorf("clickhouse batch delete %s.%s: %w", s.database, localTable, err)
-		}
-		return nil
-	}
-
-	// Composite PK: use OR conditions (ALTER TABLE DELETE WHERE (pk1=? AND pk2=?) OR ...)
-	var conditions []string
-	var args []any
 	for _, rec := range records {
-		keys, err := ResolveDeleteKeys(rec, pkCols)
-		if err != nil {
-			return fmt.Errorf("clickhouse delete %s.%s: %w", s.database, localTable, err)
+		for column := range selected {
+			if _, ok := rec.Data[column]; !ok {
+				return fmt.Errorf("clickhouse tombstone for %s.%s is missing required column %q", s.database, tableName, column)
+			}
 		}
-		var parts []string
-		for _, pk := range pkCols {
-			parts = append(parts, fmt.Sprintf("%s = ?", quoteIdent(pk)))
-			args = append(args, keys[pk])
-		}
-		conditions = append(conditions, "("+strings.Join(parts, " AND ")+")")
 	}
-	if len(conditions) == 0 {
-		return nil
-	}
-	sql := fmt.Sprintf("ALTER TABLE %s.%s DELETE WHERE %s SETTINGS mutations_sync=2",
-		quoteIdent(s.database), quoteIdent(localTable),
-		strings.Join(conditions, " OR "))
-	return s.execContext(ctx, sql, args...)
+	return s.writeInsertSelected(ctx, tableName, records, selected)
 }
 
 func (s *ClickHouseSink) Close() error {

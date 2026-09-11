@@ -60,11 +60,26 @@ else
     *)             GOARCH="$(uname -m)" ;;
   esac
   GF_BIN="/tmp/gf-$$"
-  URL="https://github.com/gogf/gf/releases/latest/download/gf_${GOOS}_${GOARCH}"
+  # Resolve the default CLI release from the module instead of a floating
+  # latest download. GF_VERSION may explicitly select another released CLI.
+  GF_VERSION="${GF_VERSION:-$(awk '/github.com\/gogf\/gf\/v2 / { print $2; exit }' go.mod)}"
+  if [[ ! "$GF_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+    echo "ERROR: cannot resolve a released GF_VERSION from go.mod" >&2
+    exit 1
+  fi
+  URL="https://github.com/gogf/gf/releases/download/${GF_VERSION}/gf_${GOOS}_${GOARCH}"
   echo "Downloading gf CLI: $URL"
   curl -fsSL "$URL" -o "$GF_BIN"
   chmod +x "$GF_BIN"
   trap 'rm -f "$GF_BIN"' EXIT
+fi
+
+# Include the actual packing tool in build logs, including when PATH supplies it.
+"$GF_BIN" -v
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "$GF_BIN"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "$GF_BIN"
 fi
 
 # gf pack refuses to overwrite a non-empty dst without confirmation.

@@ -17,6 +17,7 @@ func TestRuntimeHelpDocumentsPriorityAndCoreFlags(t *testing.T) {
 		"--api-token TOKEN",
 		"--profile PROFILE",
 		"--insecure-dev BOOL",
+		"--restore-strict BOOL",
 		"--tls-server-name NAME",
 		"--role ROLE",
 		"--audit-enabled BOOL",
@@ -42,6 +43,7 @@ func TestParseRuntimeFlags(t *testing.T) {
 		"--api-token", "secret",
 		"--profile", "production",
 		"--insecure-dev", "false",
+		"--restore-strict", "true",
 		"--tls-server-name", "localhost",
 		"--audit-enabled", "false",
 		"--worker-labels", "gpu=true,zone=us-east-1",
@@ -58,8 +60,8 @@ func TestParseRuntimeFlags(t *testing.T) {
 	if opts.storageType != "mysql" || opts.role != "master" || opts.apiToken != "secret" {
 		t.Fatalf("parsed storage/role/token = %q/%q/%q", opts.storageType, opts.role, opts.apiToken)
 	}
-	if opts.profile != "production" || opts.insecureDev != "false" || opts.tlsServerName != "localhost" {
-		t.Fatalf("parsed profile/insecure-dev/tls-name = %q/%q/%q", opts.profile, opts.insecureDev, opts.tlsServerName)
+	if opts.profile != "production" || opts.insecureDev != "false" || opts.restoreStrict != "true" || opts.tlsServerName != "localhost" {
+		t.Fatalf("parsed profile/insecure-dev/restore-strict/tls-name = %q/%q/%q/%q", opts.profile, opts.insecureDev, opts.restoreStrict, opts.tlsServerName)
 	}
 	if opts.auditEnabled != "false" {
 		t.Fatalf("parsed audit-enabled = %q", opts.auditEnabled)
@@ -67,7 +69,7 @@ func TestParseRuntimeFlags(t *testing.T) {
 	if opts.workerLabels != "gpu=true,zone=us-east-1" {
 		t.Fatalf("parsed worker-labels = %q", opts.workerLabels)
 	}
-	for _, flagName := range []string{"config", "data-dir", "port", "etl-api-port", "storage", "storage-dsn", "role", "api-token", "profile", "insecure-dev", "tls-server-name", "audit-enabled", "worker-labels"} {
+	for _, flagName := range []string{"config", "data-dir", "port", "etl-api-port", "storage", "storage-dsn", "role", "api-token", "profile", "insecure-dev", "restore-strict", "tls-server-name", "audit-enabled", "worker-labels"} {
 		if !opts.seen[flagName] {
 			t.Fatalf("flag %q not marked seen", flagName)
 		}
@@ -86,6 +88,7 @@ func TestValidateRuntimeFlagsRejectsInvalidValues(t *testing.T) {
 		{"audit-enabled", &runtimeFlags{auditEnabled: "maybe"}},
 		{"profile", &runtimeFlags{profile: "staging"}},
 		{"insecure-dev", &runtimeFlags{insecureDev: "maybe"}},
+		{"restore-strict", &runtimeFlags{restoreStrict: "maybe"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

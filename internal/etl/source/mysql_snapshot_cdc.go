@@ -731,10 +731,7 @@ func (r *snapshotCDCReader) run(ctx context.Context) {
 					// handoff are NOT captured (RPO gap); the snapshot catches the
 					// current full state. Break out of the CDC loop; the run() outer
 					// loop sees phase reset to "snapshot" and re-enters runSnapshot.
-					r.mu.Lock()
-					r.resnapshotRequested = true
-					r.phase = "snapshot"
-					r.mu.Unlock()
+					r.requestResnapshot()
 					g.Log().Warningf(ctx, "mysql_snapshot_cdc binlog purged: falling back to snapshot phase from last cursors (RPO gap for changes since stale checkpoint)")
 					break cdcLoop
 				case BinlogPurgedResumeFromCurrent:
@@ -876,7 +873,17 @@ func (r *snapshotCDCReader) snapshotStartPosition() (mysql.Position, error) {
 	r.mu.Unlock()
 	c := r.getCanal()
 	if c == nil {
-		return mysql.Position{}, fmt.Errorf("canal is unavailable")
+		// The initial snapshot reuses the canal created by Open. That canal is
+		// deliberately closed before entering CDC, so an automatic resnapshot
+		// after ERROR 1236 must create a fresh one before capturing its new
+		// handoff. Keep it registered on the reader so Close can interrupt it
+		// and the outer run loop can release it after the snapshot transaction.
+		var err error
+		c, err = r.source.newCanal(r)
+		if err != nil {
+			return mysql.Position{}, fmt.Errorf("reopen canal for snapshot handoff: %w", err)
+		}
+		r.setCanal(c)
 	}
 	pos, err := c.GetMasterPos()
 	if err != nil {
@@ -885,16 +892,38 @@ func (r *snapshotCDCReader) snapshotStartPosition() (mysql.Position, error) {
 	if pos.Name == "" || pos.Pos == 0 {
 		return mysql.Position{}, fmt.Errorf("mysql_snapshot_cdc returned an invalid CDC handoff position %q:%d", pos.Name, pos.Pos)
 	}
-	r.mu.Lock()
-	r.snapshotHandoffFile = pos.Name
-	r.snapshotHandoffPos = uint32(pos.Pos)
-	r.snapshotHandoffValid = true
-	if r.checkpointFile == "" || r.checkpointPos == 0 {
-		r.checkpointFile = pos.Name
-		r.checkpointPos = uint32(pos.Pos)
-	}
-	r.mu.Unlock()
+	r.installSnapshotHandoff(pos.Name, uint32(pos.Pos))
 	return pos, nil
+}
+
+// requestResnapshot invalidates the previous snapshot/CDC ordering anchor.
+// The next runSnapshot call must capture a new master position; reusing the
+// original handoff would make later snapshot rows compare older than CDC rows
+// already written to a versioned sink.
+func (r *snapshotCDCReader) requestResnapshot() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resnapshotRequested = true
+	r.phase = "snapshot"
+	r.snapshotHandoffFile = ""
+	r.snapshotHandoffPos = 0
+	r.snapshotHandoffValid = false
+}
+
+// installSnapshotHandoff switches the in-memory checkpoint candidate into a
+// new snapshot generation. The persisted checkpoint is unchanged until the
+// runner successfully writes and acknowledges a record from this generation.
+func (r *snapshotCDCReader) installSnapshotHandoff(file string, pos uint32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snapshotHandoffFile = file
+	r.snapshotHandoffPos = pos
+	r.snapshotHandoffValid = true
+	r.checkpointPhase = "snapshot"
+	r.checkpointFile = file
+	r.checkpointPos = pos
+	r.file = file
+	r.pos = pos
 }
 
 func (r *snapshotCDCReader) setRuntimeBinlogPos(file string, pos uint32) {
@@ -909,6 +938,10 @@ func (r *snapshotCDCReader) setRuntimeBinlogPos(file string, pos uint32) {
 // ordered non-numeric keys (datetime/varchar) use a string > cursor without
 // sharding, since MOD is only defined for integers.
 func (r *snapshotCDCReader) snapshotTable(ctx context.Context, tx *sql.Tx, tableName string, rpk resolvedPK) error {
+	handoffFile, handoffPos, handoffValid := r.getSnapshotHandoffPosition()
+	if !handoffValid {
+		return fmt.Errorf("snapshot source-order handoff position is unavailable for %s", tableName)
+	}
 	// Fetch the source column types once per table so every snapshot record
 	// carries real schema metadata; downstream sinks (direct or via a kafka
 	// hop) can then auto-create target tables from the source schema instead
@@ -985,7 +1018,34 @@ func (r *snapshotCDCReader) snapshotTable(ctx context.Context, tx *sql.Tx, table
 					}
 				}
 			}
-			rec := core.Record{Operation: core.OpInsert, Data: data, Metadata: core.Metadata{Source: r.source.name, Database: r.source.database, Table: tableName, Timestamp: time.Now(), Offset: numericOffset(rpk, data), Key: metadataKeyJSON(rpk.column, data), ColumnTypes: colTypes}}
+			cursorKind := core.SourceCursorOrdered
+			if rpk.kind == pkKindNumeric {
+				cursorKind = core.SourceCursorNumeric
+			}
+			cursor := ""
+			if value, ok := data[rpk.column]; ok && value != nil {
+				cursor = cursorString(value)
+			}
+			rec := core.Record{
+				Operation: core.OpInsert,
+				Data:      data,
+				Metadata: core.Metadata{
+					Source:              r.source.name,
+					SourceType:          core.SourceTypeMySQLSnapshotCDC,
+					SourcePhase:         core.SourcePhaseSnapshot,
+					Database:            r.source.database,
+					Table:               tableName,
+					Timestamp:           time.Now(),
+					SnapshotHandoffFile: handoffFile,
+					SnapshotHandoffPos:  handoffPos,
+					Offset:              numericOffset(rpk, data),
+					Cursor:              cursor,
+					CursorKind:          cursorKind,
+					Key:                 metadataKeyJSON(rpk.column, data),
+					PrimaryKeyColumns:   []string{rpk.column},
+					ColumnTypes:         colTypes,
+				},
+			}
 			select {
 			case r.records <- rec:
 			case <-ctx.Done():
@@ -1508,6 +1568,13 @@ func (r *snapshotCDCReader) getDurableBinlogPos() (string, uint32) {
 	return r.checkpointFile, r.checkpointPos
 }
 
+func (r *snapshotCDCReader) getSnapshotHandoffPosition() (string, uint32, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.snapshotHandoffFile, r.snapshotHandoffPos,
+		r.snapshotHandoffValid && r.snapshotHandoffFile != "" && r.snapshotHandoffPos != 0
+}
+
 // advanceResumePos atomically moves both the durable checkpoint position and
 // the producer runtime cursor to a new binlog position. It is used by the
 // binlog-purged recovery path (resume_from_current / resnapshot handoff) so
@@ -1595,7 +1662,18 @@ func (h *snapshotCDCHandler) OnRow(e *canal.RowsEvent) error {
 	}
 	for i := 0; i < len(e.Rows); i++ {
 		row := e.Rows[i]
-		rec := core.Record{Metadata: core.Metadata{Source: h.reader.source.name, Database: h.reader.source.database, Table: e.Table.Name, Timestamp: time.Now(), BinlogFile: file, BinlogPos: pos, ColumnTypes: colTypes}}
+		rec := core.Record{Metadata: core.Metadata{
+			Source:            h.reader.source.name,
+			SourceType:        core.SourceTypeMySQLSnapshotCDC,
+			SourcePhase:       core.SourcePhaseCDC,
+			Database:          h.reader.source.database,
+			Table:             e.Table.Name,
+			Timestamp:         time.Now(),
+			BinlogFile:        file,
+			BinlogPos:         pos,
+			PrimaryKeyColumns: append([]string(nil), pkCols...),
+			ColumnTypes:       colTypes,
+		}}
 		switch e.Action {
 		case canal.InsertAction:
 			rec.Operation = core.OpInsert
@@ -1662,13 +1740,15 @@ func (h *snapshotCDCHandler) OnDDL(header *replication.EventHeader, p mysql.Posi
 	rec := core.Record{
 		Operation: core.OpDDL,
 		Metadata: core.Metadata{
-			Source:     h.reader.source.name,
-			Database:   h.reader.source.database,
-			Table:      extractDDLTable(ddl),
-			Timestamp:  time.Now(),
-			BinlogFile: p.Name,
-			BinlogPos:  uint32(p.Pos),
-			DDL:        ddl,
+			Source:      h.reader.source.name,
+			SourceType:  core.SourceTypeMySQLSnapshotCDC,
+			SourcePhase: core.SourcePhaseCDC,
+			Database:    h.reader.source.database,
+			Table:       extractDDLTable(ddl),
+			Timestamp:   time.Now(),
+			BinlogFile:  p.Name,
+			BinlogPos:   uint32(p.Pos),
+			DDL:         ddl,
 		},
 	}
 	select {

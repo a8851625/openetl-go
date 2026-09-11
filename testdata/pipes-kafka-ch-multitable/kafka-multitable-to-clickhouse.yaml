@@ -6,8 +6,10 @@
 #   - ods_orders (ORDER BY order_id)   <- orders envelope events
 #   - ods_users  (ORDER BY user_no)    <- users envelope events
 #
-# Both tables are auto-created as ReplacingMergeTree(_version) with
-# heterogeneous ORDER BY keys derived from the JSON-object envelope key.
+# Both tables are auto-created as
+# ReplacingMergeTree(_version, _is_deleted) with heterogeneous ORDER BY keys
+# derived from the JSON-object envelope key. DELETE writes a versioned
+# tombstone; it does not issue an asynchronous ClickHouse mutation.
 name: kafka-multitable-to-clickhouse
 source:
   type: kafka

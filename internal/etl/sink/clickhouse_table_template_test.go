@@ -1,6 +1,7 @@
 package sink
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
@@ -131,6 +132,7 @@ func TestClickHouseConfigParsesMultiTableFields(t *testing.T) {
 func TestClickHousePKColumnsByTable(t *testing.T) {
 	s := &ClickHouseSink{
 		name:                  "clickhouse",
+		database:              "ods",
 		tableTemplate:         "ods_{table}",
 		pkColumnsFromMetadata: true,
 	}
@@ -138,12 +140,12 @@ func TestClickHousePKColumnsByTable(t *testing.T) {
 		{
 			Operation: core.OpInsert,
 			Data:      map[string]any{"order_id": int64(1)},
-			Metadata:  core.Metadata{Table: "orders", Key: `{"order_id":1}`},
+			Metadata:  core.Metadata{Table: "orders", Key: `{"order_id":1}`, PrimaryKeyColumns: []string{"order_id"}},
 		},
 		{
 			Operation: core.OpInsert,
 			Data:      map[string]any{"user_no": "u1"},
-			Metadata:  core.Metadata{Table: "users", Key: `{"user_no":"u1"}`},
+			Metadata:  core.Metadata{Table: "users", Key: `{"user_no":"u1"}`, PrimaryKeyColumns: []string{"user_no"}},
 		},
 	}
 	pkByTable, err := s.pkColumnsByTable(records)
@@ -162,17 +164,17 @@ func TestClickHousePKColumnsByTable(t *testing.T) {
 // TestClickHousePKColumnsByTableRejectsKeyChange verifies a batch whose key
 // columns change for the same table is rejected instead of mixing schemes.
 func TestClickHousePKColumnsByTableRejectsKeyChange(t *testing.T) {
-	s := &ClickHouseSink{name: "clickhouse", pkColumnsFromMetadata: true}
+	s := &ClickHouseSink{name: "clickhouse", database: "ods", pkColumnsFromMetadata: true}
 	records := []core.Record{
 		{
 			Operation: core.OpInsert,
 			Data:      map[string]any{"order_id": int64(1)},
-			Metadata:  core.Metadata{Table: "orders", Key: `{"order_id":1}`},
+			Metadata:  core.Metadata{Table: "orders", Key: `{"order_id":1}`, PrimaryKeyColumns: []string{"order_id"}},
 		},
 		{
 			Operation: core.OpInsert,
 			Data:      map[string]any{"order_id": int64(2), "tenant_id": int64(9)},
-			Metadata:  core.Metadata{Table: "orders", Key: `{"order_id":2,"tenant_id":9}`},
+			Metadata:  core.Metadata{Table: "orders", Key: `{"order_id":2,"tenant_id":9}`, PrimaryKeyColumns: []string{"order_id", "tenant_id"}},
 		},
 	}
 	if _, err := s.pkColumnsByTable(records); err == nil {
@@ -180,57 +182,43 @@ func TestClickHousePKColumnsByTableRejectsKeyChange(t *testing.T) {
 	}
 }
 
-// TestClickHousePKColumnsByTableFallsBackToStatic verifies pk_columns_from_metadata
-// falls back to the static pk_columns (then the id default) for records whose
-// Metadata.Key is empty — the DLQ-replay hardening path — instead of failing
-// the whole batch.
-func TestClickHousePKColumnsByTableFallsBackToStatic(t *testing.T) {
-	s := &ClickHouseSink{name: "clickhouse", pkColumnsFromMetadata: true, pkColumns: []string{"strategy_id", "service_city_id"}}
+// TestClickHousePKColumnsByTableRejectsEmptyKeyDespiteStaticFallback verifies
+// ordinary metadata-PK traffic cannot use static pk_columns to guess identity.
+func TestClickHousePKColumnsByTableRejectsEmptyKeyDespiteStaticFallback(t *testing.T) {
+	s := &ClickHouseSink{name: "clickhouse", database: "ods", pkColumnsFromMetadata: true, pkColumns: []string{"strategy_id", "service_city_id"}}
 	records := []core.Record{
 		{
 			Operation: core.OpInsert,
 			Data:      map[string]any{"strategy_id": int64(24), "service_city_id": int64(2)},
-			Metadata:  core.Metadata{Table: "surcharge"},
+			Metadata:  core.Metadata{Table: "surcharge", PrimaryKeyColumns: []string{"strategy_id", "service_city_id"}},
 		},
 	}
-	pk, err := s.pkColumnsByTable(records)
-	if err != nil {
-		t.Fatalf("fallback must not error: %v", err)
-	}
-	if len(pk["surcharge"]) != 2 || pk["surcharge"][0] != "strategy_id" {
-		t.Fatalf("fallback pk = %v", pk["surcharge"])
-	}
-
-	// No static pk_columns configured either: default id.
-	s2 := &ClickHouseSink{name: "clickhouse", pkColumnsFromMetadata: true}
-	pk2, err := s2.pkColumnsByTable(records)
-	if err != nil {
-		t.Fatalf("default fallback must not error: %v", err)
-	}
-	if len(pk2["surcharge"]) != 1 || pk2["surcharge"][0] != "id" {
-		t.Fatalf("default pk = %v", pk2["surcharge"])
+	if _, err := s.pkColumnsByTable(records); err == nil || core.ClassifyError(err) != core.ErrorClassData || !strings.Contains(err.Error(), string(core.RecordIdentityReasonKeyMissing)) {
+		t.Fatalf("empty metadata key error=%v, want fail-closed data/key_missing", err)
 	}
 }
 
 // TestClickHouseCompactUsesPerTablePK verifies batch compaction keys come from
 // metadata-derived per-table PKs so mixed tables collapse on their own keys.
 func TestClickHouseCompactUsesPerTablePK(t *testing.T) {
-	s := &ClickHouseSink{name: "clickhouse", tableTemplate: "ods_{table}", pkColumnsFromMetadata: true}
+	s := &ClickHouseSink{name: "clickhouse", database: "ods", tableTemplate: "ods_{table}", pkColumnsFromMetadata: true}
 	records := []core.Record{
 		{
 			Operation: core.OpInsert,
 			Data:      map[string]any{"order_id": int64(1), "amount": 11.0},
-			Metadata:  core.Metadata{Table: "orders", Key: `{"order_id":1}`},
+			Metadata:  core.Metadata{Table: "orders", Key: `{"order_id":1}`, PrimaryKeyColumns: []string{"order_id"}},
 		},
 		{
 			Operation: core.OpInsert,
 			Data:      map[string]any{"user_no": "u1", "city": "sz"},
-			Metadata:  core.Metadata{Table: "users", Key: `{"user_no":"u1"}`},
+			Metadata:  core.Metadata{Table: "users", Key: `{"user_no":"u1"}`, PrimaryKeyColumns: []string{"user_no"}},
 		},
 		{
 			Operation: core.OpUpdate,
+			Before:    map[string]any{"order_id": int64(1), "amount": 11.0},
 			Data:      map[string]any{"order_id": int64(1), "amount": 15.0},
-			Metadata:  core.Metadata{Table: "orders", Key: `{"order_id":1}`},
+			Metadata: core.Metadata{Table: "orders", Key: `{"order_id":1}`, PrimaryKeyColumns: []string{"order_id"},
+				FormatContractID: core.FormatContractOpenETLEnvelopeV1},
 		},
 	}
 	pkByTable, err := s.pkColumnsByTable(records)

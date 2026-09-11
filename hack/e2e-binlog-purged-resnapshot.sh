@@ -26,7 +26,9 @@ TOKEN="${ETL_API_TOKEN:-sk-test}"
 MYSQL="etl-mysql-source"
 CH="etl-clickhouse"
 APP="etl-binlog-purge-resnap-e2e"
+LEGACY_APP="etl-binlog-purge-e2e"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CH_TABLE="ods_binlog_purge_resnap"
 
 "$CONTAINER_CLI" inspect "$MYSQL" >/dev/null 2>&1 || { echo "SKIP: $MYSQL not running"; exit 77; }
 "$CONTAINER_CLI" inspect "$CH" >/dev/null 2>&1 || { echo "SKIP: $CH not running"; exit 77; }
@@ -36,19 +38,29 @@ echo "=== BUG-2 binlog purged recovery e2e: resnapshot policy ==="
 mysql() { "$CONTAINER_CLI" exec "$MYSQL" mysql -uroot -proot123456 "$@" 2>&1 | grep -v "Using a password" || true; }
 chq()   { "$CONTAINER_CLI" exec "$CH" clickhouse-client -h 127.0.0.1 --password dzh123456 -q "$1" 2>/dev/null || true; }
 
+cleanup() {
+  "$CONTAINER_CLI" rm -f "$APP" >/dev/null 2>&1 || true
+  rm -rf data-binlog-purge-resnap
+  chq "DROP TABLE IF EXISTS dzh3136_go.$CH_TABLE" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 # Fresh source table + known pre-purge rows.
 mysql -e "DROP DATABASE IF EXISTS snap_e2e; CREATE DATABASE snap_e2e;"
 mysql -e "CREATE TABLE snap_e2e.staff(id int NOT NULL AUTO_INCREMENT, name varchar(32), PRIMARY KEY(id)) ENGINE=InnoDB;"
 mysql -e "INSERT INTO snap_e2e.staff(name) VALUES('alice'),('bob');"
-chq "DROP TABLE IF EXISTS dzh3136_go.ods_binlog_purge_resnap"
+chq "DROP TABLE IF EXISTS dzh3136_go.$CH_TABLE"
 
 # Resnapshot spec (sibling of snapshot-cdc-fail.yaml).
 rm -rf data-binlog-purge-resnap && mkdir -p data-binlog-purge-resnap/pipes
 cp testdata/pipes-binlog-purge/snapshot-cdc-fail.yaml data-binlog-purge-resnap/pipes/resnap.yaml
-sed -i.bak "s/snapshot-cdc-binlog-purge-fail/snapshot-cdc-binlog-purge-resnap/; s/cdc_on_binlog_purged: fail/cdc_on_binlog_purged: resnapshot/" data-binlog-purge-resnap/pipes/resnap.yaml && rm -f data-binlog-purge-resnap/pipes/*.bak
+sed -i.bak "s/snapshot-cdc-binlog-purge-fail/snapshot-cdc-binlog-purge-resnap/; s/cdc_on_binlog_purged: fail/cdc_on_binlog_purged: resnapshot/; s/table: ods_binlog_purge/table: $CH_TABLE/" data-binlog-purge-resnap/pipes/resnap.yaml && rm -f data-binlog-purge-resnap/pipes/*.bak
 chmod -R a+rwX data-binlog-purge-resnap
 
-"$CONTAINER_CLI" rm -f "$APP" >/dev/null 2>&1 || true
+# The fail-policy sibling uses the same source database and may survive a
+# failed prior run. Remove it before RESET MASTER so it cannot race this
+# certification path or recreate the legacy target table.
+"$CONTAINER_CLI" rm -f "$APP" "$LEGACY_APP" >/dev/null 2>&1 || true
 NET="$("$CONTAINER_CLI" inspect "$MYSQL" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' | awk '{print $1}')"
 echo "using network: $NET"
 "$CONTAINER_CLI" run -d --name "$APP" --network "$NET" -p 8045:8001 \
@@ -73,7 +85,7 @@ for p in d.get('pipelines',[]):
 echo "pipeline id: $PID"
 
 # First rows via snapshot.
-chq "SELECT count() FROM dzh3136_go.ods_binlog_purge" | grep -q '^2$' || { echo "FAIL: snapshot rows != 2"; exit 1; }
+chq "SELECT count() FROM dzh3136_go.$CH_TABLE" | grep -q '^2$' || { echo "FAIL: snapshot rows != 2"; exit 1; }
 echo "--- snapshot OK: 2 rows in sink"
 
 curl -s -X POST -H "X-API-Token: $TOKEN" "$API/api/v2/pipelines/$PID/stop" >/dev/null 2>&1 || true
@@ -98,19 +110,23 @@ echo "--- app logs (resnapshot re-entry):"
 "$CONTAINER_CLI" logs "$APP" 2>&1 | grep -iE "binlog purged|ERROR 1236|resnapshot|policy" | tail -5 || true
 
 echo "--- sink rows after recovery (expect carol present):"
-chq "SELECT name FROM dzh3136_go.ods_binlog_purge ORDER BY id" | tr '\n' ' '; echo
+chq "SELECT name FROM dzh3136_go.$CH_TABLE ORDER BY id" | tr '\n' ' '; echo
 
 # carol (id=3, uploaded after purge) must be present; pipeline must be running.
-chq "SELECT count() FROM dzh3136_go.ods_binlog_purge" | grep -q '^3$' || { echo "FAIL: expected 3 rows after resnapshot recovery"; "$CONTAINER_CLI" logs "$APP" 2>&1 | tail -15; exit 1; }
+chq "SELECT count() FROM dzh3136_go.$CH_TABLE" | grep -q '^3$' || { echo "FAIL: expected 3 rows after resnapshot recovery"; "$CONTAINER_CLI" logs "$APP" 2>&1 | tail -15; exit 1; }
 curl -s -H "X-API-Token: $TOKEN" "$API/api/v2/pipelines/$PID" 2>/dev/null | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 print('status:', d.get('status'))
 " 2>/dev/null | grep -q 'running' || { echo "FAIL: pipeline not running after resnapshot"; exit 1; }
 
-echo "===== PASS: BUG-2 resnapshot policy — purged binlog triggers re-snapshot from cursors, new row delivered ====="
+# Prove the source did not merely finish the resumed snapshot: it must have
+# opened a fresh CDC stream at the new handoff and continue delivering rows.
+mysql -e "INSERT INTO snap_e2e.staff(name) VALUES('dave');"
+for i in $(seq 1 30); do
+  [ "$(chq "SELECT count() FROM dzh3136_go.$CH_TABLE")" = "4" ] && break
+  sleep 1
+done
+chq "SELECT count() FROM dzh3136_go.$CH_TABLE" | grep -q '^4$' || { echo "FAIL: CDC did not continue after resnapshot"; "$CONTAINER_CLI" logs "$APP" 2>&1 | tail -20; exit 1; }
 
-# Cleanup.
-"$CONTAINER_CLI" rm -f "$APP" >/dev/null 2>&1 || true
-rm -rf data-binlog-purge-resnap
-chq "DROP TABLE IF EXISTS dzh3136_go.ods_binlog_purge" 2>/dev/null || true
+echo "===== PASS: BUG-2 resnapshot policy — purged binlog triggers re-snapshot from cursors and re-enters CDC ====="
