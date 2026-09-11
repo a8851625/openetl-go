@@ -26,6 +26,16 @@ const (
 // checkpointDir and dlqDir are used for the default SQLite path and
 // for fallback file migration paths.
 func NewStore(ctx context.Context, storageType, checkpointDir, dlqDir string) (storage.Storage, error) {
+	return newStore(ctx, storageType, checkpointDir, dlqDir, true)
+}
+
+// NewMaintenanceStore opens SQL metadata without importing legacy checkpoint
+// and DLQ files. An offline backup/restore must not rename or consume those files.
+func NewMaintenanceStore(ctx context.Context, storageType, checkpointDir string) (storage.Storage, error) {
+	return newStore(ctx, storageType, checkpointDir, "", false)
+}
+
+func newStore(ctx context.Context, storageType, checkpointDir, dlqDir string, migrateFiles bool) (storage.Storage, error) {
 	switch storageType {
 	case StoreTypeSQLite, "":
 		dbPath := g.Cfg().MustGet(ctx, "etl.storage.sqlite.path", "").String()
@@ -40,7 +50,9 @@ func NewStore(ctx context.Context, storageType, checkpointDir, dlqDir string) (s
 			return nil, err
 		}
 		// Migrate existing file-based data to SQLite
-		migrateFileData(ctx, store, checkpointDir, dlqDir)
+		if migrateFiles {
+			migrateFileData(ctx, store, checkpointDir, dlqDir)
+		}
 		return store, nil
 
 	case StoreTypeMySQL:
@@ -52,7 +64,9 @@ func NewStore(ctx context.Context, storageType, checkpointDir, dlqDir string) (s
 		if err != nil {
 			return nil, err
 		}
-		migrateFileData(ctx, store, checkpointDir, dlqDir)
+		if migrateFiles {
+			migrateFileData(ctx, store, checkpointDir, dlqDir)
+		}
 		return store, nil
 
 	case StoreTypePG:
@@ -64,7 +78,9 @@ func NewStore(ctx context.Context, storageType, checkpointDir, dlqDir string) (s
 		if err != nil {
 			return nil, err
 		}
-		migrateFileData(ctx, store, checkpointDir, dlqDir)
+		if migrateFiles {
+			migrateFileData(ctx, store, checkpointDir, dlqDir)
+		}
 		return store, nil
 
 	default:

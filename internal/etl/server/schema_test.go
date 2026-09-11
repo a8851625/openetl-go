@@ -45,7 +45,7 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, sinks, "mysql", "auto_create", "column_types", "schema_drift", "insert_chunk_size", "ddl_policy")
 	assertFields(t, sinks, "postgres", "sslmode", "auto_create", "column_types", "schema_drift", "insert_chunk_size", "ddl_policy")
 	assertFields(t, sinks, "postgresql", "sslmode", "auto_create", "column_types", "schema_drift", "insert_chunk_size", "ddl_policy")
-	assertFields(t, sinks, "clickhouse", "source_dialect", "ddl_policy", "async_insert", "ttl")
+	assertFields(t, sinks, "clickhouse", "source_dialect", "ddl_policy", "async_insert", "ttl", "version_mode", "version_column", "delete_column")
 	assertFields(t, sinks, "kafka", "auto_create_topic", "retry_backoff_ms")
 	assertFields(t, sinks, "elasticsearch", "host", "chunk_size", "retry_base_ms")
 	assertFields(t, sinks, "es", "host", "chunk_size", "retry_base_ms")
@@ -742,28 +742,26 @@ func assertFields(t *testing.T, schemas map[string][]ConfigField, plugin string,
 	}
 }
 
-// TestKafkaSourceFormatExposesEnvelope verifies that the kafka source
-// config schema advertises format=envelope in its enum. The envelope format
-// restores INSERT/UPDATE/DELETE semantics for relay/land pipelines
-// (kafka->kafka, kafka->doris/mysql upsert); without it in the enum the UI
-// cannot offer the option and users have no schema-driven hint that the
-// relay-capable format exists.
-func TestKafkaSourceFormatExposesEnvelope(t *testing.T) {
+// The schema is the UI/API contract. A duplicate format field with divergent
+// enums makes the available parser semantics depend on which consumer wins.
+func TestKafkaSourceFormatContractIsUniqueAndComplete(t *testing.T) {
 	schemas := sourceConfigSchemas()
 	fields, ok := schemas["kafka"]
 	if !ok {
 		t.Fatalf("schema for kafka source is missing")
 	}
+	count := 0
 	for _, f := range fields {
 		if f.Name != "format" {
 			continue
 		}
-		for _, e := range f.Enum {
-			if e == "envelope" {
-				return
-			}
+		count++
+		want := []string{"json", "text", "envelope", "canal_json"}
+		if !reflect.DeepEqual(f.Enum, want) {
+			t.Fatalf("kafka source format enum = %v, want %v", f.Enum, want)
 		}
-		t.Fatalf("kafka source format enum = %v, want envelope included", f.Enum)
 	}
-	t.Fatalf("kafka source schema has no format field")
+	if count != 1 {
+		t.Fatalf("kafka source schema format field count = %d, want exactly 1", count)
+	}
 }
