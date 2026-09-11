@@ -92,3 +92,7 @@ dzhgo-admin-vue
 .codebuddy
 .vscode
 public/excel
+
+# Local production reference stack for ClickHouse DWH trials (contains real
+# internal hosts and credentials — never commit)
+/pipes-clickhouse-prod/
