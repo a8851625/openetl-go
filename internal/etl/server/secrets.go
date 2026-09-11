@@ -1,26 +1,34 @@
 package server
 
 import (
-	"strings"
-
 	"github.com/a8851625/openetl-go/internal/etl/orchestrator"
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
-// secretKeyPatterns are config key substrings that indicate a secret field.
-var secretKeyPatterns = []string{
-	"password", "passwd", "secret", "token", "api_key", "apikey", "credential", "private_key",
+// Legacy untyped callers share the storage fallback; connector-aware paths
+// below always provide the descriptor predicate used for persistence.
+func isSecretKey(key string) bool { return storage.IsSecretFieldKey(key) }
+
+func connectorSecretPredicate(kind, typ string) func(string) bool {
+	resolver := NewDescriptorSecretFieldResolver()
+	return func(field string) bool { return resolver(kind, typ, field) }
 }
 
-// isSecretKey reports whether a config key looks like a secret field.
-func isSecretKey(key string) bool {
-	lk := strings.ToLower(key)
-	for _, pat := range secretKeyPatterns {
-		if strings.Contains(lk, pat) {
-			return true
-		}
+func nodeSecretPredicate(node *orchestrator.Node) func(string) bool {
+	kind, _ := connectionKindForNode(node.Kind)
+	typ := node.Plugin
+	if typ == "" && kind == "transform" {
+		typ = string(node.Kind)
 	}
-	return false
+	return connectorSecretPredicate(kind, typ)
+}
+
+func configSecretPredicate(predicates []func(string) bool) func(string) bool {
+	if len(predicates) > 0 && predicates[0] != nil {
+		return predicates[0]
+	}
+	return isSecretKey
 }
 
 // maskString redacts a secret for API responses.
@@ -66,13 +74,14 @@ func looksLikeMaskedSecret(incoming, real any) bool {
 }
 
 // maskConfigSecrets recursively masks secret values in a config map for API responses.
-func maskConfigSecrets(cfg map[string]any) map[string]any {
+func maskConfigSecrets(cfg map[string]any, predicates ...func(string) bool) map[string]any {
+	isSecret := configSecretPredicate(predicates)
 	if cfg == nil {
 		return nil
 	}
 	out := make(map[string]any, len(cfg))
 	for k, v := range cfg {
-		if isSecretKey(k) {
+		if isSecret(k) {
 			if s, ok := v.(string); ok && s != "" {
 				out[k] = maskString(s)
 			} else if v != nil && v != "" {
@@ -84,12 +93,12 @@ func maskConfigSecrets(cfg map[string]any) map[string]any {
 		}
 		switch vv := v.(type) {
 		case map[string]any:
-			out[k] = maskConfigSecrets(vv)
+			out[k] = maskConfigSecrets(vv, predicates...)
 		case []any:
 			items := make([]any, len(vv))
 			for i, item := range vv {
 				if m, ok := item.(map[string]any); ok {
-					items[i] = maskConfigSecrets(m)
+					items[i] = maskConfigSecrets(m, predicates...)
 				} else {
 					items[i] = item
 				}
@@ -105,13 +114,14 @@ func maskConfigSecrets(cfg map[string]any) map[string]any {
 // maskSecretMap masks secrets for the connection catalog API.
 // Connections always use a fixed sentinel ("******") so the UI can treat any
 // non-empty secret field as "configured, value hidden".
-func maskSecretMap(in map[string]any) map[string]any {
+func maskSecretMap(in map[string]any, predicates ...func(string) bool) map[string]any {
+	isSecret := configSecretPredicate(predicates)
 	if in == nil {
 		return nil
 	}
 	out := make(map[string]any, len(in))
 	for k, v := range in {
-		if isSecretKey(k) {
+		if isSecret(k) {
 			if s, ok := v.(string); ok && s != "" {
 				out[k] = "******"
 			} else {
@@ -121,12 +131,12 @@ func maskSecretMap(in map[string]any) map[string]any {
 		}
 		switch vv := v.(type) {
 		case map[string]any:
-			out[k] = maskSecretMap(vv)
+			out[k] = maskSecretMap(vv, predicates...)
 		case []any:
 			items := make([]any, len(vv))
 			for i, item := range vv {
 				if m, ok := item.(map[string]any); ok {
-					items[i] = maskSecretMap(m)
+					items[i] = maskSecretMap(m, predicates...)
 				} else {
 					items[i] = item
 				}
@@ -144,17 +154,18 @@ func maskSecretMap(in map[string]any) map[string]any {
 //
 // This is required because GET /spec and GET /connections intentionally redact secrets
 // for the UI; a full-form resubmit would otherwise persist the mask as the real password.
-func preserveSecretConfig(incoming, existing map[string]any) map[string]any {
+func preserveSecretConfig(incoming, existing map[string]any, predicates ...func(string) bool) map[string]any {
+	isSecret := configSecretPredicate(predicates)
 	if incoming == nil {
 		return nil
 	}
 	if existing == nil {
 		// Still drop pure placeholders so we don't store "******" as a password.
-		return scrubSecretPlaceholders(incoming)
+		return scrubSecretPlaceholders(incoming, predicates...)
 	}
 	out := make(map[string]any, len(incoming))
 	for k, v := range incoming {
-		if isSecretKey(k) {
+		if isSecret(k) {
 			old, hasOld := existing[k]
 			if isSecretPlaceholder(v) || (hasOld && looksLikeMaskedSecret(v, old)) {
 				if hasOld {
@@ -169,7 +180,7 @@ func preserveSecretConfig(incoming, existing map[string]any) map[string]any {
 		switch vv := v.(type) {
 		case map[string]any:
 			oldMap, _ := existing[k].(map[string]any)
-			out[k] = preserveSecretConfig(vv, oldMap)
+			out[k] = preserveSecretConfig(vv, oldMap, predicates...)
 		case []any:
 			oldArr, _ := existing[k].([]any)
 			items := make([]any, len(vv))
@@ -180,7 +191,7 @@ func preserveSecretConfig(incoming, existing map[string]any) map[string]any {
 					om, _ = oldArr[i].(map[string]any)
 				}
 				if iok {
-					items[i] = preserveSecretConfig(im, om)
+					items[i] = preserveSecretConfig(im, om, predicates...)
 				} else {
 					items[i] = item
 				}
@@ -194,23 +205,24 @@ func preserveSecretConfig(incoming, existing map[string]any) map[string]any {
 }
 
 // scrubSecretPlaceholders removes masked/empty secret values when there is no prior secret.
-func scrubSecretPlaceholders(cfg map[string]any) map[string]any {
+func scrubSecretPlaceholders(cfg map[string]any, predicates ...func(string) bool) map[string]any {
+	isSecret := configSecretPredicate(predicates)
 	if cfg == nil {
 		return nil
 	}
 	out := make(map[string]any, len(cfg))
 	for k, v := range cfg {
-		if isSecretKey(k) && isSecretPlaceholder(v) {
+		if isSecret(k) && isSecretPlaceholder(v) {
 			continue
 		}
 		switch vv := v.(type) {
 		case map[string]any:
-			out[k] = scrubSecretPlaceholders(vv)
+			out[k] = scrubSecretPlaceholders(vv, predicates...)
 		case []any:
 			items := make([]any, len(vv))
 			for i, item := range vv {
 				if m, ok := item.(map[string]any); ok {
-					items[i] = scrubSecretPlaceholders(m)
+					items[i] = scrubSecretPlaceholders(m, predicates...)
 				} else {
 					items[i] = item
 				}
@@ -227,18 +239,18 @@ func preserveLinearSpecSecrets(incoming, existing *pipeline.Spec) {
 	if incoming == nil || existing == nil {
 		return
 	}
-	incoming.Source.Config = preserveSecretConfig(incoming.Source.Config, existing.Source.Config)
-	incoming.Sink.Config = preserveSecretConfig(incoming.Sink.Config, existing.Sink.Config)
+	incoming.Source.Config = preserveSecretConfig(incoming.Source.Config, existing.Source.Config, connectorSecretPredicate("source", incoming.Source.Type))
+	incoming.Sink.Config = preserveSecretConfig(incoming.Sink.Config, existing.Sink.Config, connectorSecretPredicate("sink", incoming.Sink.Type))
 	// Transforms: match by index when lengths align; otherwise only scrub placeholders.
 	for i := range incoming.Transforms {
 		if i < len(existing.Transforms) {
-			incoming.Transforms[i].Config = preserveSecretConfig(incoming.Transforms[i].Config, existing.Transforms[i].Config)
+			incoming.Transforms[i].Config = preserveSecretConfig(incoming.Transforms[i].Config, existing.Transforms[i].Config, connectorSecretPredicate("transform", incoming.Transforms[i].Type))
 		} else {
-			incoming.Transforms[i].Config = scrubSecretPlaceholders(incoming.Transforms[i].Config)
+			incoming.Transforms[i].Config = scrubSecretPlaceholders(incoming.Transforms[i].Config, connectorSecretPredicate("transform", incoming.Transforms[i].Type))
 		}
 	}
 	if incoming.DLQ != nil && existing.DLQ != nil {
-		incoming.DLQ.Sink.Config = preserveSecretConfig(incoming.DLQ.Sink.Config, existing.DLQ.Sink.Config)
+		incoming.DLQ.Sink.Config = preserveSecretConfig(incoming.DLQ.Sink.Config, existing.DLQ.Sink.Config, connectorSecretPredicate("sink", incoming.DLQ.Sink.Type))
 	}
 }
 
@@ -258,9 +270,9 @@ func preserveDAGSpecSecrets(incoming, existing *orchestrator.PipelineSpec) {
 			continue
 		}
 		if old, ok := oldByID[n.ID]; ok {
-			incoming.DAG.Nodes[i].Config = preserveSecretConfig(n.Config, old.Config)
+			incoming.DAG.Nodes[i].Config = preserveSecretConfig(n.Config, old.Config, nodeSecretPredicate(n))
 		} else {
-			incoming.DAG.Nodes[i].Config = scrubSecretPlaceholders(n.Config)
+			incoming.DAG.Nodes[i].Config = scrubSecretPlaceholders(n.Config, nodeSecretPredicate(n))
 		}
 	}
 }
@@ -270,17 +282,17 @@ func maskSpecSecrets(spec *pipeline.Spec) *pipeline.Spec {
 		return nil
 	}
 	cp := *spec
-	cp.Source.Config = maskConfigSecrets(cp.Source.Config)
-	cp.Sink.Config = maskConfigSecrets(cp.Sink.Config)
+	cp.Source.Config = maskConfigSecrets(cp.Source.Config, connectorSecretPredicate("source", cp.Source.Type))
+	cp.Sink.Config = maskConfigSecrets(cp.Sink.Config, connectorSecretPredicate("sink", cp.Sink.Type))
 	if cp.Transforms != nil {
 		cp.Transforms = append([]pipeline.TransformSpec(nil), cp.Transforms...)
 		for i := range cp.Transforms {
-			cp.Transforms[i].Config = maskConfigSecrets(cp.Transforms[i].Config)
+			cp.Transforms[i].Config = maskConfigSecrets(cp.Transforms[i].Config, connectorSecretPredicate("transform", cp.Transforms[i].Type))
 		}
 	}
 	if cp.DLQ != nil {
 		dlq := *cp.DLQ
-		dlq.Sink.Config = maskConfigSecrets(dlq.Sink.Config)
+		dlq.Sink.Config = maskConfigSecrets(dlq.Sink.Config, connectorSecretPredicate("sink", dlq.Sink.Type))
 		cp.DLQ = &dlq
 	}
 	return &cp
@@ -298,7 +310,7 @@ func maskDAGSpecSecrets(spec *orchestrator.PipelineSpec) *orchestrator.PipelineS
 				continue
 			}
 			nc := *n
-			nc.Config = maskConfigSecrets(n.Config)
+			nc.Config = maskConfigSecrets(n.Config, nodeSecretPredicate(n))
 			cp.DAG.Nodes[i] = &nc
 		}
 	}
