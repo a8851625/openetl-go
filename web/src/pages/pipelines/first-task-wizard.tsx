@@ -6,6 +6,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
 import { ApiErrorPanel } from '@/components/shared/api-error-panel';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import {
   ConfigForm,
   buildDefaultConfig,
@@ -18,6 +19,7 @@ import {
 import {
   api,
   apiErrorPayload,
+  apiErrorSummary,
   normalizeConnectionEntry,
   toApiErrorDetails,
   type ApiErrorDetails,
@@ -35,6 +37,11 @@ import type {
 import { ArrowLeft, ArrowRight, Check, GitBranch, Save } from 'lucide-react';
 
 const WIZARD_DRAFT_KEY = 'etl_wizard_draft_v1';
+const WIZARD_SECRET_SENTINEL = '__secret_omitted__';
+// UI-A.2 (P1-14): connectors whose writer is disabled / maturity is
+// experimental get an explicit label in wizard selects so users learn the
+// blocker before reaching Safety preflight.
+const EXPERIMENTAL_CONNECTORS = new Set(['maxcompute', 'odps']);
 const WIZARD_STEPS = [
   { id: 'scenario', labelKey: 'wizard.stepScenario' },
   { id: 'source', labelKey: 'wizard.stepSource' },
@@ -255,7 +262,17 @@ export function FirstTaskWizard({
         return null;
       }
       const raw = localStorage.getItem(WIZARD_DRAFT_KEY);
-      return raw ? JSON.parse(raw) : null;
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      // UI-A.2: sentinel secrets restore as blanks — never resurrect credentials.
+      const strip = (v: unknown) => (typeof v === 'string' ? v.split(WIZARD_SECRET_SENTINEL).join('') : v);
+      if (parsed && typeof parsed === 'object') {
+        parsed.sourceConfigText = strip(parsed.sourceConfigText);
+        parsed.sinkConfigText = strip(parsed.sinkConfigText);
+        parsed.transformsText = strip(parsed.transformsText);
+        parsed.yamlText = strip(parsed.yamlText);
+      }
+      return parsed;
     } catch {
       return null;
     }
@@ -318,6 +335,8 @@ export function FirstTaskWizard({
   );
   const [dlqEnabled, setDlqEnabled] = useState(restored?.dlqEnabled ?? true);
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  // UI-A.2: any structured edit marks the draft dirty (guards template switch).
+  const [wizardTouched, setWizardTouched] = useState(false);
 
   const reportError = (value: unknown, fallback = 'Operation failed') => {
     const details = toApiErrorDetails(value, 0, fallback);
@@ -434,8 +453,25 @@ export function FirstTaskWizard({
   const sourceFieldIssues = fieldIssuesFor('source.config');
   const sinkFieldIssues = fieldIssuesFor('sink.config');
   const transformTypes = Object.keys(schema?.data?.transforms || {}).sort();
-  const sourceConnections = connections.filter((conn) => conn.kind === 'source');
-  const sinkConnections = connections.filter((conn) => conn.kind === 'sink');
+  // UI-A.2 (P1-6): saved connections are filtered by template compatibility —
+  // selecting a mismatched type silently rewrote sourceType/sinkType and broke
+  // template semantics. Incompatible ones stay visible but clearly grouped.
+  const sourceConnections = useMemo(
+    () => connections.filter((conn) => conn.kind === 'source' && template.sourceTypes.includes(conn.type)),
+    [connections, template.sourceTypes],
+  );
+  const incompatibleSourceConnections = useMemo(
+    () => connections.filter((conn) => conn.kind === 'source' && !template.sourceTypes.includes(conn.type)),
+    [connections, template.sourceTypes],
+  );
+  const sinkConnections = useMemo(
+    () => connections.filter((conn) => conn.kind === 'sink' && template.sinkTypes.includes(conn.type)),
+    [connections, template.sinkTypes],
+  );
+  const incompatibleSinkConnections = useMemo(
+    () => connections.filter((conn) => conn.kind === 'sink' && !template.sinkTypes.includes(conn.type)),
+    [connections, template.sinkTypes],
+  );
   const recommendationValue = (field: string, fallback: number) => {
     const rec = sourceContext?.recommendations?.find((item) => item.field === field);
     return typeof rec?.value === 'number' ? rec.value : fallback;
@@ -518,18 +554,85 @@ export function FirstTaskWizard({
     }
   }, [initialStep]);
 
-  // Auto-save draft
+  // UI-A.2: never persist secret values in the local draft. Fields flagged
+  // secret in the current source/sink descriptors are replaced by a sentinel;
+  // restoring keeps them blank with a visible "re-enter secret" hint.
+  const secretFieldNames = useMemo(() => {
+    const names = new Set<string>();
+    const collect = (fields: unknown) => {
+      (Array.isArray(fields) ? fields : []).forEach((f) => {
+        if (f && typeof f === 'object' && (f as PluginSchemaField).secret) {
+          names.add((f as PluginSchemaField).name);
+        }
+      });
+    };
+    collect(schema?.data?.sources?.[sourceType]);
+    collect(schema?.data?.sinks?.[sinkType]);
+    Object.keys(schema?.data?.transforms || {}).forEach((type) => collect(schema?.data?.transforms?.[type]));
+    return names;
+  }, [schema?.data, sourceType, sinkType]);
+
+  const scrubSecrets = useCallback(
+    (text: string, yamlMode = false): { text: string; scrubbed: string[] } => {
+      const scrubbed: string[] = [];
+      if (!text.trim()) return { text, scrubbed };
+      if (yamlMode) {
+        // YAML view: line-level key scrub for known secret field names.
+        const out = text
+          .split('\n')
+          .map((line) => {
+            const m = line.match(/^\s*([A-Za-z0-9_]+):\s*(.+)$/);
+            if (m && secretFieldNames.has(m[1]) && !m[2].includes(WIZARD_SECRET_SENTINEL)) {
+              scrubbed.push(m[1]);
+              return line.replace(/^(\s*[A-Za-z0-9_]+:)\s*.+$/, `$1 ${WIZARD_SECRET_SENTINEL}`);
+            }
+            return line;
+          })
+          .join('\n');
+        return { text: out, scrubbed };
+      }
+      try {
+        const parsed = JSON.parse(text);
+        const walk = (node: unknown): unknown => {
+          if (Array.isArray(node)) return node.map(walk);
+          if (node && typeof node === 'object') {
+            const out: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+              if (secretFieldNames.has(k) && typeof v === 'string' && v !== '' && v !== WIZARD_SECRET_SENTINEL) {
+                scrubbed.push(k);
+                out[k] = WIZARD_SECRET_SENTINEL;
+              } else {
+                out[k] = walk(v);
+              }
+            }
+            return out;
+          }
+          return node;
+        };
+        return { text: JSON.stringify(walk(parsed), null, 2), scrubbed };
+      } catch {
+        return { text, scrubbed }; // unparseable text is saved verbatim (already blocks create)
+      }
+    },
+    [secretFieldNames],
+  );
+
+  // Auto-save draft (secrets scrubbed)
   useEffect(() => {
+    const sourceScrub = scrubSecrets(sourceConfigText);
+    const sinkScrub = scrubSecrets(sinkConfigText);
+    const transformScrub = scrubSecrets(transformsText);
     const draft = {
       templateId,
       name,
       sourceType,
       sinkType,
-      sourceConfigText,
-      sinkConfigText,
-      transformsText,
+      sourceConfigText: sourceScrub.text,
+      sinkConfigText: sinkScrub.text,
+      transformsText: transformScrub.text,
+      // yamlText mirrors the configs (incl. passwords) — scrub its YAML form.
+      yamlText: scrubSecrets(yamlText, true).text,
       sampleText,
-      yamlText,
       tableMappingText,
       sourceConnection,
       sinkConnection,
@@ -561,7 +664,43 @@ export function FirstTaskWizard({
     checkpointIntervalSec,
     dlqEnabled,
     step,
+    scrubSecrets,
   ]);
+
+  // UI-A.2: draft restore swaps sentinel values back to blanks so the user
+  // re-enters secrets instead of silently resurrecting scrubbed credentials.
+  const [restoredSecretHint, setRestoredSecretHint] = useState(false);
+  useEffect(() => {
+    if (!restored) return;
+    const containsSentinel = (text?: string) =>
+      typeof text === 'string' && text.includes(WIZARD_SECRET_SENTINEL);
+    if (
+      containsSentinel(restored.sourceConfigText) ||
+      containsSentinel(restored.sinkConfigText) ||
+      containsSentinel(restored.transformsText)
+    ) {
+      setRestoredSecretHint(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // UI-A.2 (P1-7): switching templates destroys everything the user typed
+  // (configs, connections, runtime params). Confirm first when dirty.
+  const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(null);
+  const draftDirtyVsTemplate = useMemo(() => {
+    // Heuristic: the draft is considered dirty once any structured field was
+    // touched after mount. Track via a lightweight touched flag set by edits.
+    return wizardTouched;
+  }, [wizardTouched]);
+
+  const requestTemplate = (nextId: string) => {
+    if (nextId === templateId) return;
+    if (draftDirtyVsTemplate) {
+      setPendingTemplateId(nextId);
+      return;
+    }
+    applyTemplate(nextId);
+  };
 
   const applyTemplate = (nextId: string) => {
     const nextTemplate = WIZARD_TEMPLATES.find((tpl) => tpl.id === nextId) || WIZARD_TEMPLATES[0];
@@ -614,11 +753,10 @@ export function FirstTaskWizard({
     }
   };
 
-  useEffect(() => {
-    if (!sourceContext) return;
-    setBatchSize(recommendationValue('batch_size', batchSize));
-    setCheckpointIntervalSec(recommendationValue('checkpoint_interval_sec', checkpointIntervalSec));
-  }, [sourceContext]);
+  // UI-A.2 (P1-9): recommendations display only — they never overwrite values
+  // the user has explicitly edited. Apply happens via the Apply button.
+  const [runtimeTouched, setRuntimeTouched] = useState(false);
+  const [startDespiteWarnings, setStartDespiteWarnings] = useState(false);
 
   useEffect(() => {
     if (yamlDirty) return; // YAML edits are authoritative until applied/discarded
@@ -637,15 +775,17 @@ export function FirstTaskWizard({
       setSourceConfigText(prettyJSON(seedBehaviorConfig('source', data.connection?.type || sourceType)));
       const firstSample = data.introspection?.sample?.[0];
       if (firstSample) setSampleText(prettyJSON(firstSample));
-      setBatchSize(recommendationNumber(data.recommendations, 'batch_size', batchSize));
-      setCheckpointIntervalSec(recommendationNumber(data.recommendations, 'checkpoint_interval_sec', checkpointIntervalSec));
+      if (!runtimeTouched) {
+        setBatchSize(recommendationNumber(data.recommendations, 'batch_size', batchSize));
+        setCheckpointIntervalSec(recommendationNumber(data.recommendations, 'checkpoint_interval_sec', checkpointIntervalSec));
+      }
       setSourceContext(data);
     } else {
       if (data.connection?.type) setSinkType(data.connection.type);
       setSinkConfigText(prettyJSON(seedBehaviorConfig('sink', data.connection?.type || sinkType)));
       setSinkContext(data);
     }
-  }, [batchSize, checkpointIntervalSec, seedBehaviorConfig, sourceType, sinkType]);
+  }, [batchSize, checkpointIntervalSec, seedBehaviorConfig, sourceType, sinkType, runtimeTouched]);
 
   const selectSourceConnection = async (connName: string) => {
     setSourceConnection(connName);
@@ -723,7 +863,19 @@ export function FirstTaskWizard({
     }
   };
 
-  const createAndStart = async () => {
+  // UI-A.2 (P0-9): a "valid" spec whose source/sink cannot be reached is NOT
+  // ready to start. Surface this explicitly instead of "Preflight passed".
+  const reachabilityWarnings = useMemo(() => {
+    const issues = [...(result?.preflight?.issues || []), ...(result?.field_issues || [])];
+    return issues.filter(
+      (issue) =>
+        (issue.level === 'warning' || issue.level === 'error') &&
+        /reachable|connect|refused|ping/i.test(`${issue.check || ''} ${issue.message || ''}`),
+    );
+  }, [result]);
+  const validatedNotReady = result?.valid !== false && result != null && reachabilityWarnings.length > 0;
+
+  const createPipeline = async (start: boolean) => {
     setBusy('create'); clearError();
     if (wizardBlocked) {
       reportError(new Error('Fix the highlighted configuration errors before creating the pipeline.'), 'Pipeline creation blocked');
@@ -735,7 +887,17 @@ export function FirstTaskWizard({
       if (!checked || checked.valid === false) return;
       const spec = YAML.parse(yamlText);
       const created = await api<{ id?: string; name: string }>('/api/v2/pipelines', { method: 'POST', body: JSON.stringify({ spec }) });
-      await api(`/api/v2/pipelines/${encodeURIComponent(created.id || created.name || spec.name)}/start`, { method: 'POST' });
+      if (start) {
+        try {
+          await api(`/api/v2/pipelines/${encodeURIComponent(created.id || created.name || spec.name)}/start`, { method: 'POST' });
+        } catch (e) {
+          // UI-A.2 (P1-12): creation succeeded — report start failure separately.
+          onShowToast?.('error', `Pipeline created, but start failed: ${apiErrorSummary(e)}`);
+          clearDraft();
+          onCreated(created.name || spec.name);
+          return;
+        }
+      }
       clearDraft();
       onCreated(created.name || spec.name);
     } catch (e) {
@@ -744,6 +906,8 @@ export function FirstTaskWizard({
       setBusy('');
     }
   };
+
+  const createAndStart = () => createPipeline(true);
 
   const syncFromYaml = () => {
     try {
@@ -952,7 +1116,7 @@ export function FirstTaskWizard({
         />
         {jsonOpen && (
           <>
-            <Textarea data-testid={`${testId}-json`} className="mt-3 min-h-28 font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
+            <Textarea data-testid={`${testId}-json`} className="mt-3 min-h-28 font-mono text-xs" value={configText} onChange={(e) => { setWizardTouched(true); setConfigText(e.target.value); }} />
             {opts?.jsonError && (
               <div data-testid="wizard-json-parse-error" className="mt-1 rounded border border-rose-300 bg-rose-50 px-2 py-1 font-mono text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
                 {opts.jsonError}
@@ -1102,6 +1266,19 @@ export function FirstTaskWizard({
 
   return (
     <div className="space-y-4" data-testid="wizard-fullpage">
+      <ConfirmDialog
+        open={pendingTemplateId !== null}
+        onOpenChange={(open) => { if (!open) setPendingTemplateId(null); }}
+        title={t('wizard.switchTemplateTitle')}
+        description={t('wizard.switchTemplateDesc')}
+        confirmLabel={t('wizard.switchTemplateConfirm')}
+        destructive
+        onConfirm={() => {
+          if (pendingTemplateId) applyTemplate(pendingTemplateId);
+          setPendingTemplateId(null);
+          setWizardTouched(false);
+        }}
+      />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={onClose} aria-label={t('wizard.back')}>
@@ -1164,6 +1341,11 @@ export function FirstTaskWizard({
               navigateLabel="Open field"
               className="mb-2"
             />
+            {restoredSecretHint && (
+              <div data-testid="wizard-secret-restore-hint" className="mb-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                {t('wizard.secretRestoreHint')}
+              </div>
+            )}
             {/* Scenario */}
             {step === 'scenario' && (
             <div id="wizard-section-scenario" className="ring-1 ring-primary/20 rounded-lg p-1">
@@ -1171,7 +1353,7 @@ export function FirstTaskWizard({
               <p className="mb-4 text-sm text-muted-foreground">{t('wizard.emptyStart')}</p>
               <div className="mb-4" data-field-path="name" tabIndex={-1}>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Pipeline name</label>
-                <Input data-testid="wizard-pipeline-name" value={name} onChange={(e) => setName(e.target.value)} />
+                <Input data-testid="wizard-pipeline-name" value={name} onChange={(e) => { setWizardTouched(true); setName(e.target.value); }} />
                 {issuesForField('name').map((issue, i) => (
                   <div key={i} className="mt-1 text-xs text-rose-700">
                     {issue.message}{issue.remediation ? ` · Fix: ${issue.remediation}` : ''}
@@ -1189,7 +1371,7 @@ export function FirstTaskWizard({
                         ? 'border-primary shadow-[0_0_0_2px_hsl(var(--accent))]'
                         : 'border-border hover:border-primary/40',
                     )}
-                    onClick={() => applyTemplate(tpl.id)}
+                    onClick={() => requestTemplate(tpl.id)}
                   >
                     <div className="flex items-center gap-1.5">
                       <span className="font-semibold">{tpl.title}</span>
@@ -1221,6 +1403,7 @@ export function FirstTaskWizard({
                     className={wizardSelectClass}
                     value={sourceType}
                     onChange={(e) => {
+                      setWizardTouched(true);
                       setSourceType(e.target.value);
                       setSourceConnection('');
                       setSourceContext(null);
@@ -1256,6 +1439,15 @@ export function FirstTaskWizard({
                         {conn.name} · {conn.type} · {conn.last_status || 'untested'}
                       </option>
                     ))}
+                    {incompatibleSourceConnections.length > 0 && (
+                      <optgroup label="Incompatible with this template (switches source type)">
+                        {incompatibleSourceConnections.map((conn) => (
+                          <option key={conn.name} value={conn.name}>
+                            {conn.name} · {conn.type} (not in {template.id})
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </div>
               </div>
@@ -1301,6 +1493,7 @@ export function FirstTaskWizard({
                     className={wizardSelectClass}
                     value={sinkType}
                     onChange={(e) => {
+                      setWizardTouched(true);
                       setSinkType(e.target.value);
                       setSinkConnection('');
                       setSinkContext(null);
@@ -1309,7 +1502,9 @@ export function FirstTaskWizard({
                     }}
                   >
                     {template.sinkTypes.map((tp) => (
-                      <option key={tp} value={tp}>{tp}</option>
+                      <option key={tp} value={tp}>
+                        {tp}{EXPERIMENTAL_CONNECTORS.has(tp) ? ' (Experimental · writer disabled)' : ''}
+                      </option>
                     ))}
                   </select>
                   {issuesForField('sink.type').map((issue, i) => (
@@ -1336,11 +1531,25 @@ export function FirstTaskWizard({
                         {conn.name} · {conn.type} · {conn.last_status || 'untested'}
                       </option>
                     ))}
+                    {incompatibleSinkConnections.length > 0 && (
+                      <optgroup label="Incompatible with this template (switches sink type)">
+                        {incompatibleSinkConnections.map((conn) => (
+                          <option key={conn.name} value={conn.name}>
+                            {conn.name} · {conn.type} (not in {template.id})
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </div>
               </div>
               {sinkMissing.length > 0 && (
                 <div className="mb-2 text-xs text-rose-600">Missing: {sinkMissing.join(', ')}</div>
+              )}
+              {EXPERIMENTAL_CONNECTORS.has(sinkType) && (
+                <div data-testid="wizard-sink-experimental-warning" className="mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                  {t('wizard.experimentalSink')} — {sinkType} pipelines are blocked by preflight until real-environment certification lands (P0 blocked_external).
+                </div>
               )}
               {(template.tableMapping || tableMappingOpen) && (
                 <div className="mb-3 rounded-lg border border-primary/20 bg-accent/40 p-3" data-testid="wizard-table-mapping">
@@ -1363,7 +1572,7 @@ export function FirstTaskWizard({
                       data-testid="wizard-table-mapping-json"
                       className="min-h-20 w-full font-mono text-xs"
                       value={tableMappingText}
-                      onChange={(e) => setTableMappingText(e.target.value)}
+                      onChange={(e) => { setWizardTouched(true); setTableMappingText(e.target.value); }}
                       placeholder={'{\n  "template": "ods_{source_table}"\n}'}
                     />
                   ) : (
@@ -1577,7 +1786,7 @@ export function FirstTaskWizard({
                     <Textarea
                       className={cn('min-h-24 font-mono text-xs', !sampleParse.ok && 'border-rose-400 ring-1 ring-rose-200')}
                       value={sampleText}
-                      onChange={(e) => setSampleText(e.target.value)}
+                      onChange={(e) => { setWizardTouched(true); setSampleText(e.target.value); }}
                     />
                     {!sampleParse.ok && (
                       <div data-testid="wizard-sample-parse-error" className="mt-1 rounded border border-rose-300 bg-rose-50 px-2 py-1 font-mono text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
@@ -1599,7 +1808,7 @@ export function FirstTaskWizard({
                         data-testid="wizard-transform-json"
                         className={cn('min-h-28 w-full font-mono text-xs', !transformsParse.ok && 'border-rose-400 ring-1 ring-rose-200')}
                         value={transformsText}
-                        onChange={(e) => setTransformsText(e.target.value)}
+                        onChange={(e) => { setWizardTouched(true); setTransformsText(e.target.value); }}
                       />
                       {!transformsParse.ok && (
                         <div data-testid="wizard-transforms-parse-error" className="mt-1 rounded border border-rose-300 bg-rose-50 px-2 py-1 font-mono text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
@@ -1634,7 +1843,7 @@ export function FirstTaskWizard({
                       type="number"
                       min={1}
                       value={batchSize}
-                      onChange={(e) => setBatchSize(positiveIntValue(e.target.value, batchSize))}
+                      onChange={(e) => { setRuntimeTouched(true); setBatchSize(positiveIntValue(e.target.value, batchSize)); }}
                     />
                   </label>
                   <label className="block text-xs text-muted-foreground">
@@ -1644,9 +1853,10 @@ export function FirstTaskWizard({
                       type="number"
                       min={1}
                       value={checkpointIntervalSec}
-                      onChange={(e) =>
-                        setCheckpointIntervalSec(positiveIntValue(e.target.value, checkpointIntervalSec))
-                      }
+                      onChange={(e) => {
+                        setRuntimeTouched(true);
+                        setCheckpointIntervalSec(positiveIntValue(e.target.value, checkpointIntervalSec));
+                      }}
                     />
                   </label>
                   <label className="flex items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-xs font-medium">
@@ -1654,7 +1864,7 @@ export function FirstTaskWizard({
                       data-testid="wizard-dlq-enabled"
                       type="checkbox"
                       checked={dlqEnabled}
-                      onChange={(e) => setDlqEnabled(e.target.checked)}
+                      onChange={(e) => { setWizardTouched(true); setDlqEnabled(e.target.checked); }}
                     />
                     DLQ enabled
                   </label>
@@ -1691,8 +1901,12 @@ export function FirstTaskWizard({
                 >
                   <div className="mb-2 flex items-start justify-between gap-2">
                     <div className="text-sm font-semibold">
-                      {result.valid === false ? 'Preflight failed' : 'Preflight passed'} ·{' '}
-                      {result.preflight?.summary || 'validation complete'}
+                      {result.valid === false
+                        ? 'Preflight failed'
+                        : validatedNotReady
+                          ? `Validated with reachability warnings — not ready to start (${reachabilityWarnings.length})`
+                          : 'Preflight passed'}{' '}
+                      · {result.preflight?.summary || 'validation complete'}
                       <span className="ml-2 text-[11px] font-normal opacity-75">
                         {(result.errors?.length || 0) + (result.warnings?.length || 0) + (result.preflight?.issues?.length || 0) + validationFieldIssues.length} issue(s)
                       </span>
@@ -1821,13 +2035,40 @@ export function FirstTaskWizard({
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
-                <Button
-                  data-testid="wizard-create-start"
-                  disabled={busy === 'create' || wizardBlocked}
-                  onClick={createAndStart}
-                >
-                  Create and start
-                </Button>
+                {validatedNotReady ? (
+                  <>
+                    <Button
+                      data-testid="wizard-create-no-start"
+                      disabled={busy === 'create' || wizardBlocked}
+                      onClick={() => createPipeline(false)}
+                    >
+                      Create without starting
+                    </Button>
+                    <Button
+                      data-testid="wizard-create-start"
+                      disabled={busy === 'create' || wizardBlocked || !startDespiteWarnings}
+                      onClick={createAndStart}
+                    >
+                      Start despite warnings
+                    </Button>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="wizard-start-despite-warning">
+                      <input
+                        type="checkbox"
+                        checked={startDespiteWarnings}
+                        onChange={(e) => setStartDespiteWarnings(e.target.checked)}
+                      />
+                      {t('wizard.startDespiteWarnings')}
+                    </label>
+                  </>
+                ) : (
+                  <Button
+                    data-testid="wizard-create-start"
+                    disabled={busy === 'create' || wizardBlocked}
+                    onClick={createAndStart}
+                  >
+                    Create and start
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="default"

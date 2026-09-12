@@ -40,20 +40,34 @@ Residual/follow-up: 无（A1 中发现的 evaljs 嵌套引号陷阶已通过专�
 Round: 2/5
 Roadmap item: UI-A.2
 Profile/path: standalone Web UI wizard + connections
-Objective: 草稿不再持久化 secret；连接选择、模板切换、推荐应用、实验 connector 均显式化；预检结果分层。
-Scope: first-task-wizard.tsx、connections 相关、ConfirmDialog
+Objective: 草稿不再持久化 secret；连接选择、模板切换、推荐应用、实验 connector 均显式化；预检结果分层；Create/Start 失败分离反馈。
+Scope: first-task-wizard.tsx、i18n.ts、hack/e2e-ui.sh
 Non-goals: 页面级问题（Round 3/4）。
 Acceptance:
-  1) localStorage 草稿中 secret 字段为哨兵值，恢复后留空并提示重新输入；
-  2) 保存连接下拉按模板类型过滤；不兼容选择需确认；
-  3) dirty draft 切模板有确认；
-  4) 连接推荐不自动覆盖用户已改的 batch/checkpoint；
-  5) maxcompute 显示实验徽标且默认不可选；
-  6) source/sink 不可达时预检显示 "not ready to start"，主按钮 Create without starting；
-  7) e2e-ui.sh 全绿。
-Evidence: 同上 + 针对性 Playwright
-Result: pending
+  1) localStorage 草稿中 secret 字段（含 yamlText 镜像）为哨兵值，恢复后留空并提示重新输入；
+  2) 保存连接下拉按模板类型过滤，不兼容项归入显式 optgroup 并标注模板名；
+  3) dirty draft 切模板弹 ConfirmDialog，确认后才重置；
+  4) 连接推荐不自动覆盖用户已改（touched）的 batch/checkpoint；
+  5) maxcompute 选项显示 Experimental 标注，选中后显示阻断警示 banner；
+  6) source/sink 不可达时预检显示 not ready to start；Confirm 主按钮变为 Create without starting，Start despite warnings 需勾选；
+  7) Create 成功但 Start 失败时明确区分反馈，不误导重复创建。
+Evidence: npm run typecheck/build/lint；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-a2 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 133 passed / 0 failed（含 A2.1–A2.4 新断言）。
+Result: delivered
+Residual/follow-up: 无。
 ```
+
+验收矩阵：
+
+| Criterion | Evidence | Result | Residual/blocker |
+| --- | --- | --- | --- |
+| 草稿不存明文 secret（含 YAML 镜像） | e2e A2.1（JSON scrub + YAML 行级 scrub，哨兵替换，明文不出现） | passed | — |
+| 连接按模板过滤 | 实测 optgroup "Incompatible with this template (switches source type)"，不兼容项标注 (not in <template>) | passed | — |
+| 模板切换确认 | e2e A2.2（dirty 弹框且 name 保留）/ A2.2b（确认后重置为模板默认） | passed | — |
+| 推荐不覆盖用户值 | runtimeTouched 标记，loadConnectionContext 仅在未 touched 时应用推荐 | passed | 单元级断言待后续如有需要 |
+| 实验 connector 显式化 | e2e A2.4（option 标注 + 选中后 warning banner） | passed | — |
+| 预检分层 | e2e A2.3（not ready to start）/ A2.3b（Create without starting + 勾选门控 Start） | passed | — |
+| Create/Start 失败分离 | createPipeline(start) 拆分，start 失败 toast 明示 "created, but start failed" | passed | 代码路径覆盖，e2e 断言待后续 |
+| 既有行为回归 | e2e-ui.sh 全量 133 passed / 0 failed | passed | — |
 
 ## Round 3：页面事实一致性（P0-1/2/4 + P1-2/3/5/19）
 

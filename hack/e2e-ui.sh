@@ -581,6 +581,69 @@ sleep 2
 check "A1.4: DAG editor loads wizard draft seed" "$(evaljs "location.hash.includes('/designer') && document.querySelectorAll('.react-flow__node').length >= 3")"
 check "A1.4b: DAG editor keeps pipeline name from wizard" "$(evaljs "Array.from(document.querySelectorAll('input')).some(i => (i.value||'').includes('ui-wizard'))")"
 
+# ── UI-A.2: wizard semantics & safety ────────────────────────────────────
+echo "==> UI-A.2 wizard safety checks"
+# Fresh wizard: clear draft and reload.
+evaljs "(() => { window.localStorage.removeItem('etl_wizard_draft_v1'); window.location.hash = '#/pipelines'; return true; })()" >/dev/null
+sleep 1
+playwright-cli open "${BASE_URL}/?e2e=$(date +%s)" >/dev/null
+sleep 2
+playwright-cli eval "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('New pipeline')); b?.click(); return !!b; })()" >/dev/null
+sleep 2
+# A2.1: secrets never persist in the local draft (sentinel scrub).
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-source]')?.click(); return true; })()" >/dev/null
+sleep 1
+for _ in $(seq 1 12); do
+  a2_schema_ready="$(evaljs "document.querySelector('[data-testid=config-field-host]') !== null")"
+  if [[ "$a2_schema_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+evaljs "(() => { const f=document.querySelector('[data-testid=wizard-source-config-form]'); Array.from(f?.querySelectorAll('button')||[]).find(b=>b.textContent?.trim()==='JSON')?.click(); return true; })()" >/dev/null
+sleep 0.8
+playwright-cli fill "[data-testid=wizard-source-config-form-json]" '{"host":"h1","user":"u1","password":"super-secret-a2","database":"db"}' >/dev/null 2>&1
+a2_secret_scrubbed="false"
+for _ in $(seq 1 10); do
+  a2_secret_scrubbed="$(evaljs "(() => { const raw=window.localStorage.getItem('etl_wizard_draft_v1') || ''; return raw.includes('__secret_omitted__') && !raw.includes('super-secret-a2'); })()")"
+  if [[ "$a2_secret_scrubbed" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "A2.1: draft scrubs secrets to sentinel" "$a2_secret_scrubbed"
+# A2.2: switching templates with a dirty draft asks for confirmation.
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-scenario]')?.click(); return true; })()" >/dev/null
+sleep 1
+playwright-cli fill "[data-testid=wizard-pipeline-name]" "a2-dirty-name" >/dev/null 2>&1
+sleep 0.5
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>b.textContent?.includes('kafka-detail'))?.click(); return true; })()" >/dev/null
+sleep 0.8
+check "A2.2: template switch confirms when draft dirty" "$(evaljs "document.body.innerText.includes('Switch template') && document.querySelector('[data-testid=wizard-pipeline-name]')?.value === 'a2-dirty-name'")"
+evaljs "(() => { Array.from(document.querySelectorAll('[role=dialog] button')).find(b=>b.textContent?.includes('Switch and reset'))?.click(); return true; })()" >/dev/null
+sleep 0.8
+check "A2.2b: confirmed switch resets to template defaults" "$(evaljs "document.querySelector('[data-testid=wizard-pipeline-name]')?.value === 'ui-wizard-kafka-detail'")"
+# A2.3: unreachable source/sink validates-but-not-ready split on confirm.
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-safety]')?.click(); return true; })()" >/dev/null
+sleep 0.6
+evaljs "(() => { document.querySelector('[data-testid=wizard-validate]')?.click(); return true; })()" >/dev/null
+a2_not_ready="false"
+for _ in $(seq 1 12); do
+  a2_not_ready="$(evaljs "document.querySelector('[data-testid=wizard-preflight-result]')?.innerText.includes('not ready to start') || false")"
+  if [[ "$a2_not_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "A2.3: reachability warnings labelled not ready to start" "$a2_not_ready"
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-confirm]')?.click(); return true; })()" >/dev/null
+sleep 0.6
+check "A2.3b: confirm offers create-without-start and gates start" "$(evaljs "document.querySelector('[data-testid=wizard-create-no-start]') !== null && document.querySelector('[data-testid=wizard-create-start]')?.disabled === true && document.querySelector('[data-testid=wizard-start-despite-warning]') !== null")"
+# A2.4: experimental sink is labelled in the type select.
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-scenario]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>b.textContent?.includes('file-http-landing'))?.click(); return true; })()" >/dev/null
+sleep 0.8
+evaljs "(() => { Array.from(document.querySelectorAll('[role=dialog] button')).find(b=>b.textContent?.includes('Switch and reset'))?.click(); return true; })()" >/dev/null
+sleep 0.8
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-sink]')?.click(); return true; })()" >/dev/null
+sleep 0.6
+check "A2.4: experimental sink option labelled" "$(evaljs "Array.from(document.querySelectorAll('[data-testid=wizard-sink-type] option')).some(o=>(o.textContent||'').includes('maxcompute (Experimental'))")"
+
 echo "==> Seed DLQ replay fixture"
 curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \
   -H 'Content-Type: application/json' \

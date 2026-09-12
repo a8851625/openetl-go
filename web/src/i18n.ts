@@ -591,6 +591,30 @@ const dict: Dict = {
     en: 'Summary reflects your hand-edited YAML (form is frozen).',
     zh: '摘要来自你手动编辑的 YAML（表单已冻结）。',
   },
+  'wizard.secretRestoreHint': {
+    en: 'This draft was restored without saved secrets. Re-enter password/token fields before validating or creating.',
+    zh: '草稿已恢复，但未保存任何 secret。请在验证或创建前重新输入 password/token 字段。',
+  },
+  'wizard.startDespiteWarnings': {
+    en: 'I understand source/sink may be unreachable; start anyway',
+    zh: '我了解 source/sink 可能不可达，仍要启动',
+  },
+  'wizard.switchTemplateTitle': {
+    en: 'Switch template?',
+    zh: '切换模板？',
+  },
+  'wizard.switchTemplateDesc': {
+    en: 'Switching templates resets source/sink types, configs, connections, transforms, sample, table mapping and runtime parameters you have entered. This cannot be undone.',
+    zh: '切换模板会重置你已填写的 source/sink 类型、配置、连接、transform、样例、表映射和运行参数，且无法撤销。',
+  },
+  'wizard.switchTemplateConfirm': {
+    en: 'Switch and reset',
+    zh: '切换并重置',
+  },
+  'wizard.experimentalSink': {
+    en: 'Experimental · writer disabled',
+    zh: '实验性 · 写入未启用',
+  },
   'wizard.saveDraftExit': { en: 'Save draft & exit', zh: '保存草稿并退出' },
   'wizard.openAdvancedDag': { en: 'Open advanced DAG', zh: '打开高级 DAG' },
   'wizard.readyHint': { en: 'Ready to create and start', zh: '可以创建并启动' },
