@@ -11,6 +11,9 @@
 > 迭代编排：已进入当前执行 backlog 的未实现条目按依赖与伤害组织为 IT-1..IT-4 主线迭代与 PT-A 并行轨，
 > 见 [docs/iterations/](./iterations/README.md)。该目录提供 spec/plan/tasks 三件套与
 > 技术方案、交付约束，**不改变本文的验收标准**；两者冲突时以本文为准。
+>
+> 2026-09-12 起，UI 加固迭代 **UI-A**（前端交互与向导逻辑，源自 v0.2.12-beta.19 发布后的两轮
+> 页面/向导审计）进入执行，见 [UI-A-frontend-hardening](./iterations/UI-A-frontend-hardening/spec.md)。
 
 本文只维护尚未完成、可以验收的产品和工程工作。已经交付的功能、测试命令和版本说明进入 [CHANGELOG.zh.md](../CHANGELOG.zh.md)；本文末尾只保留必要的证据索引，不再重复完整实现日志。
 
@@ -112,6 +115,30 @@ Roadmap 状态只使用以下值：
 - 实现过程中发现的相邻需求进入“有界后续”，不扩大当前验收标准。
 
 ## 当前主任务
+
+### UI-A：前端交互与向导逻辑加固（2026-09-12 审计）
+
+状态：`active`（UI-A.1 进行中；领取记录见 [iterations/UI-A-frontend-hardening/tasks.md](./iterations/UI-A-frontend-hardening/tasks.md)）
+
+来源：v0.2.12-beta.19 发布后的两轮审计 —— 页面交互审计（易用性/美观/逻辑）与创建向导六 Step 表单逻辑审计。完整发现清单（P0-1..P0-9、P1-1..P1-19、P2-1..P2-7）见 [spec.md](./iterations/UI-A-frontend-hardening/spec.md)。
+
+核心判断：UI 组件能力已具备，但存在事实失真（假时间范围、failed 显示无 issue、CDC 显示为 batch）、静默数据丢失（JSON 降级、空 project、模板切换覆盖）、状态分裂（表单/YAML 双真相源）与危险默认（secret 入 localStorage）。本项不新增 connector、不改 runtime 语义、不做 P4.3 信息架构重构。
+
+交付顺序（每轮一个可验收增量）：
+
+| 轮次 | 增量 | 覆盖 |
+| --- | --- | --- |
+| UI-A.1 | 向导配置完整性 | P0-5/6/7/8（单真相源、解析阻断、Add transform 默认、DAG 入口） |
+| UI-A.2 | 向导语义与安全 | P0-3/9 + P1-6/7/9/14（secret 草稿、连接过滤、模板确认、预检分层、实验 connector） |
+| UI-A.3 | 页面事实一致性 | P0-1/2/4 + P1-2/3/5/19（Dashboard 假范围、last_error 契约、状态分桶、i18n、移动端） |
+| UI-A.4 | 页面操作安全与收尾 | P1-4/17/18 + P2（确认对话、结果汇总、Schedules N+1、视觉/可访问性） |
+
+验收标准（摘要，全文见迭代 tasks.md）：
+
+- P0 项全部修复且有自动化/Playwright 证据；向导确认页与提交 spec 一致；JSON/YAML 非法时阻断而非静默降级。
+- 启动失败在 Issues/Dashboard 可见且与 Logs 一致；状态分桶不把 failed/completed 计入 stopped。
+- 高危操作统一确认与结果汇总；`npm run typecheck/build/lint` 与 `hack/e2e-ui.sh` 全绿。
+- 涉及后端（UI-A.3 的 stats last_error）的增量在 push 前按证据门禁重跑受影响路径 e2e 并重绑 manifest。
 
 ### P0：MaxCompute 真实环境认证
 
