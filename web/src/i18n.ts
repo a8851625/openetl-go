@@ -575,6 +575,22 @@ const dict: Dict = {
     zh: '草稿自动本地保存；刷新与前进/后退不丢状态。',
   },
   'wizard.draftSaved': { en: 'Draft saved', zh: '草稿已保存' },
+  'wizard.yamlDirtyHint': {
+    en: 'You hand-edited the YAML. The form is frozen until you apply the YAML back or discard the edits — only one source of truth is active at a time.',
+    zh: '你手动编辑了 YAML。表单已冻结，直到把 YAML 应用回表单或丢弃修改——同一时刻只有一个真相源。',
+  },
+  'wizard.formFrozenHint': {
+    en: 'YAML edits pending: this form is read-only. Use “Apply YAML to form” or “Discard YAML edits” in Safety → advanced checks.',
+    zh: 'YAML 修改待处理：此表单只读。请在安全检查 → 高级里“应用 YAML 到表单”或“丢弃 YAML 修改”。',
+  },
+  'wizard.projectDropsAll': {
+    en: 'This project config has no fields/mappings/constants and keep_unmapped is off — every record would be projected to {} and all fields dropped. Configure fields or enable keep_unmapped.',
+    zh: '此 project 配置没有 fields/mappings/constants 且 keep_unmapped 关闭——每条记录都会被投影为 {}，全部字段丢弃。请配置字段或开启 keep_unmapped。',
+  },
+  'wizard.confirmFromYaml': {
+    en: 'Summary reflects your hand-edited YAML (form is frozen).',
+    zh: '摘要来自你手动编辑的 YAML（表单已冻结）。',
+  },
   'wizard.saveDraftExit': { en: 'Save draft & exit', zh: '保存草稿并退出' },
   'wizard.openAdvancedDag': { en: 'Open advanced DAG', zh: '打开高级 DAG' },
   'wizard.readyHint': { en: 'Ready to create and start', zh: '可以创建并启动' },

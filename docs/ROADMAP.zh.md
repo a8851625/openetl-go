@@ -118,7 +118,7 @@ Roadmap 状态只使用以下值：
 
 ### UI-A：前端交互与向导逻辑加固（2026-09-12 审计）
 
-状态：`active`（UI-A.1 进行中；领取记录见 [iterations/UI-A-frontend-hardening/tasks.md](./iterations/UI-A-frontend-hardening/tasks.md)）
+状态：`active`（UI-A.1 delivered 2026-09-12：向导单真相源/解析阻断/transform 默认/DAG seed，e2e 127 passed；UI-A.2 进行中）
 
 来源：v0.2.12-beta.19 发布后的两轮审计 —— 页面交互审计（易用性/美观/逻辑）与创建向导六 Step 表单逻辑审计。完整发现清单（P0-1..P0-9、P1-1..P1-19、P2-1..P2-7）见 [spec.md](./iterations/UI-A-frontend-hardening/spec.md)。
 

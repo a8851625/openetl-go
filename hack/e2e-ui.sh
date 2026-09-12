@@ -387,7 +387,7 @@ for _ in $(seq 1 10); do
   if [[ "$invalid_yaml_loaded" == "true" ]]; then break; fi
   sleep 0.3
 done
-evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Sync YAML to form'))?.click(); return true; })()" >/dev/null
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Apply YAML to form'))?.click(); return true; })()" >/dev/null
 for _ in $(seq 1 10); do
   synced_invalid_sink="$(evaljs "document.querySelector('[data-testid=wizard-sink-type]')?.value === 'maxcompute'")"
   if [[ "$synced_invalid_sink" == "true" ]]; then break; fi
@@ -473,8 +473,8 @@ for _ in $(seq 1 12); do
   sleep 0.5
 done
 check "D2.4: Repaired preflight passes in UI" "$([ "$repaired_selected" = "true" ] && [ "$repaired_preflight" = "true" ] && echo true || echo false)"
-check "D2.5: YAML roundtrip surface" "$(evaljs "(document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || '').includes('source:') && document.body.innerText.includes('Sync YAML to form')")"
-evaljs "(() => { const t=document.querySelector('[data-testid=\"wizard-yaml\"]'); if (!t) return false; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; const next=t.value.replace(/name:\s*[^\n]+/, 'name: ui-wizard-roundtrip'); setter.call(t,next); t.dispatchEvent(new Event('input',{bubbles:true})); t.dispatchEvent(new Event('change',{bubbles:true})); Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Sync YAML to form'))?.click(); return true; })()" >/dev/null
+check "D2.5: YAML roundtrip surface" "$(evaljs "(document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || '').includes('source:') && document.body.innerText.includes('Apply YAML to form')")"
+evaljs "(() => { const t=document.querySelector('[data-testid=\"wizard-yaml\"]'); if (!t) return false; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; const next=t.value.replace(/name:\s*[^\n]+/, 'name: ui-wizard-roundtrip'); setter.call(t,next); t.dispatchEvent(new Event('input',{bubbles:true})); t.dispatchEvent(new Event('change',{bubbles:true})); Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Apply YAML to form'))?.click(); return true; })()" >/dev/null
 sleep 0.5
 # Name lives on scenario step after YAML sync.
 wizard_goto_step "scenario"
@@ -490,13 +490,96 @@ sleep 0.5
 wizard_goto_step "safety"
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-advanced-checks\"]')?.click(); return true; })()" >/dev/null
 sleep 0.3
-evaljs "(() => { const t=document.querySelector('[data-testid=\"wizard-yaml\"]'); if (t) { const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(t,t.value.replace(/name:\s*[^\n]+/, 'name: ui-wizard-file')); t.dispatchEvent(new Event('input',{bubbles:true})); Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Sync YAML to form'))?.click(); } return true; })()" >/dev/null
+evaljs "(() => { const t=document.querySelector('[data-testid=\"wizard-yaml\"]'); if (t) { const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(t,t.value.replace(/name:\s*[^\n]+/, 'name: ui-wizard-file')); t.dispatchEvent(new Event('input',{bubbles:true})); Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Apply YAML to form'))?.click(); } return true; })()" >/dev/null
 sleep 0.5
 wizard_goto_step "confirm"
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-create-start\"]')?.click(); return true; })()" >/dev/null
 sleep 5
 created="$(evaljs "fetch('/api/v2/pipelines').then(r=>r.json()).then(d=>(d.pipelines||[]).some(p=>p.name==='ui-wizard-file'||p.name==='ui-wizard-roundtrip')).catch(()=>false)")"
 check "D2.6: Wizard pipeline created" "$created"
+
+# ── UI-A.1: wizard config integrity ──────────────────────────────────────
+echo "==> UI-A.1 wizard integrity checks"
+# Fresh wizard run for deterministic state: clear any draft left by the D2 flow.
+evaljs "(() => { window.localStorage.removeItem('etl_wizard_draft_v1'); window.location.hash = '#/pipelines'; return true; })()" >/dev/null
+sleep 1
+playwright-cli reload >/dev/null 2>&1
+sleep 2
+playwright-cli eval "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('New pipeline')); b?.click(); return !!b; })()" >/dev/null
+sleep 2
+# A1.1: invalid source JSON shows parse error and blocks Next.
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-source]')?.click(); return true; })()" >/dev/null
+sleep 1
+for _ in $(seq 1 10); do
+  a1_form_ready="$(evaljs "document.querySelector('[data-testid=wizard-source-config-form]') !== null")"
+  if [[ "$a1_form_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+evaljs "(() => { const f=document.querySelector('[data-testid=wizard-source-config-form]'); Array.from(f?.querySelectorAll('button')||[]).find(b=>b.textContent?.trim()==='JSON')?.click(); return true; })()" >/dev/null
+sleep 1
+playwright-cli fill "[data-testid=wizard-source-config-form-json]" '{"broken": tr' >/dev/null 2>&1
+a1_json_error="false"
+for _ in $(seq 1 12); do
+  a1_json_error="$(evaljs "document.querySelector('[data-testid=wizard-json-parse-error]') !== null")"
+  if [[ "$a1_json_error" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "A1.1: invalid source JSON shows parse error" "$a1_json_error"
+a1_next_blocked="false"
+for _ in $(seq 1 8); do
+  a1_next_blocked="$(evaljs "document.querySelector('[data-testid=wizard-next]')?.disabled === true")"
+  if [[ "$a1_next_blocked" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "A1.1b: invalid JSON blocks Next" "$a1_next_blocked"
+# Restore valid JSON.
+playwright-cli fill "[data-testid=wizard-source-config-form-json]" '{"path":"/app/testdata/files/customers.jsonl","format":"json"}' >/dev/null 2>&1
+a1_next_restored="false"
+for _ in $(seq 1 8); do
+  a1_next_restored="$(evaljs "document.querySelector('[data-testid=wizard-json-parse-error]') === null && document.querySelector('[data-testid=wizard-next]')?.disabled !== true")"
+  if [[ "$a1_next_restored" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "A1.1c: valid JSON restores Next" "$a1_next_restored"
+# A1.2: hand-edited YAML freezes the form until applied or discarded.
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-safety]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { if (!document.querySelector('[data-testid=wizard-yaml]')) document.querySelector('[data-testid=wizard-advanced-checks]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { const y=document.querySelector('[data-testid=wizard-yaml]'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(y, y.value.replace(/batch_size: \d+/, 'batch_size: 321')); y.dispatchEvent(new Event('input',{bubbles:true})); y.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
+sleep 0.5
+check "A1.2: YAML edit enters dirty mode with banner" "$(evaljs "document.querySelector('[data-testid=wizard-yaml-dirty-banner]') !== null && document.querySelector('[data-testid=wizard-yaml-discard]') !== null")"
+# A1.2b: confirm summary reflects the edited YAML, not the frozen form (100 vs 321).
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-confirm]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+check "A1.2b: confirm summary shows YAML value" "$(evaljs "(document.querySelector('[data-testid=wizard-confirm-runtime]')?.innerText || '').startsWith('321')")"
+# A1.2c: discard restores the form as source of truth.
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-safety]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { document.querySelector('[data-testid=wizard-yaml-discard]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+check "A1.2c: discard YAML edits restores form values" "$(evaljs "(() => { const y=document.querySelector('[data-testid=wizard-yaml]')?.value || ''; return y.includes('batch_size: 100') && !document.querySelector('[data-testid=wizard-yaml-dirty-banner]'); })()")"
+# A1.3: Add transform defaults to identity (never an empty project).
+evaljs "(() => { document.querySelector('[data-testid=wizard-skip-transform]') ? document.querySelector('[data-testid=wizard-skip-transform]').click() : null; return true; })()" >/dev/null
+sleep 0.4
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-transform]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { document.querySelector('[data-testid=wizard-skip-transform]')?.click(); return true; })()" >/dev/null
+sleep 0.3
+evaljs "(() => { document.querySelector('[data-testid=wizard-add-transform]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+check "A1.3: added transform defaults to identity" "$(evaljs "document.querySelector('[data-testid=wizard-transform-type-0]')?.value === 'identity'")"
+# A1.3b: an empty project config shows the data-loss warning.
+playwright-cli select "[data-testid='wizard-transform-type-0']" "project" >/dev/null
+sleep 0.6
+check "A1.3b: empty project config warns about dropping all fields" "$(evaljs "document.querySelector('[data-testid=wizard-transform-project-danger]') !== null")"
+# A1.4: Open in DAG editor carries the wizard draft (3 nodes, name kept).
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-confirm]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { document.querySelector('[data-testid=wizard-open-dag]')?.click(); return true; })()" >/dev/null
+sleep 2
+check "A1.4: DAG editor loads wizard draft seed" "$(evaljs "location.hash.includes('/designer') && document.querySelectorAll('.react-flow__node').length >= 3")"
+check "A1.4b: DAG editor keeps pipeline name from wizard" "$(evaljs "Array.from(document.querySelectorAll('input')).some(i => (i.value||'').includes('ui-wizard'))")"
 
 echo "==> Seed DLQ replay fixture"
 curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \

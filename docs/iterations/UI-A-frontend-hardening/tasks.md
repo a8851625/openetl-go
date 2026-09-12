@@ -9,18 +9,30 @@ Round: 1/5
 Roadmap item: UI-A.1
 Profile/path: standalone Web UI wizard
 Objective: 向导表单成为唯一真相源；JSON/YAML 解析失败可见且阻断；Add transform 不再默认清空字段；DAG 编辑器入口不丢配置。
-Scope: web/src/pages/pipelines/first-task-wizard.tsx、web/src/DagEditorPage.tsx、web/src/lib/format.ts、web/e2e 断言
+Scope: web/src/pages/pipelines/first-task-wizard.tsx、web/src/DagEditorPage.tsx、web/src/i18n.ts、web/src/main.tsx、hack/e2e-ui.sh
 Non-goals: secret 草稿、连接过滤、预检分层（Round 2+）；runtime 语义。
 Acceptance:
   1) source/sink/transforms JSON 非法时显示行级错误，Next/Validate/Create 被禁用；
   2) YAML 手改后表单冻结只读，Apply/Discard 二选一；解析失败禁止继续；
-  3) 确认页摘要与实际提交 spec 逐字段一致（抽查 batch_size/checkpoint/source table）；
+  3) 确认页摘要与实际提交 spec 逐字段一致（YAML dirty 时从 YAML 渲染并提示来源）；
   4) Add transform 默认 identity；空 project 配置显示阻断错误；
-  5) Open in DAG editor 携带当前配置，画布非空且可返回向导；
+  5) Open in DAG editor 携带当前配置（sessionStorage seed），画布 3 节点非空且名字保留；
   6) hack/e2e-ui.sh 全绿。
-Evidence: npm run typecheck/build/lint；Playwright 断言更新；e2e-ui.sh
-Result: pending
+Evidence: npm run typecheck/build 通过；npm run lint 32 warnings 全为既有；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-a2 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 127 passed / 0 failed（含新增 A1.1–A1.4b 共 10 条断言）。
+Result: delivered
+Residual/follow-up: 无（A1 中发现的 evaljs 嵌套引号陷阶已通过专属 JSON 编辑器 testid + fill 规避）。
 ```
+
+验收矩阵：
+
+| Criterion | Evidence | Result | Residual/blocker |
+| --- | --- | --- | --- |
+| JSON 非法显示错误且阻断 Next/Validate/Create | e2e A1.1/A1.1b/A1.1c（fill invalid → wizard-json-parse-error + Next disabled；恢复后解锁） | passed | — |
+| YAML dirty 冻结表单，Apply/Discard 二选一 | e2e A1.2（dirty banner + discard 按钮）；A1.2b（confirm 显示 YAML 值 321 而非表单 100 + 来源提示）；A1.2c（discard 后恢复 batch_size:100 且 banner 消失） | passed | — |
+| 确认页与提交 spec 一致 | submissionSpec 直接从 yamlDirty?YAML:buildSpec() 派生，e2e A1.2b | passed | — |
+| Add transform 默认 identity；空 project 阻断 | e2e A1.3（默认 identity）、A1.3b（wizard-transform-project-danger 警示） | passed | — |
+| DAG 入口携带草稿 | e2e A1.4/A1.4b（#/designer + ≥3 节点 + 名字保留；sessionStorage etl_dag_seed_v1 消费后即清） | passed | — |
+| 既有行为回归 | e2e-ui.sh 全量 127 passed / 0 failed；lint/typecheck 无新增告警 | passed | — |
 
 ## Round 2：向导语义与安全（P0-3/9 + P1-6/7/9/14）
 

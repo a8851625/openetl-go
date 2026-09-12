@@ -182,6 +182,40 @@ function sourceSupportsSampleSchemaHint(type: string): boolean {
   return ['file', 'http', 'kafka'].includes(type);
 }
 
+// UI-A.1: strict JSON parse state — never silently fall back to {} / [] when
+// the user's edited text is invalid. The wizard blocks progression instead.
+function jsonParseState(text: string): { ok: boolean; error?: string } {
+  try {
+    JSON.parse(text);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function yamlParseError(text: string): string | null {
+  try {
+    YAML.parse(text);
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+// A `project` transform with no fields/mappings/constants and keep_unmapped
+// off projects every record to {} — silent full data loss. Block it.
+function projectDropsAllFields(config: Record<string, unknown> | undefined): boolean {
+  const c = config || {};
+  if (c.keep_unmapped === true) return false;
+  const fields = c.fields;
+  if (Array.isArray(fields) && fields.length > 0) return false;
+  const mappings = c.mappings;
+  if (mappings && typeof mappings === 'object' && Object.keys(mappings).length > 0) return false;
+  const constants = c.constants;
+  if (constants && typeof constants === 'object' && Object.keys(constants).length > 0) return false;
+  return true;
+}
+
 
 function parseTransformList(text: string): { type: string; config: Record<string, unknown> }[] {
   const parsed = parseJSONText(text, []);
@@ -199,7 +233,6 @@ export function FirstTaskWizard({
   onClose,
   onCreated,
   initialStep,
-  onOpenDesigner,
   onShowToast,
 }: {
   t: TFunc;
@@ -208,7 +241,6 @@ export function FirstTaskWizard({
   onClose: () => void;
   onCreated: (name: string) => void;
   initialStep?: string;
-  onOpenDesigner?: (ref: string) => void;
   onShowToast?: ToastFn;
 }) {
   const restored = useMemo(() => {
@@ -249,6 +281,10 @@ export function FirstTaskWizard({
     restored?.sampleText || prettyJSON(template.sample),
   );
   const [yamlText, setYamlText] = useState(restored?.yamlText || '');
+  // UI-A.1: true while the user hand-edited the YAML textarea and it has not
+  // been applied back to the form or discarded. While dirty the structured
+  // form is frozen so there is exactly one source of truth at create time.
+  const [yamlDirty, setYamlDirty] = useState(false);
   const [sourceJsonOpen, setSourceJsonOpen] = useState(false);
   const [sinkJsonOpen, setSinkJsonOpen] = useState(false);
   const [transformJsonOpen, setTransformJsonOpen] = useState(false);
@@ -342,6 +378,22 @@ export function FirstTaskWizard({
       }
     }, 0);
   }, []);
+
+  // UI-A.1: derived parse states — invalid JSON blocks progression instead of
+  // silently degrading to {} / [] (which dropped user config on create).
+  const sourceConfigParse = jsonParseState(sourceConfigText);
+  const sinkConfigParse = jsonParseState(sinkConfigText);
+  const transformsParse = jsonParseState(transformsText);
+  const tableMappingParse = tableMappingText.trim() === '' ? { ok: true } : jsonParseState(tableMappingText);
+  const sampleParse = jsonParseState(sampleText);
+  const yamlParse = useMemo(() => {
+    if (!yamlDirty) return { ok: true };
+    const err = yamlParseError(yamlText);
+    return err ? { ok: false, error: err } : { ok: true };
+  }, [yamlDirty, yamlText]);
+  const configBlocked =
+    !sourceConfigParse.ok || !sinkConfigParse.ok || !transformsParse.ok || !tableMappingParse.ok || !sampleParse.ok;
+  const wizardBlocked = configBlocked || (yamlDirty && !yamlParse.ok);
 
   const allSourceFields = (schema?.data?.sources?.[sourceType] || []) as PluginSchemaField[];
   const allSinkFields = (schema?.data?.sinks?.[sinkType] || []) as PluginSchemaField[];
@@ -545,6 +597,7 @@ export function FirstTaskWizard({
 
   const stepIndex = WIZARD_STEPS.findIndex((s) => s.id === step);
   const goNext = () => {
+    if (configBlocked) return; // invalid JSON blocks progression (UI-A.1)
     if (stepIndex < WIZARD_STEPS.length - 1) setStep(WIZARD_STEPS[stepIndex + 1].id);
   };
   const goBack = () => {
@@ -568,8 +621,9 @@ export function FirstTaskWizard({
   }, [sourceContext]);
 
   useEffect(() => {
+    if (yamlDirty) return; // YAML edits are authoritative until applied/discarded
     setYamlText(YAML.stringify(buildSpec()));
-  }, [buildSpec]);
+  }, [buildSpec, yamlDirty]);
 
   const loadConnectionContext = useCallback(async (name: string, target: 'source' | 'sink') => {
     if (!name) {
@@ -618,6 +672,19 @@ export function FirstTaskWizard({
   const validate = async (throwOnInvalid = false) => {
     setBusy('validate'); clearError(); setResult(null);
     let reported = false;
+    if (wizardBlocked) {
+      // UI-A.1: never post a spec whose JSON/YAML text failed to parse.
+      const detail = !sourceConfigParse.ok ? `source config: ${sourceConfigParse.error}`
+        : !sinkConfigParse.ok ? `sink config: ${sinkConfigParse.error}`
+        : !transformsParse.ok ? `transforms: ${transformsParse.error}`
+        : !tableMappingParse.ok ? `table mapping: ${tableMappingParse.error}`
+        : !sampleParse.ok ? `sample: ${sampleParse.error}`
+        : `YAML: ${yamlParse.error}`;
+      reportError(new Error(`Invalid configuration text (${detail})`), 'Validation blocked');
+      setBusy('');
+      if (throwOnInvalid) throw new Error('invalid configuration text');
+      return undefined;
+    }
     try {
       const spec = YAML.parse(yamlText);
       const data = await api<ValidateResult>('/api/v2/specs/validate', {
@@ -658,9 +725,14 @@ export function FirstTaskWizard({
 
   const createAndStart = async () => {
     setBusy('create'); clearError();
+    if (wizardBlocked) {
+      reportError(new Error('Fix the highlighted configuration errors before creating the pipeline.'), 'Pipeline creation blocked');
+      setBusy('');
+      return;
+    }
     try {
       const checked = await validate(true);
-      if (checked.valid === false) return;
+      if (!checked || checked.valid === false) return;
       const spec = YAML.parse(yamlText);
       const created = await api<{ id?: string; name: string }>('/api/v2/pipelines', { method: 'POST', body: JSON.stringify({ spec }) });
       await api(`/api/v2/pipelines/${encodeURIComponent(created.id || created.name || spec.name)}/start`, { method: 'POST' });
@@ -693,10 +765,18 @@ export function FirstTaskWizard({
       if (typeof spec.checkpoint_interval_sec === 'number') setCheckpointIntervalSec(spec.checkpoint_interval_sec);
       if (typeof spec.dlq?.enable === 'boolean') setDlqEnabled(spec.dlq.enable);
       setTransformsText(prettyJSON(spec.transforms || []));
+      setYamlDirty(false); // form is canonical again after applying YAML
       clearError();
     } catch (e) {
       reportError(e, 'YAML sync failed');
     }
+  };
+
+  // UI-A.1: discard hand-edited YAML and regenerate from the (frozen) form.
+  const discardYamlEdits = () => {
+    setYamlDirty(false);
+    setYamlText(YAML.stringify(buildSpec()));
+    clearError();
   };
 
   const setValueAtPath = (target: Record<string, unknown>, path: string, value: unknown) => {
@@ -818,6 +898,7 @@ export function FirstTaskWizard({
       connectionSelected?: boolean;
       fieldIssues?: Record<string, ConfigFieldIssue[]>;
       fieldPathPrefix?: string;
+      jsonError?: string;
     },
   ) => {
     const showAll = !!opts?.moreOpen || !opts?.essential;
@@ -855,17 +936,29 @@ export function FirstTaskWizard({
             {t('wizard.inlineFallback')}
           </div>
         )}
+        {yamlDirty && (
+          <div className="mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+            {t('wizard.formFrozenHint')}
+          </div>
+        )}
         <ConfigForm
           fields={visibleFields}
           config={config}
-          onChange={(next) => setConfigText(prettyJSON(next))}
+          onChange={yamlDirty ? () => {} : (next) => setConfigText(prettyJSON(next))}
           t={t}
           fieldIssues={opts?.fieldIssues}
           emptyText={opts?.connectionSelected ? t('wizard.connectionFirst') : undefined}
           fieldPathPrefix={opts?.fieldPathPrefix}
         />
         {jsonOpen && (
-          <Textarea className="mt-3 min-h-28 font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
+          <>
+            <Textarea data-testid={`${testId}-json`} className="mt-3 min-h-28 font-mono text-xs" value={configText} onChange={(e) => setConfigText(e.target.value)} />
+            {opts?.jsonError && (
+              <div data-testid="wizard-json-parse-error" className="mt-1 rounded border border-rose-300 bg-rose-50 px-2 py-1 font-mono text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+                {opts.jsonError}
+              </div>
+            )}
+          </>
         )}
       </div>
     );
@@ -931,7 +1024,9 @@ export function FirstTaskWizard({
   };
 
   const addTransform = () => {
-    const type = transformTypes.includes('project') ? 'project' : transformTypes[0] || 'identity';
+    // UI-A.1: default to `identity`, never an empty `project` — an empty
+    // project projects every record to {} (silent full data loss).
+    const type = transformTypes.includes('identity') ? 'identity' : transformTypes[0] || 'identity';
     const fields = (schema?.data?.transforms?.[type] || []) as PluginSchemaField[];
     setTransformsText(prettyJSON([...transformConfigs, { type, config: buildDefaultConfig(fields) }]));
     setStageDryRunResult(null);
@@ -984,6 +1079,24 @@ export function FirstTaskWizard({
       setBusy('');
     }
   };
+
+  // UI-A.1: the confirm summary must reflect what will actually be submitted.
+  // When YAML is hand-edited (dirty) the YAML is authoritative, not the form.
+  const submissionSpec = useMemo(() => {
+    if (yamlDirty) {
+      try {
+        return YAML.parse(yamlText) as Record<string, unknown> | null;
+      } catch {
+        return null;
+      }
+    }
+    return buildSpec();
+  }, [yamlDirty, yamlText, buildSpec]);
+  const submittedBatch = Number(submissionSpec?.batch_size ?? batchSize);
+  const submittedCheckpoint = Number(submissionSpec?.checkpoint_interval_sec ?? checkpointIntervalSec);
+  const submittedDlq = ((submissionSpec?.dlq as Record<string, unknown> | undefined)?.enable ?? dlqEnabled) ? 'on' : 'off';
+  const submittedName = String(submissionSpec?.name ?? name);
+  const submissionMatchesForm = !yamlDirty;
 
   const summaryPath = `${sourceType}${sourceConnection ? ` (${sourceConnection})` : ''} → ${transformConfigs.map((x) => x.type).join(' · ') || '—'} → ${sinkType}${sinkConnection ? ` (${sinkConnection})` : ''}`;
 
@@ -1168,6 +1281,7 @@ export function FirstTaskWizard({
                     connectionSelected: Boolean(sourceConnection),
                     fieldIssues: sourceFieldIssues,
                     fieldPathPrefix: 'source.config',
+                    jsonError: sourceConfigParse.ok ? undefined : sourceConfigParse.error,
                   },
                 )}
               </div>
@@ -1278,6 +1392,7 @@ export function FirstTaskWizard({
                     connectionSelected: Boolean(sinkConnection),
                     fieldIssues: sinkFieldIssues,
                     fieldPathPrefix: 'sink.config',
+                    jsonError: sinkConfigParse.ok ? undefined : sinkConfigParse.error,
                   },
                 )}
               </div>
@@ -1403,12 +1518,17 @@ export function FirstTaskWizard({
                           <ConfigForm
                             fields={showAll ? fields : compactFields}
                             config={item.config || {}}
-                            onChange={(next) => updateTransformConfig(index, next)}
+                            onChange={yamlDirty ? () => {} : (next) => updateTransformConfig(index, next)}
                             t={t}
                             emptyText="No config fields for this transform."
                             fieldPathPrefix={`transforms.${index}.config`}
                             fieldIssues={fieldIssuesFor(`transforms.${index}.config`)}
                           />
+                          {item.type === 'project' && projectDropsAllFields(item.config) && (
+                            <div data-testid="wizard-transform-project-danger" className="mt-2 rounded border border-rose-300 bg-rose-50 px-2 py-1.5 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+                              {t('wizard.projectDropsAll')}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -1454,7 +1574,16 @@ export function FirstTaskWizard({
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-medium text-muted-foreground">Sample record</label>
-                    <Textarea className="min-h-24 font-mono text-xs" value={sampleText} onChange={(e) => setSampleText(e.target.value)} />
+                    <Textarea
+                      className={cn('min-h-24 font-mono text-xs', !sampleParse.ok && 'border-rose-400 ring-1 ring-rose-200')}
+                      value={sampleText}
+                      onChange={(e) => setSampleText(e.target.value)}
+                    />
+                    {!sampleParse.ok && (
+                      <div data-testid="wizard-sample-parse-error" className="mt-1 rounded border border-rose-300 bg-rose-50 px-2 py-1 font-mono text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+                        {sampleParse.error}
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button data-testid="wizard-dry-run" variant="secondary" disabled={busy === 'dry-run'} onClick={dryRun}>
@@ -1465,12 +1594,19 @@ export function FirstTaskWizard({
                     </Button>
                   </div>
                   {transformJsonOpen && (
-                    <Textarea
-                      data-testid="wizard-transform-json"
-                      className="min-h-28 w-full font-mono text-xs"
-                      value={transformsText}
-                      onChange={(e) => setTransformsText(e.target.value)}
-                    />
+                    <>
+                      <Textarea
+                        data-testid="wizard-transform-json"
+                        className={cn('min-h-28 w-full font-mono text-xs', !transformsParse.ok && 'border-rose-400 ring-1 ring-rose-200')}
+                        value={transformsText}
+                        onChange={(e) => setTransformsText(e.target.value)}
+                      />
+                      {!transformsParse.ok && (
+                        <div data-testid="wizard-transforms-parse-error" className="mt-1 rounded border border-rose-300 bg-rose-50 px-2 py-1 font-mono text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+                          {transformsParse.error}
+                        </div>
+                      )}
+                    </>
                   )}
                   {dryRunResult !== null && (
                     <div className="rounded-lg border border-primary/20 bg-accent/40 p-3">
@@ -1606,16 +1742,36 @@ export function FirstTaskWizard({
               {safetyMoreOpen && (
                 <div className="mt-3 space-y-3 rounded-lg border border-dashed border-border p-3">
                   <div className="mb-1 flex items-center justify-between gap-2">
-                    <label className="block text-xs font-medium text-muted-foreground">Generated YAML</label>
-                    <Button variant="secondary" size="sm" onClick={syncFromYaml}>
-                      Sync YAML to form
-                    </Button>
+                    <label className="block text-xs font-medium text-muted-foreground">{yamlDirty ? 'Hand-edited YAML (form frozen)' : 'Generated YAML'}</label>
+                    <div className="flex gap-1">
+                      {yamlDirty && (
+                        <Button variant="outline" size="sm" data-testid="wizard-yaml-discard" onClick={discardYamlEdits}>
+                          Discard YAML edits
+                        </Button>
+                      )}
+                      <Button variant="secondary" size="sm" onClick={syncFromYaml}>
+                        Apply YAML to form
+                      </Button>
+                    </div>
                   </div>
+                  {yamlDirty && (
+                    <div data-testid="wizard-yaml-dirty-banner" className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                      {t('wizard.yamlDirtyHint')}
+                    </div>
+                  )}
+                  {yamlDirty && !yamlParse.ok && (
+                    <div data-testid="wizard-yaml-parse-error" className="rounded border border-rose-300 bg-rose-50 px-3 py-2 font-mono text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+                      YAML parse error: {yamlParse.error}
+                    </div>
+                  )}
                   <Textarea
                     data-testid="wizard-yaml"
-                    className="min-h-40 w-full font-mono text-xs"
+                    className={cn('min-h-40 w-full font-mono text-xs', yamlDirty && !yamlParse.ok && 'border-rose-400 ring-1 ring-rose-200')}
                     value={yamlText}
-                    onChange={(e) => setYamlText(e.target.value)}
+                    onChange={(e) => {
+                      setYamlText(e.target.value);
+                      setYamlDirty(true);
+                    }}
                   />
                   {(result?.preflight?.guidance || []).map((item, i) => (
                     <div key={`guidance-${i}`} className="rounded border border-border bg-card/70 p-2 text-xs">
@@ -1639,10 +1795,15 @@ export function FirstTaskWizard({
             <div id="wizard-section-confirm" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepConfirm')}</h3>
               <p className="mb-4 text-sm text-muted-foreground">{t('wizard.confirmHint')}</p>
-              <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
+              <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm" data-testid="wizard-confirm-summary">
+                {!submissionMatchesForm && (
+                  <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                    {t('wizard.confirmFromYaml')}
+                  </div>
+                )}
                 <div className="flex justify-between gap-3">
                   <span className="text-muted-foreground">Name</span>
-                  <span className="font-semibold">{name}</span>
+                  <span className="font-semibold">{submittedName}</span>
                 </div>
                 <div className="flex justify-between gap-3">
                   <span className="text-muted-foreground">Path</span>
@@ -1650,8 +1811,8 @@ export function FirstTaskWizard({
                 </div>
                 <div className="flex justify-between gap-3">
                   <span className="text-muted-foreground">Batch / checkpoint / DLQ</span>
-                  <span className="tabular">
-                    {batchSize} / {checkpointIntervalSec}s / {dlqEnabled ? 'on' : 'off'}
+                  <span className="tabular" data-testid="wizard-confirm-runtime">
+                    {submittedBatch} / {submittedCheckpoint}s / {submittedDlq}
                   </span>
                 </div>
                 <div className="flex justify-between gap-3">
@@ -1662,7 +1823,7 @@ export function FirstTaskWizard({
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button
                   data-testid="wizard-create-start"
-                  disabled={busy === 'create'}
+                  disabled={busy === 'create' || wizardBlocked}
                   onClick={createAndStart}
                 >
                   Create and start
@@ -1672,9 +1833,22 @@ export function FirstTaskWizard({
                   size="default"
                   data-testid="wizard-open-dag"
                   onClick={() => {
+                    // UI-A.1: hand the current draft spec to the DAG editor via
+                    // sessionStorage instead of dropping it on the floor (the
+                    // old flow navigated to designer with editTarget=<draft
+                    // name>, which loads nothing and shows an empty canvas).
+                    try {
+                      const spec = yamlDirty ? YAML.parse(yamlText) : buildSpec();
+                      window.sessionStorage.setItem('etl_dag_seed_v1', JSON.stringify({
+                        spec,
+                        from: 'wizard',
+                        savedAt: new Date().toISOString(),
+                      }));
+                    } catch {
+                      /* keep form state; designer will start empty */
+                    }
                     saveDraftAndExit();
-                    onOpenDesigner?.(name.trim() || 'draft');
-                    navigate({ page: 'designer', editTarget: name.trim() || undefined });
+                    navigate({ page: 'designer' });
                   }}
                 >
                   <GitBranch className="h-4 w-4" /> {t('wizard.openAdvancedDag')}
@@ -1689,7 +1863,7 @@ export function FirstTaskWizard({
                 <ArrowLeft className="h-4 w-4" /> {t('wizard.prev')}
               </Button>
               {step !== 'confirm' ? (
-                <Button size="sm" onClick={goNext} data-testid="wizard-next">
+                <Button size="sm" onClick={goNext} data-testid="wizard-next" disabled={configBlocked} title={configBlocked ? 'Fix invalid configuration text before continuing' : undefined}>
                   {t('wizard.next')} <ArrowRight className="h-4 w-4" />
                 </Button>
               ) : (

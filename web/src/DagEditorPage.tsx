@@ -584,6 +584,23 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   // Intentionally omit loadSpecIntoCanvas from deps so local batch_size edits
   // never re-fetch and overwrite the form.
   useEffect(() => {
+    if (editTarget) return; // explicit edit target wins over wizard seed
+    try {
+      const raw = window.sessionStorage.getItem('etl_dag_seed_v1');
+      if (!raw) return;
+      const seed = JSON.parse(raw);
+      if (seed?.spec && typeof seed.spec === 'object') {
+        loadSpecIntoCanvas(seed.spec);
+        if (seed.from === 'wizard') setDagFormat(false); // linear draft stays linear until advanced nodes added
+      }
+      window.sessionStorage.removeItem('etl_dag_seed_v1');
+    } catch {
+      /* bad seed — start empty */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     if (!editTarget) return;
     let cancelled = false;
     apiGet<{ spec: any }>(`/api/v2/pipelines/${encodeURIComponent(editTarget)}/spec`).then((res) => {
