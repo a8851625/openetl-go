@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -13,6 +13,7 @@ import {
   findMetric,
   formatLag,
   type DerivedIssue,
+  issueTitle,
 } from '@/lib/pipeline-health';
 import type { ApiState, MetricsPipeline, Pipeline, TFunc } from '@/lib/types';
 import type { Lang } from '@/i18n';
@@ -41,7 +42,6 @@ type Props = {
   onOpenDLQ?: (key: string) => void;
   onCreatePipeline?: () => void;
   onOpenConnections?: () => void;
-  timeRangeLabel?: string;
 };
 
 function IssueRow({
@@ -67,7 +67,7 @@ function IssueRow({
         aria-hidden
       />
       <div className="min-w-0">
-        <div className="truncate text-sm font-semibold">{issue.title}</div>
+        <div className="truncate text-sm font-semibold">{issueTitle(issue, t)}</div>
         <div className="mt-0.5 truncate text-xs text-muted-foreground">{issue.summary}</div>
       </div>
       <span className="flex items-center gap-1 text-xs font-semibold text-primary">
@@ -93,23 +93,39 @@ export function DashboardPage({
   onOpenDLQ,
   onCreatePipeline,
   onOpenConnections,
-  timeRangeLabel,
 }: Props) {
-  const [rangeKey, setRangeKey] = useState<'15m' | '24h' | 'all'>('15m');
   const pList = normalizePipelines(pipelines.data);
   const mList = metrics.data?.pipelines || [];
   const issues = deriveIssues(pList, mList);
   const counts = countHealth(pList, mList);
   const healthyShare =
     counts.total > 0 ? Math.round((counts.healthy / counts.total) * 100) : 100;
-  const range =
-    timeRangeLabel ||
-    (rangeKey === '15m'
-      ? t('dash.range15m')
-      : rangeKey === '24h'
-        ? t('dash.range24h')
-        : t('dash.rangeAll'));
-  const showCumulative = rangeKey === 'all' || rangeKey === '24h';
+  const range = t('dash.cumulativeScope');
+  // UI-A.3 (P1-19): the eyebrow badge reflects the real runtime profile from
+  // /api/v2/health instead of a static "Production runtime" label.
+  const [runtimeBadge, setRuntimeBadge] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    // /api/v2/health returns 503 while dependencies are degraded, but the
+    // body still carries role/profile — read it via raw fetch (never fail the
+    // badge on overall health status).
+    fetch('/api/v2/health')
+      .then((r) => r.json())
+      .then((h: { role?: string; profile?: string; insecure_dev?: string }) => {
+        if (cancelled || !h) return;
+        const role = h.role || 'standalone';
+        const profile = h.profile || 'development';
+        const insecure = h.insecure_dev === 'true';
+        const label = profile === 'production'
+          ? (insecure ? `production (insecure-dev) · ${role}` : `production · ${role}`)
+          : `${profile} · ${role}`;
+        if (!cancelled) setRuntimeBadge(label);
+      })
+      .catch(() => {
+        /* keep the i18n fallback label */
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const criticalPipes = pList
     .map((p) => {
@@ -133,7 +149,7 @@ export function DashboardPage({
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.08em] text-primary">
-              {t('dash.eyebrow')}
+              {runtimeBadge || t('dash.eyebrow')}
             </div>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">
               {t('dash.emptyTitle')}
@@ -174,7 +190,7 @@ export function DashboardPage({
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="text-xs font-bold uppercase tracking-[0.08em] text-primary">
-            {t('dash.eyebrow')}
+            {runtimeBadge || t('dash.eyebrow')}
           </div>
           <h2 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">
             {t('dash.heroTitle')}
@@ -187,33 +203,16 @@ export function DashboardPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div
-            className="flex overflow-hidden rounded-md border border-border bg-card text-xs"
-            role="group"
-            aria-label={t('dash.timeRange')}
+          {/* UI-A.3 (P0-1): the old 15m/24h/cumulative switch fabricated windowed
+              numbers (24h showed all-time; 15m showed all-time*0.08). Removed —
+              every metric here is cumulative and labeled as such until a real
+              time-series metrics API exists. */}
+          <span
+            data-testid="dash-scope-badge"
+            className="rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
           >
-            {(
-              [
-                { id: '15m', label: t('dash.range15m') },
-                { id: '24h', label: t('dash.range24h') },
-                { id: 'all', label: t('dash.rangeAll') },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                className={cn(
-                  'px-3 py-2 transition',
-                  rangeKey === opt.id
-                    ? 'bg-primary font-semibold text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-muted',
-                )}
-                onClick={() => setRangeKey(opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+            {t('dash.cumulativeScope')}
+          </span>
           <Button onClick={onCreatePipeline}>
             <Plus className="h-4 w-4" />
             {t('nav.createPipeline')}
@@ -277,8 +276,12 @@ export function DashboardPage({
                 <span className="text-muted-foreground">{t('health.failed')}</span>
               </div>
               <div>
-                <span className="tabular font-semibold">{counts.paused + counts.stopped}</span>{' '}
+                <span className="tabular font-semibold">{counts.paused}</span>{' '}
                 <span className="text-muted-foreground">{t('health.paused')}</span>
+              </div>
+              <div>
+                <span className="tabular font-semibold">{counts.stopped}</span>{' '}
+                <span className="text-muted-foreground">{t('health.stopped')}</span>
               </div>
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">{t('dash.healthNote')}</p>
@@ -295,13 +298,13 @@ export function DashboardPage({
           {[
             {
               label: t('dash.recordsRead'),
-              value: showCumulative ? totals.read : Math.round(totals.read * 0.08),
-              scope: rangeKey === '15m' ? t('dash.range15m') : t('dash.allTime'),
+              value: totals.read,
+              scope: t('dash.allTime'),
             },
             {
               label: t('dash.recordsWritten'),
-              value: showCumulative ? totals.written : Math.round(totals.written * 0.08),
-              scope: rangeKey === '15m' ? t('dash.range15m') : t('dash.allTime'),
+              value: totals.written,
+              scope: t('dash.allTime'),
             },
             {
               label: t('dash.failedRecords'),

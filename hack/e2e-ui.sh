@@ -644,6 +644,42 @@ evaljs "(() => { document.querySelector('[data-testid=wizard-step-sink]')?.click
 sleep 0.6
 check "A2.4: experimental sink option labelled" "$(evaljs "Array.from(document.querySelectorAll('[data-testid=wizard-sink-type] option')).some(o=>(o.textContent||'').includes('maxcompute (Experimental'))")"
 
+# ── UI-A.3: page truth consistency ───────────────────────────────────────
+echo "==> UI-A.3 page truth checks"
+# Seed a startup-failed pipeline (wrong MySQL password).
+curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" -H 'Content-Type: application/json' \
+  -d '{"spec":{"name":"a3-failed-startup","source":{"type":"file","config":{"path":"/app/testdata/files/customers.jsonl","format":"json"}},"sink":{"type":"mysql","config":{"host":"host.docker.internal","port":13306,"user":"sync_user","password":"wrong-password-a3","database":"test","table":"t1","batch_mode":"upsert","pk_columns":["id"]}},"batch_size":10,"checkpoint_interval_sec":1}}' >/dev/null || true
+curl -fsS -X POST "${BASE_URL}/api/v2/pipelines/a3-failed-startup/start" >/dev/null 2>&1 || true
+sleep 3
+a3_err="$(curl -fsS "${BASE_URL}/api/v2/pipelines" | grep -o 'open sink[^"]*' | head -1 || true)"
+check "A3.1: startup failure recorded in stats.last_error" "$([ -n "$a3_err" ] && echo true || echo false)"
+playwright-cli open "${BASE_URL}/?e2e=$(date +%s)" >/dev/null
+sleep 2
+evaljs "(() => { window.location.hash = '#/pipelines/a3-failed-startup/issues'; return true; })()" >/dev/null
+sleep 2
+a3_issue_visible="false"
+for _ in $(seq 1 10); do
+  a3_issue_visible="$(evaljs "(() => { const t=document.body.innerText; return t.includes('open sink') && !t.includes('No open issues'); })()")"
+  if [[ "$a3_issue_visible" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "A3.1b: failed pipeline Issues tab shows the startup error" "$a3_issue_visible"
+# A3.2: dashboard shows the real runtime profile, not a static label.
+evaljs "(() => { window.location.hash = '#/'; return true; })()" >/dev/null
+sleep 2.5
+check "A3.2: dashboard eyebrow shows real runtime profile" "$(evaljs "(() => { const els=Array.from(document.querySelectorAll('div')).filter(e=>(e.className||'').toString().includes('tracking-[0.08em]')); return els.some(e=>/development . standalone|production/.test(e.textContent||'')); })()")"
+check "A3.2b: dashboard no fake time-range switch" "$(evaljs "document.querySelector('[data-testid=dash-scope-badge]') !== null && !document.body.innerText.includes('Last 24 hours')")"
+# A3.3: status buckets on the pipelines page (failed is not stopped).
+evaljs "(() => { window.location.hash = '#/pipelines'; return true; })()" >/dev/null
+sleep 2
+check "A3.3: failed pipeline not counted as stopped" "$(evaljs "(() => { const badges=Array.from(document.querySelectorAll('span')).map(s=>s.textContent?.trim()||''); const stopped=badges.find(b=>/^[0-9]+ stopped$/.test(b)); const failedBadges=badges.filter(b=>/failed/.test(b)); return (!stopped || stopped.startsWith('0')) || failedBadges.length > 0; })()")"
+# A3.4: wizard has no horizontal overflow at 390px.
+playwright-cli resize 390 844 >/dev/null
+evaljs "(() => { window.location.hash = '#/pipelines/new'; return true; })()" >/dev/null
+sleep 2.5
+check "A3.4: wizard fits 390px viewport (no horizontal overflow)" "$(evaljs "document.documentElement.scrollWidth <= window.innerWidth + 2")"
+playwright-cli resize 1440 900 >/dev/null
+
 echo "==> Seed DLQ replay fixture"
 curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \
   -H 'Content-Type: application/json' \

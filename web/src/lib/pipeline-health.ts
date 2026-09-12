@@ -21,6 +21,8 @@ export type DerivedIssue = {
   pipelineKey: string;
   pipelineName: string;
   title: string;
+  /** i18n key suffix for the issue kind; display layers translate it. */
+  titleKey?: string;
   summary: string;
   node?: string;
   field?: string;
@@ -138,7 +140,8 @@ export function deriveIssues(
         health: 'failed',
         pipelineKey: key,
         pipelineName: p.name,
-        title: `${p.name} · ${p.stats?.last_error ? '运行失败' : '管道失败'}`,
+        title: `${p.name} · ${p.stats?.last_error ? 'run failed' : 'pipeline failed'}`,
+        titleKey: p.stats?.last_error ? 'issue.runFailed' : 'issue.pipelineFailed',
         summary: p.stats?.last_error || `status=${p.status}`,
         metricLabel: 'failed records',
         metricValue: p.stats?.records_failed || 0,
@@ -167,7 +170,8 @@ export function deriveIssues(
           health: 'degraded',
           pipelineKey: key,
           pipelineName: p.name,
-          title: `${p.name} · 失败记录`,
+          title: `${p.name} · failed records`,
+          titleKey: 'issue.failedRecords',
           summary: `${p.stats.records_failed.toLocaleString()} failed records`,
           metricLabel: 'failed records',
           metricValue: p.stats.records_failed,
@@ -194,7 +198,8 @@ export function deriveIssues(
           health: 'degraded',
           pipelineKey: key,
           pipelineName: p.name,
-          title: `${p.name} · checkpoint 停滞`,
+          title: `${p.name} · checkpoint stalled`,
+          titleKey: 'issue.checkpointStalled',
           summary: `checkpoint age ${m.checkpoint_age_seconds}s`,
           metricLabel: 'checkpoint age',
           metricValue: `${m.checkpoint_age_seconds}s`,
@@ -207,7 +212,8 @@ export function deriveIssues(
           health: 'degraded',
           pipelineKey: key,
           pipelineName: p.name,
-          title: `${p.name} · 最近错误`,
+          title: `${p.name} · last error`,
+          titleKey: 'issue.lastError',
           summary: p.stats.last_error,
           action: 'detail',
         });
@@ -261,4 +267,14 @@ export function healthTone(
     default:
       return 'slate';
   }
+}
+
+// issueTitle renders a localized issue title: pipeline name + translated kind.
+// Falls back to the stored English title when no key is present.
+export function issueTitle(issue: DerivedIssue, t: (key: string) => string): string {
+  if (!issue.titleKey) return issue.title;
+  const translated = t(issue.titleKey);
+  if (!translated || translated === issue.titleKey) return issue.title;
+  const name = issue.pipelineName || '';
+  return name ? `${name} · ${translated}` : translated;
 }

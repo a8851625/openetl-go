@@ -250,7 +250,8 @@ const PipelineRow = React.memo(
             variant={health === 'failed' || health === 'degraded' ? 'default' : 'secondary'}
             onClick={() => {
               onSelect(pipelineKey(p));
-              onOpenDetail?.(pipelineKey(p));
+              // UI-A.3 (P1-2): "View issues" must land on the Issues tab, not Overview.
+              onOpenDetail?.(pipelineKey(p), health === 'failed' || health === 'degraded' ? 'issues' : undefined);
             }}
           >
             {primaryLabel}
@@ -506,7 +507,11 @@ export function PipelinesPage({
 
   const loading = pipelines.loading || metrics.loading;
   const runningCount = filteredPipelines.filter((p) => p.status === 'running').length;
-  const stoppedCount = filteredPipelines.filter((p) => p.status !== 'running').length;
+  // UI-A.3 (P1-3): stopped means actually stopped — failed/completed/scheduled/
+  // paused must not be folded into it (they used to inflate the "stopped"
+  // badge and become Start-all targets).
+  const stoppedCount = filteredPipelines.filter((p) => p.status === 'stopped').length;
+  const otherCount = filteredPipelines.length - runningCount - stoppedCount;
 
   const healthOptions: { value: string; label: string }[] = [
     { value: '', label: t('pipe.allStatuses') },
@@ -719,6 +724,11 @@ export function PipelinesPage({
                     {stoppedCount} {t('pipe.stopped')}
                   </span>
                 )}
+                {otherCount > 0 && (
+                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700 dark:bg-amber-950/50 dark:text-amber-300" title="failed / completed / paused / scheduled">
+                    {otherCount} {t('pipe.otherStatuses')}
+                  </span>
+                )}
                 <div className="flex-1" />
                 <Button
                   variant="ghost"
@@ -727,7 +737,7 @@ export function PipelinesPage({
                   onClick={() =>
                     batchAction(
                       'start',
-                      filteredPipelines.filter((p) => p.status !== 'running'),
+                      filteredPipelines.filter((p) => p.status === 'stopped'),
                     )
                   }
                 >

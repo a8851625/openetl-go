@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/shared/empty-state';
 import { normalizePipelines } from '@/lib/api';
-import { deriveIssues, type DerivedIssue } from '@/lib/pipeline-health';
+import { deriveIssues, type DerivedIssue , issueTitle } from '@/lib/pipeline-health';
 import type { ApiState, MetricsPipeline, Pipeline, TFunc } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { ArrowRight } from 'lucide-react';
@@ -99,7 +99,7 @@ export function IssuesPage({
                 )}
               />
               <div className="min-w-0">
-                <div className="text-sm font-semibold">{issue.title}</div>
+                <div className="text-sm font-semibold">{issueTitle(issue, t)}</div>
                 <div className="mt-0.5 text-xs text-muted-foreground">
                   <span className="font-medium text-foreground/80">{issue.pipelineName}</span>
                   {' · '}

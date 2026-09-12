@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -577,12 +578,27 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.cancel = cancel
 	r.mu.Unlock()
 
-	markStartFailed := func() {
+	// markStartFailed tears the half-started runner down. stage/err are
+	// recorded into stats so API/UI surfaces (pipeline detail Issues, global
+	// Issues, dashboard) show the startup failure instead of an empty
+	// last_error that rendered "No open issues" for a failed pipeline (UI-A.3).
+	markStartFailed := func(stage string, startErr error) {
 		r.closeRuntime()
 		r.mu.Lock()
 		active := r.runActive
 		if active {
 			r.runActive = false
+		}
+		if startErr != nil {
+			r.stats.LastError = fmt.Sprintf("%s: %v", stage, startErr)
+			// Checkpoint-stage failures already carry a precise machine code
+			// (e.g. checkpoint.file.invalid) plus targeted remediation from
+			// setCheckpointFailure — do not overwrite them with the generic
+			// startup code.
+			if !strings.HasPrefix(r.stats.LastErrorCode, "checkpoint") {
+				r.stats.LastErrorCode = "startup_failed"
+				r.stats.LastErrorRemediation = "Fix the reported startup error (connection/credentials/schema), then start the pipeline again."
+			}
 		}
 		cancel := r.cancel
 		r.mu.Unlock()
@@ -598,14 +614,14 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err := r.sink.Open(ctx); err != nil {
 		r.setStatus(StatusFailed)
 		r.logError(fmt.Sprintf("Failed to open sink: %v", err))
-		markStartFailed()
+		markStartFailed("open sink", err)
 		return fmt.Errorf("open sink: %w", err)
 	}
 	if validator, ok := targetContractValidatorForSink(r.sink); ok {
 		if err := validator.ValidateTargetContract(ctx); err != nil {
 			r.setStatus(StatusFailed)
 			r.logError(fmt.Sprintf("Target contract validation failed: %v", err))
-			markStartFailed()
+			markStartFailed("validate target contract", err)
 			return fmt.Errorf("validate target contract: %w", err)
 		}
 	}
@@ -618,7 +634,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		if err != nil {
 			r.setStatus(StatusFailed)
 			r.logError(fmt.Sprintf("Source schema description failed: %v", err))
-			markStartFailed()
+			markStartFailed("describe source schema", err)
 			return fmt.Errorf("describe source schema: %w", err)
 		}
 		if len(schema.Columns) > 0 {
@@ -630,7 +646,7 @@ func (r *Runner) Start(ctx context.Context) error {
 				if err := validator.ValidateSchema(ctx, schema); err != nil {
 					r.setStatus(StatusFailed)
 					r.logError(fmt.Sprintf("Schema validation failed: %v", err))
-					markStartFailed()
+					markStartFailed("schema validation", err)
 					return fmt.Errorf("schema validation: %w", err)
 				}
 				r.logInfo(fmt.Sprintf("Schema validated: %d columns", len(schema.Columns)))
@@ -645,7 +661,7 @@ func (r *Runner) Start(ctx context.Context) error {
 			r.setStatus(StatusFailed)
 			r.setCheckpointFailure("load checkpoint", err)
 			r.logError(fmt.Sprintf("Failed to load checkpoint: %v", err))
-			markStartFailed()
+			markStartFailed("load checkpoint", err)
 			return fmt.Errorf("load checkpoint: %w", err)
 		}
 		if loaded != nil {
@@ -654,7 +670,7 @@ func (r *Runner) Start(ctx context.Context) error {
 				r.setStatus(StatusFailed)
 				r.setCheckpointFailure("validate checkpoint", err)
 				r.logError(fmt.Sprintf("Invalid checkpoint: %v", err))
-				markStartFailed()
+				markStartFailed("validate checkpoint", err)
 				return fmt.Errorf("validate checkpoint: %w", err)
 			}
 			r.logInfo("Resuming from checkpoint")
@@ -666,7 +682,7 @@ func (r *Runner) Start(ctx context.Context) error {
 			r.setStatus(StatusFailed)
 			r.setCheckpointFailure("validate source checkpoint", err)
 			r.logError(fmt.Sprintf("Invalid source checkpoint: %v", err))
-			markStartFailed()
+			markStartFailed("validate source checkpoint", err)
 			return fmt.Errorf("validate source checkpoint: %w", err)
 		}
 	}
@@ -676,7 +692,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err != nil {
 		r.setStatus(StatusFailed)
 		r.logError(fmt.Sprintf("Failed to open source: %v", err))
-		markStartFailed()
+		markStartFailed("open source", err)
 		return fmt.Errorf("open source: %w", err)
 	}
 

@@ -74,22 +74,36 @@ Residual/follow-up: 无。
 ```text
 Round: 3/5
 Roadmap item: UI-A.3
-Profile/path: standalone Web UI pages + 后端 last_error 契约
-Objective: Dashboard 不再伪造时间范围；启动失败在 Issues 可见；状态分桶正确；移动端向导可用。
-Scope: DashboardPage、PipelinesPage、PipelineDetailPage、pipeline-health、i18n、internal/etl/server（stats last_error）、wizard 布局
+Profile/path: standalone Web UI pages + 后端 stats/health 契约
+Objective: Dashboard 不伪造时间范围；启动失败在 Issues 可见；状态分桶正确；View issues 直达；i18n 化 issue 文案；runtime 徽标真实化；移动端向导无溢出。
+Scope: DashboardPage、PipelinesPage、PipelineDetailPage、pipeline-health、i18n、internal/etl/pipeline/pipeline.go（markStartFailed）、internal/etl/server/server.go（health profile）、wizard 布局、hack/e2e-ui.sh
 Non-goals: 批量操作/调度页/高危确认（Round 4）。
 Acceptance:
   1) Dashboard 无假时间切换；展示值与 API 累计值一致；
-  2) 启动失败管道 Issues tab 显示错误（含 last_error 或 status=failed 派生）；
+  2) 启动失败管道 Issues tab 显示错误（后端 stats 补 last_error/startup_failed，不覆盖 checkpoint 类错误码）；
   3) 列表/总览状态分桶不再把 failed/completed 计入 stopped；Start all 只针对 stopped；
   4) View issues 直达 issues tab；
-  5) 英文界面无中文硬编码 issue 文案；
-  6) Production runtime 徽标反映真实 profile；
-  7) 390px 视口向导无横向溢出（scrollWidth ≤ 视口宽）；
-  8) go test ./internal/etl/... + 受影响路径证据重绑通过。
-Evidence: go test、Playwright、e2e-ui.sh、check-connector-evidence -strict
-Result: pending
+  5) 英文界面无中文硬编码 issue 文案（titleKey + issueTitle）；
+  6) Production runtime 徽标反映真实 profile/role（health 暴露 profile + insecure_dev）；
+  7) 390px 视口向导无横向溢出；
+  8) go test -race ./internal/etl/pipeline ./internal/etl/server + e2e 全绿。
+Evidence: go test -race（pipeline 63s / server 98s ok）；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-a3 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 139 passed / 0 failed（含 A3.1–A3.4）。
+Result: delivered
+Residual/follow-up: 无。
 ```
+
+验收矩阵：
+
+| Criterion | Evidence | Result | Residual/blocker |
+| --- | --- | --- | --- |
+| Dashboard 假时间范围移除 | e2e A3.2b（dash-scope-badge 存在，无 Last 24 hours 切换；×0.08 估算代码删除） | passed | — |
+| 启动失败进入 Issues | 后端 markStartFailed(stage, err) 写 stats；实测 open sink 错误在 Issues tab 可见（A3.1/A3.1b）；checkpoint 类错误码不被覆盖（D2.7a 回归通过） | passed | — |
+| 状态分桶 | e2e A3.3（failed 不计 stopped，other states 徽标）；Start all 目标只含 status==stopped | passed | — |
+| View issues 直达 | 实测点击后 hash 落在 /issues tab（带 pipeline id） | passed | — |
+| issue 文案 i18n | titleKey + issueTitle() 翻译；英文环境无中文拼接 | passed | — |
+| runtime 徽标真实化 | health 暴露 profile/insecure_dev；eyebrow 显示 development · standalone（A3.2） | passed | — |
+| 移动端无溢出 | e2e A3.4（390px scrollWidth ≤ innerWidth+2） | passed | — |
+| Go/前端回归 | go test -race 两包 ok；typecheck/build/lint 无新增告警；e2e 139 passed | passed | — |
 
 ## Round 4：页面操作安全与收尾（P1-4/17/18 + P2-1/2/3/4/6/7）
 

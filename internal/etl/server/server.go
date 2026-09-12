@@ -5149,6 +5149,12 @@ func (s *Server) getHealthStatus() map[string]string {
 	} else {
 		extra["role"] = "standalone"
 	}
+	// UI-A.3 (P1-19): expose the resolved runtime profile so the UI badge
+	// reflects the real mode instead of a static "Production runtime" label.
+	extra["profile"] = s.runtimeProfile.Name
+	if s.runtimeProfile.InsecureDevelopment {
+		extra["insecure_dev"] = "true"
+	}
 	extra["checkpoint_stale_threshold_sec"] = strconv.FormatInt(th.StaleCheckpointSec, 10)
 	extra["cdc_lag_threshold_ms"] = strconv.FormatInt(th.HighCDCLagMs, 10)
 

@@ -1301,10 +1301,13 @@ export function FirstTaskWizard({
 
       <div className="overflow-hidden rounded-[14px] border border-border bg-card">
         <div className="grid min-h-[520px] gap-0 xl:grid-cols-[200px_minmax(0,1fr)_250px]">
-          {/* Left steps */}
-          <aside className="border-b border-border p-4 xl:border-b-0 xl:border-r" data-testid="wizard-steps">
+          {/* Left steps
+              UI-A.3 (P0-4): min-w-0 lets the horizontal step strip shrink on
+              mobile — as a grid item its default min-width:auto kept the
+              nowrap buttons at ~695px and blew the 390px viewport. */}
+          <aside className="min-w-0 border-b border-border p-4 xl:border-b-0 xl:border-r" data-testid="wizard-steps">
             <div className="mb-3 text-xs font-semibold text-muted-foreground">{t('wizard.progress')}</div>
-            <div className="flex gap-2 overflow-x-auto xl:flex-col xl:overflow-visible">
+            <div className="flex max-w-full gap-2 overflow-x-auto pb-1 xl:flex-col xl:overflow-visible">
               {WIZARD_STEPS.map((s, i) => {
                 const active = s.id === step;
                 const done = i < stepIndex;
@@ -1330,8 +1333,10 @@ export function FirstTaskWizard({
             </div>
           </aside>
 
-          {/* Center form: only the active step is rendered to reduce visual clutter. */}
-          <div className="space-y-4 p-5 md:p-6" data-testid="wizard-step-body">
+          {/* Center form: only the active step is rendered to reduce visual clutter.
+              UI-A.3 (P0-4): min-w-0 keeps long config text/template cards from
+              stretching the grid past the 390px viewport (was scrollWidth 729). */}
+          <div className="min-w-0 space-y-4 overflow-x-hidden p-5 md:p-6" data-testid="wizard-step-body">
             <ApiErrorPanel
               error={errorDetails || (error ? { error } : null)}
               title="Pipeline configuration failed"

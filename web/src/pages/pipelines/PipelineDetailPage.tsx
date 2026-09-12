@@ -397,8 +397,21 @@ export function PipelineDetailPage({
                         </div>
                       )}
                       {pipeline.stats.last_error ? (
-                        <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+                        <div data-testid="detail-issue-last-error" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
                           {pipeline.stats.last_error}
+                          {pipeline.stats.last_error_remediation && (
+                            <div className="mt-1 text-xs text-rose-700/80 dark:text-rose-300/80">
+                              {pipeline.stats.last_error_remediation}
+                            </div>
+                          )}
+                        </div>
+                      ) : pipeline.status === 'failed' ? (
+                        // UI-A.3 (P0-2): a failed pipeline always has an issue even when
+                        // counters are zero and stats.last_error is absent (startup
+                        // failure) — never render "No open issues" for failed runs.
+                        <div data-testid="detail-issue-startup-failure" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+                          <div className="text-sm font-semibold">{t('pipe.startupFailureTitle')}</div>
+                          <div className="mt-1 text-xs">{t('pipe.startupFailureHint')}</div>
                         </div>
                       ) : (pipeline.stats.records_dlq || 0) > 0 ? (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
@@ -471,7 +484,8 @@ export function PipelineDetailPage({
             <TabsContent value="issues" className="mt-4 space-y-3">
               {(pipeline.stats.records_failed || 0) > 0 ||
               (pipeline.stats.records_dlq || 0) > 0 ||
-              pipeline.stats.last_error ? (
+              pipeline.stats.last_error ||
+              pipeline.status === 'failed' ? (
                 <>
                   {checkpointFailure && (
                     <div
