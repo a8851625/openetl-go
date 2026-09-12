@@ -9,6 +9,7 @@ import { SchedulesPage } from './SchedulesPage';
 import { ConnectionsPage } from './ConnectionsPage';
 import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from '@/components/ui/sonner';
+import { Button } from '@/components/ui/button';
 import { AppShell, type AppPage, type NavGroup } from '@/components/layout/app-shell';
 import {
   api,
@@ -283,6 +284,7 @@ function App() {
   const pageTitle = (() => {
     if (route.page === 'pipeline-detail') return selected?.name || t('nav.pipelines');
     if (route.page === 'pipeline-new') return t('nav.createPipeline');
+    if (route.page === 'not-found') return t('nav.notFound');
     if (route.page === 'dlq') return t('top.dlqWorkbench');
     if (route.page === 'designer') return t('nav.dagEditor');
     return t(`nav.${navPage}`);
@@ -323,6 +325,15 @@ function App() {
         hasRunning={pipelinesList.some((p) => p.status === 'running')}
         issueCount={issueCount}
       >
+        {route.page === 'not-found' && (
+          <div className="space-y-4 p-8" data-testid="not-found-page">
+            <h2 className="text-2xl font-semibold">{t('nav.notFound')}</h2>
+            <p className="text-sm text-muted-foreground">
+              {t('nav.notFoundHint')} <code className="rounded bg-muted px-1">{(route as { path?: string }).path || ''}</code>
+            </p>
+            <Button onClick={() => navigate({ page: 'dashboard' })}>{t('nav.backHome')}</Button>
+          </div>
+        )}
         {(route.page === 'dashboard') && (
           <DashboardPage
             t={t}

@@ -42,6 +42,16 @@ const WIZARD_SECRET_SENTINEL = '__secret_omitted__';
 // experimental get an explicit label in wizard selects so users learn the
 // blocker before reaching Safety preflight.
 const EXPERIMENTAL_CONNECTORS = new Set(['maxcompute', 'odps']);
+// UI-A.4 (P2-4): transform picker grouped by intent so 39 flat options do not
+// read as one undifferentiated list.
+const TRANSFORM_GROUPS: Record<string, string[]> = {
+  'Field shaping': ['project', 'select_fields', 'rename', 'add_field', 'drop_field', 'type_convert', 'cast', 'coalesce', 'map_fields', 'extract', 'normalize_envelope', 'identity'],
+  'Cleansing': ['filter', 'validate', 'deduplicate', 'distinct', 'limit', 'sample', 'sort', 'skip'],
+  'CDC': ['debezium_cdc', 'debezium_envelope', 'cdc_policy', 'ddl_guard'],
+  'Enrichment (external DB)': ['lookup', 'join', 'enricher'],
+  'Stateful (needs Redis for HA)': ['window', 'rate_limiter', 'router', 'fanout', 'tap'],
+  'Scripting / code': ['flat_map', 'udtf', 'lua', 'javascript', 'js', 'ts', 'dbt'],
+};
 const WIZARD_STEPS = [
   { id: 'scenario', labelKey: 'wizard.stepScenario' },
   { id: 'source', labelKey: 'wizard.stepSource' },
@@ -337,6 +347,8 @@ export function FirstTaskWizard({
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   // UI-A.2: any structured edit marks the draft dirty (guards template switch).
   const [wizardTouched, setWizardTouched] = useState(false);
+  // UI-A.4 (P2-6): DLQ disable needs an explicit confirmation (non-blocking dialog).
+  const [pendingDlqDisable, setPendingDlqDisable] = useState(false);
 
   const reportError = (value: unknown, fallback = 'Operation failed') => {
     const details = toApiErrorDetails(value, 0, fallback);
@@ -1267,6 +1279,18 @@ export function FirstTaskWizard({
   return (
     <div className="space-y-4" data-testid="wizard-fullpage">
       <ConfirmDialog
+        open={pendingDlqDisable}
+        onOpenChange={(open) => { if (!open) setPendingDlqDisable(false); }}
+        title={t('wizard.dlqDisableTitle')}
+        description={t('wizard.dlqDisableWarning')}
+        confirmLabel={t('wizard.dlqDisableConfirm')}
+        destructive
+        onConfirm={() => {
+          setDlqEnabled(false);
+          setPendingDlqDisable(false);
+        }}
+      />
+      <ConfirmDialog
         open={pendingTemplateId !== null}
         onOpenChange={(open) => { if (!open) setPendingTemplateId(null); }}
         title={t('wizard.switchTemplateTitle')}
@@ -1665,9 +1689,23 @@ export function FirstTaskWizard({
                                 value={item.type}
                                 onChange={(e) => updateTransformType(index, e.target.value)}
                               >
-                                {transformTypes.map((type) => (
-                                  <option key={type} value={type}>{type}</option>
-                                ))}
+                                {Object.entries(TRANSFORM_GROUPS).map(([group, types]) => {
+                                  const avail = types.filter((type) => transformTypes.includes(type));
+                                  if (!avail.length) return null;
+                                  return (
+                                    <optgroup key={group} label={group}>
+                                      {avail.map((type) => (
+                                        <option key={type} value={type}>{type}</option>
+                                      ))}
+                                    </optgroup>
+                                  );
+                                })}
+                                {/* keep ungrouped types visible */}
+                                {transformTypes
+                                  .filter((type) => !Object.values(TRANSFORM_GROUPS).some((g) => g.includes(type)))
+                                  .map((type) => (
+                                    <option key={type} value={type}>{type}</option>
+                                  ))}
                               </select>
                               </div>
                               {issuesForField(`transforms.${index}.type`).map((issue, i) => (
@@ -1869,7 +1907,14 @@ export function FirstTaskWizard({
                       data-testid="wizard-dlq-enabled"
                       type="checkbox"
                       checked={dlqEnabled}
-                      onChange={(e) => { setWizardTouched(true); setDlqEnabled(e.target.checked); }}
+                      onChange={(e) => {
+                        setWizardTouched(true);
+                        if (!e.target.checked && dlqEnabled) {
+                          setPendingDlqDisable(true);
+                          return;
+                        }
+                        setDlqEnabled(e.target.checked);
+                      }}
                     />
                     DLQ enabled
                   </label>

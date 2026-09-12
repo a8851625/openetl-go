@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   Activity,
   AlertTriangle,
-  Bell,
   Boxes,
   CalendarClock,
   ClipboardList,
@@ -365,15 +364,7 @@ export function AppShell({
                 </Button>
               )}
 
-              <Button
-                variant="ghost"
-                size="icon"
-                className="hidden sm:inline-flex"
-                aria-label={t('top.notifications')}
-                title={t('top.notifications')}
-              >
-                <Bell className="h-4 w-4" />
-              </Button>
+              {/* UI-A.4 (P2-1): dead notifications button removed until a real notification center exists. */}
 
               {/* Keep Auto-refresh text in DOM for e2e/a11y (visually subtle). */}
               <span className="hidden text-xs text-muted-foreground lg:inline" data-testid="auto-refresh-label">

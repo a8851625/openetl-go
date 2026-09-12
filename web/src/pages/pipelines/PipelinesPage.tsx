@@ -11,7 +11,7 @@ import {
 import { EmptyState } from '@/components/shared/empty-state';
 import { PipelineHealthBadge, HealthDot } from '@/components/shared/pipeline-health-badge';
 import { PipelinePath } from '@/components/shared/pipeline-path';
-import { confirmAction } from '@/components/shared/confirm-dialog';
+import { confirmAction, ConfirmDialog } from '@/components/shared/confirm-dialog';
 import {
   api,
   getToken,
@@ -381,6 +381,12 @@ export function PipelinesPage({
 }: Props) {
   const initial = readListFilters();
   // Modal logs kept as fallback when detail route is unavailable.
+  // UI-A.4 (P1-4): batch start/stop needs an explicit confirmation and a
+  // summarized result (success/failure counts + per-target reasons) instead
+  // of fire-and-forget forEach with a toast storm.
+  const [batchConfirm, setBatchConfirm] = useState<{ action: 'start' | 'stop'; targets: Pipeline[] } | null>(null);
+  const [batchResult, setBatchResult] = useState<{ action: string; ok: string[]; failed: { name: string; reason: string }[] } | null>(null);
+  const [batchBusy, setBatchBusy] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -494,15 +500,38 @@ export function PipelinesPage({
 
   const batchAction = (action: 'start' | 'stop', targets: Pipeline[]) => {
     if (!targets.length) return;
+    setBatchResult(null);
+    setBatchConfirm({ action, targets });
+  };
+
+  const runBatch = async () => {
+    if (!batchConfirm) return;
+    const { action, targets } = batchConfirm;
+    setBatchConfirm(null);
+    setBatchBusy(true);
+    const ok: string[] = [];
+    const failed: { name: string; reason: string }[] = [];
+    // Controlled concurrency (4) — no fire-and-forget forEach.
+    const queue = [...targets];
+    const worker = async () => {
+      while (queue.length) {
+        const p = queue.shift();
+        if (!p) break;
+        try {
+          await api(`/api/v2/pipelines/${pipelineRef(p)}/${action}`, { method: 'POST' });
+          ok.push(p.name);
+        } catch (e) {
+          failed.push({ name: p.name, reason: e instanceof Error ? e.message : String(e) });
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    setBatchBusy(false);
+    setBatchResult({ action, ok, failed });
     onShowToast?.(
-      'info',
-      `${action === 'start' ? t('ui.starting') : t('ui.stopping')} ${targets.length} ${t('ui.pipelines')}...`,
+      failed.length ? 'error' : 'success',
+      `${action}: ${ok.length} ok, ${failed.length} failed`,
     );
-    targets.forEach((p) => {
-      onAction(`${action} ${p.name}`, () =>
-        api(`/api/v2/pipelines/${pipelineRef(p)}/${action}`, { method: 'POST' }),
-      );
-    });
   };
 
   const loading = pipelines.loading || metrics.loading;
@@ -534,6 +563,41 @@ export function PipelinesPage({
 
   return (
     <>
+      <ConfirmDialog
+        open={batchConfirm !== null}
+        onOpenChange={(open) => { if (!open) setBatchConfirm(null); }}
+        title={t('pipe.batchConfirmTitle').replace('{action}', batchConfirm?.action === 'stop' ? t('pipe.stop') : t('pipe.start'))}
+        description={t('pipe.batchConfirmDesc')
+          .replace('{count}', String(batchConfirm?.targets.length || 0))
+          .replace('{names}', (batchConfirm?.targets || []).slice(0, 5).map((p) => p.name).join(', ') + ((batchConfirm?.targets.length || 0) > 5 ? '…' : ''))}
+        confirmLabel={batchConfirm?.action === 'stop' ? t('pipe.stopAll') : t('pipe.startAll')}
+        destructive={batchConfirm?.action === 'stop'}
+        onConfirm={() => { runBatch(); }}
+      />
+      {batchResult && (
+        <div data-testid="batch-result-panel" className="mb-4 rounded-lg border border-border bg-card p-3 text-sm">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="font-semibold">
+              {batchResult.action === 'stop' ? t('pipe.stopAll') : t('pipe.startAll')}: {batchResult.ok.length} {t('ui.ok')}, {batchResult.failed.length} {t('ui.failed')}
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => setBatchResult(null)}>✕</Button>
+          </div>
+          {batchResult.failed.length > 0 && (
+            <div className="space-y-1">
+              {batchResult.failed.map((f) => (
+                <div key={f.name} className="text-xs text-rose-700 dark:text-rose-300">
+                  {f.name}: {f.reason}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {batchBusy && (
+        <div className="mb-4 rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+          {t('pipe.batchRunning')}
+        </div>
+      )}
       {showLogs && selected?.name && (
         <PipelineLogModal
           t={t}
@@ -683,7 +747,10 @@ export function PipelinesPage({
                   onClick={() =>
                     batchAction(
                       'start',
-                      selectedPipes.filter((p) => p.status !== 'running'),
+                      // UI-A.4: align selection Start with Start-all — only
+                      // genuinely stopped pipelines; completed/failed are not
+                      // silent start targets.
+                      selectedPipes.filter((p) => p.status === 'stopped'),
                     )
                   }
                 >
@@ -734,6 +801,8 @@ export function PipelinesPage({
                   variant="ghost"
                   size="sm"
                   className="text-xs"
+                  disabled={stoppedCount === 0}
+                  title={stoppedCount === 0 ? t('pipe.noStoppedTargets') : undefined}
                   onClick={() =>
                     batchAction(
                       'start',
@@ -747,6 +816,8 @@ export function PipelinesPage({
                   variant="ghost"
                   size="sm"
                   className="text-xs"
+                  disabled={runningCount === 0}
+                  title={runningCount === 0 ? t('pipe.noRunningTargets') : undefined}
                   onClick={() =>
                     batchAction(
                       'stop',

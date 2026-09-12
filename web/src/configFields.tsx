@@ -173,6 +173,7 @@ export function ConfigForm({
         const issues = fieldIssues?.[field.name] || fieldIssues?.[`${fieldPathPrefix || ''}.${field.name}`] || [];
         const fieldPath = fieldPathPrefix ? `${fieldPathPrefix}.${field.name}` : field.name;
         const hasError = issues.some((issue) => issue.level !== 'warning' && issue.level !== 'info');
+        const fieldId = `cfg-${fieldPathPrefix ? fieldPathPrefix.replace(/[^a-z0-9]+/gi, '-') + '-' : ''}${field.name}`;
         const invalidClass = hasError ? 'border-rose-400 ring-1 ring-rose-200' : '';
         let input: React.ReactNode;
         if (field.enum && field.enum.length > 0) {
@@ -207,6 +208,7 @@ export function ConfigForm({
         } else if (field.type === 'int' || field.type === 'float') {
           input = (
             <Input
+              id={fieldId}
               className={invalidClass}
               aria-invalid={issues.length > 0}
               type="number"
@@ -237,6 +239,7 @@ export function ConfigForm({
         } else if (field.type === 'map') {
           input = (
             <Textarea
+              id={fieldId}
               className={cn('min-h-24 font-mono text-xs leading-relaxed', invalidClass)}
               aria-invalid={issues.length > 0}
               value={mapText(value)}
@@ -248,6 +251,7 @@ export function ConfigForm({
           const multiline = ['query', 'script', 'code', 'rules', 'body'].includes(field.name);
           input = multiline ? (
             <Textarea
+              id={fieldId}
               className={cn('min-h-20 font-mono text-xs leading-relaxed', invalidClass)}
               aria-invalid={issues.length > 0}
               value={String(value || '')}
@@ -256,6 +260,7 @@ export function ConfigForm({
             />
           ) : (
             <Input
+              id={fieldId}
               className={invalidClass}
               aria-invalid={issues.length > 0}
               type={field.secret ? 'password' : 'text'}
@@ -278,7 +283,7 @@ export function ConfigForm({
               issues.length > 0 && !hasError && 'border border-amber-300 bg-amber-50/60 dark:border-amber-800 dark:bg-amber-950/20',
             )}
           >
-            <Label className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
+            <Label htmlFor={fieldId} className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
               <span>{field.name}</span>
               {field.required && <span className="text-rose-500">*</span>}
               {field.secret && (

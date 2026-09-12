@@ -2,6 +2,7 @@
 
 export type AppRoute =
   | { page: 'dashboard' }
+  | { page: 'not-found'; path?: string }
   | { page: 'pipelines' }
   | { page: 'pipeline-detail'; id: string; tab: DetailTab }
   | { page: 'pipeline-new'; step?: string }
@@ -104,7 +105,10 @@ export function parseHash(hash = window.location.hash): AppRoute {
   ) {
     return { page: legacy } as AppRoute;
   }
-  return { page: 'dashboard' };
+  // UI-A.4 (P2-7): legacy wizard alias and explicit not-found instead of a
+  // silent dashboard fallback.
+  if (parts[0] === 'pipeline-new') return { page: 'pipeline-new', step: qs.get('step') || undefined };
+  return { page: 'not-found', path: parts[0] };
 }
 
 export function routeToHash(route: AppRoute): string {

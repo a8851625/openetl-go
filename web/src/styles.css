@@ -63,7 +63,7 @@
   body {
     @apply bg-background text-foreground;
     margin: 0;
-    font-family: Geist, 'Noto Sans SC', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    font-family: 'Noto Sans SC', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
       sans-serif;
     -webkit-font-smoothing: antialiased;
     font-feature-settings: 'tnum' 1;
@@ -154,7 +154,7 @@
 /* ── Tabular numbers for metrics ── */
 .tabular {
   font-variant-numeric: tabular-nums;
-  font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
 }
 
 /* ── xyflow ── */

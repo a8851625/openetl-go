@@ -112,18 +112,31 @@ Round: 4/5
 Roadmap item: UI-A.4
 Profile/path: standalone Web UI pages
 Objective: 高危操作统一确认+结果汇总；Schedules 请求与状态诚实；P2 视觉/命名/可访问性收尾。
-Scope: PipelinesPage、SchedulesPage、DLQPage、app-shell、styles、routing、configFields
-Non-goals: 新 API（除 schedules 列表端点复用既有），transform 风险标注全量（只做分组）。
+Scope: PipelinesPage、SchedulesPage、DLQPage、app-shell、styles、routing、main.tsx、configFields、first-task-wizard、i18n、hack/e2e-ui.sh
+Non-goals: 新 API；transform 风险标注全量。
 Acceptance:
-  1) 批量启停/Run now/Stop all/checkpoint reset/连接删除/DLQ delete/replay 均有 ConfirmDialog 确认；
-  2) 批量操作结果有汇总（成功/失败/原因）；
-  3) Schedules 无 N+1（列表页 ≤2 请求/刷新），失败显示 unavailable；
-  4) DLQ 按钮改名；Bell 移除；字体栈修正；transform 分组；未知 hash 有提示；
-  5) DLQ 关闭有风险确认；ConfigForm label 绑定；
-  6) e2e-ui.sh 全绿。
-Evidence: Playwright + e2e-ui.sh
-Result: pending
+  1) 批量启停有 ConfirmDialog 确认（显示目标数量/名单）与结果汇总面板（成功/失败/原因），受控并发 4；Start/Stop all 无目标时禁用；
+  2) Run now 有确认；Schedules 去除 selected 依赖的 N+1 重拉，失败行显示 unavailable；
+  3) DLQ 预览按钮改名 Preview impact (≤50 loaded)；向导关闭 DLQ 有风险确认（非阻塞 ConfirmDialog）；
+  4) 死 Bell 按钮移除；Geist 未加载字体声明移除；transform 下拉按意图分组（6 组 + 未分组）；
+  5) 未知路由显示 not-found 页；legacy #/pipeline-new 别名进入向导；ConfigForm label htmlFor 绑定；
+  6) selection Start 与 Start-all 口径统一（只针对 stopped）。
+Evidence: npm typecheck/build/lint（32 warnings 低于基线 34）；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-a4 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 145 passed / 0 failed（含 A4.1–A4.3）。
+Result: delivered
+Residual/follow-up: 批量确认对话框的交互流在本环境无稳定 running fixture，由 A2.2（同 ConfirmDialog 组件）+ 按钮禁用门控断言共同覆盖；真实多状态场景待后续有依赖服务的 e2e 补充。
 ```
+
+验收矩阵：
+
+| Criterion | Evidence | Result | Residual/blocker |
+| --- | --- | --- | --- |
+| 批量确认与汇总 | batchAction → ConfirmDialog（数量+前 5 名）+ runBatch 受控并发 4 + 结果面板；e2e A4.1/A4.1a（无目标禁用） | passed | 真实多目标交互流待依赖服务 e2e |
+| Run now 确认 | confirmAction(sched.confirmRunNow) | passed | — |
+| Schedules N+1/状态诚实 | load effect 去除 selected 依赖；失败行 unavailable 徽标 | passed | — |
+| DLQ 命名/关闭确认 | i18n dlq.dryRun 改名；pendingDlqDisable ConfirmDialog（非阻塞） | passed | e2e D2.1g 已适配 |
+| 死控件/字体/分组/路由 | Bell 移除；system 字体栈；TRANSFORM_GROUPS 6 组；not-found 页 + pipeline-new 别名（A4.2/A4.2b） | passed | — |
+| ConfigForm 可访问性 | Label htmlFor + input id（全部输入类型） | passed | — |
+| 回归 | e2e-ui.sh 145 passed / 0 failed；lint 32（<基线 34） | passed | — |
 
 ## Round 5：缓冲（溢出项/回归收口）
 

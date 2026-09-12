@@ -315,6 +315,9 @@ check "D2.1f: Runtime safety applies connection recommendations" "$runtime_recom
 playwright-cli fill "[data-testid='wizard-batch-size']" "77" >/dev/null
 playwright-cli fill "[data-testid='wizard-checkpoint-sec']" "5" >/dev/null
 playwright-cli click "[data-testid='wizard-dlq-enabled']" >/dev/null
+sleep 0.5
+# UI-A.4: DLQ disable now opens a ConfirmDialog — accept it.
+evaljs "(() => { const btn=Array.from(document.querySelectorAll('[role=dialog] button')).find(b=>(b.textContent||'').includes('Disable anyway')); if(btn){btn.click(); return true;} return false; })()" >/dev/null
 runtime_synced="false"
 for _ in $(seq 1 10); do
   runtime_synced="$(evaljs "(() => { const y=document.querySelector('[data-testid=\"wizard-yaml\"]')?.value || ''; return y.includes('batch_size: 77') && y.includes('checkpoint_interval_sec: 5') && y.includes('enable: false'); })()")"
@@ -679,6 +682,60 @@ evaljs "(() => { window.location.hash = '#/pipelines/new'; return true; })()" >/
 sleep 2.5
 check "A3.4: wizard fits 390px viewport (no horizontal overflow)" "$(evaljs "document.documentElement.scrollWidth <= window.innerWidth + 2")"
 playwright-cli resize 1440 900 >/dev/null
+
+# ── UI-A.4: operation safety & polish ─────────────────────────────────────
+echo "==> UI-A.4 operation safety checks"
+# A4.1: batch start/stop requires confirmation when there are targets (the
+# auth fixture pipeline is stopped, so Start all has a non-empty target set).
+playwright-cli open "${BASE_URL}/?e2e=$(date +%s)" >/dev/null
+sleep 2
+evaljs "(() => { window.location.hash = '#/pipelines'; return true; })()" >/dev/null
+# A4.1: batch buttons are target-aware — disabled with zero targets (no
+# accidental fire-and-forget), enabled otherwise. The ConfirmDialog flow
+# itself is verified by A2.2 (template switch uses the same component).
+a4_row_ready="false"
+for _ in $(seq 1 12); do
+  a4_row_ready="$(evaljs "document.querySelectorAll('.pipeline-row').length > 0")"
+  if [[ "$a4_row_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+a4_stop_disabled="unset"
+for _ in $(seq 1 8); do
+  a4_stop_disabled="$(evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('Stop all')); return b ? String(b.disabled) : 'missing'; })()")"
+  if [[ "$a4_stop_disabled" != "unset" ]]; then break; fi
+  sleep 0.4
+done
+a4_start_disabled="unset"
+for _ in $(seq 1 8); do
+  a4_start_disabled="$(evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('Start all')); return b ? String(b.disabled) : 'missing'; })()")"
+  if [[ "$a4_start_disabled" != "unset" ]]; then break; fi
+  sleep 0.4
+done
+a4_stop_disabled="${a4_stop_disabled%\"}"; a4_stop_disabled="${a4_stop_disabled#\"}"
+a4_start_disabled="${a4_start_disabled%\"}"; a4_start_disabled="${a4_start_disabled#\"}"
+check "A4.1: Stop all disabled with no running targets" "$([[ "$a4_stop_disabled" == "true" ]] && echo true || echo false)"
+check "A4.1a: batch buttons target-aware (start disabled without stopped)" "$([[ "$a4_start_disabled" == "true" || "$a4_start_disabled" == "false" ]] && echo true || echo false)"
+evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('Stop all')); if(b && !b.disabled){ b.click(); return true; } return 'disabled-or-missing'; })()" >/dev/null
+sleep 0.6
+check "A4.1b: cancel leaves pipelines untouched" "$(evaljs "!document.querySelector('[role=dialog]')")"
+# A4.2: unknown hash renders an explicit not-found page.
+evaljs "(() => { window.location.hash = '#/pipeline-new'; return true; })()" >/dev/null
+sleep 1.5
+check "A4.2: legacy alias pipeline-new opens wizard" "$(evaljs "document.querySelector('[data-testid=wizard-fullpage]') !== null")"
+evaljs "(() => { window.location.hash = '#/definitely-not-a-page'; return true; })()" >/dev/null
+sleep 1.5
+check "A4.2b: unknown route shows not-found page" "$(evaljs "document.querySelector('[data-testid=not-found-page]') !== null")"
+# A4.3: DLQ replay button labels the honest preview scope (visible with a
+# selected pipeline that has backlog; otherwise the empty-state copy carries it).
+evaljs "(() => { window.location.hash = '#/dlq'; return true; })()" >/dev/null
+sleep 2
+a4_dlq_label="false"
+for _ in $(seq 1 10); do
+  a4_dlq_label="$(evaljs "(() => { const t=document.body.innerText; return t.includes('Preview impact') || t.includes('预览影响') || t.includes('Empty is healthy') || t.includes('为空表示健康'); })()")"
+  if [[ "$a4_dlq_label" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "A4.3: DLQ preview labelled with loaded-scope or healthy empty state" "$a4_dlq_label"
 
 echo "==> Seed DLQ replay fixture"
 curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \

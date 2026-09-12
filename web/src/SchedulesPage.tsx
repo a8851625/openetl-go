@@ -15,6 +15,7 @@ import {
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { StatusDot, ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
+import { confirmAction } from '@/components/shared/confirm-dialog';
 import { ScheduleEditorDialog } from '@/components/schedule-editor-dialog';
 import { getToken } from '@/lib/api';
 
@@ -111,15 +112,19 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      // UI-A.4 (P1-17): avoid the N+1 fan-out on every refresh/selection —
+      // load schedule state once per pipeline-list change (not per `selected`
+      // change), and mark fetch failures as `unavailable` instead of silently
+      // rendering them as disabled.
       const loaded = await Promise.all(
         allPipelines.map(async (p) => {
           try {
             const res = await api<{ enabled: boolean; schedule?: Schedule }>(
               `/api/v2/pipelines/${pipelineRef(p)}/schedule`,
             );
-            return { ...p, enabled: !!res.enabled, schedule: res.schedule };
+            return { ...p, enabled: !!res.enabled, schedule: res.schedule, unavailable: false };
           } catch {
-            return { ...p, enabled: false };
+            return { ...p, enabled: false, unavailable: true };
           }
         }),
       );
@@ -132,7 +137,10 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
     return () => {
       cancelled = true;
     };
-  }, [allPipelines, refreshKey, selected]);
+    // `selected` intentionally excluded: selecting a row must not refetch
+    // schedules for every pipeline (was the N+1 amplifier).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allPipelines, refreshKey]);
 
   const selectedRow = rows.find((r) => pipelineKey(r) === selected || r.name === selected);
 
@@ -181,6 +189,8 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
 
   const runNow = async () => {
     if (!selected) return;
+    // UI-A.4 (P1-18): Run now is a high-impact action — confirm first.
+    if (!confirmAction(t('sched.confirmRunNow').replace('{name}', selectedName || selected))) return;
     setBusy(true);
     setError('');
     setMessage('');
@@ -349,6 +359,11 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
                           <TableCell className="font-medium">{p.name}</TableCell>
                           <TableCell>
                             <ToneBadge tone={typeTone[schedType] || 'slate'}>{schedType}</ToneBadge>
+                            {(p as any).unavailable && (
+                              <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" title="schedule state could not be loaded">
+                                {t('sched.unavailable')}
+                              </span>
+                            )}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {p.schedule?.cron ||
