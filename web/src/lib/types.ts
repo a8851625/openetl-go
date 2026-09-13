@@ -31,6 +31,22 @@ export type MetricsPipeline = PipelineStats & {
   dlq_file_count: number;
 };
 
+export type SpecSummary = {
+  source?: string;
+  source_mode?: 'cdc' | 'batch' | 'streaming' | 'scheduled' | 'dag';
+  transforms?: string[];
+  sink?: string;
+  write_mode?: string;
+  schedule?: string;
+  parallel_shards?: number;
+  table_mapping?: boolean;
+  has_dlq?: boolean;
+  allow_unsafe?: boolean;
+  dag_sources?: string[];
+  dag_transforms?: string[];
+  dag_sinks?: string[];
+};
+
 export type Pipeline = {
   id?: string;
   name: string;
@@ -42,6 +58,7 @@ export type Pipeline = {
   shard_count?: number;
   shards?: { index: number; status: string; stats: PipelineStats }[];
   tags?: string[];
+  spec_summary?: SpecSummary;
 };
 
 export type ShardInfo = {

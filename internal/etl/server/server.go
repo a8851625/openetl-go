@@ -1603,6 +1603,143 @@ func formatPreflightIssues(pr *PreflightResult) (warnings []string, hasError boo
 	return warnings, hasError
 }
 
+// specSummary is the type-level, secret-free projection of a pipeline spec
+// exposed on list responses so clients can render the real topology/mode
+// without fetching full specs (which may contain credentials).
+type specSummary struct {
+	Source         string   `json:"source,omitempty"`
+	SourceMode     string   `json:"source_mode,omitempty"` // cdc | batch | streaming | dag
+	Transforms     []string `json:"transforms,omitempty"`
+	Sink           string   `json:"sink,omitempty"`
+	WriteMode      string   `json:"write_mode,omitempty"` // insert | upsert | append | source_order ...
+	Schedule       string   `json:"schedule,omitempty"`   // cron/periodic expression or "streaming"/"once"
+	ParallelShards int      `json:"parallel_shards,omitempty"`
+	TableMapping   bool     `json:"table_mapping,omitempty"`
+	HasDLQ         bool     `json:"has_dlq,omitempty"`
+	AllowUnsafe    bool     `json:"allow_unsafe,omitempty"`
+	DAGSources     []string `json:"dag_sources,omitempty"`
+	DAGTransforms  []string `json:"dag_transforms,omitempty"`
+	DAGSinks       []string `json:"dag_sinks,omitempty"`
+}
+
+// buildSpecSummary derives the secret-free summary from a linear or DAG spec.
+// It returns nil when neither spec is available (restores rely on restore_error).
+func buildSpecSummary(spec *pipeline.Spec, dagSpec *orchestrator.PipelineSpec) *specSummary {
+	if spec == nil && dagSpec == nil {
+		return nil
+	}
+	summary := &specSummary{}
+	if spec != nil {
+		summary.Source = spec.Source.Type
+		switch {
+		case isCDCSource(spec.Source.Type):
+			summary.SourceMode = "cdc"
+		case hasEffectiveSchedule(spec.Schedule):
+			summary.SourceMode = "scheduled"
+		case isStreamingSource(spec.Source.Type):
+			summary.SourceMode = "streaming"
+		default:
+			summary.SourceMode = "batch"
+		}
+		for _, t := range spec.Transforms {
+			summary.Transforms = append(summary.Transforms, t.Type)
+		}
+		summary.Sink = spec.Sink.Type
+		summary.WriteMode = sinkWriteMode(spec.Sink)
+		if spec.Schedule != nil {
+			summary.Schedule = scheduleLabel(spec.Schedule)
+		}
+		if spec.Parallelism != nil {
+			spec.Parallelism.ApplyDefaults()
+			summary.ParallelShards = spec.Parallelism.LogicalShardCount()
+		}
+		summary.TableMapping = spec.TableMapping != nil
+		summary.HasDLQ = spec.DLQ != nil && spec.DLQ.Enable
+		summary.AllowUnsafe = spec.AllowUnsafe
+	}
+	if dagSpec != nil {
+		summary.SourceMode = "dag"
+		for _, n := range dagSpec.DAG.Nodes {
+			switch n.Kind {
+			case orchestrator.KindSource:
+				summary.DAGSources = append(summary.DAGSources, n.Plugin)
+			case orchestrator.KindTransform:
+				summary.DAGTransforms = append(summary.DAGTransforms, n.Plugin)
+			case orchestrator.KindSink:
+				summary.DAGSinks = append(summary.DAGSinks, n.Plugin)
+			}
+		}
+		if dagSpec.Schedule != nil {
+			switch {
+			case dagSpec.Schedule.Cron != "":
+				summary.Schedule = "cron " + dagSpec.Schedule.Cron
+			case dagSpec.Schedule.IntervalS > 0:
+				summary.Schedule = fmt.Sprintf("every %ds", dagSpec.Schedule.IntervalS)
+			default:
+				summary.Schedule = string(dagSpec.Schedule.Type)
+			}
+		}
+		summary.AllowUnsafe = dagSpec.AllowUnsafe
+	}
+	return summary
+}
+
+// isStreamingSource lists unbounded-but-not-CDC sources (polling queues/files).
+var streamingSourceTypes = map[string]bool{
+	"kafka": true,
+	"http":  true,
+	"redis": true,
+}
+
+func isStreamingSource(t string) bool {
+	return streamingSourceTypes[strings.TrimSpace(strings.ToLower(t))]
+}
+
+// hasEffectiveSchedule reports whether the schedule actually defers or
+// repeats execution. ApplyDefaultSchedule materializes {type: once} for nil
+// schedules ("start immediately") and {type: streaming} for continuous
+// sources (kafka/http/redis) — neither is a deferred/repeating schedule.
+// Only cron/periodic/dependency style types read as "scheduled".
+func hasEffectiveSchedule(sc *pipeline.ScheduleConfig) bool {
+	if sc == nil {
+		return false
+	}
+	switch strings.TrimSpace(sc.Type) {
+	case "", "once", "streaming":
+		return false
+	default:
+		return true
+	}
+}
+
+// sinkWriteMode extracts the effective write semantics for a sink config.
+func sinkWriteMode(s pipeline.SinkSpec) string {
+	if v := stringField(s.Config, "write_mode", ""); v != "" {
+		return v
+	}
+	return stringField(s.Config, "mode", "")
+}
+
+// scheduleLabel renders a schedule config as its canonical expression.
+func scheduleLabel(sc *pipeline.ScheduleConfig) string {
+	if sc == nil {
+		return ""
+	}
+	switch strings.TrimSpace(sc.Type) {
+	case "streaming":
+		return "streaming"
+	case "", "once":
+		return "once"
+	}
+	if sc.Cron != "" {
+		return "cron " + sc.Cron
+	}
+	if sc.IntervalSec > 0 {
+		return fmt.Sprintf("every %ds", sc.IntervalSec)
+	}
+	return strings.TrimSpace(sc.Type)
+}
+
 func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -1712,6 +1849,11 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				info["desired_state"] = lifecycle.DesiredState
 				info["observed_state"] = lifecycle.ObservedState
 				info["generation"] = lifecycle.Generation
+			}
+			// UI-B.1: type-level, secret-free spec summary so clients render the
+			// real topology/mode instead of guessing from tags.
+			if summary := buildSpecSummary(spec, dagSpec); summary != nil {
+				info["spec_summary"] = summary
 			}
 			if spec != nil && spec.Parallelism != nil {
 				spec.Parallelism.ApplyDefaults()

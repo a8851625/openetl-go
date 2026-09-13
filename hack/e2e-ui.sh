@@ -736,6 +736,27 @@ for _ in $(seq 1 10); do
   sleep 0.5
 done
 check "A4.3: DLQ preview labelled with loaded-scope or healthy empty state" "$a4_dlq_label"
+# ── UI-B.1: spec_summary-backed truth ────────────────────────────────────
+echo "==> UI-B.1 spec_summary checks"
+# Seed one scheduled batch and one streaming pipeline, then assert the list
+# renders their real source/sink path and mode from spec_summary (not tags).
+curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" -H 'Content-Type: application/json' \
+  -d '{"spec":{"name":"b1-cron-probe","source":{"type":"file","config":{"path":"/app/testdata/files/customers.jsonl","format":"json"}},"sink":{"type":"file_sink","config":{"output_dir":"/app/data/output/b1c","format":"jsonl"}},"batch_size":10,"checkpoint_interval_sec":1,"schedule":{"type":"cron","cron":"0 * * * *"}}}' >/dev/null || true
+curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" -H 'Content-Type: application/json' \
+  -d '{"spec":{"name":"b1-kafka-probe","source":{"type":"kafka","config":{"brokers":["host.docker.internal:19092"],"topic":"t","group_id":"b1-e2e","format":"json"}},"sink":{"type":"file_sink","config":{"output_dir":"/app/data/output/b1k","format":"jsonl"}},"batch_size":10,"checkpoint_interval_sec":1,"allow_unsafe":true}}' >/dev/null || true
+playwright-cli open "${BASE_URL}/?e2e=$(date +%s)" >/dev/null
+sleep 2
+evaljs "(() => { window.location.hash = '#/pipelines'; return true; })()" >/dev/null
+b1_row="false"
+for _ in $(seq 1 15); do
+  b1_row="$(evaljs "Array.from(document.querySelectorAll('.pipeline-row')).some(r=>r.textContent.includes('b1-kafka-probe'))")"
+  if [[ "$b1_row" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "B1.1: kafka pipeline renders real source mode streaming" "$(evaljs "(() => { const r=Array.from(document.querySelectorAll('.pipeline-row')).find(x=>x.textContent.includes('b1-kafka-probe')); return r ? r.textContent.includes('streaming') : false; })()")"
+check "B1.2: path shows real kafka → file_sink topology" "$(evaljs "(() => { const r=Array.from(document.querySelectorAll('.pipeline-row')).find(x=>x.textContent.includes('b1-kafka-probe')); if(!r) return false; return r.textContent.includes('kafka') && r.textContent.includes('file_sink'); })()")"
+check "B1.3: cron pipeline renders scheduled mode" "$(evaljs "(() => { const r=Array.from(document.querySelectorAll('.pipeline-row')).find(x=>x.textContent.includes('b1-cron-probe')); return r ? r.textContent.includes('scheduled') : false; })()")"
+
 
 echo "==> Seed DLQ replay fixture"
 curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \

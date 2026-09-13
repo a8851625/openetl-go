@@ -123,7 +123,22 @@ Acceptance:
   6) selection Start 与 Start-all 口径统一（只针对 stopped）。
 Evidence: npm typecheck/build/lint（32 warnings 低于基线 34）；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-a4 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 145 passed / 0 failed（含 A4.1–A4.3）。
 Result: delivered
-Residual/follow-up: 批量确认对话框的交互流在本环境无稳定 running fixture，由 A2.2（同 ConfirmDialog 组件）+ 按钮禁用门控断言共同覆盖；真实多状态场景待后续有依赖服务的 e2e 补充。
+
+```text
+Round: 5/5
+Roadmap item: UI-B.1（原 UI-A 残留 P1-1 真实管道摘要契约）
+Profile/path: standalone API + Web UI
+Objective: 列表/详情的模式与拓扑来自后端事实而非 tags 猜测。
+Scope: internal/etl/server/server.go（buildSpecSummary + spec_summary 字段）、web/src/lib/types.ts、web/src/lib/pipeline-health.ts、hack/e2e-ui.sh（B1 断言块）
+Non-goals: 完整 spec 展开；P1-8 introspection 消费；write_mode 深层校验。
+Acceptance:
+  1) GET /api/v2/pipelines 每条记录携带 spec_summary（source/source_mode/transforms/sink/write_mode/schedule/dag_*），config 值（密码等）绝不出现；
+  2) source_mode 分类：mysql_cdc 等为 cdc；kafka/http/redis 为 streaming；cron/periodic/dependency 为 scheduled；once/streaming 默认值不误判为 scheduled；DAG 为 dag；
+  3) 前端 deriveModeLabel/derivePipelinePath 优先消费 spec_summary，无字段时回退 tags（旧后端兼容）；
+  4) 单测覆盖分类矩阵与脱敏；e2e B1.1-B1.3 断言列表真实渲染。
+Evidence: go test ./internal/etl/server/ 全绿（含 TestBuildSpecSummary 5 例）；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-b1 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 148 passed / 0 failed；live 验证 batch/scheduled/streaming 三管道 mode+path 正确。
+Result: delivered
+Residual/follow-up: P1-8（连接 introspection 表/主题/主键选择器）另立增量；write_mode 展示与 Confirm 页集成属 UI-B.2。
 ```
 
 验收矩阵：

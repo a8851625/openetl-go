@@ -98,8 +98,18 @@ export function findMetric(
   return metrics.find((x) => (x.id && x.id === p.id) || x.name === p.name);
 }
 
-/** Infer a short Source → Transform → Sink path from available runtime fields. */
+/** Derive a short Source → Transform → Sink path from spec_summary (UI-B.1), falling back to tags. */
 export function derivePipelinePath(p: Pipeline): { source: string; transform: string; sink: string } {
+  const sum = p.spec_summary;
+  if (sum && (sum.source || sum.sink || (sum.dag_sources && sum.dag_sources.length))) {
+    const source = sum.source || (sum.dag_sources && sum.dag_sources.length ? sum.dag_sources.join(' + ') : 'Source');
+    const sink = sum.sink || (sum.dag_sinks && sum.dag_sinks.length ? sum.dag_sinks.join(' + ') : 'Sink');
+    const tfCount = sum.transforms?.length || sum.dag_transforms?.length || 0;
+    const transform = tfCount
+      ? (sum.transforms || sum.dag_transforms || []).join(' + ')
+      : '—';
+    return { source, transform, sink };
+  }
   const tags = p.tags || [];
   const tagHint = (prefix: string) => {
     const hit = tags.find((t) => t.toLowerCase().startsWith(prefix));
@@ -112,6 +122,9 @@ export function derivePipelinePath(p: Pipeline): { source: string; transform: st
 }
 
 export function deriveModeLabel(p: Pipeline, m?: MetricsPipeline): string {
+  // UI-B.1: authoritative mode from the backend spec summary.
+  const mode = p.spec_summary?.source_mode;
+  if (mode) return mode;
   if (m && m.cdc_lag_ms > 0) return 'CDC';
   if (p.dag) return 'DAG';
   const tags = (p.tags || []).map((t) => t.toLowerCase());
