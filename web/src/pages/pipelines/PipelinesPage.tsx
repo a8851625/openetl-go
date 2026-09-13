@@ -11,7 +11,7 @@ import {
 import { EmptyState } from '@/components/shared/empty-state';
 import { PipelineHealthBadge, HealthDot } from '@/components/shared/pipeline-health-badge';
 import { PipelinePath } from '@/components/shared/pipeline-path';
-import { confirmAction, ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import {
   api,
   getToken,
@@ -468,12 +468,9 @@ export function PipelinesPage({
     setShowVersions(false);
   }, [selected?.id, selected?.name]);
 
-  const handleDelete = (p: Pipeline) => {
-    if (!confirmAction(t('pipe.confirmDelete').replace('{name}', p.name))) return;
-    onAction(t('pipe.deleted').replace('{name}', p.name), () =>
-      api(`/api/v2/pipelines/${pipelineRef(p)}`, { method: 'DELETE' }),
-    );
-  };
+  // UI-B.3: delete confirms via the shared dialog instead of window.confirm.
+  const [pendingDelete, setPendingDelete] = useState<Pipeline | null>(null);
+  const handleDelete = (p: Pipeline) => setPendingDelete(p);
 
   const handleExport = async (p: Pipeline) => {
     try {
@@ -895,6 +892,22 @@ export function PipelinesPage({
           </Card>
         </div>
       )}
+      <ConfirmDialog
+        open={pendingDelete != null}
+        onOpenChange={(o) => { if (!o) setPendingDelete(null); }}
+        title={t('pipe.confirmDeleteTitle')}
+        description={t('pipe.confirmDelete').replace('{name}', pendingDelete?.name ?? '')}
+        confirmLabel={t('pipe.delete')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          onAction(t('pipe.deleted').replace('{name}', pendingDelete.name), () =>
+            api(`/api/v2/pipelines/${pipelineRef(pendingDelete)}`, { method: 'DELETE' }),
+          );
+          setPendingDelete(null);
+        }}
+      />
     </>
   );
 }

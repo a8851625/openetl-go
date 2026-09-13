@@ -47,6 +47,9 @@ const dict: Dict = {
 
   // ── Top bar ──
   'top.autorefresh': { en: 'Auto-refresh 5s', zh: '自动刷新 5秒' },
+  'top.autorefreshPaused': { en: 'Auto-refresh paused', zh: '自动刷新已暂停' },
+  'top.autorefreshPausedTitle': { en: 'Resume 5s auto-refresh', zh: '恢复 5 秒自动刷新' },
+  'top.autorefreshFailed': { en: 'Refresh failed · retrying', zh: '刷新失败 · 重试中' },
   'top.reloadSpecs': { en: 'Reload Specs', zh: '重载配置' },
   'top.dlqWorkbench': { en: 'DLQ Workbench', zh: '死信队列工作台' },
 
@@ -215,6 +218,7 @@ const dict: Dict = {
     zh: '危险动作。重置后将从更早位点重放；upsert 可吸收重复，insert-only 会扩大重复边界。',
   },
   'pipe.resetConfirmPh': { en: 'Type {name} to confirm', zh: '键入 {name} 确认' },
+  'pipe.confirmResetTitle': { en: 'Reset checkpoint', zh: '重置检查点' },
   'pipe.confirmReset': {
     en: 'Reset checkpoint for "{name}"? Replay may produce duplicates.',
     zh: '确认重置管道 "{name}" 的检查点？重放可能产生重复。',
@@ -254,6 +258,7 @@ const dict: Dict = {
   'pipe.preview': { en: 'Preview', zh: '预览' },
   'pipe.dag': { en: 'DAG', zh: 'DAG 图' },
   'pipe.versions': { en: 'Versions', zh: '版本' },
+  'pipe.confirmDeleteTitle': { en: 'Delete pipeline', zh: '删除管道' },
   'pipe.confirmDelete': { en: 'Delete pipeline "{name}" and its checkpoint? This cannot be undone.', zh: '确认删除管道 "{name}" 及其检查点？此操作不可撤销。' },
   'pipe.previewTitle': { en: 'Runtime Preview', zh: '运行时预览' },
   'pipe.previewSource': { en: 'Source Stage', zh: '数据源阶段' },
@@ -272,6 +277,7 @@ const dict: Dict = {
   'pipe.versionDiff': { en: 'Diff', zh: '对比' },
   'pipe.collapseDiff': { en: 'Collapse', zh: '收起' },
   'pipe.rollback': { en: 'Rollback', zh: '回滚' },
+  'pipe.confirmRollbackTitle': { en: 'Rollback spec version', zh: '回滚配置版本' },
   'pipe.confirmRollback': { en: 'Rollback to version {version}? Current config will be saved as a new version.', zh: '回滚到版本 {version}？当前配置将被保存为新版本。' },
   'pipe.diffCurrent': { en: 'Current', zh: '当前' },
   'pipe.diffHistorical': { en: 'Historical', zh: '历史' },
@@ -344,6 +350,8 @@ const dict: Dict = {
   },
   'wizard.dlqDisableTitle': { en: 'Disable DLQ?', zh: '关闭 DLQ？' },
   'wizard.dlqDisableConfirm': { en: 'Disable anyway', zh: '仍要关闭' },
+  'sched.confirmRunNowTitle': { en: 'Run now', zh: '立即运行' },
+  'ui.cancel': { en: 'Cancel', zh: '取消' },
   'sched.confirmRunNow': {
     en: 'Run {name} now? It starts the pipeline immediately; make sure the sink can absorb replay.',
     zh: '立即运行 {name}？将立刻启动该管道；请确认 sink 可吸收重放。',
@@ -371,6 +379,7 @@ const dict: Dict = {
   'dlq.replay': { en: 'Replay', zh: '重放' },
   'dlq.delete': { en: 'Delete', zh: '删除' },
   'dlq.deleteAll': { en: 'Delete All', zh: '全部删除' },
+  'dlq.confirmDeleteAllTitle': { en: 'Delete all DLQ records', zh: '删除全部死信记录' },
   'dlq.confirmDeleteAll': { en: 'Delete ALL dead-letter records for this pipeline?', zh: '确认删除该管道的所有死信记录？' },
   'dlq.noRecords': { en: 'No DLQ records for this pipeline', zh: '该管道暂无死信记录' },
   'dlq.operation': { en: 'Operation', zh: '操作' },

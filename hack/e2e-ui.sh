@@ -820,6 +820,58 @@ evaljs "(() => { const steps=Array.from(document.querySelectorAll('button')); co
 sleep 1.5
 check "B2.5: confirm shows write mode and retry summary" "$(evaljs "!!document.querySelector('[data-testid=wizard-confirm-write-mode]') && !!document.querySelector('[data-testid=wizard-confirm-retry]')")"
 
+
+# ── UI-B.3: shared confirm dialogs + refresh control ─────────────────────
+echo "==> UI-B.3 confirm & refresh checks"
+# B3.1: pipeline delete opens the shared dialog (no native confirm).
+playwright-cli open "${BASE_URL}/?e2e=$(date +%s)" >/dev/null
+sleep 2
+evaljs "(() => { window.location.hash = '#/pipelines'; return true; })()" >/dev/null
+b3_row_ready="false"
+for _ in $(seq 1 15); do
+  b3_row_ready="$(evaljs "!!document.querySelector('.pipeline-row button[aria-label=More]')")"
+  if [[ "$b3_row_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+sleep 1
+# Radix DropdownMenu needs a real pointer click on the trigger.
+# Pause the 5s auto-refresh so re-renders cannot close the menu mid-flow.
+evaljs "(() => { const t=document.querySelector('[data-testid=auto-refresh-toggle]'); t?.click(); return true; })()" >/dev/null
+sleep 0.5
+# Radix opens on pointerdown, not click.
+evaljs "(() => { const b=document.querySelector('.pipeline-row button[aria-label=More]'); if(!b) return false; b.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:1,button:0})); b.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:1,button:0})); b.click(); return true; })()" >/dev/null
+b3_menu_open="false"
+for _ in $(seq 1 10); do
+  b3_menu_open="$(evaljs "document.querySelectorAll('[role=menuitem]').length > 0")"
+  if [[ "$b3_menu_open" == "true" ]]; then break; fi
+  sleep 0.4
+done
+playwright-cli click "[role=menuitem] >> text=Delete" >/dev/null 2>&1
+b3_dialog="false"
+for _ in $(seq 1 8); do
+  b3_dialog="$(evaljs "!!document.querySelector('[role=dialog]')")"
+  if [[ "$b3_dialog" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "B3.1: delete opens shared ConfirmDialog" "$b3_dialog"
+evaljs "(() => { const btn=Array.from(document.querySelectorAll('[role=dialog] button')).find(b=>(b.textContent||'').trim()==='Cancel'); btn?.click(); return true; })()" >/dev/null
+sleep 0.5
+# Resume auto-refresh paused for the menu flow, so B3.2 starts from running.
+evaljs "(() => { const l=document.querySelector('[data-testid=auto-refresh-label]'); if(l && (l.textContent||'').toLowerCase().includes('paused')){ const t=document.querySelector('[data-testid=auto-refresh-toggle]'); t?.click(); } return true; })()" >/dev/null
+sleep 0.5
+# B3.2: auto-refresh toggle pauses with visible state.
+b3_toggle_ready="false"
+for _ in $(seq 1 8); do
+  b3_toggle_ready="$(evaljs "!!document.querySelector('[data-testid=auto-refresh-toggle]')")"
+  if [[ "$b3_toggle_ready" == "true" ]]; then break; fi
+  sleep 0.4
+done
+evaljs "(() => { const t=document.querySelector('[data-testid=auto-refresh-toggle]'); if(t){t.click(); return true;} return false; })()" >/dev/null
+sleep 0.5
+check "B3.2: auto-refresh toggle shows paused state" "$(evaljs "(() => { const l=document.querySelector('[data-testid=auto-refresh-label]'); return l ? (l.textContent||'').toLowerCase().includes('paused') : false; })()")"
+evaljs "(() => { const t=document.querySelector('[data-testid=auto-refresh-toggle]'); t?.click(); return true; })()" >/dev/null
+sleep 0.5
+check "B3.2b: auto-refresh resumes with timestamp" "$(evaljs "(() => { const l=document.querySelector('[data-testid=auto-refresh-label]'); if(!l) return false; const txt=(l.textContent||''); return /[0-9]/.test(txt) && !txt.toLowerCase().includes('paused'); })()")"
 echo "==> Seed DLQ replay fixture"
 curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \
   -H 'Content-Type: application/json' \
@@ -1209,7 +1261,13 @@ check "K8: /api/v2/dlq works" "$(echo "$dlq_json" | grep -q '"items"' && echo tr
 # ════════════════════════════════════════════════
 echo "=== L: Auto-refresh ==="
 open_app
-check "L1: Auto-refresh label" "$(evaljs "document.body.innerText.includes('Auto-refresh')")"
+l1_ready="false"
+for _ in $(seq 1 12); do
+  l1_ready="$(evaljs "!!document.querySelector('[data-testid=auto-refresh-toggle]')")"
+  if [[ "$l1_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "L1: Auto-refresh control present" "$(evaljs "!!document.querySelector('[data-testid=auto-refresh-toggle]') && (document.body.innerText.includes('Auto-refresh') || /[0-9][0-9]?:[0-9][0-9]/.test(document.body.innerText) || document.body.innerText.includes('已暂停'))")"
 
 # ════════════════════════════════════════════════
 echo "=== M: Full Chinese Switch E2E ==="

@@ -156,7 +156,22 @@ Acceptance:
   7) Confirm 页新增 Write mode、Retry/buffer、Schedule 行（提交语义可见）。
 Evidence: npm typecheck 0 错误；lint 30 warnings（低于 34 基线，净减 2：清除 plugins/recommendationValue 未用变量）；build 2.33s；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-b2 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 153 passed / 0 failed（新增 B2.1–B2.5）。
 Result: delivered
-Residual/follow-up: P1-8 另立增量；window.confirm 替换与 i18n 全量属后续轮次。
+
+```text
+Round: 3/5（UI-B 窗口）
+Roadmap item: UI-B.3（window.confirm 统一替换 + 自动刷新控制）
+Profile/path: standalone Web UI
+Objective: 破坏性操作全部走共享 ConfirmDialog；自动刷新可暂停并带新度/失败反馈。
+Scope: web/src/{SchedulesPage,DLQPage,main.tsx,i18n.ts,pages/pipelines/{PipelinesPage,PipelineDetailPage,pipeline-modals}.tsx,components/{layout/app-shell,shared/confirm-dialog}.tsx}、hack/e2e-ui.sh（B3 断言块）
+Non-goals: ConfirmDialog pending/error 态（后续）；P1-8；i18n 全量。
+Acceptance:
+  1) 全部 6 处 window.confirm/confirmAction 调用点（Schedules Run now、DLQ Delete all、版本回滚×2、checkpoint reset、管道删除）替换为声明式 ConfirmDialog；confirmAction 导出删除，仓库 0 残留；
+  2) 自动刷新：topbar 控件可暂停/恢复（aria-pressed），label 显示上次刷新时间或 paused/failed 态；暂停后 5s interval 停止；
+  3) 新增 i18n 键（ui.cancel、各确认标题、autorefresh 态）双语；
+  4) e2e B3.1–B3.2b + L1 适配全绿。
+Evidence: npm typecheck 0 错误；lint 29 warnings（再减 1）；build 2.50s；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-b3 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 156 passed / 0 failed。
+Result: delivered
+Residual/follow-up: ConfirmDialog 无 pending/禁用态（连点防护）——小项；P1-8 introspection 消费仍待立。
 ```
 
 验收矩阵：

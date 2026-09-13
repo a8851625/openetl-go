@@ -15,7 +15,7 @@ import {
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { StatusDot, ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
-import { confirmAction } from '@/components/shared/confirm-dialog';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { ScheduleEditorDialog } from '@/components/schedule-editor-dialog';
 import { getToken } from '@/lib/api';
 
@@ -187,10 +187,12 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
     }
   };
 
+  // UI-B.3: pending-confirmation state instead of window.confirm.
+  const [pendingRunNow, setPendingRunNow] = useState(false);
   const runNow = async () => {
     if (!selected) return;
     // UI-A.4 (P1-18): Run now is a high-impact action — confirm first.
-    if (!confirmAction(t('sched.confirmRunNow').replace('{name}', selectedName || selected))) return;
+    // UI-B.3: replaced the blocking window.confirm with the shared dialog.
     setBusy(true);
     setError('');
     setMessage('');
@@ -263,7 +265,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
                   size="sm"
                   variant="secondary"
                   disabled={busy || !selected}
-                  onClick={runNow}
+                  onClick={() => setPendingRunNow(true)}
                 >
                   {t('sched.runNow')}
                 </Button>
@@ -450,6 +452,16 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
         pipelineName={selectedName}
         onClose={() => setEditorOpen(false)}
         onSaved={() => setRefreshKey((n) => n + 1)}
+      />
+      <ConfirmDialog
+        open={pendingRunNow}
+        onOpenChange={setPendingRunNow}
+        title={t('sched.confirmRunNowTitle')}
+        description={t('sched.confirmRunNow').replace('{name}', selectedName || selected)}
+        confirmLabel={t('sched.runNow')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={() => runNow()}
       />
     </div>
   );

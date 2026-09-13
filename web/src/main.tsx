@@ -56,6 +56,10 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [llmConfig, setLLMConfig] = useState({ base_url: '', model: '', api_key: '' });
   const [distributedHint, setDistributedHint] = useState(false);
+  // UI-B.3: user-controllable auto-refresh with last-success/failure feedback.
+  const [autoPaused, setAutoPaused] = useState(false);
+  const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null);
+  const [lastRefreshFailed, setLastRefreshFailed] = useState(false);
   const autoRefresh = useRef(setInterval(() => {}, 99999));
 
   const t = useCallback((key: string) => translate(key, lang), [lang]);
@@ -66,6 +70,16 @@ function App() {
   const pluginSchema = useApi<any>('/api/v2/plugins/schema', refreshKey);
   const checkpoints = useApi<{ checkpoints: Checkpoint[] }>('/api/v2/checkpoints', refreshKey);
   const audit = useApi<{ events: AuditEvent[] }>('/api/v2/audit?limit=50', refreshKey);
+
+  // UI-B.3: surface refresh recency/failure (drives the topbar indicator).
+  useEffect(() => {
+    if (pipelines.loading) return;
+    if (pipelines.error) setLastRefreshFailed(true);
+    else {
+      setLastRefreshFailed(false);
+      setLastRefreshAt(new Date().toLocaleTimeString());
+    }
+  }, [pipelines.loading, pipelines.error, refreshKey]);
 
   const pipelinesList = normalizePipelines(pipelines.data);
   const metricsList = metrics.data?.pipelines || [];
@@ -130,9 +144,10 @@ function App() {
 
   useEffect(() => {
     clearInterval(autoRefresh.current);
+    if (autoPaused) return;
     autoRefresh.current = setInterval(() => setRefreshKey((n) => n + 1), 5000);
     return () => clearInterval(autoRefresh.current);
-  }, []);
+  }, [autoPaused]);
 
   const toast: ToastFn = useCallback((type, msg) => {
     showToast(type, msg);
@@ -322,6 +337,13 @@ function App() {
         }
         reloadLabel={t('top.reloadSpecs')}
         autoRefreshLabel={t('top.autorefresh')}
+        autoRefreshPausedLabel={t('top.autorefreshPaused')}
+        autoRefreshPausedTitle={t('top.autorefreshPausedTitle')}
+        autoRefreshFailedLabel={t('top.autorefreshFailed')}
+        autoPaused={autoPaused}
+        onToggleAutoRefresh={() => setAutoPaused((v) => !v)}
+        lastRefreshAt={lastRefreshAt}
+        lastRefreshFailed={lastRefreshFailed}
         hasRunning={pipelinesList.some((p) => p.status === 'running')}
         issueCount={issueCount}
       >

@@ -101,6 +101,13 @@ type AppShellProps = {
   onReloadSpecs: () => void;
   reloadLabel: string;
   autoRefreshLabel: string;
+  autoRefreshPausedLabel: string;
+  autoRefreshPausedTitle: string;
+  autoRefreshFailedLabel: string;
+  autoPaused?: boolean;
+  onToggleAutoRefresh?: () => void;
+  lastRefreshAt?: string | null;
+  lastRefreshFailed?: boolean;
   hasRunning?: boolean;
   issueCount?: number;
   crumb?: string;
@@ -262,6 +269,13 @@ export function AppShell({
   onReloadSpecs,
   reloadLabel,
   autoRefreshLabel,
+  autoRefreshPausedLabel,
+  autoRefreshPausedTitle,
+  autoRefreshFailedLabel,
+  autoPaused = false,
+  onToggleAutoRefresh,
+  lastRefreshAt = null,
+  lastRefreshFailed = false,
   hasRunning = false,
   issueCount = 0,
   crumb,
@@ -366,15 +380,30 @@ export function AppShell({
 
               {/* UI-A.4 (P2-1): dead notifications button removed until a real notification center exists. */}
 
-              {/* Keep Auto-refresh text in DOM for e2e/a11y (visually subtle). */}
-              <span className="hidden text-xs text-muted-foreground lg:inline" data-testid="auto-refresh-label">
-                {autoRefreshLabel}
-              </span>
-              <span
-                className={cn('status-dot', hasRunning ? 'status-running' : 'status-stopped')}
-                aria-hidden
-                title={autoRefreshLabel}
-              />
+              {/* UI-B.3: auto-refresh is user-controllable with recency/failure feedback. */}
+              <button
+                type="button"
+                data-testid="auto-refresh-toggle"
+                aria-pressed={autoPaused}
+                title={autoPaused ? autoRefreshPausedTitle : autoRefreshLabel}
+                onClick={() => onToggleAutoRefresh?.()}
+                className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted"
+              >
+                <span
+                  className={cn(
+                    'status-dot',
+                    lastRefreshFailed ? 'status-stopped' : hasRunning ? 'status-running' : 'status-stopped',
+                  )}
+                  aria-hidden
+                />
+                <span data-testid="auto-refresh-label">
+                  {autoPaused
+                    ? autoRefreshPausedLabel
+                    : lastRefreshFailed
+                      ? autoRefreshFailedLabel
+                      : lastRefreshAt || autoRefreshLabel}
+                </span>
+              </button>
 
               {/* Compact lang toggle kept for e2e title=Switch language + user discoverability */}
               <Button

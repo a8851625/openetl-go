@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { StatusDot, ToneBadge } from '@/components/shared/status-badge';
-import { confirmAction } from '@/components/shared/confirm-dialog';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { api, normalizePipelines, pipelineKey, pipelineRef, useApi } from '@/lib/api';
 import { fmtTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -123,6 +123,9 @@ function SampleRow({
 }
 
 export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
+
+  // UI-B.3: pending confirmation for destructive DLQ purge.
+  const [pendingPurge, setPendingPurge] = useState(false);
   const [filter, setFilter] = useState('');
   const [pipeFilter, setPipeFilter] = useState('');
   const [showBacklogOnly, setShowBacklogOnly] = useState(false);
@@ -368,15 +371,7 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
                 variant="destructive"
                 size="sm"
                 disabled={!selected}
-                onClick={() => {
-                  if (!confirmAction(t('dlq.confirmDeleteAll'))) return;
-                  onAction(`${t('toast.deleteDlq')}: ${selected!.name}`, () => {
-                    const q = filter ? `?contains=${encodeURIComponent(filter)}` : '';
-                    return api(`/api/v2/dlq/${selectedRef}${q}`, { method: 'DELETE' }).then(() =>
-                      setRefreshKey((n) => n + 1),
-                    );
-                  });
-                }}
+                onClick={() => setPendingPurge(true)}
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 {t('dlq.deleteAll')}
@@ -586,6 +581,24 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
           )}
         </CardContent>
       </Card>
+      <ConfirmDialog
+        open={pendingPurge}
+        onOpenChange={setPendingPurge}
+        title={t('dlq.confirmDeleteAllTitle')}
+        description={t('dlq.confirmDeleteAll')}
+        confirmLabel={t('dlq.deleteAll')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={() => {
+          if (!selected) return;
+          onAction(`${t('toast.deleteDlq')}: ${selected.name}`, () => {
+            const q = filter ? `?contains=${encodeURIComponent(filter)}` : '';
+            return api(`/api/v2/dlq/${selectedRef}${q}`, { method: 'DELETE' }).then(() =>
+              setRefreshKey((n) => n + 1),
+            );
+          });
+        }}
+      />
     </div>
   );
 }

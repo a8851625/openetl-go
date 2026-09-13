@@ -52,8 +52,3 @@ export function ConfirmDialog({
     </Dialog>
   );
 }
-
-/** 轻量 confirm 包装：优先浏览器 confirm，保持业务逻辑简单 */
-export function confirmAction(message: string): boolean {
-  return window.confirm(message);
-}

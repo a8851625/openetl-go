@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Modal } from '@/components/shared/modal';
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
-import { confirmAction } from '@/components/shared/confirm-dialog';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { TextDiffView } from '@/components/shared/text-diff-view';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
@@ -293,11 +293,15 @@ export function PipelineVersionsModal({
     historical: string;
   } | null>(null);
 
-  const doRollback = async (version: number) => {
-    if (!confirmAction(t('pipe.confirmRollback').replace('{version}', String(version)))) return;
-    onAction(t('pipe.rolledBack').replace('{version}', String(version)), () =>
-      api(`/api/v2/pipelines/${refId}/versions/${version}/rollback`, { method: 'POST' }),
+  // UI-B.3: rollback confirms via the shared dialog instead of window.confirm.
+  const [pendingRollback, setPendingRollback] = useState<number | null>(null);
+  const doRollback = (version: number) => setPendingRollback(version);
+  const confirmRollback = () => {
+    if (pendingRollback == null) return;
+    onAction(t('pipe.rolledBack').replace('{version}', String(pendingRollback)), () =>
+      api(`/api/v2/pipelines/${refId}/versions/${pendingRollback}/rollback`, { method: 'POST' }),
     );
+    setPendingRollback(null);
     onClose();
   };
 
@@ -376,6 +380,16 @@ export function PipelineVersionsModal({
           ))}
         </div>
       )}
+      <ConfirmDialog
+        open={pendingRollback != null}
+        onOpenChange={(o) => { if (!o) setPendingRollback(null); }}
+        title={t('pipe.confirmRollbackTitle')}
+        description={t('pipe.confirmRollback').replace('{version}', String(pendingRollback ?? ''))}
+        confirmLabel={t('pipe.rollback')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={confirmRollback}
+      />
     </Modal>
   );
 }

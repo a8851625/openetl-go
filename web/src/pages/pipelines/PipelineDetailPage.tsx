@@ -7,7 +7,7 @@ import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { MiniStat, Progress } from '@/components/shared/progress';
 import { PipelineHealthBadge, HealthDot } from '@/components/shared/pipeline-health-badge';
 import { PipelinePath } from '@/components/shared/pipeline-path';
-import { confirmAction } from '@/components/shared/confirm-dialog';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { TextDiffView } from '@/components/shared/text-diff-view';
 import { api, getToken, pipelineKey, pipelineRef } from '@/lib/api';
 import { fmtTime, ratio } from '@/lib/format';
@@ -60,6 +60,10 @@ export function PipelineDetailPage({
   onOpenDesigner,
   onOpenDLQ,
 }: Props) {
+
+  // UI-B.3: destructive actions confirm via the shared dialog.
+  const [pendingReset, setPendingReset] = useState(false);
+  const [pendingRollback, setPendingRollback] = useState<number | null>(null);
   const [resetName, setResetName] = useState('');
   const [versions, setVersions] = useState<{ version: number; created_at: string }[]>([]);
   const [specYaml, setSpecYaml] = useState('');
@@ -596,12 +600,7 @@ export function PipelineDetailPage({
                     variant="destructive"
                     size="sm"
                     disabled={resetName !== pipeline.name}
-                    onClick={() => {
-                      if (!confirmAction(t('pipe.confirmReset').replace('{name}', pipeline.name)))
-                        return;
-                      onResetCheckpoint(ref, pipeline.name);
-                      setResetName('');
-                    }}
+                    onClick={() => setPendingReset(true)}
                   >
                     {t('pipe.reset')}
                   </Button>
@@ -748,13 +747,7 @@ export function PipelineDetailPage({
                               variant="destructive"
                               size="sm"
                               className="h-7"
-                              onClick={() => {
-                                if (!confirmAction(t('pipe.confirmRollback').replace('{version}', String(v.version)))) return;
-                                onAction(
-                                  t('pipe.rolledBack').replace('{version}', String(v.version)),
-                                  () => api(`/api/v2/pipelines/${ref}/versions/${v.version}/rollback`, { method: 'POST' }),
-                                );
-                              }}
+                              onClick={() => setPendingRollback(v.version)}
                             >
                               {t('pipe.rollback')}
                             </Button>
@@ -778,6 +771,36 @@ export function PipelineDetailPage({
         pipelineName={pipeline.name}
         onClose={() => setScheduleOpen(false)}
         onSaved={() => setScheduleTick((n) => n + 1)}
+      />
+      <ConfirmDialog
+        open={pendingReset}
+        onOpenChange={setPendingReset}
+        title={t('pipe.confirmResetTitle')}
+        description={t('pipe.confirmReset').replace('{name}', pipeline.name)}
+        confirmLabel={t('pipe.reset')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={() => {
+          onResetCheckpoint(ref, pipeline.name);
+          setResetName('');
+        }}
+      />
+      <ConfirmDialog
+        open={pendingRollback != null}
+        onOpenChange={(o) => { if (!o) setPendingRollback(null); }}
+        title={t('pipe.confirmRollbackTitle')}
+        description={t('pipe.confirmRollback').replace('{version}', String(pendingRollback ?? ''))}
+        confirmLabel={t('pipe.rollback')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={() => {
+          if (pendingRollback == null) return;
+          onAction(
+            t('pipe.rolledBack').replace('{version}', String(pendingRollback)),
+            () => api(`/api/v2/pipelines/${ref}/versions/${pendingRollback}/rollback`, { method: 'POST' }),
+          );
+          setPendingRollback(null);
+        }}
       />
     </div>
   );
