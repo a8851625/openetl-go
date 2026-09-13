@@ -86,6 +86,8 @@ type WizardTemplate = {
   title: string;
   descKey?: string;
   recommended?: boolean;
+  /** UI-B.2: honest badge — required inputs the template does not pre-fill. */
+  needsInputKeys?: string[];
   sourceTypes: string[];
   sinkTypes: string[];
   transforms: { type: string; config: Record<string, unknown> }[];
@@ -139,6 +141,7 @@ const WIZARD_TEMPLATES: WizardTemplate[] = [
     title: 'cdc-wide-table',
     descKey: 'wizard.cdcWideTableDesc',
     recommended: true,
+    needsInputKeys: ['lookup dsn / query (dimension DB)'],
     sourceTypes: ['mysql_cdc'],
     sinkTypes: ['clickhouse', 'mysql', 'postgresql'],
     transforms: [
@@ -151,7 +154,7 @@ const WIZARD_TEMPLATES: WizardTemplate[] = [
     tableMapping: { rules: { orders: 'order_detail_wide' } },
   },
   { id: 'database-sync', title: 'database-sync', descKey: 'wizard.databaseSync', sourceTypes: ['mysql_batch', 'mysql_cdc', 'mysql_snapshot_cdc'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'Alice', updated_at: '2026-06-27T10:00:00Z' }, metadata: { source: 'wizard', table: 'customers' } } },
-  { id: 'kafka-detail', title: 'kafka-detail', descKey: 'wizard.kafkaDetail', sourceTypes: ['kafka'], sinkTypes: ['clickhouse', 'mysql', 'postgresql'], transforms: [{ type: 'project', config: { fields: ['id', 'user_id', 'amount', 'dt'] } }, { type: 'deduplicate', config: { key_fields: ['id'] } }], sample: { operation: 'INSERT', data: { id: 1001, user_id: 42, amount: 19.5, dt: '20260627' }, metadata: { source: 'kafka', table: 'orders' } } },
+  { id: 'kafka-detail', title: 'kafka-detail', descKey: 'wizard.kafkaDetail', sourceTypes: ['kafka'], sinkTypes: ['clickhouse', 'mysql', 'postgresql'], transforms: [{ type: 'project', config: { fields: ['id', 'user_id', 'amount', 'dt'] } }, { type: 'deduplicate', config: { keys: ['id'] } }], sample: { operation: 'INSERT', data: { id: 1001, user_id: 42, amount: 19.5, dt: '20260627' }, metadata: { source: 'kafka', table: 'orders' } } },
   { id: 'debezium-cdc', title: 'debezium-cdc', descKey: 'wizard.debeziumCdc', sourceTypes: ['kafka'], sinkTypes: ['mysql', 'postgresql', 'clickhouse', 'doris'], transforms: [{ type: 'debezium_cdc', config: { skip_snapshot: true } }, { type: 'cdc_policy', config: { skip_delete: false, dangerous_ddl: 'reject' } }], sample: { operation: 'INSERT', data: { payload: { op: 'c', source: { db: 'app', table: 'orders' }, after: { id: 1, amount: 29.9 } } }, metadata: { source: 'debezium', table: 'orders' } } },
   { id: 'kafka-parser', title: 'kafka-parser', descKey: 'wizard.kafkaParser', sourceTypes: ['kafka'], sinkTypes: ['kafka', 'clickhouse', 'file_sink'], transforms: [{ type: 'flat_map', config: { script: 'return { { data = { id = record.data.id, value = record.data.value } } }' } }, { type: 'project', config: { fields: ['id', 'value'] } }], sample: { operation: 'INSERT', data: { id: 'raw-1', value: 7, payload: '010203' }, metadata: { source: 'kafka', table: 'raw' } } },
   { id: 'file-http-landing', title: 'file-http-landing', descKey: 'wizard.fileHttp', sourceTypes: ['file', 'http'], sinkTypes: ['file_sink', 's3', 'maxcompute'], transforms: [{ type: 'identity', config: {} }], sample: { operation: 'INSERT', data: { id: 1, name: 'UI Wizard', dt: '20260627' }, metadata: { source: 'wizard', table: 'landing' } } },
@@ -162,7 +165,7 @@ function defaultSourceConfig(type: string): Record<string, unknown> {
     case 'mysql_batch':
     case 'mysql_cdc':
     case 'mysql_snapshot_cdc':
-      return { host: 'host.docker.internal', port: 13306, user: 'sync_user', password: 'sync_password_123', database: 'dzh3136_go', table: 'customers', tables: ['customers'], pk_column: 'id', server_id: 12001 };
+      return { host: 'host.docker.internal', port: 13306, user: '', password: '', database: '', table: 'customers', tables: ['customers'], pk_column: 'id', server_id: 12001 };
     case 'kafka':
       return { brokers: ['host.docker.internal:19092'], topic: 'orders', group_id: 'openetl-ui-wizard', format: 'json' };
     case 'http':
@@ -177,15 +180,15 @@ function defaultSinkConfig(type: string): Record<string, unknown> {
   switch (type) {
     case 'mysql':
     case 'postgresql':
-      return { host: 'host.docker.internal', port: type === 'mysql' ? 13306 : 15432, user: 'sync_user', password: 'sync_password_123', database: 'dzh3136_go', table: 'wizard_output', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
+      return { host: 'host.docker.internal', port: type === 'mysql' ? 13306 : 15432, user: '', password: '', database: '', table: 'wizard_output', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
     case 'clickhouse':
-      return { host: 'host.docker.internal', port: 9000, database: 'default', table: 'wizard_output', username: 'default', password: 'dzh123456', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
+      return { host: 'host.docker.internal', port: 9000, database: 'default', table: 'wizard_output', username: 'default', password: '', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
     case 'doris':
-      return { host: 'host.docker.internal', port: 9030, http_port: 8030, user: 'root', database: 'dzh3136_go', table: 'wizard_output', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
+      return { host: 'host.docker.internal', port: 9030, http_port: 8030, user: 'root', database: '', table: 'wizard_output', batch_mode: 'upsert', pk_columns: ['id'], auto_create: true };
     case 'kafka':
       return { brokers: ['host.docker.internal:19092'], topic: 'ods.orders', format: 'json' };
     case 's3':
-      return { endpoint: 'http://host.docker.internal:9001', bucket: 'openetl', prefix: 'wizard/', access_key: 'minioadmin', secret_key: 'minioadmin', format: 'jsonl' };
+      return { endpoint: 'http://host.docker.internal:9001', bucket: 'openetl', prefix: 'wizard/', access_key: '', secret_key: '', format: 'jsonl' };
     case 'maxcompute':
       return { endpoint: 'http://127.0.0.1:1/api', project: 'demo_project', table: 'wizard_output', access_key_id: 'replace-me', access_key_secret: 'replace-me', columns: { id: 'BIGINT', name: 'STRING', dt: 'STRING' }, partition_fields: ['dt'] };
     case 'file_sink':
@@ -201,6 +204,23 @@ function sourceSupportsSampleSchemaHint(type: string): boolean {
 
 // UI-A.1: strict JSON parse state — never silently fall back to {} / [] when
 // the user's edited text is invalid. The wizard blocks progression instead.
+// UI-B.2 (P1-15): the runtime deduplicate transform reads `keys`; older
+// drafts and docs used `key_fields`, which the backend silently ignores
+// (falling back to whole-record keys). Normalize on submit so legacy drafts
+// keep their intent.
+function normalizeTransforms(list: unknown): { type: string; config?: Record<string, unknown> }[] {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((x): x is { type: string; config?: Record<string, unknown> } => !!x && typeof x === 'object' && typeof (x as any).type === 'string')
+    .map((t) => {
+      if (t.type === 'deduplicate' && t.config && 'key_fields' in t.config && !('keys' in t.config)) {
+        const { key_fields: keyFields, ...rest } = t.config as Record<string, unknown>;
+        return { ...t, config: { ...rest, keys: keyFields } };
+      }
+      return t;
+    });
+}
+
 function jsonParseState(text: string): { ok: boolean; error?: string } {
   try {
     JSON.parse(text);
@@ -245,7 +265,6 @@ function parseTransformList(text: string): { type: string; config: Record<string
 
 export function FirstTaskWizard({
   t,
-  plugins,
   schema,
   onClose,
   onCreated,
@@ -253,7 +272,7 @@ export function FirstTaskWizard({
   onShowToast,
 }: {
   t: TFunc;
-  plugins: any;
+
   schema: any;
   onClose: () => void;
   onCreated: (name: string) => void;
@@ -343,6 +362,13 @@ export function FirstTaskWizard({
   const [checkpointIntervalSec, setCheckpointIntervalSec] = useState(
     restored?.checkpointIntervalSec ?? 1,
   );
+  // UI-B.2 (P1-10): retry/backpressure were hidden hard-coded values; expose
+  // them as editable advanced runtime knobs (collapsed by default).
+  const [retryMaxAttempts, setRetryMaxAttempts] = useState(restored?.retryMaxAttempts ?? 3);
+  const [retryInitialMs, setRetryInitialMs] = useState(restored?.retryInitialMs ?? 100);
+  const [retryMaxMs, setRetryMaxMs] = useState(restored?.retryMaxMs ?? 1000);
+  const [backpressureBuffer, setBackpressureBuffer] = useState(restored?.backpressureBuffer ?? 100);
+  const [runtimeMoreOpen, setRuntimeMoreOpen] = useState(false);
   const [dlqEnabled, setDlqEnabled] = useState(restored?.dlqEnabled ?? true);
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   // UI-A.2: any structured edit marks the draft dirty (guards template switch).
@@ -388,8 +414,11 @@ export function FirstTaskWizard({
   const navigateToIssue = useCallback((issue: ApiIssue) => {
     const field = issue.field || '';
     let next: WizardStepId = 'safety';
-    if (field === 'name' || field.startsWith('schedule') || field.startsWith('retry') || field.startsWith('batch_') || field.startsWith('checkpoint_')) {
+    if (field === 'name') {
       next = 'scenario';
+    } else if (field.startsWith('schedule') || field.startsWith('retry') || field.startsWith('batch_') || field.startsWith('checkpoint_') || field.startsWith('backpressure_')) {
+      // These runtime knobs live on the Safety step, not Scenario.
+      next = 'safety';
     } else if (field.startsWith('source.')) {
       next = 'source';
       setSourceMoreOpen(true);
@@ -415,7 +444,13 @@ export function FirstTaskWizard({
   const sourceConfigParse = jsonParseState(sourceConfigText);
   const sinkConfigParse = jsonParseState(sinkConfigText);
   const transformsParse = jsonParseState(transformsText);
-  const tableMappingParse = tableMappingText.trim() === '' ? { ok: true } : jsonParseState(tableMappingText);
+  // UI-B.2 (P1-16): warn when a multi-table template user enters sink.table
+  // manually — table_mapping owns routing and the manual value is dropped.
+  const sinkHasManualTable = useMemo(() => {
+    if (!template.hideSinkTable) return false;
+    const cfg = parseJSONText(sinkConfigText, {}) as Record<string, unknown>;
+    return typeof cfg.table === 'string' && cfg.table.trim() !== '';
+  }, [template.hideSinkTable, sinkConfigText]);  const tableMappingParse = tableMappingText.trim() === '' ? { ok: true } : jsonParseState(tableMappingText);
   const sampleParse = jsonParseState(sampleText);
   const yamlParse = useMemo(() => {
     if (!yamlDirty) return { ok: true };
@@ -484,10 +519,6 @@ export function FirstTaskWizard({
     () => connections.filter((conn) => conn.kind === 'sink' && !template.sinkTypes.includes(conn.type)),
     [connections, template.sinkTypes],
   );
-  const recommendationValue = (field: string, fallback: number) => {
-    const rec = sourceContext?.recommendations?.find((item) => item.field === field);
-    return typeof rec?.value === 'number' ? rec.value : fallback;
-  };
   const recommendationNumber = (recommendations: ConnectionRecommendation[] | undefined, field: string, fallback: number) => {
     const rec = recommendations?.find((item) => item.field === field);
     return typeof rec?.value === 'number' ? rec.value : fallback;
@@ -525,8 +556,18 @@ export function FirstTaskWizard({
     }
     const source: Record<string, unknown> = { type: sourceType, config: sourceConfigForSpec };
     const sinkConfigForSpec = parseJSONText(sinkConfigText, {}) as Record<string, unknown>;
-    if (template.hideSinkTable) {
+    // UI-B.2 (P1-16): for multi-table templates the table_mapping owns table
+    // routing, so a manually entered sink.table would be silently wrong.
+    // Drop it from the spec but surface it as an explicit warning instead of
+    // the old silent delete.
+    if (template.hideSinkTable && 'table' in sinkConfigForSpec) {
+      const t = sinkConfigForSpec.table;
       delete sinkConfigForSpec.table;
+      const m = parseJSONText(tableMappingText, null);
+      if (!(m && typeof m === 'object' && !Array.isArray(m) && Object.keys(m).length > 0)) {
+        // No mapping present: keep the user's table rather than dropping it.
+        sinkConfigForSpec.table = t;
+      }
     }
     const sink: Record<string, unknown> = { type: sinkType, config: sinkConfigForSpec };
     if (sourceConnection) source.connection = sourceConnection;
@@ -534,12 +575,16 @@ export function FirstTaskWizard({
     const spec: Record<string, unknown> = {
       name: name.trim(),
       source,
-      transforms: parseJSONText(transformsText, []),
+      transforms: normalizeTransforms(parseJSONText(transformsText, [])),
       sink,
       batch_size: batchSize,
       checkpoint_interval_sec: checkpointIntervalSec,
-      backpressure_buffer: 100,
-      retry: { max_attempts: 3, initial_interval_ms: 100, max_interval_ms: 1000 },
+      backpressure_buffer: backpressureBuffer,
+      retry: {
+        max_attempts: retryMaxAttempts,
+        initial_interval_ms: retryInitialMs,
+        max_interval_ms: retryMaxMs,
+      },
       dlq: { enable: dlqEnabled },
       tags: ['ui-wizard', template.id],
     };
@@ -548,7 +593,7 @@ export function FirstTaskWizard({
       spec.table_mapping = tm;
     }
     return spec;
-  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, batchSize, checkpointIntervalSec, dlqEnabled, template.id, template.sample, template.hideSinkTable, tableMappingText]);
+  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, batchSize, checkpointIntervalSec, backpressureBuffer, retryMaxAttempts, retryInitialMs, retryMaxMs, dlqEnabled, template.id, template.sample, template.hideSinkTable, tableMappingText]);
 
   useEffect(() => {
     refreshConnections();
@@ -650,6 +695,11 @@ export function FirstTaskWizard({
       sinkConnection,
       batchSize,
       checkpointIntervalSec,
+      // UI-B.2 (P1-10): runtime knobs persist too (plain numbers, no secrets).
+      retryMaxAttempts,
+      retryInitialMs,
+      retryMaxMs,
+      backpressureBuffer,
       dlqEnabled,
       step,
     };
@@ -674,6 +724,10 @@ export function FirstTaskWizard({
     sinkConnection,
     batchSize,
     checkpointIntervalSec,
+    retryMaxAttempts,
+    retryInitialMs,
+    retryMaxMs,
+    backpressureBuffer,
     dlqEnabled,
     step,
     scrubSecrets,
@@ -1272,6 +1326,24 @@ export function FirstTaskWizard({
   const submittedCheckpoint = Number(submissionSpec?.checkpoint_interval_sec ?? checkpointIntervalSec);
   const submittedDlq = ((submissionSpec?.dlq as Record<string, unknown> | undefined)?.enable ?? dlqEnabled) ? 'on' : 'off';
   const submittedName = String(submissionSpec?.name ?? name);
+  // UI-B.2 (P1-13): show the delivery semantics actually being submitted.
+  const submittedWriteMode = (() => {
+    const sc = submissionSpec?.sink as { config?: Record<string, unknown> } | undefined;
+    const mode = (sc?.config?.write_mode ?? sc?.config?.mode) as string | undefined;
+    return mode || 'default (insert)';
+  })();
+  const submittedRetrySummary = (() => {
+    const r = submissionSpec?.retry as { max_attempts?: number; initial_interval_ms?: number; max_interval_ms?: number } | undefined;
+    const b = Number(submissionSpec?.backpressure_buffer ?? backpressureBuffer);
+    return `${r?.max_attempts ?? retryMaxAttempts}× / ${r?.initial_interval_ms ?? retryInitialMs}-${r?.max_interval_ms ?? retryMaxMs}ms / buf ${b}`;
+  })();
+  const submittedSchedule = (() => {
+    const sc = submissionSpec?.schedule as { type?: string; cron?: string; interval_sec?: number } | undefined;
+    if (!sc) return '';
+    if (sc.cron) return `cron ${sc.cron}`;
+    if (sc.interval_sec) return `every ${sc.interval_sec}s`;
+    return String(sc.type || '');
+  })();
   const submissionMatchesForm = !yamlDirty;
 
   const summaryPath = `${sourceType}${sourceConnection ? ` (${sourceConnection})` : ''} → ${transformConfigs.map((x) => x.type).join(' · ') || '—'} → ${sinkType}${sinkConnection ? ` (${sinkConnection})` : ''}`;
@@ -1404,6 +1476,15 @@ export function FirstTaskWizard({
                   >
                     <div className="flex items-center gap-1.5">
                       <span className="font-semibold">{tpl.title}</span>
+                      {tpl.needsInputKeys && tpl.needsInputKeys.length > 0 && (
+                        <span
+                          data-testid={`wizard-template-needs-${tpl.id}`}
+                          className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                          title={tpl.needsInputKeys.join('; ')}
+                        >
+                          {t('wizard.needsInput')} ({tpl.needsInputKeys.length})
+                        </span>
+                      )}
                       {tpl.recommended && (
                         <ToneBadge tone="emerald" className="px-1.5 py-0 text-[10px]">
                           {t('wizard.recommended')}
@@ -1514,6 +1595,11 @@ export function FirstTaskWizard({
             <div id="wizard-section-sink" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSink')}</h3>
               <p className="mb-3 text-sm text-muted-foreground">{t('wizard.sinkHint')}</p>
+              {template.hideSinkTable && sinkHasManualTable && (
+                <div data-testid="wizard-sink-table-mapping-hint" className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                  {t('wizard.sinkTableMappingHint')}
+                </div>
+              )}
               <div className="mb-3 grid gap-3 sm:grid-cols-2">
                 <div data-field-path="sink.type" tabIndex={-1}>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
@@ -1845,6 +1931,9 @@ export function FirstTaskWizard({
                       {transformJsonOpen ? 'Hide chain JSON' : 'Chain JSON'}
                     </Button>
                   </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground" data-testid="wizard-dryrun-scope-hint">
+                    {t('wizard.dryRunScope')}
+                  </p>
                   {transformJsonOpen && (
                     <>
                       <Textarea
@@ -1919,6 +2008,57 @@ export function FirstTaskWizard({
                     DLQ enabled
                   </label>
                 </div>
+                <button
+                  type="button"
+                  data-testid="wizard-runtime-more-toggle"
+                  className="mt-2 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:underline"
+                  onClick={() => setRuntimeMoreOpen((v) => !v)}
+                >
+                  {runtimeMoreOpen ? 'Hide retry & backpressure' : 'Retry & backpressure options'}
+                </button>
+                {runtimeMoreOpen && (
+                  <div data-testid="wizard-runtime-advanced" className="mt-2 grid gap-3 rounded border border-dashed border-border p-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <label className="block text-xs text-muted-foreground">
+                      <span className="mb-1 block font-medium">Retry max attempts</span>
+                      <Input
+                        data-testid="wizard-retry-max-attempts"
+                        type="number" min={1}
+                        value={retryMaxAttempts}
+                        onChange={(e) => { setRuntimeTouched(true); setRetryMaxAttempts(positiveIntValue(e.target.value, retryMaxAttempts)); }}
+                      />
+                    </label>
+                    <label className="block text-xs text-muted-foreground">
+                      <span className="mb-1 block font-medium">Retry initial ms</span>
+                      <Input
+                        data-testid="wizard-retry-initial-ms"
+                        type="number" min={1}
+                        value={retryInitialMs}
+                        onChange={(e) => { setRuntimeTouched(true); setRetryInitialMs(positiveIntValue(e.target.value, retryInitialMs)); }}
+                      />
+                    </label>
+                    <label className="block text-xs text-muted-foreground">
+                      <span className="mb-1 block font-medium">Retry max ms</span>
+                      <Input
+                        data-testid="wizard-retry-max-ms"
+                        type="number" min={1}
+                        value={retryMaxMs}
+                        onChange={(e) => { setRuntimeTouched(true); setRetryMaxMs(positiveIntValue(e.target.value, retryMaxMs)); }}
+                      />
+                    </label>
+                    <label className="block text-xs text-muted-foreground">
+                      <span className="mb-1 block font-medium">Backpressure buffer</span>
+                      <Input
+                        data-testid="wizard-backpressure-buffer"
+                        type="number" min={1}
+                        value={backpressureBuffer}
+                        onChange={(e) => { setRuntimeTouched(true); setBackpressureBuffer(positiveIntValue(e.target.value, backpressureBuffer)); }}
+                      />
+                    </label>
+                    <p className="col-span-full text-[11px] leading-relaxed text-muted-foreground">
+                      Defaults follow the spec (retry 3 / 100ms–1000ms, buffer 100). Raise retry limits only when transient sink outages are expected; each retry may re-deliver records (at-least-once).
+                    </p>
+                  </div>
+                )}
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button
@@ -2079,6 +2219,20 @@ export function FirstTaskWizard({
                     {submittedBatch} / {submittedCheckpoint}s / {submittedDlq}
                   </span>
                 </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">Write mode</span>
+                  <span className="font-mono text-xs" data-testid="wizard-confirm-write-mode">{submittedWriteMode}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">Retry / buffer</span>
+                  <span className="font-mono text-xs" data-testid="wizard-confirm-retry">{submittedRetrySummary}</span>
+                </div>
+                {submittedSchedule && (
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">Schedule</span>
+                    <span className="font-mono text-xs" data-testid="wizard-confirm-schedule">{submittedSchedule}</span>
+                  </div>
+                )}
                 <div className="flex justify-between gap-3">
                   <span className="text-muted-foreground">Template</span>
                   <span>{template.id}</span>

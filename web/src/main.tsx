@@ -383,7 +383,6 @@ function App() {
         {route.page === 'pipeline-new' && (
           <FirstTaskWizard
             t={t}
-            plugins={plugins}
             schema={pluginSchema}
             initialStep={route.step}
             onClose={() => navigate({ page: 'pipelines' })}

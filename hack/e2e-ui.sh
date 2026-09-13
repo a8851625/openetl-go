@@ -758,6 +758,68 @@ check "B1.2: path shows real kafka → file_sink topology" "$(evaljs "(() => { c
 check "B1.3: cron pipeline renders scheduled mode" "$(evaljs "(() => { const r=Array.from(document.querySelectorAll('.pipeline-row')).find(x=>x.textContent.includes('b1-cron-probe')); return r ? r.textContent.includes('scheduled') : false; })()")"
 
 
+# ── UI-B.2: wizard runtime knobs, normalization, honest defaults ──────────
+echo "==> UI-B.2 wizard logic checks"
+playwright-cli open "${BASE_URL}/?e2e=$(date +%s)" >/dev/null
+sleep 2
+evaljs "(() => { window.location.hash = '#/pipelines/new'; return true; })()" >/dev/null
+sleep 2
+# B2.1: runtime advanced knobs expose retry/backpressure and persist into YAML.
+a4_runtime_open="false"
+for _ in $(seq 1 10); do
+  a4_runtime_open="$(evaljs "(() => { const steps=Array.from(document.querySelectorAll('button')); const safety=steps.find(b=>b.textContent?.includes('Safety')); if(!safety) return false; safety.click(); return true; })()")"
+  if [[ "$a4_runtime_open" == "true" ]]; then break; fi
+  sleep 0.5
+done
+sleep 1.5
+evaljs "(() => { const btn=document.querySelector('[data-testid=wizard-runtime-more-toggle]'); if(btn){btn.click(); return true;} return false; })()" >/dev/null
+sleep 0.5
+b2_adv="false"
+for _ in $(seq 1 8); do
+  b2_adv="$(evaljs "!!document.querySelector('[data-testid=wizard-retry-max-attempts]') && !!document.querySelector('[data-testid=wizard-backpressure-buffer]')")"
+  if [[ "$b2_adv" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "B2.1: retry & backpressure inputs exposed" "$b2_adv"
+B2_VAL_JSON=$(printf '%s' "5" | base64 | tr -d '\n')
+evaljs "(() => { const el=document.querySelector('[data-testid=wizard-retry-max-attempts]'); if(!el) return false; const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set; setter.call(el, atob('$B2_VAL_JSON')); el.dispatchEvent(new Event('input',{bubbles:true})); return true; })()" >/dev/null
+sleep 1.5
+# The generated-YAML editor lives behind the advanced-checks toggle.
+evaljs "(() => { const btn=document.querySelector('[data-testid=wizard-advanced-checks]'); if(btn){btn.click(); return true;} return false; })()" >/dev/null
+b2_yaml_ready="false"
+for _ in $(seq 1 10); do
+  b2_yaml_ready="$(evaljs "!!document.querySelector('[data-testid=wizard-yaml]')")"
+  if [[ "$b2_yaml_ready" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "B2.2: retry override flows into generated YAML" "$(evaljs "(() => { const y=document.querySelector('[data-testid=wizard-yaml]'); if(!y) return false; return y.value.includes('max_attempts: 5'); })()")"
+# B2.3: demo credentials are no longer pre-filled.
+evaljs "(() => { const steps=Array.from(document.querySelectorAll('button')); const src=steps.find(b=>b.textContent?.includes('Source')); if(src){src.click(); return true;} return false; })()" >/dev/null
+b2_src_ready="false"
+for _ in $(seq 1 12); do
+  b2_src_ready="$(evaljs "!!document.querySelector('[data-testid=wizard-source-config-form]')")"
+  if [[ "$b2_src_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+evaljs "(() => { const f=document.querySelector('[data-testid=wizard-source-config-form]'); Array.from(f?.querySelectorAll('button')||[]).find(b=>b.textContent?.trim()==='JSON')?.click(); return true; })()" >/dev/null
+b2_json_ready="false"
+for _ in $(seq 1 12); do
+  b2_json_ready="$(evaljs "!!document.querySelector('[data-testid=wizard-source-config-form-json]')")"
+  if [[ "$b2_json_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "B2.3: mysql defaults carry no demo password" "$(evaljs "(() => { const el=document.querySelector('[data-testid=wizard-source-config-form-json]'); if(!el) return false; return !el.value.includes('sync_password_123'); })()")"
+# B2.4: cdc-wide-table template carries a needs-completion badge.
+evaljs "(() => { const steps=Array.from(document.querySelectorAll('button')); const sc=steps.find(b=>b.textContent?.includes('Scenario')); if(sc){sc.click(); return true;} return false; })()" >/dev/null
+sleep 1.5
+check "B2.4: needs-completion badge on cdc-wide-table" "$(evaljs "!!document.querySelector('[data-testid=wizard-template-needs-cdc-wide-table]')")"
+# B2.5: confirm step surfaces write mode + retry summary (file template path).
+evaljs "(() => { const steps=Array.from(document.querySelectorAll('button')); const safety=steps.find(b=>b.textContent?.includes('Safety')); if(safety){safety.click(); return true;} return false; })()" >/dev/null
+sleep 1.5
+evaljs "(() => { const steps=Array.from(document.querySelectorAll('button')); const cf=steps.find(b=>b.textContent?.includes('Confirm')); if(cf){cf.click(); return true;} return false; })()" >/dev/null
+sleep 1.5
+check "B2.5: confirm shows write mode and retry summary" "$(evaljs "!!document.querySelector('[data-testid=wizard-confirm-write-mode]') && !!document.querySelector('[data-testid=wizard-confirm-retry]')")"
+
 echo "==> Seed DLQ replay fixture"
 curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \
   -H 'Content-Type: application/json' \

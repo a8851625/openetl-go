@@ -659,6 +659,18 @@ const dict: Dict = {
     en: 'Switch and reset',
     zh: '切换并重置',
   },
+  'wizard.dryRunScope': {
+    en: 'Dry-run validates transforms against the single sample record only — it does not test the real source schema, sink writes, checkpoints or replay.',
+    zh: 'Dry-run 仅针对单条样例记录验证转换 —— 不检验真实 source 结构、sink 写入、checkpoint 或重放。',
+  },
+  'wizard.needsInput': {
+    en: 'Needs completion',
+    zh: '需补全配置',
+  },
+  'wizard.sinkTableMappingHint': {
+    en: 'This multi-table template routes tables via table mapping — the manually entered sink table is ignored on submit. Define routing in the transform step table mapping instead.',
+    zh: '此多表模板通过表映射路由表 —— 手动填写的 sink 表在提交时会被忽略。请在转换步骤的表映射中定义路由。',
+  },
   'wizard.experimentalSink': {
     en: 'Experimental · writer disabled',
     zh: '实验性 · 写入未启用',

@@ -138,7 +138,25 @@ Acceptance:
   4) 单测覆盖分类矩阵与脱敏；e2e B1.1-B1.3 断言列表真实渲染。
 Evidence: go test ./internal/etl/server/ 全绿（含 TestBuildSpecSummary 5 例）；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-b1 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 148 passed / 0 failed；live 验证 batch/scheduled/streaming 三管道 mode+path 正确。
 Result: delivered
-Residual/follow-up: P1-8（连接 introspection 表/主题/主键选择器）另立增量；write_mode 展示与 Confirm 页集成属 UI-B.2。
+
+```text
+Round: 2/5（UI-B 窗口）
+Roadmap item: UI-B.2（向导逻辑小项打包：P1-10/11/13/15/16 + demo 凭据 + 模板诚实标注）
+Profile/path: standalone Web UI wizard
+Objective: Safety 隐藏参数显式化；错误导航修正；deduplicate 字段归一；多表 sink.table 诚实处理；凭据/模板/文案诚实。
+Scope: web/src/pages/pipelines/first-task-wizard.tsx、web/src/i18n.ts、web/src/main.tsx（移除未用 plugins prop）、hack/e2e-ui.sh（B2 断言块）
+Non-goals: P1-8 introspection 消费；window.confirm 全量替换；i18n 全量覆盖。
+Acceptance:
+  1) P1-10 Safety 新增折叠式 Retry & backpressure 区（max_attempts/initial_ms/max_ms/buffer 可编辑，持久化进草稿与 YAML）；
+  2) P1-11 navigateToIssue 将 schedule/retry/batch_/checkpoint_/backpressure_ 类字段错误路由到 Safety（原误路由 Scenario）；
+  3) P1-15 deduplicate 配置归一：提交时 key_fields→keys（后端只认 keys，旧字段被静默忽略导致全记录去重）；模板自身改用 keys；
+  4) P1-16 多表模板不再静默丢 sink.table：mapping 存在时才丢弃并显示琥珀提示（wizard-sink-table-mapping-hint）；无 mapping 时保留用户输入；
+  5) demo 凭据（sync_password_123/dzh123456/minioadmin/dzh3136_go 库名）全部清空为空串占位，首填界面不再展示示例密码；
+  6) cdc-wide-table 模板卡显示 Needs completion 徽标（lookup dsn/query 未预填）；transform dry-run 按钮旁新增作用域提示（仅单样例，不验 source/sink/checkpoint）；
+  7) Confirm 页新增 Write mode、Retry/buffer、Schedule 行（提交语义可见）。
+Evidence: npm typecheck 0 错误；lint 30 warnings（低于 34 基线，净减 2：清除 plugins/recommendationValue 未用变量）；build 2.33s；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-b2 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 153 passed / 0 failed（新增 B2.1–B2.5）。
+Result: delivered
+Residual/follow-up: P1-8 另立增量；window.confirm 替换与 i18n 全量属后续轮次。
 ```
 
 验收矩阵：
