@@ -171,7 +171,23 @@ Acceptance:
   4) e2e B3.1–B3.2b + L1 适配全绿。
 Evidence: npm typecheck 0 错误；lint 29 warnings（再减 1）；build 2.50s；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-b3 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 156 passed / 0 failed。
 Result: delivered
-Residual/follow-up: ConfirmDialog 无 pending/禁用态（连点防护）——小项；P1-8 introspection 消费仍待立。
+
+```text
+Round: 4/5（UI-B 窗口）
+Roadmap item: UI-B.4（P1-8 连接 introspection 消费）
+Profile/path: standalone Web UI
+Objective: 向导消费连接探测数据——库/表/topic 选择器与列/PK/目标事实展示，替代手填。
+Scope: web/src/{pages/pipelines/first-task-wizard.tsx,i18n.ts,lib/types.ts}、hack/e2e-ui.sh（B4 断言块）
+Non-goals: 连接管理页改造；introspection 后端扩展（现有 API 已足够）。
+Acceptance:
+  1) mysql/pg/CH/doris 家族 source/sink：database 下拉 → 表下拉（显示 PK），选中写回 config（source 且有 PK 时自动填 pk_columns）；
+  2) kafka：topic 下拉（分区数提示）；
+  3) file/S3 sink：目标事实（kind/location/prefix/exists/writable）展示；
+  4) file/http/demo source：schema chips（列名+类型）展示；
+  5) 选择写回通过 mergeConfigText 保留用户其余手填项。
+Evidence: npm typecheck 0 错误；lint 29 warnings 持平；build 2.63s；CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-b4 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 158 passed / 0 failed（B4.1 schema chips、B4.2 sink target facts）。
+Result: delivered
+Residual/follow-up: db/table picker 对真实 MySQL/CH 连接的 e2e 留待有依赖容器的环境；wizard i18n 全量、全局搜索按钮、Dashboard 密度、行交互模型为小项池。
 ```
 
 验收矩阵：

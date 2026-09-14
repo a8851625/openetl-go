@@ -263,6 +263,25 @@ function parseTransformList(text: string): { type: string; config: Record<string
 }
 
 
+
+// UI-B.4 (P1-8): helpers that merge introspection-driven picks into the
+// editable JSON config text without discarding user edits.
+function mergeConfigText(text: string, patch: Record<string, unknown>): string {
+  const parsed = parseJSONText(text, null);
+  const base = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+  return prettyJSON({ ...base, ...patch });
+}
+
+type IntroTable = NonNullable<ConnectionContext['introspection']>['tables'] extends (infer T)[] | undefined ? T : never;
+
+function tablesForDatabase(tables: IntroTable[] | undefined, database: string): IntroTable[] {
+  if (!tables) return [];
+  if (!database) return tables;
+  return tables.filter((tb) => (tb.database || tb.schema || '') === database);
+}
+
 export function FirstTaskWizard({
   t,
   schema,
@@ -357,6 +376,8 @@ export function FirstTaskWizard({
   const [sourceConnection, setSourceConnection] = useState(restored?.sourceConnection || '');
   const [sinkConnection, setSinkConnection] = useState(restored?.sinkConnection || '');
   const [sourceContext, setSourceContext] = useState<ConnectionContext | null>(null);
+  // UI-B.4 (P1-8): selected database for introspection-driven table pickers.
+  const [currentDatabase, setCurrentDatabase] = useState('');
   const [sinkContext, setSinkContext] = useState<ConnectionContext | null>(null);
   const [batchSize, setBatchSize] = useState(restored?.batchSize ?? 100);
   const [checkpointIntervalSec, setCheckpointIntervalSec] = useState(
@@ -838,6 +859,8 @@ export function FirstTaskWizard({
     const data = await api<ConnectionContext>(`/api/v2/connections/${encodeURIComponent(name)}/context`);
     if (target === 'source') {
       if (data.connection?.type) setSourceType(data.connection.type);
+      const introDb = data.introspection?.databases?.[0] || String((data.connection?.config as Record<string, unknown>)?.database || '');
+      setCurrentDatabase(introDb || String(((data.introspection?.tables || [])[0]?.database) || ''));
       setSourceConfigText(prettyJSON(seedBehaviorConfig('source', data.connection?.type || sourceType)));
       const firstSample = data.introspection?.sample?.[0];
       if (firstSample) setSampleText(prettyJSON(firstSample));
@@ -1194,17 +1217,33 @@ export function FirstTaskWizard({
     );
   };
 
-  const renderConnectionContext = (title: string, ctx: ConnectionContext | null) => {
+  const renderConnectionContext = (title: 'Source' | 'Sink', ctx: ConnectionContext | null) => {
     if (!ctx) return null;
     const intro = ctx.introspection;
     const ok = intro?.ok !== false;
     const name = ctx.connection?.name || 'connection';
     const status = intro?.status || ctx.connection?.last_status || 'ready';
     const recCount = ctx.recommendations?.length || 0;
+    const isSource = title === 'Source';
+    const introDatabases = intro?.databases || [];
+    const introTables = tablesForDatabase(intro?.tables, currentDatabase);
+    const introTopics = intro?.topics || [];
+    const currentCfg = parseJSONText(isSource ? sourceConfigText : sinkConfigText, {}) as Record<string, unknown>;
+    const supportsDbTable = isSource
+      ? ['mysql_batch', 'mysql_cdc', 'mysql_snapshot_cdc', 'postgres_cdc'].includes(sourceType)
+      : ['mysql', 'postgres', 'postgresql', 'clickhouse', 'doris'].includes(sinkType);
+    const isKafka = (isSource ? sourceType : sinkType) === 'kafka';
+    const cfgTable = String(currentCfg.table || currentCfg.tables || '');
+    const selectedTableMeta = introTables.find((tb) => tb.name === cfgTable);
+    const applyPick = (patch: Record<string, unknown>) => {
+      if (isSource) setSourceConfigText(mergeConfigText(sourceConfigText, patch));
+      else setSinkConfigText(mergeConfigText(sinkConfigText, patch));
+      setWizardTouched(true);
+    };
     return (
       <div
         className={`mb-2 rounded-lg border px-3 py-2 text-xs ${ok ? 'border-primary/20 bg-accent/50' : 'border-rose-200 bg-rose-50'}`}
-        data-testid={`${title.toLowerCase().replace(/\s+/g, '-')}-context`}
+        data-testid={`${title.toLowerCase()}-context`}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="font-medium text-slate-700">
@@ -1214,6 +1253,117 @@ export function FirstTaskWizard({
           <ToneBadge tone={ok ? 'blue' : 'rose'}>{status}</ToneBadge>
         </div>
         {intro?.error && <div className="mt-1 text-rose-700">{intro.error}</div>}
+        {(intro?.warnings || []).slice(0, 2).map((w, i) => (
+          <div key={i} className="mt-1 text-amber-700">⚠ {w}</div>
+        ))}
+        {ok && supportsDbTable && introTables.length >= 0 && (
+          <div className="mt-2 grid gap-2 sm:grid-cols-2" data-testid={`${title.toLowerCase()}-introspection-picker`}>
+            {introDatabases.length > 0 && (
+              <div>
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {t('wizard.introDatabase')}
+                </label>
+                <select
+                  data-testid={`${title.toLowerCase()}-intro-database`}
+                  className={wizardSelectClass}
+                  value={currentDatabase}
+                  onChange={(e) => {
+                    const db = e.target.value;
+                    setCurrentDatabase(db);
+                    applyPick(db ? { database: db } : {});
+                  }}
+                >
+                  <option value="">— {t('wizard.introPickDatabase')} —</option>
+                  {introDatabases.map((db) => (
+                    <option key={db} value={db}>{db}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div>
+              <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                {t('wizard.introTable')}
+              </label>
+              <select
+                data-testid={`${title.toLowerCase()}-intro-table`}
+                className={wizardSelectClass}
+                value={cfgTable}
+                onChange={(e) => {
+                  const tb = e.target.value;
+                  const meta = introTables.find((x) => x.name === tb);
+                  const patch: Record<string, unknown> = { table: tb };
+                  if (isSource && meta?.primary_key?.length) patch.pk_columns = meta.primary_key;
+                  applyPick(patch);
+                }}
+              >
+                <option value="">— {t('wizard.introPickTable')} —</option>
+                {introTables.map((tb) => (
+                  <option key={tb.name} value={tb.name}>
+                    {tb.name}{tb.primary_key?.length ? ` · PK: ${tb.primary_key.join(',')}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+        {ok && isKafka && introTopics.length > 0 && (
+          <div className="mt-2" data-testid={`${title.toLowerCase()}-introspection-picker`}>
+            <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {t('wizard.introTopic')}
+            </label>
+            <select
+              data-testid={`${title.toLowerCase()}-intro-topic`}
+              className={wizardSelectClass}
+              value={String(currentCfg.topic || '')}
+              onChange={(e) => applyPick({ topic: e.target.value })}
+            >
+              <option value="">— {t('wizard.introPickTopic')} —</option>
+              {introTopics.map((tp) => (
+                <option key={tp.name} value={tp.name}>
+                  {tp.name}{tp.partitions?.length ? ` · ${tp.partitions.length}p` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {ok && !supportsDbTable && !isKafka && (intro?.targets || []).length > 0 ? (
+          <div className="mt-2 grid gap-1 text-[10px] text-slate-600" data-testid={`${title.toLowerCase()}-intro-targets`}>
+            {intro!.targets!.slice(0, 2).map((tg, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-1">
+                <span className="rounded border border-slate-200 bg-white/80 px-1.5 py-0.5 uppercase tracking-wide">{tg.kind}</span>
+                <span className="font-mono">{tg.location}</span>
+                {tg.prefix ? <span>· prefix <span className="font-mono">{tg.prefix}</span></span> : null}
+                <span className={tg.exists ? 'text-emerald-600' : 'text-amber-600'}>
+                  {tg.exists ? '✓ exists' : '⚠ missing'}
+                </span>
+                <span className={tg.writable ? 'text-emerald-600' : 'text-rose-600'}>
+                  {tg.writable ? '✓ writable' : '✗ not writable'}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {ok && selectedTableMeta?.columns?.length ? (
+          <div className="mt-2 flex flex-wrap gap-1" data-testid={`${title.toLowerCase()}-intro-columns`}>
+            {selectedTableMeta.columns.slice(0, 12).map((col) => (
+              <span key={col.name} className="rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 text-[10px] text-slate-600">
+                {col.name}{col.data_type ? `: ${col.data_type}` : ''}
+              </span>
+            ))}
+            {selectedTableMeta.columns.length > 12 && (
+              <span className="text-[10px] text-muted-foreground">+{selectedTableMeta.columns.length - 12}</span>
+            )}
+          </div>
+        ) : null}
+        {ok && isSource && intro?.schema?.length && !selectedTableMeta ? (
+          <div className="mt-2 flex flex-wrap gap-1" data-testid={`${title.toLowerCase()}-intro-schema`}>
+            {intro.schema.slice(0, 12).map((col) => (
+              <span key={col.name} className="rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 text-[10px] text-slate-600">
+                {col.name}{col.data_type ? `: ${col.data_type}` : ''}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {recCount > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {ctx.recommendations!.slice(0, 4).map((rec) => {

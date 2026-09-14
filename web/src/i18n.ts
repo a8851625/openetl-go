@@ -672,6 +672,12 @@ const dict: Dict = {
     en: 'Dry-run validates transforms against the single sample record only — it does not test the real source schema, sink writes, checkpoints or replay.',
     zh: 'Dry-run 仅针对单条样例记录验证转换 —— 不检验真实 source 结构、sink 写入、checkpoint 或重放。',
   },
+  'wizard.introDatabase': { en: 'Database (from connection)', zh: '数据库（来自连接探测）' },
+  'wizard.introTable': { en: 'Table (from connection)', zh: '表（来自连接探测）' },
+  'wizard.introTopic': { en: 'Topic (from connection)', zh: 'Topic（来自连接探测）' },
+  'wizard.introPickDatabase': { en: 'keep current', zh: '保持当前' },
+  'wizard.introPickTable': { en: 'keep current / type manually', zh: '保持当前或手动输入' },
+  'wizard.introPickTopic': { en: 'keep current', zh: '保持当前' },
   'wizard.needsInput': {
     en: 'Needs completion',
     zh: '需补全配置',

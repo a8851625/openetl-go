@@ -872,6 +872,45 @@ check "B3.2: auto-refresh toggle shows paused state" "$(evaljs "(() => { const l
 evaljs "(() => { const t=document.querySelector('[data-testid=auto-refresh-toggle]'); t?.click(); return true; })()" >/dev/null
 sleep 0.5
 check "B3.2b: auto-refresh resumes with timestamp" "$(evaljs "(() => { const l=document.querySelector('[data-testid=auto-refresh-label]'); if(!l) return false; const txt=(l.textContent||''); return /[0-9]/.test(txt) && !txt.toLowerCase().includes('paused'); })()")"
+
+
+# ── UI-B.4: introspection-driven pickers ─────────────────────────────────
+echo "==> UI-B.4 introspection picker checks"
+# Reuse the D2 connection flow: open wizard, pick the seeded file connection,
+# and assert the introspection surfaced as schema chips / target facts.
+playwright-cli open "${BASE_URL}/?e2e=$(date +%s)" >/dev/null
+sleep 2
+evaljs "(() => { window.location.hash = '#/pipelines/new?step=source'; return true; })()" >/dev/null
+sleep 2
+b4_wizard_ready="false"
+for _ in $(seq 1 12); do
+  b4_wizard_ready="$(evaljs "!!document.querySelector('[data-testid=wizard-source-connection]')")"
+  if [[ "$b4_wizard_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+sleep 1
+# Default multi-table template uses mysql_snapshot_cdc source; switch to file.
+evaljs "(() => { const sel=document.querySelector('[data-testid=wizard-source-type]'); if(!sel) return false; const opt=Array.from(sel.options).find(o=>o.value==='file'); if(!opt) return false; sel.value='file'; sel.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
+sleep 1
+evaljs "(() => { const sel=document.querySelector('[data-testid=wizard-source-connection]'); if(!sel) return false; const opt=Array.from(sel.options).find(o=>o.value==='ui-file-source'); if(!opt) return false; sel.value='ui-file-source'; sel.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
+b4_schema="false"
+for _ in $(seq 1 12); do
+  b4_schema="$(evaljs "!!document.querySelector('[data-testid=source-intro-schema]')")"
+  if [[ "$b4_schema" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "B4.1: file connection introspection shows schema chips" "$b4_schema"
+# Sink: file_sink connection shows target facts (exists/writable).
+evaljs "(() => { window.location.hash = '#/pipelines/new?step=sink'; return true; })()" >/dev/null
+sleep 2
+evaljs "(() => { const sel=document.querySelector('[data-testid=wizard-sink-connection]'); if(!sel) return false; const opt=Array.from(sel.options).find(o=>o.value==='ui-file-sink'); if(!opt) return false; sel.value='ui-file-sink'; sel.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
+b4_targets="false"
+for _ in $(seq 1 12); do
+  b4_targets="$(evaljs "!!document.querySelector('[data-testid=sink-intro-targets]')")"
+  if [[ "$b4_targets" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "B4.2: file sink connection shows target facts" "$b4_targets"
 echo "==> Seed DLQ replay fixture"
 curl -fsS -X POST "${BASE_URL}/api/v2/pipelines" \
   -H 'Content-Type: application/json' \
