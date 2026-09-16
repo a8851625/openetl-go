@@ -28,8 +28,8 @@
 | T3.3 | RA-6：去除硬截断 + 流式导出 | — | `done` | 复核 Round 3/5：三 backend 各三类 100,037 行逐字段/SQL hash 对账与导出 RSS 通过 |
 | T3.4 | PR-1.3 残留：原子 restore + 保真度 + artifact/state | T3.3 | `done` | 复核 Round 1/5 三 backend + CLI + artifact/Redis RDB 证据通过；大数据完整性仍属 T3.3 |
 | T3.5 | 两项待决策结论与文档落地 | — | `todo` | additive-only 已获明确答复；CH 画像范围待答复 |
-| T3.6 | RA-8：实测容量基线 | IT-2、T3.5 | `active` | 复核 Round 4/5 的 T3.6-A 已交付；T3.6-B 路径/并发曲线及 CH 范围仍未闭合 |
-| T3.7 | 回归阈值接入 CI + 迭代收口 | T3.6、IT-1 | `todo` | CI 配置保留，补有效输入与实际运行证据 |
+| T3.6 | RA-8：实测容量基线 | IT-2、T3.5 | `done` | T3.6-A 2026-09-09 交付；T3.6-B 2026-09-16 闭合：3 条生产路径吞吐 + 三 backend 1/4/8/16/32 并发曲线，全部 sustained_offered_load=YES（证据 it3-baseline-20260916） |
+| T3.7 | 回归阈值接入 CI + 迭代收口 | T3.6、IT-1 | `done` | 2026-09-06 warning 模式接入 _gate.yml；2026-09-16 T3.6-B 提供有效输入 |
 
 ## 任务明细
 
@@ -280,6 +280,32 @@ Evidence: <commands, run URL, e2e, docs>
 Result: <delivered|active|blocked_external>
 Residual/follow-up: <bounded next item or none>
 ```
+
+### Round 6 —— T3.6-B 路径吞吐 + 三 backend 并发曲线闭合，2026-09-16 领取
+
+```text
+Round: 6（追加轮，用于闭合 T3.6-B）
+Roadmap item: RA-8 / T3.6-B (IT-3)
+Profile/path: standalone + sqlite/mysql/postgres storage，真实依赖容器
+Objective: 三条生产路径的单管道吞吐与三 backend 并发容量曲线有可重复实测，sqlite 拐点声明由数据支撑。
+Scope: hack/bench_capacity.py（已存在）、hack/bench-capacity.sh（补执行位）、docs/resource-baseline.md、docs/evidence/it3-baseline-20260916/
+Non-goals: 运行时调优；阈值转 blocking；linux/amd64 认证。
+Acceptance: T3.6 验收 1（吞吐按 source/sink 分组）、2（sqlite 拐点曲线）、3（commit/硬件/参数绑定）。
+Evidence: CONTAINER_CLI=podman ./hack/bench-baseline.sh --out /tmp/ra8-baseline --keep-images（通过，绑定 ccc6df1）；
+  CONTAINER_CLI=podman bash hack/bench-capacity.sh --baseline ... --part all --trials 1 --counts 1,4,8,16,32（18/18 case passed，status=passed）。
+Result: delivered
+Residual/follow-up: 单 trial/共享 topic/ARM 平台等 scope 限制已写入文档；多 trial 与 amd64 认证归 IT-4/发布流程。
+```
+
+T3.6-B 验收矩阵（2026-09-16）：
+
+| 验收 | 证据 | 结果 | 残留 |
+| --- | --- | --- | --- |
+| 单管道吞吐按 source/sink 分组 | mysql_cdc→mysql upsert 49,218 rows/s；mysql_batch→CH native 76,640；kafka→S3 60,065（2 CPU/1 GiB 限额） | passed | 单 trial |
+| sqlite checkpoint 拐点曲线 | p95 3.2→5.6→6.5→11.7→63.4 ms（n=1→32），p99 247 ms@32、890 次获取等待；劣化始于 8-16 管道之间 | passed | 推荐结论保持 >8 并发用 MySQL/PG |
+| 三 backend p50/p95/p99 | 15 个曲线点全测，全部 sustained_offered_load=YES（committed≥95% offered、backlog 增长≤5%） | passed | — |
+| commit/镜像/硬件/参数绑定 | manifest.json 记录 commit ccc6df1、硬件规格、全部运行参数；内容 canonical SHA-256 全量校验 | passed | — |
+| 文档更新 | resource-baseline.md 新增容量章节 + 状态表全绿 | passed | — |
 
 ## 历史 IT-3 收口声明（2026-09-06，已被复核撤回）
 

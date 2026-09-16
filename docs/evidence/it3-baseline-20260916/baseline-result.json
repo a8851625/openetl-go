@@ -1,0 +1,567 @@
+{
+  "base_images": {
+    "docker.io/library/alpine:3.19": {
+      "architecture": "arm64",
+      "bytes": 8034276,
+      "healthcheck": null,
+      "image_id": "sha256:6cf065f724d522cbb3e1898559cd88f015db8a1a4210d2d048a0853b69b57ba9",
+      "manifest_digest": "sha256:5cd72f301a291887075a70d8b14aed6ee228fc9fd8f65e1e7eaa072f2115efd6",
+      "os": "linux",
+      "repo_digests": [
+        "docker.io/library/alpine@sha256:5cd72f301a291887075a70d8b14aed6ee228fc9fd8f65e1e7eaa072f2115efd6",
+        "docker.io/library/alpine@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1"
+      ]
+    },
+    "docker.io/library/golang:1.24-alpine": {
+      "architecture": "arm64",
+      "bytes": 271280616,
+      "healthcheck": null,
+      "image_id": "sha256:fa0811e6d279edea461b508a8f1c66f0fee2ba0b75dcaddd07ffda3661d7e2d3",
+      "manifest_digest": "sha256:2e926920fc5fa28349f4b9eaf82fd2615da1964293219a816ab699233492d921",
+      "os": "linux",
+      "repo_digests": [
+        "docker.io/library/golang@sha256:2e926920fc5fa28349f4b9eaf82fd2615da1964293219a816ab699233492d921",
+        "docker.io/library/golang@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191"
+      ]
+    },
+    "docker.io/library/node:20-alpine": {
+      "architecture": "arm64",
+      "bytes": 138082028,
+      "healthcheck": null,
+      "image_id": "sha256:cd266ddf7e80183cbac3cb23b49e90ab83a06f14f95d28681d8468f89dc00615",
+      "manifest_digest": "sha256:d63c387675b0ec5d7ef0c15b03691ac9f82803a8b30c87de3ce8a16960831cbc",
+      "os": "linux",
+      "repo_digests": [
+        "docker.io/library/node@sha256:d63c387675b0ec5d7ef0c15b03691ac9f82803a8b30c87de3ce8a16960831cbc",
+        "docker.io/library/node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293"
+      ]
+    }
+  },
+  "cleanup": {
+    "errors": [],
+    "images_retained": true,
+    "passed": true
+  },
+  "hardware": {
+    "architecture": "arm64",
+    "client_platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "cpus": 5,
+    "kernel": "7.0.11-200.fc44.aarch64",
+    "memory_bytes": 16717205504,
+    "os": "linux",
+    "other_running_containers": 1,
+    "runtime_version": "5.8.4"
+  },
+  "harness_sha256": {
+    "bench-baseline.sh": "a31f48a90218e9fbfb32d5619832125c84276e8bc949100191a8fa047d9facad",
+    "bench_baseline.py": "8c4d0fab9cf3df45880d978bb9318ad14a790b3af426389dd6b6335f8e8e3896",
+    "cmd/process-measure/main.go": "5d57185945f5b95717a39d8e5b3fd8117d3b0166f6672893a9a16da3e99f01dc",
+    "cmd/process-measure/main_test.go": "93488f9eedad227b8460fc5dbc968298e378f766c02c4f08033c08d3fd70d601"
+  },
+  "images": {
+    "default": {
+      "architecture": "arm64",
+      "binary_bytes": 63307960,
+      "binary_sha256": "a2a4d46795236bda631d9fb53da19c2378210434d0985777f8609b72fbcfa778",
+      "build_tags": "",
+      "bytes": 139721596,
+      "cgo_enabled": false,
+      "frontend_bytes": 1108631,
+      "frontend_sha256": "2e7b1b68c030fc8a234114e334416a5798f366596d3e668ae9f20f29165b440b",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "image_id": "sha256:8fabacd9334d135c3bde0013c93e9a80e27ed88735c71bcbf24b188d9350b191",
+      "manifest_digest": "sha256:118630467134184c675294c271888ed7a7a1300f9ed3de238f43b44b8ed5ef8f",
+      "os": "linux",
+      "packed_bytes": 433714,
+      "packed_sha256": "4313a01b42e6d945ca683ea4987adf4f727e587c496bd7187d4a8bee919c1eb1",
+      "repo_digests": [
+        "localhost/openetl-baseline-21b4e9a13540@sha256:118630467134184c675294c271888ed7a7a1300f9ed3de238f43b44b8ed5ef8f"
+      ],
+      "tag": "localhost/openetl-baseline-21b4e9a13540:default"
+    },
+    "extism": {
+      "architecture": "arm64",
+      "binary_bytes": 66846904,
+      "binary_sha256": "05c0bcc0b7b4e456f07c53e5d854365a43bfe1faabd1531fdc4e5d386ea097af",
+      "build_tags": "extism",
+      "bytes": 146799483,
+      "cgo_enabled": false,
+      "frontend_bytes": 1108631,
+      "frontend_sha256": "2e7b1b68c030fc8a234114e334416a5798f366596d3e668ae9f20f29165b440b",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "image_id": "sha256:603a1e7b51c94e5d3e225090da27d32d1adf526e9c03f8bc3c3140c5bc7406af",
+      "manifest_digest": "sha256:7107fdcf3d647852669f4759b1e12de53a78bf52192e0d1898c548bc84e98503",
+      "os": "linux",
+      "packed_bytes": 433714,
+      "packed_sha256": "4313a01b42e6d945ca683ea4987adf4f727e587c496bd7187d4a8bee919c1eb1",
+      "repo_digests": [
+        "localhost/openetl-baseline-21b4e9a13540@sha256:7107fdcf3d647852669f4759b1e12de53a78bf52192e0d1898c548bc84e98503"
+      ],
+      "tag": "localhost/openetl-baseline-21b4e9a13540:extism"
+    },
+    "extism-nolua": {
+      "architecture": "arm64",
+      "binary_bytes": 66060472,
+      "binary_sha256": "4e346bc9724b8616394fcfec946b874cecc2fcd1db966e39ad8c314cea8bb0b9",
+      "build_tags": "extism,nolua",
+      "bytes": 145226620,
+      "cgo_enabled": false,
+      "frontend_bytes": 1108631,
+      "frontend_sha256": "2e7b1b68c030fc8a234114e334416a5798f366596d3e668ae9f20f29165b440b",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "image_id": "sha256:ac42c6467c55147630ed7c4b27ac155577875c0152b726273edda32779a7c26d",
+      "manifest_digest": "sha256:afe96c5348ef141d34d55660e83ca6d1996b68f96b00a65b3c73ce4900f43e3c",
+      "os": "linux",
+      "packed_bytes": 433714,
+      "packed_sha256": "4313a01b42e6d945ca683ea4987adf4f727e587c496bd7187d4a8bee919c1eb1",
+      "repo_digests": [
+        "localhost/openetl-baseline-21b4e9a13540@sha256:afe96c5348ef141d34d55660e83ca6d1996b68f96b00a65b3c73ce4900f43e3c"
+      ],
+      "tag": "localhost/openetl-baseline-21b4e9a13540:extism-nolua"
+    },
+    "nolua": {
+      "architecture": "arm64",
+      "binary_bytes": 62521528,
+      "binary_sha256": "f990a372ad61be98a8ad50880b70a92476a2a2bfbf805866a98e9268d152e6f8",
+      "build_tags": "nolua",
+      "bytes": 138148732,
+      "cgo_enabled": false,
+      "frontend_bytes": 1108631,
+      "frontend_sha256": "2e7b1b68c030fc8a234114e334416a5798f366596d3e668ae9f20f29165b440b",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "image_id": "sha256:0737e6734a4255c134a31596d9e41b85c1b0c3f3c464040e5a654cb59a2cf288",
+      "manifest_digest": "sha256:e32255c109cd2116a811d11188aa8d3f130b72a050a14c9dd65abfa19f93807f",
+      "os": "linux",
+      "packed_bytes": 433714,
+      "packed_sha256": "4313a01b42e6d945ca683ea4987adf4f727e587c496bd7187d4a8bee919c1eb1",
+      "repo_digests": [
+        "localhost/openetl-baseline-21b4e9a13540@sha256:e32255c109cd2116a811d11188aa8d3f130b72a050a14c9dd65abfa19f93807f"
+      ],
+      "tag": "localhost/openetl-baseline-21b4e9a13540:nolua"
+    }
+  },
+  "limitations": [
+    "Fresh process and SQLite volume, cached image/OS pages; not a host reboot cold start.",
+    "Start timer includes container start, port discovery and health polling overhead.",
+    "Runtime image uses Dockerfile, not a published GoReleaser release asset.",
+    "CGO/QuickJS is not published by .goreleaser.yml and is not measured here.",
+    "Loaded control-plane peak is not sustained pipeline throughput/concurrency evidence.",
+    "ClickHouse specialty scope is pending; no specialty benchmark is run."
+  ],
+  "measured_at": "2026-09-16T15:26:44Z",
+  "parameters": {
+    "container_log_driver": "k8s-file",
+    "cpus": 2,
+    "gomaxprocs": 2,
+    "idle_samples": 5,
+    "memory_bytes": 1073741824,
+    "records_per_pipeline": 100,
+    "restore_pipelines": 16,
+    "sample_interval_seconds": 1,
+    "settle_seconds": 10,
+    "trials": 3
+  },
+  "runtime": {
+    "backup": {
+      "bytes": 51671,
+      "container_start_to_exit_seconds": 0.2792340839514509,
+      "counts": {
+        "audit_logs": 48,
+        "checkpoints": 16,
+        "connections": 0,
+        "dead_letters": 0,
+        "pipeline_versions": 16,
+        "pipelines": 16,
+        "plugins": 0,
+        "run_history": 16,
+        "settings": 0,
+        "task_assignments": 0,
+        "workers": 1
+      },
+      "elapsed_seconds": 0.034321691,
+      "exit_code": 0,
+      "method": "wait4.rusage.ru_maxrss",
+      "native_max_rss": 43396,
+      "native_rss_unit": "KiB",
+      "peak_rss_bytes": 44437504,
+      "platform": "linux",
+      "seconds": 0.034321691,
+      "sha256": "f3c4f755c211d0c04bed2a30d86ee9b581fb1d703238da0858699a08621f0b6b"
+    },
+    "cold_trials": [
+      {
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-09-16T15:33:21Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 50614272,
+            "rss_bytes": 50614272
+          },
+          {
+            "peak_rss_bytes": 50614272,
+            "rss_bytes": 50614272
+          },
+          {
+            "peak_rss_bytes": 50618368,
+            "rss_bytes": 50618368
+          },
+          {
+            "peak_rss_bytes": 50618368,
+            "rss_bytes": 50618368
+          },
+          {
+            "peak_rss_bytes": 50618368,
+            "rss_bytes": 50618368
+          }
+        ],
+        "start_to_health_seconds": 0.356357290991582,
+        "started_at": "2026-09-16T23:33:21.625705785+08:00"
+      },
+      {
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-09-16T15:33:38Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 51064832,
+            "rss_bytes": 51064832
+          },
+          {
+            "peak_rss_bytes": 51064832,
+            "rss_bytes": 51064832
+          },
+          {
+            "peak_rss_bytes": 51064832,
+            "rss_bytes": 51064832
+          },
+          {
+            "peak_rss_bytes": 51064832,
+            "rss_bytes": 51064832
+          },
+          {
+            "peak_rss_bytes": 51064832,
+            "rss_bytes": 51064832
+          }
+        ],
+        "start_to_health_seconds": 0.3421153749804944,
+        "started_at": "2026-09-16T23:33:38.71378205+08:00"
+      },
+      {
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-09-16T15:33:55Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 50819072,
+            "rss_bytes": 50819072
+          },
+          {
+            "peak_rss_bytes": 50819072,
+            "rss_bytes": 50819072
+          },
+          {
+            "peak_rss_bytes": 50819072,
+            "rss_bytes": 50819072
+          },
+          {
+            "peak_rss_bytes": 50819072,
+            "rss_bytes": 50819072
+          },
+          {
+            "peak_rss_bytes": 50819072,
+            "rss_bytes": 50819072
+          }
+        ],
+        "start_to_health_seconds": 0.340558624942787,
+        "started_at": "2026-09-16T23:33:55.815140439+08:00"
+      }
+    ],
+    "fixture": {
+      "identity_sha256": "b637e42ada10b310ef022d37b59602dd82d9f4cc674789c4a03a46525072608f",
+      "peak_rss_bytes": 59043840,
+      "pipeline_count": 16,
+      "records_verified": 1600,
+      "rss_bytes": 59043840
+    },
+    "image_id": "sha256:8fabacd9334d135c3bde0013c93e9a80e27ed88735c71bcbf24b188d9350b191",
+    "profile": "production",
+    "restore_trials": [
+      {
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-09-16T15:34:17Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "b637e42ada10b310ef022d37b59602dd82d9f4cc674789c4a03a46525072608f",
+        "peak_rss_bytes": 52547584,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.2848488329909742,
+        "restore_peak_rss_bytes": 43548672,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.2848488329909742,
+          "elapsed_seconds": 0.061426359,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 42528,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 43548672,
+          "platform": "linux",
+          "seconds": 0.061426359
+        },
+        "restore_seconds": 0.061426359,
+        "rss_bytes": 52547584,
+        "start_to_health_seconds": 0.3617006669519469,
+        "started_at": "2026-09-16T23:34:17.566580963+08:00"
+      },
+      {
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-09-16T15:34:19Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "b637e42ada10b310ef022d37b59602dd82d9f4cc674789c4a03a46525072608f",
+        "peak_rss_bytes": 52809728,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.3293157910229638,
+        "restore_peak_rss_bytes": 43581440,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.3293157910229638,
+          "elapsed_seconds": 0.064749161,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 42560,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 43581440,
+          "platform": "linux",
+          "seconds": 0.064749161
+        },
+        "restore_seconds": 0.064749161,
+        "rss_bytes": 52809728,
+        "start_to_health_seconds": 0.35535229195374995,
+        "started_at": "2026-09-16T23:34:19.59902349+08:00"
+      },
+      {
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-09-16T15:34:21Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "b637e42ada10b310ef022d37b59602dd82d9f4cc674789c4a03a46525072608f",
+        "peak_rss_bytes": 52260864,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.32965404202695936,
+        "restore_peak_rss_bytes": 43585536,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.32965404202695936,
+          "elapsed_seconds": 0.070793513,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 42564,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 43585536,
+          "platform": "linux",
+          "seconds": 0.070793513
+        },
+        "restore_seconds": 0.070793513,
+        "rss_bytes": 52260864,
+        "start_to_health_seconds": 0.3638784580398351,
+        "started_at": "2026-09-16T23:34:21.627295337+08:00"
+      }
+    ],
+    "tls_verified": true,
+    "uid": 1001
+  },
+  "schema_version": 2,
+  "scope": "packaging-startup-restore",
+  "source": {
+    "commit": "ccc6df1e9d76988087de40169e684f64ed8baddb",
+    "dirty": false,
+    "files": 480,
+    "sha256": "1f44c68da179ecbef2db84ef7cd3f46c545e581004333cb825846dbed86006bf"
+  },
+  "status": "passed",
+  "toolchain": {
+    "binary_build_info": "/app/main: go1.24.13\n\tpath\tgithub.com/a8851625/openetl-go\n\tmod\tgithub.com/a8851625/openetl-go\t(devel)\t\n\tdep\tfilippo.io/edwards25519\tv1.2.0\th1:crnVqOiS4jqYleHd9vaKZ+HKtHfllngJIiOpNpoJsjo=\n\tdep\tgithub.com/BurntSushi/toml\tv1.5.0\th1:W5quZX/G/csjUnuI8SUYlsHs9M38FC7znL0lIO+DvMg=\n\tdep\tgithub.com/ClickHouse/ch-go\tv0.61.5\th1:zwR8QbYI0tsMiEcze/uIMK+Tz1D3XZXLdNrlaOpeEI4=\n\tdep\tgithub.com/ClickHouse/clickhouse-go/v2\tv2.23.0\th1:srmRrkS0BR8gEut87u8jpcZ7geOob6nGj9ifrb+aKmg=\n\tdep\tgithub.com/IBM/sarama\tv1.43.3\th1:Yj6L2IaNvb2mRBop39N7mmJAHBVY3dTPncr3qGVkxPA=\n\tdep\tgithub.com/Masterminds/semver\tv1.5.0\th1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3QEww=\n\tdep\tgithub.com/alibabacloud-go/debug\tv1.0.1\th1:MsW9SmUtbb1Fnt3ieC6NNZi6aEwrXfDksD4QA6GSbPg=\n\tdep\tgithub.com/alibabacloud-go/tea\tv1.2.2\th1:aTsR6Rl3ANWPfqeQugPglfurloyBJY85eFy7Gc1+8oU=\n\tdep\tgithub.com/aliyun/aliyun-odps-go-sdk\tv0.4.23\th1:c8p3S9Fw3bmOwXOdyWzK7jPSRhMjCJCvVQAf9xSzQkQ=\n\tdep\tgithub.com/aliyun/credentials-go\tv1.3.10\th1:45Xxrae/evfzQL9V10zL3xX31eqgLWEaIdCoPipOEQA=\n\tdep\tgithub.com/andybalholm/brotli\tv1.1.1\th1:PR2pgnyFznKEugtsUo0xLdDop5SKXd5Qf5ysW+7XdTA=\n\tdep\tgithub.com/cespare/xxhash/v2\tv2.3.0\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\n\tdep\tgithub.com/clbanning/mxj/v2\tv2.7.0\th1:WA/La7UGCanFe5NpHF0Q3DNtnCsVoxbPKuyBNHWRyME=\n\tdep\tgithub.com/cznic/mathutil\tv0.0.0-20181122101859-297441e03548\th1:iwZdTE0PVqJCos1vaoKsclOGD3ADKpshg3SRtYBbwso=\n\tdep\tgithub.com/davecgh/go-spew\tv1.1.1\th1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=\n\tdep\tgithub.com/dustin/go-humanize\tv1.0.1\th1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=\n\tdep\tgithub.com/eapache/go-resiliency\tv1.7.0\th1:n3NRTnBn5N0Cbi/IeOHuQn9s2UwVUH7Ga0ZWcP+9JTA=\n\tdep\tgithub.com/eapache/go-xerial-snappy\tv0.0.0-20230731223053-c322873962e3\th1:Oy0F4ALJ04o5Qqpdz8XLIpNA3WM/iSIXqxtqo7UGVws=\n\tdep\tgithub.com/eapache/queue\tv1.1.0\th1:YOEu7KNc61ntiQlcEeUIoDTJ2o8mQznoNvUhiigpIqc=\n\tdep\tgithub.com/emirpasic/gods/v2\tv2.0.0-alpha\th1:dwFlh8pBg1VMOXWGipNMRt8v96dKAIvBehtCt6OtunU=\n\tdep\tgithub.com/fatih/color\tv1.18.0\th1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=\n\tdep\tgithub.com/fsnotify/fsnotify\tv1.9.0\th1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=\n\tdep\tgithub.com/go-faster/city\tv1.0.1\th1:4WAxSZ3V2Ws4QRDrscLEDcibJY8uf41H6AhXDrNDcGw=\n\tdep\tgithub.com/go-faster/errors\tv0.7.1\th1:MkJTnDoEdi9pDabt1dpWf7AA8/BaSYZqibYyhZ20AYg=\n\tdep\tgithub.com/go-ini/ini\tv1.67.0\th1:z6ZrTEZqSWOTyH2FlglNbNgARyHG8oLW9gMELqKr06A=\n\tdep\tgithub.com/go-logr/logr\tv1.4.3\th1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=\n\tdep\tgithub.com/go-logr/stdr\tv1.2.2\th1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=\n\tdep\tgithub.com/go-mysql-org/go-mysql\tv1.9.1\th1:W2ZKkHkoM4mmkasJCoSYfaE4RQNxXTb6VqiaMpKFrJc=\n\tdep\tgithub.com/go-sql-driver/mysql\tv1.9.3\th1:U/N249h2WzJ3Ukj8SowVFjdtZKfu9vlLZxjPXV1aweo=\n\tdep\tgithub.com/goccy/go-json\tv0.10.3\th1:KZ5WoDbxAIgm2HNbYckL0se1fHD6rz5j4ywS6ebzDqA=\n\tdep\tgithub.com/gogf/gf/v2\tv2.10.0\th1:rzDROlyqGMe/eM6dCalSR8dZOuMIdLhmxKSH1DGhbFs=\n\tdep\tgithub.com/golang/snappy\tv0.0.4\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\n\tdep\tgithub.com/google/flatbuffers\tv23.5.26+incompatible\th1:M9dgRyhJemaM4Sw8+66GHBu8ioaQmyPLg1b8VwK5WJg=\n\tdep\tgithub.com/google/uuid\tv1.6.0\th1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n\tdep\tgithub.com/gorilla/websocket\tv1.5.3\th1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=\n\tdep\tgithub.com/grokify/html-strip-tags-go\tv0.1.0\th1:03UrQLjAny8xci+R+qjCce/MYnpNXCtgzltlQbOBae4=\n\tdep\tgithub.com/hashicorp/errwrap\tv1.1.0\th1:OxrOeh75EUXMY8TBjag2fzXGZ40LB6IKw45YeGUDY2I=\n\tdep\tgithub.com/hashicorp/go-multierror\tv1.1.1\th1:H5DkEtf6CXdFp0N0Em5UCwQpXMWke8IA0+lD48awMYo=\n\tdep\tgithub.com/hashicorp/go-uuid\tv1.0.3\th1:2gKiV6YVmrJ1i2CKKa9obLvRieoRGviZFL26PcT/Co8=\n\tdep\tgithub.com/jackc/pgio\tv1.0.0\th1:g12B9UwVnzGhueNavwioyEEpAmqMe1E/BN9ES+8ovkE=\n\tdep\tgithub.com/jackc/pglogrepl\tv0.0.0-20250509230407-a9884f6bd75a\th1:f2a1BtfxAaGSs+kI2MfZjNf9KiHzynJKqOPLTkF8L4Y=\n\tdep\tgithub.com/jackc/pgpassfile\tv1.0.0\th1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=\n\tdep\tgithub.com/jackc/pgservicefile\tv0.0.0-20240606120523-5a60cdf6a761\th1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=\n\tdep\tgithub.com/jackc/pgx/v5\tv5.7.4\th1:9wKznZrhWa2QiHL+NjTSPP6yjl3451BX3imWDnokYlg=\n\tdep\tgithub.com/jackc/puddle/v2\tv2.2.2\th1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=\n\tdep\tgithub.com/jcmturner/aescts/v2\tv2.0.0\th1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8=\n\tdep\tgithub.com/jcmturner/dnsutils/v2\tv2.0.0\th1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo=\n\tdep\tgithub.com/jcmturner/gofork\tv1.7.6\th1:QH0l3hzAU1tfT3rZCnW5zXl+orbkNMMRGJfdJjHVETg=\n\tdep\tgithub.com/jcmturner/gokrb5/v8\tv8.4.4\th1:x1Sv4HaTpepFkXbt2IkL29DXRf8sOfZXo8eRKh687T8=\n\tdep\tgithub.com/jcmturner/rpc/v2\tv2.0.3\th1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY=\n\tdep\tgithub.com/json-iterator/go\tv1.1.12\th1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=\n\tdep\tgithub.com/klauspost/compress\tv1.17.9\th1:6KIumPrER1LHsvBVuDa0r5xaG0Es51mhhB9BQB2qeMA=\n\tdep\tgithub.com/magiconair/properties\tv1.8.10\th1:s31yESBquKXCV9a/ScB3ESkOjUYYv+X0rg8SYxI99mE=\n\tdep\tgithub.com/mattn/go-colorable\tv0.1.13\th1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=\n\tdep\tgithub.com/mattn/go-isatty\tv0.0.20\th1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=\n\tdep\tgithub.com/mattn/go-runewidth\tv0.0.16\th1:E5ScNMtiwvlvB5paMFdw9p4kSQzbXFikJ5SQO6TULQc=\n\tdep\tgithub.com/minio/md5-simd\tv1.1.2\th1:Gdi1DZK69+ZVMoNHRXJyNcxrMA4dSxoYHZSQbirFg34=\n\tdep\tgithub.com/minio/minio-go/v7\tv7.0.74\th1:fTo/XlPBTSpo3BAMshlwKL5RspXRv9us5UeHEGYCFe0=\n\tdep\tgithub.com/modern-go/concurrent\tv0.0.0-20180306012644-bacd9c7ef1dd\th1:TRLaZ9cD/w8PVh93nsPXa1VrQ6jlwL5oN8l14QlcNfg=\n\tdep\tgithub.com/modern-go/reflect2\tv1.0.2\th1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=\n\tdep\tgithub.com/olekukonko/errors\tv1.1.0\th1:RNuGIh15QdDenh+hNvKrJkmxxjV4hcS50Db478Ou5sM=\n\tdep\tgithub.com/olekukonko/ll\tv0.0.9\th1:Y+1YqDfVkqMWuEQMclsF9HUR5+a82+dxJuL1HHSRpxI=\n\tdep\tgithub.com/olekukonko/tablewriter\tv1.1.0\th1:N0LHrshF4T39KvI96fn6GT8HEjXRXYNDrDjKFDB7RIY=\n\tdep\tgithub.com/parquet-go/bitpack\tv1.0.0\th1:AUqzlKzPPXf2bCdjfj4sTeacrUwsT7NlcYDMUQxPcQA=\n\tdep\tgithub.com/parquet-go/jsonlite\tv1.0.0\th1:87QNdi56wOfsE5bdgas0vRzHPxfJgzrXGml1zZdd7VU=\n\tdep\tgithub.com/parquet-go/parquet-go\tv0.30.1\th1:Oy6ganNrAdFiVwy7wNmWagfPTWA2X9Z3tVHBc7JtuX8=\n\tdep\tgithub.com/paulmach/orb\tv0.11.1\th1:3koVegMC4X/WeiXYz9iswopaTwMem53NzTJuTF20JzU=\n\tdep\tgithub.com/pierrec/lz4/v4\tv4.1.21\th1:yOVMLb6qSIDP67pl/5F7RepeKYu/VmTyEXvuMI5d9mQ=\n\tdep\tgithub.com/pingcap/errors\tv0.11.5-0.20221009092201-b66cddb77c32\th1:m5ZsBa5o/0CkzZXfXLaThzKuR85SnHHetqBCpzQ30h8=\n\tdep\tgithub.com/pingcap/failpoint\tv0.0.0-20220801062533-2eaa32854a6c\th1:CgbKAHto5CQgWM9fSBIvaxsJHuGP0uM74HXtv3MyyGQ=\n\tdep\tgithub.com/pingcap/log\tv1.1.1-0.20230317032135-a0d097d16e22\th1:2SOzvGvE8beiC1Y4g9Onkvu6UmuBBOeWRGQEjJaT/JY=\n\tdep\tgithub.com/pingcap/tidb/pkg/parser\tv0.0.0-20231103042308-035ad5ccbe67\th1:m0RZ583HjzG3NweDi4xAcK54NBBPJh+zXp5Fp60dHtw=\n\tdep\tgithub.com/pkg/errors\tv0.9.1\th1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=\n\tdep\tgithub.com/rcrowley/go-metrics\tv0.0.0-20201227073835-cf1acfcdf475\th1:N/ElC8H3+5XpJzTSTfLsJV/mx9Q9g7kxmchpfZyxgzM=\n\tdep\tgithub.com/redis/go-redis/v9\tv9.20.1\th1:sfCU6A8P3dXbKyWes02uxA2baehGux9dZHfEKtsTB1w=\n\tdep\tgithub.com/remyoudompheng/bigfft\tv0.0.0-20230129092748-24d4a6f8daec\th1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=\n\tdep\tgithub.com/rivo/uniseg\tv0.2.0\th1:S1pD9weZBuJdFmowNwbpi7BJ8TNftyUImj/0WQi72jY=\n\tdep\tgithub.com/robfig/cron/v3\tv3.0.1\th1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=\n\tdep\tgithub.com/rs/xid\tv1.5.0\th1:mKX4bl4iPYJtEIxp6CYiUuLQ/8DYMoz0PUdtGgMFRVc=\n\tdep\tgithub.com/segmentio/asm\tv1.2.0\th1:9BQrFxC+YOHJlTlHGkTrFWf59nbL3XnCoFLTwDCI7ys=\n\tdep\tgithub.com/shopspring/decimal\tv1.3.1\th1:2Usl1nmF/WZucqkFZhnfFYxxxu8LG21F6nPQBE5gKV8=\n\tdep\tgithub.com/siddontang/go\tv0.0.0-20180604090527-bdc77568d726\th1:xT+JlYxNGqyT+XcU8iUrN18JYed2TvG9yN5ULG2jATM=\n\tdep\tgithub.com/siddontang/go-log\tv0.0.0-20180807004314-8d05993dda07\th1:oI+RNwuC9jF2g2lP0u0cVEEZrc/AYBCuFdvwrLWM/6Q=\n\tdep\tgithub.com/twpayne/go-geom\tv1.6.1\th1:iLE+Opv0Ihm/ABIcvQFGIiFBXd76oBIar9drAwHFhR4=\n\tdep\tgithub.com/yuin/gopher-lua\tv1.1.2\th1:yF/FjE3hD65tBbt0VXLE13HWS9h34fdzJmrWRXwobGA=\n\tdep\tgo.opentelemetry.io/auto/sdk\tv1.1.0\th1:cH53jehLUN6UFLY71z+NDOiNJqDdPRaXzTel0sJySYA=\n\tdep\tgo.opentelemetry.io/otel\tv1.38.0\th1:RkfdswUDRimDg0m2Az18RKOsnI8UDzppJAtj01/Ymk8=\n\tdep\tgo.opentelemetry.io/otel/metric\tv1.38.0\th1:Kl6lzIYGAh5M159u9NgiRkmoMKjvbsKtYRwgfrA6WpA=\n\tdep\tgo.opentelemetry.io/otel/sdk\tv1.38.0\th1:l48sr5YbNf2hpCUj/FoGhW9yDkl+Ma+LrVl8qaM5b+E=\n\tdep\tgo.opentelemetry.io/otel/trace\tv1.38.0\th1:Fxk5bKrDZJUH+AMyyIXGcFAPah0oRcT+LuNtJrmcNLE=\n\tdep\tgo.uber.org/atomic\tv1.11.0\th1:ZvwS0R+56ePWxUNi+Atn9dWONBPp/AUETXlHW0DxSjE=\n\tdep\tgo.uber.org/multierr\tv1.11.0\th1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=\n\tdep\tgo.uber.org/zap\tv1.27.0\th1:aJMhYGrd5QSmlpLMr2MftRKl7t8J8PTZPA732ud/XR8=\n\tdep\tgolang.org/x/crypto\tv0.38.0\th1:jt+WWG8IZlBnVbomuhg2Mdq0+BBQaHbtqHEFEigjUV8=\n\tdep\tgolang.org/x/exp\tv0.0.0-20250620022241-b7579e27df2b\th1:M2rDM6z3Fhozi9O7NWsxAkg/yqS/lQJ6PmkyIV3YP+o=\n\tdep\tgolang.org/x/net\tv0.40.0\th1:79Xs7wF06Gbdcg4kdCCIQArK11Z1hr5POQ6+fIYHNuY=\n\tdep\tgolang.org/x/sync\tv0.15.0\th1:KWH3jNZsfyT6xfAfKiz6MRNmd46ByHDYaZ7KSkCtdW8=\n\tdep\tgolang.org/x/sys\tv0.38.0\th1:3yZWxaJjBmCWXqhN1qh02AkOnCQ1poK6oF+a7xWL6Gc=\n\tdep\tgolang.org/x/text\tv0.25.0\th1:qVyWApTSYLk/drJRO5mDlNYskwQznZmkpV2c8q9zls4=\n\tdep\tgolang.org/x/xerrors\tv0.0.0-20220907171357-04be3eba64a2\th1:H2TDz8ibqkAF6YGhCdN3jS9O0/s90v0rJh3X/OLHEUk=\n\tdep\tgoogle.golang.org/protobuf\tv1.34.2\th1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6hg=\n\tdep\tgopkg.in/ini.v1\tv1.67.0\th1:Dgnx+6+nfE+IfzjUEISNeydPJh9AXNNsWbGP9KzCsOA=\n\tdep\tgopkg.in/natefinch/lumberjack.v2\tv2.2.1\th1:bBRl1b0OH9s/DuPhuXpNl+VtCaJXFZ5/uEFST95x9zc=\n\tdep\tgopkg.in/yaml.v3\tv3.0.1\th1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=\n\tdep\tmodernc.org/libc\tv1.66.3\th1:cfCbjTUcdsKyyZZfEUKfoHcP3S0Wkvz3jgSzByEWVCQ=\n\tdep\tmodernc.org/mathutil\tv1.7.1\th1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=\n\tdep\tmodernc.org/memory\tv1.11.0\th1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=\n\tdep\tmodernc.org/sqlite\tv1.38.2\th1:Aclu7+tgjgcQVShZqim41Bbw9Cho0y/7WzYptXqkEek=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-ldflags=\"-s -w\"\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=linux\n\tbuild\tGOARM64=v8.0\n",
+    "builder": {
+      "architecture": "arm64",
+      "bytes": 2157251983,
+      "healthcheck": null,
+      "image_id": "sha256:c2e572bbc4c8acbf47a52bd1e586ea16488ddc17e53c72ece339798f78afc727",
+      "manifest_digest": "sha256:d8da1811a9bd53691725eb1c6c78ab81ddc9db43cf5d560f14f7fbbece2e4806",
+      "os": "linux",
+      "repo_digests": [
+        "localhost/openetl-baseline-21b4e9a13540@sha256:d8da1811a9bd53691725eb1c6c78ab81ddc9db43cf5d560f14f7fbbece2e4806"
+      ]
+    },
+    "gf_default_download_version": "v2.10.0",
+    "go_version": "go version go1.24.13 linux/arm64",
+    "pack_recipe": "Dockerfile: SKIP_UI=1 hack/pack.sh; gf URL/output are in build logs",
+    "process_measure": {
+      "binary_sha256": "5d2d620abf8988734d2ab8fcce5540294e16f8c8be45fa1b65404d8d7991d8f4",
+      "linux_native_rss_unit": "KiB",
+      "method": "wait4.rusage.ru_maxrss",
+      "source_sha256": "5d57185945f5b95717a39d8e5b3fd8117d3b0166f6672893a9a16da3e99f01dc"
+    }
+  },
+  "warnings": []
+}

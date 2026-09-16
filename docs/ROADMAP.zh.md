@@ -2095,7 +2095,7 @@ PR-1.3 恢复残留已在复核 Round 1/5 重新交付；RA-6 于 2026-09-08 复
 
 ### RA-8：实测 resource baseline 与容量边界
 
-状态：`active`（2026-09-09 复核 Round 4/5：T3.6-A 构建/启动/恢复资源基线已交付；路径/并发曲线未闭合，CH 专项仍待答复）
+状态：`delivered`（2026-09-16 T3.6-B 闭合：3 条生产路径吞吐（mysql_cdc→mysql upsert 49,218 rows/s、mysql_batch→CH native 76,640、kafka→S3 60,065）+ 三 backend 1/4/8/16/32 并发曲线全部 sustained；sqlite 拐点 8-16 管道间、BUG-3 边界声明有数据支撑。证据 `docs/evidence/it3-baseline-20260916/`、[resource-baseline.md](./resource-baseline.md)）
 
 **追溯依据**：原审计记录「resource baseline 多为估算或目标值，不是当前 release 的实测记录」；
 [resource-baseline.md](./resource-baseline.md) 现状未随版本重新测定。BUG-3 已证明 sqlite

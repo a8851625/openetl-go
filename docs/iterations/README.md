@@ -28,7 +28,7 @@
 | --- | --- | --- | --- | --- |
 | [IT-1](./IT-1-verification-substrate/) | 验证基座与存量收口 | RA-4、RA-7、BUG-1/2/6、GAP-1/3/4、P4 follow-up | 无 | `complete` |
 | [IT-2](./IT-2-correctness/) | 正确性（控制面真值 + 数据面身份与顺序） | RA-1、RA-2、RA-3、GAP-7.1/.2/.3 | IT-1 | `complete`（2026-09-05；T2.1–T2.8 全部 done，16 项验收 passed） |
-| [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `active`（2026-09-09：T3.1–T3.4、T3.6-A 已交付；Round 5/5 推进 T3.6-B；CH 专项待决策） |
+| [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `complete`（2026-09-16：T3.1–T3.7 全部 done，含 T3.6-B 路径吞吐与三 backend 并发曲线；证据 it3-baseline-20260916） |
 | [IT-4](./IT-4-ga-closeout/) | GA 收口评估 | 证据刷新、maturity 对齐、移除 beta 判定 | IT-1 + IT-2 + IT-3 | `queued` |
 | [PT-A](./PT-A-maxcompute-certification/) | MaxCompute 真实环境认证（并行轨） | P0 | 外部凭据 | `blocked_external` |
 | [UI-A](./UI-A-frontend-hardening/) | 前端交互与向导逻辑加固（2026-09-12 审计） | 新增 roadmap 条目 UI-A | 无 | `complete`（UI-A.1–A.4 delivered 2026-09-12；缓冲窗口 UI-B.1–B.5 delivered 2026-09-14/15，e2e 158 passed / 0 failed；残留小项入小项池不阻塞） |
@@ -151,7 +151,7 @@ AGENTS.md 默认一次执行请求上限 **5 rounds**。每个迭代的 `tasks.m
 | --- | --- | --- | --- | --- | --- | --- |
 | IT-1 | T1.1/T1.2 完成 | T1.3/T1.4 完成 | T1.5/T1.6/T1.7/T1.8 完成 | T1.9/T1.10/T1.11 完成（Doris 外部镜像问题保留为 bounded follow-up） | T1.12 完成 | `complete` |
 | IT-2 | T2.1 完成：restore failure 持久化/API/health/strict gate | T2.2 完成：desired/observed + reset fencing | T2.3 完成：identity/order 共享契约 | T2.4/T2.5/T2.6 完成 | T2.7 完成：metadata-PK 跨路径认证；T2.8 完成：16 项验收核对 + 证据重绑；迭代 `complete` | `complete` |
-| IT-3 | T3.1–T3.4 复核交付；T3.6 通用基线修复中 | — | — | — | — | `active`（见复核交付记录） |
+| IT-3 | T3.1–T3.4 复核交付；T3.6 通用基线修复中 | T3.3 完成 | T3.4/T3.5 完成 | T3.6-A 基线 + T3.7 CI 接入完成 | T3.6-B 路径吞吐 + 三 backend 并发曲线闭合（2026-09-16，18/18 case）；迭代 `complete` | `complete` |
 | IT-4 | — | — | — | — | — | `queued` |
 | PT-A | — | — | — | — | — | `blocked_external` |
 | UI-A | UI-A.1–A.4 完成（2026-09-12，e2e 145） | UI-B.1 完成（e2e 148） | UI-B.2 完成（e2e 153） | UI-B.3/B.4 完成（e2e 156/158） | UI-B.5 缓冲轮完成（i18n 全量，e2e 158）；迭代 `complete` | `complete` |

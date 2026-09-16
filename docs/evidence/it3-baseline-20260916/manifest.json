@@ -1,0 +1,68 @@
+{
+ "commit": "ccc6df1e9d76988087de40169e684f64ed8baddb",
+ "hardware": {
+  "architecture": "arm64",
+  "client_platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "cpus": 5,
+  "kernel": "7.0.11-200.fc44.aarch64",
+  "memory_bytes": 16717205504,
+  "os": "linux",
+  "other_running_containers": 1,
+  "runtime_version": "5.8.4"
+ },
+ "measured_at": "2026-09-16T15:43:20Z",
+ "notes": "T3.6-B closing run: paths part (3 production paths, 1 trial) + curves part (sqlite/mysql/postgres x n=1,4,8,16,32, 1 trial). Raw per-case JSON kept alongside; server logs inside capacity-result.json cases. Run commands: ./hack/bench-baseline.sh --out /tmp/ra8-baseline --keep-images; ./hack/bench-capacity.sh --baseline /tmp/ra8-baseline/result.json --out /tmp/ra8-capacity --part all --trials 1 --counts 1,4,8,16,32 (CONTAINER_CLI=podman).",
+ "parameters": {
+  "app_cpus": 2,
+  "app_memory_bytes": 1073741824,
+  "backends": [
+   "sqlite",
+   "mysql",
+   "postgres"
+  ],
+  "backpressure_buffer": 1000,
+  "batch_size_curve": 100,
+  "batch_size_path": 500,
+  "checkpoint_batches_trigger": 10,
+  "checkpoint_interval_seconds": 1,
+  "concurrency": [
+   1,
+   4,
+   8,
+   16,
+   32
+  ],
+  "dependency_cpus_each": 1,
+  "dependency_memory_mib": {
+   "olap": 2048,
+   "other": 1024
+  },
+  "drain_timeout_seconds": 180,
+  "fixture": "id=1..N; grp=id%97; amount=id*7; payload=row-%09d- plus 48 x characters",
+  "flush_interval_ms": 100,
+  "gomaxprocs": 2,
+  "keep_going_after_failed_case": false,
+  "offered_rows_per_second_per_pipeline": 5000,
+  "part": "all",
+  "producer_cpus": 1,
+  "producer_memory_bytes": 536870912,
+  "sample_interval_seconds": 1,
+  "single_path_rows": 200000,
+  "trials": 1,
+  "warmup_seconds": 5,
+  "window_seconds": 20
+ },
+ "parts": {
+  "baseline": {
+   "result": "baseline-result.json",
+   "source_commit": "ccc6df1e9d76988087de40169e684f64ed8baddb",
+   "status": "passed"
+  },
+  "capacity": {
+   "cases_passed": 18,
+   "cases_total": 18,
+   "result": "capacity-result.json",
+   "status": "passed"
+  }
+ }
+}
