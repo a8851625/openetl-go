@@ -116,6 +116,13 @@ Follow [ops-runbook.md](./ops-runbook.md):
 | `ghcr.io/...:latest` as compose default | Forbidden in production assets |
 | Distributed compose with placeholders | **Beta only** until PR-D1; not standalone production evidence |
 
+## 9b. GA assessment
+
+Current explicit assessment: [ga-assessment-2026-09-16.md](./ga-assessment-2026-09-16.md)
+(standalone may claim production ready; project-level and distributed remain beta
+until the release-candidate recertification loop completes). Update this link on
+each assessment.
+
 ## 10. Sign-off
 
 | Role | Name | Date | Notes |

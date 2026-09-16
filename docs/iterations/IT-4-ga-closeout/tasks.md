@@ -18,11 +18,11 @@
 
 | ID | 任务 | 依赖 | 状态 | 证据落点 |
 | --- | --- | --- | --- | --- |
-| T4.1 | 证据全量复核与对照表 | IT-1/T1.5 | `todo` | `check-connector-evidence.sh` 输出 |
-| T4.2 | maturity 对齐（降级优先） | T4.1 | `todo` | connector-certification / path-contract / README / positioning |
-| T4.3 | 三 backend 升级与回滚 drill | IT-1、IT-3/T3.4 | `todo` | upgrade drill 脚本与耗时记录 |
-| T4.4 | 两条主推荐链路全矩阵认证 | IT-2 | `todo` | 证据 JSON |
-| T4.5 | GA 判定 + 发布说明 + 收口 | T4.1..T4.4 | `todo` | `docs/ga-assessment-<date>.md` |
+| T4.1 | 证据全量复核与对照表 | IT-1/T1.5 | `done` | `check-connector-evidence.sh` 输出 |
+| T4.2 | maturity 对齐（降级优先） | T4.1 | `done` | connector-certification / path-contract / README / positioning |
+| T4.3 | 三 backend 升级与回滚 drill | IT-1、IT-3/T3.4 | `done` | upgrade drill 脚本与耗时记录 |
+| T4.4 | 两条主推荐链路全矩阵认证 | IT-2 | `done` | 证据 JSON |
+| T4.5 | GA 判定 + 发布说明 + 收口 | T4.1..T4.4 | `done` | `docs/ga-assessment-<date>.md` |
 
 ## 任务明细
 
@@ -94,6 +94,25 @@
 6. `docs/iterations/README.md` 状态看板更新。
 
 **证据落点**：`docs/ga-assessment-<date>.md`；ROADMAP diff；`release-checklist.md`。
+
+## 领取与收口记录
+
+```text
+Round: 1-5 合并执行（评估型任务，一次闭环保收 2026-09-16）
+Roadmap item: IT-4 (T4.1-T4.5)
+Profile/path: standalone + storage backends + forced primary paths
+Objective: 显式 GA 判定；五条项目级门槛与十项验收逐条核验。
+Scope: hack/check-connector-evidence.sh、hack/e2e-storage-upgrade-*.sh、internal/etl/e2e 路径矩阵、docs/ga-assessment-2026-09-16.md
+Non-goals: 不就地修复缺口；不放宽门槛；不把 standalone 证据用于 distributed。
+Acceptance: spec 十项验收全 passed（见判定文档核验表）。
+Evidence:
+  - check-connector-evidence.sh 全绿（2 path 证据重绑 b1deefa + 15 connector manifest 绑定通过）
+  - go test -tags=e2e -e2e.strict：TestPathMySQLCDCMySQLUpsert（13.4s）、TestPathMySQLSnapshotCDCToClickHouse（71.4s）PASS
+  - e2e-storage-upgrade-{sqlite,mysql,postgres}.sh 三次实跑 PASS
+  - check-release-assets.sh PASS
+Result: delivered（判定：项目级保持 beta；standalone 可声明 production ready；distributed 保持 beta；connector-path 按 path 声明有效）
+Residual/follow-up: 发布候选 commit 重认证循环；distributed PR-D1 当前版本重验；CI 预算噪声一个版本周期后转 blocking 决策。
+```
 
 ## 领取记录模板
 
