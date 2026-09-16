@@ -31,7 +31,7 @@
 | [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `active`（2026-09-09：T3.1–T3.4、T3.6-A 已交付；Round 5/5 推进 T3.6-B；CH 专项待决策） |
 | [IT-4](./IT-4-ga-closeout/) | GA 收口评估 | 证据刷新、maturity 对齐、移除 beta 判定 | IT-1 + IT-2 + IT-3 | `queued` |
 | [PT-A](./PT-A-maxcompute-certification/) | MaxCompute 真实环境认证（并行轨） | P0 | 外部凭据 | `blocked_external` |
-| [UI-A](./UI-A-frontend-hardening/) | 前端交互与向导逻辑加固（2026-09-12 审计） | 新增 roadmap 条目 UI-A | 无 | `active`（UI-A.1–A.4 全部 delivered 2026-09-12，e2e 145 passed；待复审后 complete） |
+| [UI-A](./UI-A-frontend-hardening/) | 前端交互与向导逻辑加固（2026-09-12 审计） | 新增 roadmap 条目 UI-A | 无 | `complete`（UI-A.1–A.4 delivered 2026-09-12；缓冲窗口 UI-B.1–B.5 delivered 2026-09-14/15，e2e 158 passed / 0 failed；残留小项入小项池不阻塞） |
 
 ### 依赖关系
 
@@ -154,3 +154,4 @@ AGENTS.md 默认一次执行请求上限 **5 rounds**。每个迭代的 `tasks.m
 | IT-3 | T3.1–T3.4 复核交付；T3.6 通用基线修复中 | — | — | — | — | `active`（见复核交付记录） |
 | IT-4 | — | — | — | — | — | `queued` |
 | PT-A | — | — | — | — | — | `blocked_external` |
+| UI-A | UI-A.1–A.4 完成（2026-09-12，e2e 145） | UI-B.1 完成（e2e 148） | UI-B.2 完成（e2e 153） | UI-B.3/B.4 完成（e2e 156/158） | UI-B.5 缓冲轮完成（i18n 全量，e2e 158）；迭代 `complete` | `complete` |

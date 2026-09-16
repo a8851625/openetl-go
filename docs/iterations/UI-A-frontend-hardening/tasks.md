@@ -190,6 +190,22 @@ Result: delivered
 Residual/follow-up: db/table picker 对真实 MySQL/CH 连接的 e2e 留待有依赖容器的环境；wizard i18n 全量、全局搜索按钮、Dashboard 密度、行交互模型为小项池。
 ```
 
+```text
+Round: 5/5（UI-B 窗口，缓冲轮）
+Roadmap item: UI-B.5（小项池：wizard/详情/连接页 i18n 全量收口）
+Profile/path: standalone Web UI
+Objective: 全中文切换覆盖六步向导与详情/连接/问题页标签，消除裸英文与裸 i18n key（detail.status 之前直接渲染 key 本身）。
+Scope: web/src/{pages/pipelines/{first-task-wizard,PipelineDetailPage}.tsx,pages/IssuesPage.tsx,ConnectionsPage.tsx,i18n.ts}
+Non-goals: DagEditorPage 面板标签（25 处，多为专有名词/代码标识符，留待后续按需）；新功能。
+Acceptance:
+  1) 向导 33 处裸英文（字段标签/运行时旋钮/确认页摘要行/右侧摘要/错误面板/stage 按钮）全部走 t()；
+  2) 详情页 lifecycle/spec 表格 10 项、连接页 Resources/Readiness、问题页 DLQ backlog 键化；补齐 detail.*/wizard.* 共 42 个 i18n key（en/zh）；
+  3) typecheck 0 错误、lint 无新增告警（29 持平）、build 通过。
+Evidence: CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-b5 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 158 passed / 0 failed（含 M1 全中文切换断言块）。
+Result: delivered
+Residual/follow-up: DagEditorPage 面板标签 i18n（25 处）与全局搜索按钮、Dashboard 密度为后续小项池；不阻塞迭代收口。
+```
+
 验收矩阵：
 
 | Criterion | Evidence | Result | Residual/blocker |
