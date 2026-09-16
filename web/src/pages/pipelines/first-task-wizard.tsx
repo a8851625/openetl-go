@@ -1585,11 +1585,11 @@ export function FirstTaskWizard({
           <div className="min-w-0 space-y-4 overflow-x-hidden p-5 md:p-6" data-testid="wizard-step-body">
             <ApiErrorPanel
               error={errorDetails || (error ? { error } : null)}
-              title="Pipeline configuration failed"
+              title={t('wizard.errorConfigFailed')}
               testId="wizard-error-details"
               onDismiss={clearError}
               onNavigate={navigateToIssue}
-              navigateLabel="Open field"
+              navigateLabel={t('wizard.openField')}
               className="mb-2"
             />
             {restoredSecretHint && (
@@ -1603,7 +1603,7 @@ export function FirstTaskWizard({
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepScenario')}</h3>
               <p className="mb-4 text-sm text-muted-foreground">{t('wizard.emptyStart')}</p>
               <div className="mb-4" data-field-path="name" tabIndex={-1}>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Pipeline name</label>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('wizard.fieldPipelineName')}</label>
                 <Input data-testid="wizard-pipeline-name" value={name} onChange={(e) => { setWizardTouched(true); setName(e.target.value); }} />
                 {issuesForField('name').map((issue, i) => (
                   <div key={i} className="mt-1 text-xs text-rose-700">
@@ -1657,7 +1657,7 @@ export function FirstTaskWizard({
               <p className="mb-3 text-sm text-muted-foreground">{t('wizard.sourceHint')}</p>
               <div className="mb-3 grid gap-3 sm:grid-cols-2">
                 <div data-field-path="source.type" tabIndex={-1}>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('wizard.fieldType')}</label>
                   <select
                     data-testid="wizard-source-type"
                     className={wizardSelectClass}
@@ -1682,7 +1682,7 @@ export function FirstTaskWizard({
                   ))}
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Connection</label>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('wizard.fieldConnection')}</label>
                   <select
                     data-testid="wizard-source-connection"
                     className={cn(wizardSelectClass, 'text-sm')}
@@ -1752,7 +1752,7 @@ export function FirstTaskWizard({
               )}
               <div className="mb-3 grid gap-3 sm:grid-cols-2">
                 <div data-field-path="sink.type" tabIndex={-1}>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('wizard.fieldType')}</label>
                   <select
                     data-testid="wizard-sink-type"
                     className={wizardSelectClass}
@@ -1779,7 +1779,7 @@ export function FirstTaskWizard({
                   ))}
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Connection</label>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('wizard.fieldConnection')}</label>
                   <select
                     data-testid="wizard-sink-connection"
                     className={cn(wizardSelectClass, 'text-sm')}
@@ -2055,13 +2055,13 @@ export function FirstTaskWizard({
                         <Button size="sm" variant="ghost" className="px-2" onClick={() => moveTransform(index, -1)} disabled={index === 0}>↑</Button>
                         <Button size="sm" variant="ghost" className="px-2" onClick={() => moveTransform(index, 1)} disabled={index === transformConfigs.length - 1}>↓</Button>
                         <Button size="sm" variant="secondary" className="px-2" onClick={() => dryRunThroughStage(index)} disabled={busy === `stage-${index}`}>
-                          <PlayIcon /> stage {index + 1}
+                          <PlayIcon /> {t('wizard.stageN').replace('{n}', String(index + 1))}
                         </Button>
                       </div>
                     ))}
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-muted-foreground">Sample record</label>
+                    <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('wizard.fieldSampleRecord')}</label>
                     <Textarea
                       className={cn('min-h-24 font-mono text-xs', !sampleParse.ok && 'border-rose-400 ring-1 ring-rose-200')}
                       value={sampleText}
@@ -2101,7 +2101,7 @@ export function FirstTaskWizard({
                   )}
                   {dryRunResult !== null && (
                     <div className="rounded-lg border border-primary/20 bg-accent/40 p-3">
-                      <div className="mb-2 text-xs font-semibold text-primary">Dry-run output</div>
+                      <div className="mb-2 text-xs font-semibold text-primary">{t('wizard.dryRunOutput')}</div>
                       <pre className="max-h-56 overflow-auto text-xs">{prettyJSON(dryRunResult)}</pre>
                     </div>
                   )}
@@ -2116,10 +2116,10 @@ export function FirstTaskWizard({
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepSafety')}</h3>
               <p className="mb-3 text-sm text-muted-foreground">{t('wizard.safetyHint')}</p>
               <div className="rounded-lg border border-border bg-card p-3" data-testid="wizard-runtime-safety">
-                <div className="mb-3 text-xs font-semibold">Runtime defaults</div>
+                <div className="mb-3 text-xs font-semibold">{t('wizard.runtimeDefaults')}</div>
                 <div className="grid gap-3 sm:grid-cols-3">
                   <label className="block text-xs text-muted-foreground">
-                    <span className="mb-1 block font-medium">Batch size</span>
+                    <span className="mb-1 block font-medium">{t('wizard.fieldBatchSize')}</span>
                     <Input
                       data-testid="wizard-batch-size"
                       type="number"
@@ -2129,7 +2129,7 @@ export function FirstTaskWizard({
                     />
                   </label>
                   <label className="block text-xs text-muted-foreground">
-                    <span className="mb-1 block font-medium">Checkpoint sec</span>
+                    <span className="mb-1 block font-medium">{t('wizard.fieldCheckpointSec')}</span>
                     <Input
                       data-testid="wizard-checkpoint-sec"
                       type="number"
@@ -2155,7 +2155,7 @@ export function FirstTaskWizard({
                         setDlqEnabled(e.target.checked);
                       }}
                     />
-                    DLQ enabled
+                    {t('wizard.dlqEnabled')}
                   </label>
                 </div>
                 <button
@@ -2164,12 +2164,12 @@ export function FirstTaskWizard({
                   className="mt-2 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:underline"
                   onClick={() => setRuntimeMoreOpen((v) => !v)}
                 >
-                  {runtimeMoreOpen ? 'Hide retry & backpressure' : 'Retry & backpressure options'}
+                  {runtimeMoreOpen ? t('wizard.hideRetryBackpressure') : t('wizard.retryBackpressureOptions')}
                 </button>
                 {runtimeMoreOpen && (
                   <div data-testid="wizard-runtime-advanced" className="mt-2 grid gap-3 rounded border border-dashed border-border p-2 sm:grid-cols-2 lg:grid-cols-4">
                     <label className="block text-xs text-muted-foreground">
-                      <span className="mb-1 block font-medium">Retry max attempts</span>
+                      <span className="mb-1 block font-medium">{t('wizard.fieldRetryMaxAttempts')}</span>
                       <Input
                         data-testid="wizard-retry-max-attempts"
                         type="number" min={1}
@@ -2178,7 +2178,7 @@ export function FirstTaskWizard({
                       />
                     </label>
                     <label className="block text-xs text-muted-foreground">
-                      <span className="mb-1 block font-medium">Retry initial ms</span>
+                      <span className="mb-1 block font-medium">{t('wizard.fieldRetryInitialMs')}</span>
                       <Input
                         data-testid="wizard-retry-initial-ms"
                         type="number" min={1}
@@ -2187,7 +2187,7 @@ export function FirstTaskWizard({
                       />
                     </label>
                     <label className="block text-xs text-muted-foreground">
-                      <span className="mb-1 block font-medium">Retry max ms</span>
+                      <span className="mb-1 block font-medium">{t('wizard.fieldRetryMaxMs')}</span>
                       <Input
                         data-testid="wizard-retry-max-ms"
                         type="number" min={1}
@@ -2196,7 +2196,7 @@ export function FirstTaskWizard({
                       />
                     </label>
                     <label className="block text-xs text-muted-foreground">
-                      <span className="mb-1 block font-medium">Backpressure buffer</span>
+                      <span className="mb-1 block font-medium">{t('wizard.fieldBackpressureBuffer')}</span>
                       <Input
                         data-testid="wizard-backpressure-buffer"
                         type="number" min={1}
@@ -2273,7 +2273,7 @@ export function FirstTaskWizard({
                       {issue.remediation && <div className="mt-1 break-words whitespace-pre-wrap text-muted-foreground">Fix: {issue.remediation}</div>}
                       {issue.field && (
                         <Button variant="link" size="sm" className="h-auto px-0 py-0 text-xs" onClick={() => navigateToIssue(issue)}>
-                          Open field
+                          {t('wizard.openField')}
                         </Button>
                       )}
                     </div>
@@ -2356,35 +2356,35 @@ export function FirstTaskWizard({
                   </div>
                 )}
                 <div className="flex justify-between gap-3">
-                  <span className="text-muted-foreground">Name</span>
+                  <span className="text-muted-foreground">{t('wizard.fieldName')}</span>
                   <span className="font-semibold">{submittedName}</span>
                 </div>
                 <div className="flex justify-between gap-3">
-                  <span className="text-muted-foreground">Path</span>
+                  <span className="text-muted-foreground">{t('wizard.fieldPath')}</span>
                   <span className="text-right font-mono text-xs">{summaryPath}</span>
                 </div>
                 <div className="flex justify-between gap-3">
-                  <span className="text-muted-foreground">Batch / checkpoint / DLQ</span>
+                  <span className="text-muted-foreground">{t('wizard.fieldRuntimeSummary')}</span>
                   <span className="tabular" data-testid="wizard-confirm-runtime">
                     {submittedBatch} / {submittedCheckpoint}s / {submittedDlq}
                   </span>
                 </div>
                 <div className="flex justify-between gap-3">
-                  <span className="text-muted-foreground">Write mode</span>
+                  <span className="text-muted-foreground">{t('wizard.fieldWriteMode')}</span>
                   <span className="font-mono text-xs" data-testid="wizard-confirm-write-mode">{submittedWriteMode}</span>
                 </div>
                 <div className="flex justify-between gap-3">
-                  <span className="text-muted-foreground">Retry / buffer</span>
+                  <span className="text-muted-foreground">{t('wizard.fieldRetryBuffer')}</span>
                   <span className="font-mono text-xs" data-testid="wizard-confirm-retry">{submittedRetrySummary}</span>
                 </div>
                 {submittedSchedule && (
                   <div className="flex justify-between gap-3">
-                    <span className="text-muted-foreground">Schedule</span>
+                    <span className="text-muted-foreground">{t('wizard.fieldSchedule')}</span>
                     <span className="font-mono text-xs" data-testid="wizard-confirm-schedule">{submittedSchedule}</span>
                   </div>
                 )}
                 <div className="flex justify-between gap-3">
-                  <span className="text-muted-foreground">Template</span>
+                  <span className="text-muted-foreground">{t('wizard.fieldTemplate')}</span>
                   <span>{template.id}</span>
                 </div>
               </div>
@@ -2396,7 +2396,7 @@ export function FirstTaskWizard({
                       disabled={busy === 'create' || wizardBlocked}
                       onClick={() => createPipeline(false)}
                     >
-                      Create without starting
+                      {t('wizard.createWithoutStarting')}
                     </Button>
                     <Button
                       data-testid="wizard-create-start"
@@ -2474,24 +2474,24 @@ export function FirstTaskWizard({
             </h3>
             <div className="space-y-3 text-sm">
               <div>
-                <div className="text-[11px] text-muted-foreground">Name</div>
+                <div className="text-[11px] text-muted-foreground">{t('wizard.fieldName')}</div>
                 <div className="font-semibold">{name || '—'}</div>
               </div>
               <div>
-                <div className="text-[11px] text-muted-foreground">Source</div>
+                <div className="text-[11px] text-muted-foreground">{t('wizard.fieldSource')}</div>
                 <div className="rounded-md bg-card px-2 py-1.5 text-xs">
                   {sourceType}
                   {sourceConnection ? ` · ${sourceConnection}` : ''}
                 </div>
               </div>
               <div>
-                <div className="text-[11px] text-muted-foreground">Transform</div>
+                <div className="text-[11px] text-muted-foreground">{t('wizard.fieldTransform')}</div>
                 <div className="rounded-md bg-card px-2 py-1.5 text-xs">
                   {transformConfigs.map((x) => x.type).join(' → ') || '—'}
                 </div>
               </div>
               <div>
-                <div className="text-[11px] text-muted-foreground">Sink</div>
+                <div className="text-[11px] text-muted-foreground">{t('wizard.fieldSink')}</div>
                 <div className="rounded-md bg-card px-2 py-1.5 text-xs">
                   {sinkType}
                   {sinkConnection ? ` · ${sinkConnection}` : ''}

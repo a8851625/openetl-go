@@ -289,15 +289,15 @@ export function PipelineDetailPage({
                   </CardHeader>
                   <CardContent className="space-y-2 text-sm">
                     <div className="flex justify-between gap-2">
-                      <span className="text-muted-foreground">Status</span>
+                      {t('detail.status')}
                       <PipelineHealthBadge health={health} t={t} />
                     </div>
                     <div className="flex justify-between gap-2">
-                      <span className="text-muted-foreground">Mode</span>
+                      <span className="text-muted-foreground">{t('detail.mode')}</span>
                       <span>{deriveModeLabel(pipeline, metric)}</span>
                     </div>
                     <div className="flex justify-between gap-2">
-                      <span className="text-muted-foreground">Uptime</span>
+                      <span className="text-muted-foreground">{t('detail.uptime')}</span>
                       <span className="tabular text-xs">{pipeline.stats.uptime || '—'}</span>
                     </div>
                     <div className="flex justify-between gap-2">
@@ -438,13 +438,13 @@ export function PipelineDetailPage({
                 <table className="w-full text-left text-sm">
                   <thead className="bg-muted/50 text-xs text-muted-foreground">
                     <tr>
-                      <th className="px-3 py-2">Time</th>
-                      <th className="px-3 py-2">Result</th>
-                      <th className="px-3 py-2">Read</th>
-                      <th className="px-3 py-2">Written</th>
-                      <th className="px-3 py-2">Failed</th>
+                      <th className="px-3 py-2">{t('detail.time')}</th>
+                      <th className="px-3 py-2">{t('detail.result')}</th>
+                      <th className="px-3 py-2">{t('detail.read')}</th>
+                      <th className="px-3 py-2">{t('detail.written')}</th>
+                      <th className="px-3 py-2">{t('detail.failed')}</th>
                       <th className="px-3 py-2">DLQ</th>
-                      <th className="px-3 py-2">Checkpoint</th>
+                      <th className="px-3 py-2">{t('detail.checkpoint')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -640,10 +640,10 @@ export function PipelineDetailPage({
                 <div>
                   <div className="mb-2 text-xs font-semibold text-muted-foreground">{t('pipe.formView')}</div>
                   <div className="space-y-2 rounded-lg border border-border p-3 text-sm">
-                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">Name</span><span className="font-medium">{pipeline.name}</span></div>
-                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">Status</span><span>{pipeline.status}</span></div>
-                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">Mode</span><span>{deriveModeLabel(pipeline, metric)}</span></div>
-                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">Tags</span><span className="text-xs">{(pipeline.tags || []).join(', ') || '—'}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">{t('wizard.fieldName')}</span><span className="font-medium">{pipeline.name}</span></div>
+                    <div className="flex justify-between gap-2">{t('detail.status')}<span>{pipeline.status}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">{t('detail.mode')}</span><span>{deriveModeLabel(pipeline, metric)}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">{t('detail.tags')}</span><span className="text-xs">{(pipeline.tags || []).join(', ') || '—'}</span></div>
                     <div className="text-xs text-muted-foreground">{t('pipe.specNote')}</div>
                   </div>
                 </div>

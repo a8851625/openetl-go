@@ -248,7 +248,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="text-xs font-bold uppercase tracking-[0.08em] text-primary">Resources</div>
+          <div className="text-xs font-bold uppercase tracking-[0.08em] text-primary">{t('conn.resources')}</div>
           <h2 className="mt-1 text-2xl font-semibold tracking-tight">{t('nav.connections')}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             {connections.length} instances · {connections.filter((c) => c.last_status === 'ok').length} healthy
@@ -433,7 +433,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                 </div>
                 {selectedDescriptor.readiness && (
                   <div className="rounded border border-border bg-card p-2 text-xs text-muted-foreground">
-                    <div className="mb-1 font-medium text-foreground">Readiness</div>
+                    <div className="mb-1 font-medium text-foreground">{t('conn.readiness')}</div>
                     {selectedDescriptor.readiness.summary && (
                       <div className="mb-1">{selectedDescriptor.readiness.summary}</div>
                     )}

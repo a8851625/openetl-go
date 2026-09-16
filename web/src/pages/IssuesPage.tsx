@@ -71,7 +71,7 @@ export function IssuesPage({
         </Card>
         <Card>
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground">DLQ backlog</div>
+            <div className="text-xs text-muted-foreground">{t('issue.dlqBacklog')}</div>
             <div className="mt-1 tabular text-3xl font-bold">{dlqTotal.toLocaleString()}</div>
           </CardContent>
         </Card>
