@@ -17,7 +17,7 @@
 | ID | 任务 | 依赖 | Round | 状态 | 证据落点 |
 | --- | --- | --- | --- | --- | --- |
 | T5.1 | CH-C1：dedup token + provider 实现与错误分类 | — | Round 1 | `done` | commit da3f80c |
-| T5.2 | CH-C1：crash-window/协议等价 e2e + 文档 | T5.1 | Round 2 | `todo` | e2e + docs/etl-idempotency.md |
+| T5.2 | CH-C1：crash-window/协议等价 e2e + 文档 | T5.1 | Round 2 | `done` | commit 0714244；evidence ch_dedup_crash_window 4/4 |
 | T5.3 | CH-C3：Kafka metadata envelope 全链路 | — | Round 3 | `todo` | core/source/sink + e2e |
 | T5.4 | CH-C2：schema contract 存储与校验 | — | Round 4 | `todo` | storage + server validate/preflight |
 | T5.5 | CH-C2：e2e + migration drill + 迭代收口 | T5.4 | Round 5 | `todo` | e2e + upgrade drill + ROADMAP 回填 |
@@ -64,9 +64,25 @@ Residual/follow-up: T5.2 crash-window e2e + 协议等价 conformance + idempoten
 
 **证据落点**：
 
-- `internal/etl/e2e/path_mysql_snapcdc_clickhouse_test.go`（扩展）+ 新 HTTP case 文件
-- `go test -tags=e2e -e2e.strict ./internal/etl/e2e/ -run 'ClickHouse' -count=1`
-- `docs/etl-idempotency.md`
+- `internal/etl/e2e/path_ch_dedup_crash_test.go`（新，native+http 两 phase）
+- evidence `docs/evidence/ch_dedup_crash_window.json`（4/4 passed，绑定 7acfec5）
+- `docs/etl-idempotency.md` 新章节；commit `0714244`
+
+**领取记录**：
+
+```text
+Round: 2/5
+Roadmap item: CH-C1 (IT-5/T5.2)
+Profile/path: standalone + clickhouse connector path (native/http)
+Objective: 双协议 crash-window e2e——checkpoint envelope 携带 dedup token，SIGKILL 于 ack 后/commit 前窗口，replay 后 FINAL 状态一致。
+Scope: internal/etl/e2e/path_ch_dedup_crash_test.go（新）、internal/etl/pipeline/metrics.go（hook 转发修复）、internal/etl/sink/clickhouse{,_dedup}.go（panic 修复）、docs/etl-idempotency.md
+Non-goals: Kafka envelope（T5.3）；schema contract（T5.4/5.5）
+Acceptance: T5.2 验收 1-4（native/http 各 ack_token_in_checkpoint + crash_window_replay；单表两协议；tombstone/mutation 边界文档；DLQ 不丢）
+Evidence: e2e -e2e.strict 4/4 passed（ch_dedup_crash_window.json）；两既有 path 回归 PASS；go test ./internal/etl/... 全绿
+Result: delivered
+Residual/follow-up: 多表（table_template）crash-window case 归入后续 conformance 扩展；T5.3 继续
+额外修复: SinkWriteHook 装饰器遮蔽 provider 接口（真实 bug，由新 e2e 捕获）；dedupPipelineKey 未注入时 replay 路径 panic（破坏了 snapcdc DLQ replay）
+```
 
 ### T5.3 CH-C3：Kafka metadata envelope 全链路
 
