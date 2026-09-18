@@ -92,7 +92,7 @@ Production ready 必须同时满足以下目标：
 - standalone/master/worker/headless 运行文档、CLI smoke 和最小生产 runbook。
 - MySQL/PostgreSQL `pre_write`、`increment`、生成列跳过、Debezium metadata PK 提取，以及多表映射/CDC 宽表生产候选链路。
 
-当前公开成熟度必须继续以 descriptor/readiness、组件文档和可重复测试证据为准。没有真实环境证据的 MaxCompute、Feishu 和第三方插件不得提升为 production。
+当前公开成熟度必须继续以 descriptor/readiness、组件文档和可重复测试证据为准。没有真实环境证据的 MaxCompute（2026-09-17 起移除认证主线，实现保留、maturity 维持 experimental）、Feishu 和第三方插件不得提升为 production。
 
 ## 执行规则
 
@@ -116,9 +116,33 @@ Roadmap 状态只使用以下值：
 
 ## 当前主任务
 
+### IT-5：CH 第一批 —— 写入确认/去重契约 + Kafka metadata envelope + additive-only schema contract
+
+状态：`active`（2026-09-17 用户决策立项：CH-C1/CH-C3/CH-C2 晋级第一批；MaxCompute P0 同日移除执行面）
+
+来源：ROADMAP「ClickHouse 迭代启发候选」CH-C1/CH-C3/CH-C2 候选条目（动机分析与验收锚点见候选节）；依赖均已达：RA-1/IT-2 版本与删除语义（delivered）、GAP-7 身份契约（delivered）、P3.1 descriptor 契约（delivered）、schema evolution 决议（2026-09-05 用户确认采 (b) additive-only）、RA-8/T3.6 容量基线（delivered）。
+
+核心判断：`core.SinkCommitMetadataProvider` 接口与 checkpoint 集成已存在但无生产实现；Kafka source 未透传 headers、sink producer 使用写入时钟而非源 timestamp、headers 不在统一 Metadata；schema 无持久化 contract/fingerprint，新增列无兼容矩阵。三个子项分别强化 at-least-once 核心承诺、全链路可追溯性、schema 安全演进。
+
+交付内容（验收锚点沿用候选节，数字在迭代 spec 冻结）：
+
+- **CH-C1**：`SinkCommitMetadataProvider` 首个生产实现（稳定 dedup token、native/HTTP 等价确认等待、错误分类三态、批次边界等价）；native 与 HTTP 各一次“目标确认后、checkpoint 提交前崩溃 → 重启/replay”e2e，重复吸收结果一致；tombstone 与物理 mutation 边界文档化；失败仍进 DLQ 不丢记录。
+- **CH-C3**：headers 进入统一 `core.Metadata`；key/源 timestamp/partition/offset/headers 在 source→transform→sink→DLQ→replay 逐字段 round-trip；Kafka producer 使用源 timestamp、透传 headers；Schema Registry 只做 capability/preflight 探测不新增外部服务。
+- **CH-C2**：schema contract/fingerprint 随 pipeline spec/version 持久化；类型兼容矩阵（新增列放行、删除/重命名/不兼容类型在 validate/preflight 阻断）；旧 contract replay 有可解释结果。
+
+非目标：不做跨 sink exactly-once；不引入通用 keyed state/timer；不做删除列/重命名传播；不新增 Schema Registry 外部依赖；不做 CH-C4..C8（保持候选池）。
+
+验收：见 [IT-5 spec](./iterations/IT-5-ch-write-contract/spec.md)；共同验收锚点（故障不丢数据、协议等价 conformance、量化指标绑定 commit/镜像、边界先于能力）全部适用。
+
+### UI-C：向导行交互模型收尾（并行小项，不占 active 主任务槽）
+
+状态：`queued`（2026-09-17 立项；P2-5 残留 + 批量步骤操作）
+
+来源：UI-A 审计 P2-5（ConfigForm label 无 htmlFor 绑定、字段名裸露内部命名、移动/删除 transform 无风险提示）——删除确认已于 UI-B.7 交付，剩余 htmlFor 绑定、字段语义标签、移动顺序风险提示；加 UI-B.7 收口时记录的“向导 transform 链批量操作”。规模 1–2 轮。
+
 ### UI-A：前端交互与向导逻辑加固（2026-09-12 审计）
 
-状态：`delivered`（UI-A.1–A.4 全部 delivered 2026-09-12：两轮审计的 P0×9/P1×19/P2×7 项全部修复；缓冲轮 UI-B.1–B.5 于 2026-09-14/15 续交付：spec_summary 真相契约、向导小项、ConfirmDialog 统一、introspection 消费、i18n 全量收口，e2e 最终 158 passed / 0 failed。迭代收口，残留小项入后续小项池，不阻塞）
+状态：`delivered`（UI-A.1–A.4 全部 delivered 2026-09-12：两轮审计的 P0×9/P1×19/P2×7 项全部修复；缓冲轮 UI-B.1–B.5 于 2026-09-14/15 续交付：spec_summary 真相契约、向导小项、ConfirmDialog 统一、introspection 消费、i18n 全量收口，e2e 最终 158 passed / 0 failed。缓冲窗口后 2026-09-16/17 小项池续交付 DagEditor i18n、全局搜索/密度、删除确认，e2e 163 passed / 0 failed。迭代收口）
 
 来源：v0.2.12-beta.19 发布后的两轮审计 —— 页面交互审计（易用性/美观/逻辑）与创建向导六 Step 表单逻辑审计。完整发现清单（P0-1..P0-9、P1-1..P1-19、P2-1..P2-7）见 [spec.md](./iterations/UI-A-frontend-hardening/spec.md)。
 
@@ -140,35 +164,19 @@ Roadmap 状态只使用以下值：
 - 高危操作统一确认与结果汇总；`npm run typecheck/build/lint` 与 `hack/e2e-ui.sh` 全绿。
 - 涉及后端（UI-A.3 的 stats last_error）的增量在 push 前按证据门禁重跑受影响路径 e2e 并重绑 manifest。
 
-### P0：MaxCompute 真实环境认证
+### P0：MaxCompute 真实环境认证（已移除，2026-09-17）
 
-状态：`blocked_external`
+状态：`deferred`（用户决策 2026-09-17：从 roadmap 执行面与迭代中移除）
 
-这是现有最高优先级，不改变原 roadmap 排序。MaxCompute/ODPS sink 的 SDK batch writer、partition/schema validator、远端 preflight、错误分类、retry/backoff、metrics 和环境门控 e2e 脚本已经存在；当前缺口不是继续实现 writer，而是真实 MaxCompute 环境中的认证证据。
-
-解除阻塞所需输入：
-
-- `MAXCOMPUTE_ENDPOINT`
-- `MAXCOMPUTE_PROJECT`
-- `MAXCOMPUTE_TABLE`
-- `MAXCOMPUTE_ACCESS_KEY_ID`
-- `MAXCOMPUTE_ACCESS_KEY_SECRET`
-- 可选的 tunnel endpoint、quota 和用于失败注入的受控权限/测试表
-
-验收标准：
-
-- 实跑 Kafka ODS JSON -> `project` / `type_convert` -> MaxCompute 分区表。
-- 验证正常写入、动态/静态分区、权限失败分类和远端 schema/partition preflight。
-- 验证 sink 暂时失败进入 DLQ、修复后 replay 写回。
-- 验证应用 restart、checkpoint reset/replay，并记录 append 模式可能重复的边界。
-- 更新组件文档、connector readiness 和 certification evidence。
-- 在上述证据完成前，`maxcompute` / `odps` maturity 保持 `experimental`。
-
-现有入口：[e2e-maxcompute.sh](../hack/e2e-maxcompute.sh)、[sink-maxcompute.md](./components/sink-maxcompute.md)。
+用户已决定下线 MaxCompute 认证主线。已交付的实现（SDK batch writer、partition/schema validator、
+远端 preflight、错误分类、retry/backoff、metrics、env-gated e2e 脚本）保留在代码库中，
+maturity 维持 `experimental`、preflight 继续阻断 writer-disabled 管道；但不再占用 P0 槽位、
+不再阻塞任何优先级决策，真实环境认证不再作为项目里程碑。若未来需要重启，凭据需求与验收标准
+见 git 历史与本节早期版本（含 `MAXCOMPUTE_ENDPOINT/PROJECT/TABLE/ACCESS_KEY_ID/ACCESS_KEY_SECRET`）。
 
 ## Production Ready 收口队列
 
-本节把 2026-07-24 production-readiness 审计中确认的缺口拆成可交付任务。它**不改变当前 MaxCompute P0 的最高优先级**；P0 仍为 `blocked_external`。当外部凭据继续不可得且需要切换主任务时，推荐顺序为 `PR-0 -> PR-1 -> PR-2 -> P3 -> P4 -> P5`，但实际切换仍需显式确认。`PR-D1` 是 distributed 独立门槛，在 standalone 收口后实施，除非用户明确把 distributed 提前。
+本节把 2026-07-24 production-readiness 审计中确认的缺口拆成可交付任务。MaxCompute P0 已于 2026-09-17 移除执行面（`deferred`），本节各 PR/P 条目均已交付，仅作历史记录保留。`PR-D1` 是 distributed 独立门槛，在 standalone 收口后实施，除非用户明确把 distributed 提前。
 
 | 阶段 | 面向目标 | 退出结果 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
@@ -372,7 +380,7 @@ PR-0 最终验收矩阵：
 | UI token 内存化与当前构建上下文 | `npm run typecheck && npm run build`；`./hack/e2e-ui-token.sh`；`.dockerignore` 排除本地缓存/构建产物 | passed | 完整 UI 向导脚本的 17 个 P4 residual 不属于 PR-0 |
 | runtime/release regression | `./hack/e2e-runtime-smoke.sh`；`go test ./... -count=1`；`go test -race ./internal/etl/orchestrator ./internal/etl/server -count=1`；`git diff --check` | passed | 未认证 connector/path 仍按各自 maturity 声明 |
 
-因此 `PR-0.1`、`PR-0.2` 主事务切片、`PR-0.3` 安全/TLS 切片、`PR-0.2a` scheduler compensation 和本轮最终验收均已交付；`PR-0` 现标记为 `delivered`。这不提升项目级或 distributed maturity：P0 MaxCompute 仍为 `blocked_external`，PR-1 storage/secret 演进和 PR-D1 distributed transport 保持原顺序。P4 UI e2e residual 已于 2026-08-06 收口（`hack/e2e-ui.sh` 108/0）。
+因此 `PR-0.1`、`PR-0.2` 主事务切片、`PR-0.3` 安全/TLS 切片、`PR-0.2a` scheduler compensation 和本轮最终验收均已交付；`PR-0` 现标记为 `delivered`。（历史注：MaxCompute P0 当时为 `blocked_external`，2026-09-17 起已移除执行面。）P4 UI e2e residual 已于 2026-08-06 收口（`hack/e2e-ui.sh` 108/0）。
 
 最终交接：
 
@@ -453,7 +461,7 @@ Profile/path: standalone control plane
 Objective: connection/settings 持久化 secret 字段级加密、rotation 和 restart/restore 可验证
 Scope: storage secret envelope adapter、connection/settings encode/decode、API mask/preserve、runtime-modes 与相关测试
 Non-goals: PR-1.2 migration lock/concurrent version；PR-1.3 backup/restore/janitor；PR-2 path certification；重新实现 pipeline spec encryption；RBAC
-Dependency: PR-0 delivered；P0 MaxCompute 仍 blocked_external，本轮按执行方案显式推进 PR-1.1
+Dependency: PR-0 delivered；MaxCompute P0 当时仍 blocked_external（2026-09-17 起已移除执行面），本轮按执行方案显式推进 PR-1.1
 Acceptance: 1) 固定测试 secret 写入后 dump/直接查询无明文；2) API 只返回 mask，masked 更新不覆盖真实 secret；3) key ID/旧 key/新 key re-encrypt/错误 key/损坏密文有明确结果；4) 重启后 connection/settings 仍可用于 runtime；5) 失败路径不把 secret 写入日志/audit/task/DLQ
 Evidence: internal/etl/storage/secret_fields*.go；internal/etl/server/secret_envelope_test.go；go test ./internal/etl/storage ./internal/etl/server -count=1；go test -race ...；./hack/e2e-storage-mysql.sh；./hack/e2e-storage-postgres.sh；docs/runtime-modes.md
 Result: delivered
@@ -555,7 +563,7 @@ Round 1/5，三个 storage backend 的兼容、原子性、保真度、插件恢
 
 状态：`delivered`（2026-08-08 · PR-2.4.1/.2/.3/.4）
 
-本项不改变已交付 PR-2 的主链路声明，也不把当前 blocked_external 的 MaxCompute P0 静默改为已完成；它只修复审计确认的恢复边界：checkpoint storage/envelope 读取失败时，linear 与 DAG 不得以空位点继续打开 source。
+本项不改变已交付 PR-2 的主链路声明（MaxCompute P0 已于 2026-09-17 移除执行面）；它只修复审计确认的恢复边界：checkpoint storage/envelope 读取失败时，linear 与 DAG 不得以空位点继续打开 source。
 
 当前领取记录：
 
@@ -728,7 +736,7 @@ P3.1 本轮验收矩阵（Round 4/5）：
 | --- | --- | --- | --- |
 | metadata required 只由 schema 派生 | `pluginCapabilityMetadata` 不再携带 required；`pluginMetadataFromSchema`；`TestPluginMetadataRequiredFieldsAreDerivedFromSchema` | passed | 条件必填（如 table/query 二选一）继续由 validate/preflight 表达，不伪装成静态 required |
 | descriptor required/secret/scope/default 与 schema 一致 | `TestConnectorDescriptorConfigContractMatchesSchemaExactly`；JDBC `dsn` secret；ClickHouse `async_insert_wait` schema/runtime default=true | passed | 其他 connector 构造默认值的全量自动对账可另列后续，不扩大本轮 |
-| 任一 production source/sink 自动进入 certification target | `TestConnectorCertificationKitProductionSet` 对 production 集合做双向完全匹配；新增 HTTP、PostgreSQL/PostgreSQL alias、Doris target 与组件文档/e2e 引用 | passed | maturity 未提升；MaxCompute/ODPS 仍 experimental + blocked_external |
+| 任一 production source/sink 自动进入 certification target | `TestConnectorCertificationKitProductionSet` 对 production 集合做双向完全匹配；新增 HTTP、PostgreSQL/PostgreSQL alias、Doris target 与组件文档/e2e 引用 | passed | maturity 未提升；MaxCompute/ODPS 仍 experimental（2026-09-17 起移除认证主线） |
 | 新增 production target 的实际路径证据 | `CONTAINER_CLI=docker ./hack/e2e-http-source.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-mysql-postgres.sh`；`CONTAINER_CLI=docker E2E_SKIP_BUILD=1 ./hack/e2e-doris.sh` | passed | 复用既有 MySQL 容器时 compose 输出 name-in-use 环境 warning，但脚本最终退出 0 |
 | PostgreSQL 16 generated-column schema introspection | 首次 e2e 暴露 `attgenerated` binary char -> string 扫描失败；改为 DB 端 `is_generated` bool 后同一 e2e 正常写入、schema rejection 与 checkpoint reset/upsert replay 均通过 | passed | 无 |
 | package/race/static checks | `go test ./internal/etl/... -count=1`；`go test -race ./internal/etl/server ./internal/etl/sink -count=1`；`go vet ./internal/etl/server ./internal/etl/sink`；`git diff --check` | passed | 无 |
@@ -789,7 +797,7 @@ Roadmap item: P3.3.1 evidence manifest + freshness gate
 Profile/path: standalone connector descriptors/readiness + certification kit
 Objective: 将 connector 认证的 commit、image、依赖版本、执行时间、过期策略和验证脚本收敛为机器可读 manifest；manifest 缺失、损坏或过期时 readiness 自动降级，但不偷偷提升或修改 maturity。
 Scope: internal/etl/server evidence manifest loader/validator、descriptor e2e_evidence gate、manifest fixture、certification tests、hack checker 和 connector certification 文档。
-Non-goals: PR-2.4.4 checkpoint position 校验、Runner/DAG/UI 错误展示；MaxCompute 外部认证；自动运行所有外部 e2e；修改 connector runtime 语义。
+Non-goals: PR-2.4.4 checkpoint position 校验、Runner/DAG/UI 错误展示；自动运行所有外部 e2e；修改 connector runtime 语义。
 Dependencies: P3.1/P3.2 delivered；当前 `sync-canal-go-hardening-20260808` 正在处理 PR-2.4.4，本切片避开其修改路径。
 Acceptance: 1) 每个 production source/sink 有唯一 evidence record，字段包含 commit/image/dependencies/started_at/finished_at/expires_at/scripts；2) manifest schema、重复记录、时间窗口、过期和缺失均有 deterministic checks；3) descriptor gate 暴露 evidence metadata，fresh/verified 为 pass，过期为 partial，缺失/损坏为 missing；4) checker 支持对当前 commit/image 做可选严格校验；5) targeted/package/race/vet 与 git diff --check 通过。
 Evidence: internal/etl/server/evidence_manifest.go、evidence_manifest_test.go、connector_descriptor.go、connector_certification_test.go、internal/etl/server/evidence/connector-evidence.json、hack/check-connector-evidence.sh、docs/connector-certification.md。
@@ -816,12 +824,12 @@ Roadmap item: P3.3.2 真实 connector e2e 证据回写与 strict gate
 Profile/path: standalone production source/sink certification
 Objective: 在当前可用的真实依赖拓扑中执行 manifest 列出的 production connector e2e，将实际通过的 commit/image/时间/cases 回写；未能运行的外部路径必须明确记录为 skip/block，不得伪造 verified。
 Scope: manifest 证据记录与 checker、认证脚本执行日志、release/CI strict gate、connector certification 文档和本 roadmap 验收矩阵。
-Non-goals: connector runtime 语义、checkpoint/UI 错误契约、MaxCompute 真实认证（仍 blocked_external）、修改或合并 `sync-canal-go-hardening-20260808` 的任务。
+Non-goals: connector runtime 语义、checkpoint/UI 错误契约、修改或合并 `sync-canal-go-hardening-20260808` 的任务。
 Dependencies: P3.3.1 manifest gate delivered；使用仓库标准 container runtime 和现有 production connector e2e fixtures。
 Acceptance: 1) 对每个 manifest record 对应脚本执行或记录明确 skip/block 原因；2) 只有脚本及其 required cases 全部通过的 record 才标记 verified=true，并回写 finished_at/expires_at/image；3) strict checker 在当前认证集合通过，在未验证/过期/commit-image 不匹配时非零；4) CI/release gate 调用同一 checker，外部环境缺失显示为 skip/block 而非 pass；5) package/race/vet、脚本语法、git diff --check 和认证文档证据更新通过。
 Evidence: `hack/e2e*.sh` 实际输出、`internal/etl/server/evidence/connector-evidence.json`、`hack/check-connector-evidence.sh`、`.github/workflows/*`、`docs/connector-certification.md`。
 Result: delivered
-Residual/follow-up: MaxCompute/ODPS 仍为 experimental + blocked_external，不属于本次 production connector 集合；其成熟度不因本项提升。
+Residual/follow-up: MaxCompute/ODPS 仍为 experimental（2026-09-17 起移除认证主线），不属于本次 production connector 集合；其成熟度不因本项提升。
 ```
 
 P3.3.2 验收矩阵：
@@ -1383,7 +1391,7 @@ T2.3 验收矩阵（2026-09-05）：
 | 全仓与文档 | `go test ./... -count=1`；`git diff --check`；`docs/record-contract.md` | passed | 无 |
 
 本项把 ClickHouse 多表写入中暴露的身份风险收敛为 source、传输、DLQ/replay 和启用
-metadata PK 的 sink 共同遵守的契约。它不改变 P0 MaxCompute 的最高优先级，不替代
+metadata PK 的 sink 共同遵守的契约。它不替代（MaxCompute P0 2026-09-17 起已移除执行面）
 BUG-1/2/6、GAP-1/3/4 的既有 e2e 欠账，也不得在未显式领取前标为 `active`。
 
 **Profile/path**：identity-aware CDC/消息 source → Kafka/内部 envelope →
@@ -1558,7 +1566,7 @@ Roadmap item: GAP-7.3 (IT-2/T2.7)
 Profile/path: Kafka/CDC identity contract -> ClickHouse/MySQL/PostgreSQL/Doris metadata-PK sinks
 Objective: 所有公开声明 metadata PK 的 sink 对完整/不完整/legacy 身份给出同一 fail-closed 语义，并以真实 Kafka→ClickHouse/PostgreSQL 多表故障矩阵完成认证。
 Scope: shared sink conformance fixture、四个 metadata-PK sink、preflight/schema、per-target error/metrics、既有 Kafka 多表 e2e 与组件/证据文档。
-Non-goals: 非行主键 sink；用 ES 证据替代关系型路径；新 connector；exactly-once；MaxCompute 外部认证。
+Non-goals: 非行主键 sink；用 ES 证据替代关系型路径；新 connector；exactly-once。
 Dependencies: T2.4/T2.6 delivered；T2.3 shared fixtures；既有 Kafka→ClickHouse/PostgreSQL 与 ES template e2e。
 Acceptance: GAP-7.3 验收 1-4；四 sink 共享矩阵、可操作 preflight、两条多表故障 e2e/独立 ES 记录、逐路径环境与结果证据。
 Evidence: shared conformance、server diagnostics tests、Kafka→ClickHouse/PostgreSQL 容器矩阵、ES template 记录、race/full/vet/docs。
@@ -1619,7 +1627,7 @@ source/sink 的身份与 replay 安全契约）。每项独立成 commit、独�
 （`internal/etl/sink/clickhouse.go:125` 现为 `asyncInsertWait: true`，与 descriptor 默认值一致）。
 该基线 `go build ./...` 通过。
 
-本节**不改变** P0 MaxCompute 的 `blocked_external` 状态，也不替代 BUG-1/2/6 与 GAP-1..7
+本节不替代 BUG-1/2/6 与 GAP-1..7 的既有证据（MaxCompute P0 2026-09-17 起已移除执行面）
 的既有容器 e2e 证据。各 RA 项以下方当前状态为准；RA-1 已按用户持续交付授权在 IT-1
 之后作为 IT-2/T2.4 完成，未领取的 RA 项仍保持 `queued`。
 
@@ -1710,7 +1718,7 @@ Profile/path: standalone control plane restore
 Objective: 恢复失败的 pipeline 在 DB、API 与 health 中保持可见；production strict 可 fail-closed；修复后保留 checkpoint 并恢复。
 Scope: pipeline restore-state persistence、SQLite/MySQL/PostgreSQL additive migration、RestoreFromDB/list/health/runtime profile、focused tests 和 runtime runbook。
 Non-goals: RA-3 desired/observed 与 checkpoint fencing；自动修复 spec；改变数据面或 ClickHouse/Kafka 候选能力。
-Dependencies: P0 MaxCompute 仍 blocked_external；IT-1 complete；用户显式启动下一轮迭代。
+Dependencies: IT-1 complete；用户显式启动下一轮迭代。
 Acceptance: 六类 restore failure 可见；production strict/non-strict 行为；修复后原 checkpoint 保留；control-plane persistence e2e 回归。
 Evidence: internal/etl/server/restore_visibility_test.go、storage migration/conformance、hack/e2e-control-plane-persistence.sh、docs/runtime-modes.md。
 Result: delivered
@@ -2234,8 +2242,7 @@ RA-1 / IT-2 源序与删除复活
   -> CH-C4 / CH-C5 / CH-C6 / CH-C7 / CH-C8（按容量和运维数据再排）
 ```
 
-这只是建议序列，不是状态变更：P0 仍保持 `blocked_external`，当前所有 RA 与迭代状态按
-上文不变；任何候选晋级都要新增对应迭代三件套并留下优先级决策记录。
+历史注：本序列为 2026-09 候选池阶段的建议。2026-09-17 用户决策：MaxCompute P0 移除执行面（`deferred`），CH-C1/C2/C3 晋级第一批立项（见 CH 线新增迭代），其余候选保持候选池。
 
 ### 参考资料（能力启发，不代表兼容性承诺）
 
@@ -2287,7 +2294,7 @@ RA-1 / IT-2 源序与删除复活
   CH-C8 确定性插件 ABI。
 - S3/File first-class manifest（即 CH-C4）；当前 content-addressed key 只吸收相同 batch 边界的重放，
   不宣称通用 exactly-once 文件输出。
-- ODPS/MaxCompute lookup/source 方向；必须在 MaxCompute sink 真实认证后再评估，优先推荐将维表镜像到 MySQL/PostgreSQL/Redis。
+- ODPS/MaxCompute lookup/source 方向；MaxCompute sink 认证主线已于 2026-09-17 移除（deferred），此方向一并下线；优先推荐将维表镜像到 MySQL/PostgreSQL/Redis。
 - Feishu 内置 source 和插件样板的真实环境、429/rate-limit、token failure 和 restart 证据；完成前保持 beta/dev-only。
 - JS/TS/WASM parser 示例扩展；不得将具体行业协议硬编码进核心。
 - 更复杂的多事实实时 merge、CDC dimension update 和 late-data 策略；只在不引入 Flink 级状态计算语义的前提下评估。
