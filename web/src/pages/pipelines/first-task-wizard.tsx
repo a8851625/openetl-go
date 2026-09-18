@@ -325,6 +325,7 @@ export function FirstTaskWizard({
       return null;
     }
   }, []);
+  const [pendingTransformRemove, setPendingTransformRemove] = useState<number | null>(null);
   const [step, setStep] = useState<WizardStepId>(
     () => (initialStep as WizardStepId) || readStepFromHash(),
   );
@@ -1513,6 +1514,18 @@ export function FirstTaskWizard({
         }}
       />
       <ConfirmDialog
+        open={pendingTransformRemove !== null}
+        onOpenChange={(open) => { if (!open) setPendingTransformRemove(null); }}
+        title={t('wizard.transformRemoveTitle')}
+        description={t('wizard.transformRemoveDesc')}
+        confirmLabel={t('wizard.transformRemoveConfirm')}
+        destructive
+        onConfirm={() => {
+          if (pendingTransformRemove !== null) removeTransform(pendingTransformRemove);
+          setPendingTransformRemove(null);
+        }}
+      />
+      <ConfirmDialog
         open={pendingTemplateId !== null}
         onOpenChange={(open) => { if (!open) setPendingTemplateId(null); }}
         title={t('wizard.switchTemplateTitle')}
@@ -1995,9 +2008,9 @@ export function FirstTaskWizard({
                                 variant="destructive"
                                 size="sm"
                                 className="px-2"
-                                onClick={() => removeTransform(index)}
-                                title="Remove"
-                                aria-label="Remove"
+                                onClick={() => setPendingTransformRemove(index)}
+                                title={t('wizard.transformRemoveTitle')}
+                                aria-label={t('wizard.transformRemoveTitle')}
                               >
                                 ×
                               </Button>

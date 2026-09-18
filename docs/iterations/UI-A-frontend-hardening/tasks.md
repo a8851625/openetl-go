@@ -218,6 +218,26 @@ Residual/follow-up: DagEditorPage 面板标签 i18n（25 处）与全局搜索�
 | ConfigForm 可访问性 | Label htmlFor + input id（全部输入类型） | passed | — |
 | 回归 | e2e-ui.sh 145 passed / 0 failed；lint 32（<基线 34） | passed | — |
 
+### Round 5 续（UI 小项池，2026-09-16/17）
+
+```text
+Round: 5/5 续（UI 小项池窗口）
+Roadmap item: UI-B.6/B.7（DagEditor i18n、全局搜索、Dashboard 密度、transform 删除确认）
+Profile/path: standalone Web UI
+Objective: 小项池四项收口：DagEditor 25 处面板标签 i18n；全局搜索 Escape 清空；Dashboard 关键管道卡片紧凑/舒适行密度切换（持久化）；向导 transform 删除加 ConfirmDialog 风险确认。
+Scope: web/src/{DagEditorPage.tsx,components/layout/app-shell.tsx,pages/DashboardPage.tsx,pages/pipelines/first-task-wizard.tsx,i18n.ts}、hack/e2e-ui.sh（B6/B7 断言块 + D2.1b 适配）
+Non-goals: 信息架构重构；搜索联想/高亮。
+Acceptance:
+  1) DagEditor 面板标签（toolbar Delete、校验/操作错误面板、Context、hooks 选项、Advanced 抽屉、Tags/Worker、AI 评审卡、Sync YAML）26 处全部走 t()，en/zh 双语；
+  2) 全局搜索 Enter 过滤管道列表（q= 参数）、Escape 清空；e2e B6.1/B6.1b 验证参数写入与列表输入框回显；
+  3) Dashboard 密度切换 aria-pressed 翻转、localStorage 持久化（e2e B6.2/B6.2b）；
+  4) transform 删除先弹 ConfirmDialog（e2e B7.1），既有 D2.1b 断言适配确认流；
+  5) typecheck 0 错误、lint 29 持平、build 通过。
+Evidence: CONTAINER_CLI=podman IMAGE=openetl-go-etl:ui-b8 E2E_SKIP_BUILD=1 bash hack/e2e-ui.sh → 163 passed / 0 failed。
+Result: delivered
+Residual/follow-up: 小项池清空；wizard 行交互模型剩余项（批量选择行内操作）若需要另立小项。
+```
+
 ## Round 5：缓冲（溢出项/回归收口）
 
 预留给前四轮溢出的修复、e2e 断言修缮与最终验收矩阵汇总。

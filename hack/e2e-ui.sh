@@ -247,6 +247,15 @@ evaljs "(() => { document.querySelector('[data-testid=\"wizard-transform-move-up
 sleep 1
 check "D2.1b3: Transform chain reorder works" "$(evaljs "document.querySelector('[data-testid=\"wizard-transform-type-0\"]')?.value === 'project'")"
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-transform-remove-0\"]')?.click(); return true; })()" >/dev/null
+# UI small-pool: removal now requires explicit confirmation (risk of changing all downstream records)
+confirm_dialog_visible="false"
+for _ in $(seq 1 8); do
+  confirm_dialog_visible="$(evaljs "!!document.querySelector('[role=dialog]') && document.body.innerText.includes('Remove transform')")"
+  if [[ "$confirm_dialog_visible" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "B7.1: transform removal asks for confirmation" "$confirm_dialog_visible"
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').includes('Remove step'))?.click(); return true; })()" >/dev/null
 sleep 1
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-add-transform\"]')?.click(); return true; })()" >/dev/null
 playwright-cli select "[data-testid='wizard-transform-type-1']" "flat_map" >/dev/null
@@ -260,6 +269,8 @@ for _ in $(seq 1 10); do
 done
 check "D2.1b4: Transform stage error is positioned" "$stage_error"
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-transform-remove-1\"]')?.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').includes('Remove step'))?.click(); return true; })()" >/dev/null
 sleep 1
 check "D2.1b5: Transform chain remove restores one stage" "$(evaljs "document.querySelectorAll('[data-testid^=\"wizard-transform-stage-\"]').length === 1")"
 check "D2.1c: Docs link visible" "$(evaljs "Array.from(document.querySelectorAll('a')).some(a=>a.getAttribute('href')==='/api/v2/docs')")"
