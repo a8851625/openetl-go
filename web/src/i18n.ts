@@ -116,6 +116,8 @@ const dict: Dict = {
   },
   'dash.noIssues': { en: 'No open issues in this window', zh: '当前没有待处理问题' },
   'dash.criticalPipes': { en: 'Key pipelines', zh: '关键管道' },
+  'dash.compactRows': { en: 'Compact rows', zh: '紧凑行' },
+  'dash.comfortableRows': { en: 'Comfortable rows', zh: '舒适行' },
   'dash.viewAllPipes': { en: 'View all pipelines', zh: '查看全部管道' },
   'dash.actionView': { en: 'View issues', zh: '查看问题' },
   'dash.actionRepair': { en: 'Repair', zh: '查看修复' },

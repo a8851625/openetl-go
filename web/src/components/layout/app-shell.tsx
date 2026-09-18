@@ -349,6 +349,8 @@ export function AppShell({
             </div>
 
             <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+              {/* UI small-pool: global search has a visible affordance — Enter
+              filters the pipelines list; Escape clears. */}
               <div className="relative hidden md:block">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -360,6 +362,8 @@ export function AppShell({
                       const q = (e.target as HTMLInputElement).value.trim();
                       if (q) window.location.hash = `#/pipelines?q=${encodeURIComponent(q)}`;
                       else window.location.hash = '#/pipelines';
+                    } else if (e.key === 'Escape') {
+                      (e.target as HTMLInputElement).value = '';
                     }
                   }}
                 />

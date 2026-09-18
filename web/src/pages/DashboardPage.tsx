@@ -101,6 +101,22 @@ export function DashboardPage({
   const healthyShare =
     counts.total > 0 ? Math.round((counts.healthy / counts.total) * 100) : 100;
   const range = t('dash.cumulativeScope');
+  // UI small-pool: dashboard row density — persisted per browser, defaults
+  // to comfortable rows; only affects the critical-pipelines card.
+  const [dashCompact, setDashCompact] = useState(() => {
+    try {
+      return window.localStorage.getItem('etl_dash_compact') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('etl_dash_compact', dashCompact ? '1' : '0');
+    } catch {
+      /* storage unavailable — keep in-memory only */
+    }
+  }, [dashCompact]);
   // UI-A.3 (P1-19): the eyebrow badge reflects the real runtime profile from
   // /api/v2/health instead of a static "Production runtime" label.
   const [runtimeBadge, setRuntimeBadge] = useState('');
@@ -340,16 +356,29 @@ export function DashboardPage({
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-semibold">{t('dash.criticalPipes')}</CardTitle>
-          <button
-            type="button"
-            className="text-xs font-semibold text-primary"
-            onClick={() => onOpenPipeline?.('')}
-          >
-            {t('dash.viewAllPipes')} →
-          </button>
+          {/* UI small-pool: density toggle + honest "view all" — the dashboard
+              card caps at 6 rows; the toggle only changes row padding here. */}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              data-testid="dash-density-toggle"
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              aria-pressed={dashCompact}
+              onClick={() => setDashCompact((v) => !v)}
+            >
+              {dashCompact ? t('dash.comfortableRows') : t('dash.compactRows')}
+            </button>
+            <button
+              type="button"
+              className="text-xs font-semibold text-primary"
+              onClick={() => onOpenPipeline?.('')}
+            >
+              {t('dash.viewAllPipes')} →
+            </button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-0 p-0">
-          {(criticalPipes.length ? criticalPipes : pList.slice(0, 4).map((p) => ({
+          {(criticalPipes.length ? criticalPipes : pList.slice(0, dashCompact ? 6 : 4).map((p) => ({
             p,
             m: findMetric(p, mList),
             health: derivePipelineHealth(p, findMetric(p, mList)),
@@ -357,7 +386,7 @@ export function DashboardPage({
             <button
               type="button"
               key={pipelineKey(p)}
-              className="grid w-full grid-cols-1 items-center gap-3 border-t border-border px-5 py-4 text-left transition hover:bg-muted/40 first:border-t-0 md:grid-cols-[minmax(160px,.8fr)_minmax(0,1.4fr)_120px_100px]"
+              className={`grid w-full grid-cols-1 items-center gap-3 border-t border-border px-5 text-left transition hover:bg-muted/40 first:border-t-0 md:grid-cols-[minmax(160px,.8fr)_minmax(0,1.4fr)_120px_100px] ${dashCompact ? 'py-2.5' : 'py-4'}`}
               onClick={() => {
                 onSelect(pipelineKey(p));
                 onOpenPipeline?.(pipelineKey(p), health === 'failed' || health === 'degraded' ? 'issues' : 'overview');

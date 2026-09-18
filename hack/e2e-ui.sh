@@ -1309,6 +1309,17 @@ done
 check "L1: Auto-refresh control present" "$(evaljs "!!document.querySelector('[data-testid=auto-refresh-toggle]') && (document.body.innerText.includes('Auto-refresh') || /[0-9][0-9]?:[0-9][0-9]/.test(document.body.innerText) || document.body.innerText.includes('已暂停'))")"
 
 # ════════════════════════════════════════════════
+echo "=== B6: Global search affordance + dashboard density ==="
+open_app
+check "B6.1: global search Enter filters pipelines list" "$(evaljs "(() => { const inp = document.querySelector('input[aria-label=Search]') || Array.from(document.querySelectorAll('input')).find(i => (i.placeholder || '').includes('Search pipelines')); if (!inp) return 'no input'; inp.value = 'auth-file'; inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return location.hash.includes('pipelines') && location.hash.includes('q=auth-file') || 'hash=' + location.hash; })()")"
+sleep 1
+check "B6.1b: list search input reflects q param" "$(evaljs "(() => { const card = document.querySelector('[data-testid=pipelines-list-fullwidth]'); if (!card) return 'no list card'; const inp = Array.from(card.querySelectorAll('input')).find(i => i.type === 'text' || i.type === 'search' || i.type === ''); if (!inp) return 'no list input'; return inp.value === 'auth-file' || 'value=' + inp.value; })()")"
+open_app
+goto_page "Overview"
+check "B6.2: dashboard density toggle present" "$(evaljs "!!document.querySelector('[data-testid=dash-density-toggle]')")"
+check "B6.2b: density toggle flips aria-pressed" "$(evaljs "(() => { const btn = document.querySelector('[data-testid=dash-density-toggle]'); if (!btn) return 'missing'; const before = String(btn.getAttribute('aria-pressed')); btn.click(); return new Promise(resolve => setTimeout(() => { const after = String(document.querySelector('[data-testid=dash-density-toggle]').getAttribute('aria-pressed')); resolve(before !== after || 'before=' + before + ' after=' + after); }, 200)); })()")"
+
+# ════════════════════════════════════════════════
 echo "=== M: Full Chinese Switch E2E ==="
 open_app
 evaljs "(() => { localStorage.setItem('etl_lang','zh'); location.reload(); return true; })()" >/dev/null 2>&1 || true
