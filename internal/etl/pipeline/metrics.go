@@ -101,6 +101,33 @@ func (s *SinkWriteHook) Close() error { return s.Sink.Close() }
 
 func (s *SinkWriteHook) Name() string { return s.Sink.Name() }
 
+// SinkCommitMetadata forwards the CH-C1 commit contract through the metrics
+// decorator. The hook itself only counts as a provider when the wrapped
+// sink is one — otherwise the checkpoint builder must keep skipping the
+// native path (a plain sink has no verifiable boundary, and fabricating an
+// error here would block checkpoints for every non-provider sink).
+// The indirection below keeps that conditional forwarding intact: the
+// decorator implements the interface statically, but consults the wrapped
+// sink and mirrors "not a provider" as a nil metadata + nil error, which
+// BuildSinkCommitMetadata treats as "no native metadata".
+type sinkCommitForwarder interface {
+	SinkCommitMetadata(ctx context.Context) (map[string]any, error)
+}
+
+func (s *SinkWriteHook) SinkCommitMetadata(ctx context.Context) (map[string]any, error) {
+	if p, ok := s.Sink.(sinkCommitForwarder); ok {
+		return p.SinkCommitMetadata(ctx)
+	}
+	return nil, nil
+}
+
+// SetPipelineKey forwards the pipeline binding to the wrapped sink.
+func (s *SinkWriteHook) SetPipelineKey(key string) {
+	if ks, ok := s.Sink.(core.PipelineKeySetter); ok {
+		ks.SetPipelineKey(key)
+	}
+}
+
 func CheckIdempotencyCompatibility(sourceType string, sinkType string, sinkConfig map[string]any) []string {
 	var warnings []string
 	cdcSources := map[string]bool{

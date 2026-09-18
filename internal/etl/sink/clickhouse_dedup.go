@@ -142,14 +142,20 @@ func (s *ClickHouseSink) SetPipelineKey(key string) {
 	s.dedupPipelineKey.Store(key)
 }
 
+// dedupPipelineKeyString safely reads the bound pipeline key; a sink that
+// never received SetPipelineKey (e.g. replay paths building the sink
+// directly) falls back to a stable default so token derivation cannot panic.
+func (s *ClickHouseSink) dedupPipelineKeyString() string {
+	if v, ok := s.dedupPipelineKey.Load().(string); ok && v != "" {
+		return v
+	}
+	return "clickhouse-sink"
+}
+
 // pendingDedupToken returns the token for the in-flight batch (derived at
 // beginDedupBatch time) so write paths can attach it to the INSERT.
 func (s *ClickHouseSink) pendingDedupToken() string {
-	key, _ := s.dedupPipelineKey.Load().(string)
-	if key == "" {
-		key = "clickhouse-sink"
-	}
-	return deriveDedupToken(key, s.dedupFirst, s.dedupLast, s.dedupBatchSeq, int(s.dedupBatchRows.Load()))
+	return deriveDedupToken(s.dedupPipelineKeyString(), s.dedupFirst, s.dedupLast, s.dedupBatchSeq, int(s.dedupBatchRows.Load()))
 }
 
 // clickhouseWithSettings derives a context carrying per-query settings for

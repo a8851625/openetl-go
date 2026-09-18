@@ -1,7 +1,7 @@
 {
   "path_id": "mysql_snap_cdc__ch_rmt",
-  "commit": "b1deefab5415fffd62cec80d00c5ee7a30b0f939",
-  "run_started_at": "2026-09-16T16:05:32Z",
+  "commit": "7acfec545717cbbf2df6979ecb4aab511e710c97",
+  "run_started_at": "2026-09-18T16:20:49Z",
   "runner": "local",
   "deps": {
     "clickhouse": "docker.io/clickhouse/clickhouse-server:24.3",
@@ -35,5 +35,5 @@
     }
   ],
   "result": "passed",
-  "finished_at": "2026-09-16T16:06:42Z"
+  "finished_at": "2026-09-18T16:21:59Z"
 }

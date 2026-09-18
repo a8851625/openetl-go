@@ -1,0 +1,31 @@
+{
+  "path_id": "ch_dedup_crash_window",
+  "commit": "7acfec545717cbbf2df6979ecb4aab511e710c97",
+  "run_started_at": "2026-09-18T16:20:30Z",
+  "runner": "local",
+  "deps": {
+    "clickhouse": "docker.io/clickhouse/clickhouse-server:24.3",
+    "harness": "e2e",
+    "mysql": "docker.io/library/mysql:8.0"
+  },
+  "checks": [
+    {
+      "name": "native_ack_token_in_checkpoint",
+      "result": "passed"
+    },
+    {
+      "name": "native_crash_window_replay",
+      "result": "passed"
+    },
+    {
+      "name": "http_ack_token_in_checkpoint",
+      "result": "passed"
+    },
+    {
+      "name": "http_crash_window_replay",
+      "result": "passed"
+    }
+  ],
+  "result": "passed",
+  "finished_at": "2026-09-18T16:20:45Z"
+}

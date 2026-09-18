@@ -683,7 +683,7 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 	for tableName, tb := range batches {
 		tableRows[tableName] = len(tb.inserts) + len(tb.updates) + len(tb.deletes)
 	}
-	s.finalizeDedupBatch(s.dedupPipelineKey.Load().(string), dataRecords, tableRows)
+	s.finalizeDedupBatch(s.dedupPipelineKeyString(), dataRecords, tableRows)
 
 	return nil
 }

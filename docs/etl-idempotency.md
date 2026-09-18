@@ -55,6 +55,32 @@ Legacy tables with `Int64` wall-clock versions or one-argument ReplacingMergeTre
 this contract. Build a new two-argument table, reload from one documented source lineage, reconcile
 `FINAL` values by business key, and then switch. Keep the old table intact as the rollback boundary.
 
+## ClickHouse write-ack and dedup token (CH-C1)
+
+The ClickHouse sink exposes sink-native commit metadata for every fully acknowledged `Write` batch:
+a deterministic dedup token derived from `pipeline key + first/last source position + batch sequence +
+row count` (no wall-clock or random component). The same batch replayed after a crash re-derives the
+same token. The token is carried with both protocols (native query setting `insert_dedup_token`, HTTP
+URL parameter) when the server supports it, and is always recorded in the checkpoint envelope under
+`sink_commit.native` regardless of server support (`dedup_mode: server` vs `record_only`).
+
+Boundary semantics:
+
+- **Crash window (sink acked, checkpoint not committed)**: replay re-sends the same batch with the same
+  token. Servers that honor `insert_dedup_token` drop the duplicate block; otherwise ReplacingMergeTree
+  absorbs it by source-order version. Both paths converge to an identical `FINAL` state — this
+  equivalence is certified by e2e on both protocols (`ch_dedup_crash_window`).
+- **Tombstones and physical mutations**: DELETE tombstones and UPDATE-driven mutations are not covered
+  by insert dedup. They rely on the source-order version contract above; a replayed tombstone is
+  idempotent because it re-writes the same version, not because of the token.
+- **Write failures**: transport failures after a possible server commit classify as `ack unknown`
+  (transient — replay-safe); explicit pre-write server rejections classify as `not acked` (auth/schema/
+  data — retry or DLQ). A failed `Write` invalidates the pending boundary: `SinkCommitMetadata` then
+  errors, which blocks checkpoint advancement — the runner never persists an unverifiable boundary.
+- **Non-provider sinks** (MySQL, PostgreSQL, Kafka, ...): the checkpoint envelope keeps the generic
+  `sink_commit` block without `native` metadata; their duplicate absorption stays as documented in
+  their own sections.
+
 ## Runtime Guarantees
 
 - Checkpoints advance after successful sink write.
