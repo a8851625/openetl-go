@@ -16,7 +16,7 @@
 
 | ID | 任务 | 依赖 | Round | 状态 | 证据落点 |
 | --- | --- | --- | --- | --- | --- |
-| T5.1 | CH-C1：dedup token + provider 实现与错误分类 | — | Round 1 | `todo` | clickhouse.go + 单测 |
+| T5.1 | CH-C1：dedup token + provider 实现与错误分类 | — | Round 1 | `done` | commit da3f80c |
 | T5.2 | CH-C1：crash-window/协议等价 e2e + 文档 | T5.1 | Round 2 | `todo` | e2e + docs/etl-idempotency.md |
 | T5.3 | CH-C3：Kafka metadata envelope 全链路 | — | Round 3 | `todo` | core/source/sink + e2e |
 | T5.4 | CH-C2：schema contract 存储与校验 | — | Round 4 | `todo` | storage + server validate/preflight |
@@ -35,8 +35,23 @@
 
 **证据落点**：
 
-- `internal/etl/sink/clickhouse.go`、`clickhouse_test.go`、`clickhouse_version_test.go`
-- `go test ./internal/etl/sink/... -run 'ClickHouse' -count=1`
+- `internal/etl/sink/clickhouse_dedup.go`（新）、`clickhouse.go`、`clickhouse_dedup_test.go`（新）、`internal/etl/core/core.go`（PipelineKeySetter）、`internal/etl/pipeline/pipeline.go`（注入）
+- commit `da3f80c`；`go test ./internal/etl/sink/ ./internal/etl/core/`、`go test -race -run 'ClickHouse|Dedup'` 全绿
+
+**领取记录**：
+
+```text
+Round: 1/5
+Roadmap item: CH-C1 (IT-5/T5.1)
+Profile/path: standalone + clickhouse connector path (native/http)
+Objective: ClickHouse sink 提供 SinkCommitMetadataProvider 首个生产实现——每逻辑 Write 批次确定性 dedup token + 三态 ack 错误分类。
+Scope: internal/etl/sink/clickhouse{,_dedup}.go、internal/etl/core/core.go、internal/etl/pipeline/pipeline.go
+Non-goals: crash-window e2e（T5.2）；Kafka envelope（T5.3）；schema contract（T5.4/5.5）；跨 sink exactly-once
+Acceptance: T5.1 验收 1-4（provider 返回 token/protocol/seq/rows/tables；token 确定性；三态分类 native/HTTP 共用；探测降级 record_only）
+Evidence: go test ./internal/etl/sink/ ./internal/etl/core/ 全绿；-race 通过；单测覆盖确定性/唯一性/NUL 别名/位置边界/分类三态/provider 契约/探测回退
+Result: delivered
+Residual/follow-up: T5.2 crash-window e2e + 协议等价 conformance + idempotency 文档
+```
 
 ### T5.2 CH-C1：crash-window/协议等价 e2e + 文档
 
