@@ -320,6 +320,11 @@ func (r *Runner) buildRuntime() error {
 		transforms.CloseChain()
 		return fmt.Errorf("build sink: %w", err)
 	}
+	// CH-C1: bind deterministic commit-token derivation to the pipeline key
+	// so dedup tokens cannot collide across pipelines on the same target.
+	if ks, ok := sink.(core.PipelineKeySetter); ok {
+		ks.SetPipelineKey(r.spec.Name)
+	}
 
 	hooks := &MetricsHooks{}
 	r.source = source

@@ -102,6 +102,18 @@ type ClickHouseSink struct {
 	batchesSent    int64
 	writeLatencyNs int64
 	writeErrors    int64
+	// CH-C1 dedup state (clickhouse_dedup.go): writeBatches counts logical
+	// Write calls for token derivation; dedupState holds the last fully
+	// acknowledged batch until SinkCommitMetadata collects it.
+	writeBatches           atomic.Uint64
+	dedupBatchSeq          uint64
+	dedupFirst, dedupLast  string
+	dedupPositioned        bool
+	dedupBatchRows         atomic.Int64
+	dedupState             atomic.Pointer[sinkDedupState]
+	insertDedupSupported   atomic.Bool
+	insertDedupProbeDone   atomic.Bool
+	dedupPipelineKey       atomic.Value // string
 	// tableMetricsImpl gives per-table write metrics (GAP-6: which target
 	// table drags a multi-table batch).
 	tableMetricsImpl *tableMetricsSet
@@ -625,6 +637,16 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 		}
 	}
 
+	// CH-C1: stamp this logical batch before any table sub-batch goes out.
+	s.beginDedupBatch(records)
+	defer func() {
+		if err != nil {
+			// Any failure path invalidates the pending boundary; only a fully
+			// acknowledged Write may surface commit metadata.
+			s.invalidateDedupBatch()
+		}
+	}()
+
 	for tableName, tb := range batches {
 		start := time.Now()
 		failed := false
@@ -655,6 +677,13 @@ func (s *ClickHouseSink) Write(ctx context.Context, records []core.Record) (err 
 			}
 		}
 	}
+
+	// CH-C1: every table sub-batch acknowledged — publish the batch boundary.
+	tableRows := make(map[string]int, len(batches))
+	for tableName, tb := range batches {
+		tableRows[tableName] = len(tb.inserts) + len(tb.updates) + len(tb.deletes)
+	}
+	s.finalizeDedupBatch(s.dedupPipelineKey.Load().(string), dataRecords, tableRows)
 
 	return nil
 }
@@ -1077,10 +1106,15 @@ func (s *ClickHouseSink) writeInsertSelected(ctx context.Context, tableName stri
 
 	start := time.Now()
 
+	// CH-C1: probe server support once; the deterministic dedup token is
+	// attached to the INSERT by both protocols (native: query setting via
+	// ctx below; HTTP: URL param inside writeInsertHTTP).
+	s.detectInsertDedupSupport(ctx)
+
 	// HTTP protocol: use JSONEachRow batch insert via HTTP API
 	if s.httpConn != nil && s.conn == nil {
 		if err := s.writeInsertHTTP(ctx, localTable, writableCols, records); err != nil {
-			return err
+			return classifyClickHouseWriteError(err)
 		}
 		s.recordMetrics(len(records), time.Since(start))
 		return nil
@@ -1088,9 +1122,10 @@ func (s *ClickHouseSink) writeInsertSelected(ctx context.Context, tableName stri
 
 	// Native protocol: use PrepareBatch
 	sql := fmt.Sprintf("INSERT INTO %s.%s (%s)", quoteIdent(s.database), quoteIdent(localTable), columnList(writableCols))
-	batch, err := s.conn.PrepareBatch(ctx, sql)
+	nativeCtx := withInsertDedupToken(ctx, s.pendingDedupToken(), s.insertDedupSupported.Load())
+	batch, err := s.conn.PrepareBatch(nativeCtx, sql)
 	if err != nil {
-		return fmt.Errorf("prepare batch: %w", err)
+		return classifyClickHouseWriteError(fmt.Errorf("prepare batch: %w", err))
 	}
 
 	for _, rec := range records {
@@ -1108,7 +1143,7 @@ func (s *ClickHouseSink) writeInsertSelected(ctx context.Context, tableName stri
 	}
 
 	if err := batch.Send(); err != nil {
-		return fmt.Errorf("send batch: %w", err)
+		return classifyClickHouseWriteError(fmt.Errorf("send batch: %w", err))
 	}
 
 	s.recordMetrics(len(records), time.Since(start))
@@ -1153,6 +1188,11 @@ func (s *ClickHouseSink) writeInsertHTTP(ctx context.Context, tableName string, 
 			"INSERT+INTO+"+s.database+"."+tableName+"+FORMAT+JSONEachRow")
 		if s.asyncInsert {
 			url += "&async_insert=1"
+		}
+		// CH-C1: HTTP path carries the same deterministic dedup token as the
+		// native path so both protocols expose identical server-side dedup.
+		if s.insertDedupSupported.Load() {
+			url += "&insert_dedup_token=" + s.pendingDedupToken()
 		}
 		return url
 	}

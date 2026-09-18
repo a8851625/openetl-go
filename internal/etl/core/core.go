@@ -201,6 +201,14 @@ type SinkCommitMetadataProvider interface {
 	SinkCommitMetadata(ctx context.Context) (map[string]any, error)
 }
 
+// PipelineKeySetter is implemented by sinks that derive deterministic
+// per-pipeline commit tokens (e.g. the ClickHouse dedup token). The runner
+// calls it once after building the sink so the token namespace is bound to
+// the pipeline identity rather than a connection-level default.
+type PipelineKeySetter interface {
+	SetPipelineKey(key string)
+}
+
 // SchemaInfo describes the schema of a source or sink for validation.
 type SchemaInfo struct {
 	Columns []ColumnInfo
