@@ -30,7 +30,7 @@
 | [IT-2](./IT-2-correctness/) | 正确性（控制面真值 + 数据面身份与顺序） | RA-1、RA-2、RA-3、GAP-7.1/.2/.3 | IT-1 | `complete`（2026-09-05；T2.1–T2.8 全部 done，16 项验收 passed） |
 | [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `complete`（2026-09-16：T3.1–T3.7 全部 done，含 T3.6-B 路径吞吐与三 backend 并发曲线；证据 it3-baseline-20260916） |
 | [IT-4](./IT-4-ga-closeout/) | GA 收口评估 | 证据刷新、maturity 对齐、移除 beta 判定 | IT-1 + IT-2 + IT-3 | `complete`（2026-09-16：T4.1–T4.5 done；判定见 [ga-assessment-2026-09-16](../ga-assessment-2026-09-16.md)——standalone 可声明、项目级/distributed 保持 beta） |
-| [IT-5](./IT-5-ch-write-contract/) | CH 第一批：写入确认/去重契约 + Kafka metadata envelope + additive-only schema contract | CH-C1、CH-C3、CH-C2 | IT-2（RA-1）、RA-8/T3.6、P3.1+schema 决议 | `queued`（2026-09-17 立项） |
+| [IT-5](./IT-5-ch-write-contract/) | CH 第一批：写入确认/去重契约 + Kafka metadata envelope + additive-only schema contract | CH-C1、CH-C3、CH-C2 | IT-2（RA-1）、RA-8/T3.6、P3.1+schema 决议 | `complete`（2026-09-19：T5.1–T5.5 全部 done；e2e ch_dedup_crash_window 4/4、kafka_envelope_roundtrip 2/2、schema_contract_enforcement 5/5） |
 | [UI-C](./UI-C-wizard-interaction/) | 向导行交互模型收尾（P2-5 残留 + 批量步骤操作） | UI 小项池 | 无 | `queued`（2026-09-17 立项） |
 | [UI-A](./UI-A-frontend-hardening/) | 前端交互与向导逻辑加固（2026-09-12 审计） | 新增 roadmap 条目 UI-A | 无 | `complete`（UI-A.1–A.4 delivered 2026-09-12；缓冲窗口 UI-B.1–B.5 delivered 2026-09-14/15，e2e 158 passed / 0 failed；残留小项入小项池不阻塞） |
 
@@ -155,6 +155,6 @@ AGENTS.md 默认一次执行请求上限 **5 rounds**。每个迭代的 `tasks.m
 | IT-2 | T2.1 完成：restore failure 持久化/API/health/strict gate | T2.2 完成：desired/observed + reset fencing | T2.3 完成：identity/order 共享契约 | T2.4/T2.5/T2.6 完成 | T2.7 完成：metadata-PK 跨路径认证；T2.8 完成：16 项验收核对 + 证据重绑；迭代 `complete` | `complete` |
 | IT-3 | T3.1–T3.4 复核交付；T3.6 通用基线修复中 | T3.3 完成 | T3.4/T3.5 完成 | T3.6-A 基线 + T3.7 CI 接入完成 | T3.6-B 路径吞吐 + 三 backend 并发曲线闭合（2026-09-16，18/18 case）；迭代 `complete` | `complete` |
 | IT-4 | T4.1 证据复核全绿 | T4.2 无降级项 | T4.3 三 backend 升级 drill PASS | T4.4 两主链路重认证（b1deefa） | T4.5 显式 GA 判定产出 | `complete` |
-| IT-5 | — | — | — | — | — | `queued` |
+| IT-5 | T5.1 完成：dedup token + provider + 错误分类 | T5.2 完成：双协议 crash-window e2e（顺带修复 hook 遮蔽与 replay panic 两个真实 bug） | T5.3 完成：Kafka envelope 全链路 + Redpanda harness | T5.4 完成：contract 类型/存储/enforce 接入 | T5.5 完成：contract e2e 5/5 + 三 backend drill + 全量回归；迭代 `complete` | `complete` |
 | UI-C | — | — | — | — | — | `queued` |
 | UI-A | UI-A.1–A.4 完成（2026-09-12，e2e 145） | UI-B.1 完成（e2e 148） | UI-B.2 完成（e2e 153） | UI-B.3/B.4 完成（e2e 156/158） | UI-B.5 缓冲轮完成（i18n 全量，e2e 158）；迭代 `complete` | `complete` |

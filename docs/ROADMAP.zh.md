@@ -118,7 +118,7 @@ Roadmap 状态只使用以下值：
 
 ### IT-5：CH 第一批 —— 写入确认/去重契约 + Kafka metadata envelope + additive-only schema contract
 
-状态：`active`（2026-09-17 用户决策立项：CH-C1/CH-C3/CH-C2 晋级第一批；MaxCompute P0 同日移除执行面）
+状态：`delivered`（T5.1–T5.5 全部交付 2026-09-17/19：CH-C1 dedup token+provider+双协议 crash-window e2e 4/4；CH-C3 Kafka envelope 全链路 round-trip 2/2；CH-C2 schema contract 存储+enforce e2e 5/5；三 backend upgrade drill PASS；全量 -e2e.strict 回归 PASS。残留：多表 table_template conformance、Registry capability 字段归后续）
 
 来源：ROADMAP「ClickHouse 迭代启发候选」CH-C1/CH-C3/CH-C2 候选条目（动机分析与验收锚点见候选节）；依赖均已达：RA-1/IT-2 版本与删除语义（delivered）、GAP-7 身份契约（delivered）、P3.1 descriptor 契约（delivered）、schema evolution 决议（2026-09-05 用户确认采 (b) additive-only）、RA-8/T3.6 容量基线（delivered）。
 

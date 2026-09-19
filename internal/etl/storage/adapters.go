@@ -1054,3 +1054,24 @@ func UnwrapSecretFieldStore(s Storage) Storage {
 	}
 	return s
 }
+
+// SaveSchemaContract forwards the CH-C2 contract write so server-side
+// SchemaContractStore type assertions keep working through this wrapper.
+func (s *SecretFieldStore) SaveSchemaContract(ctx context.Context, c core.SchemaContract) error {
+	if forwarder, ok := s.Storage.(interface {
+		SaveSchemaContract(context.Context, core.SchemaContract) error
+	}); ok {
+		return forwarder.SaveSchemaContract(ctx, c)
+	}
+	return fmt.Errorf("storage backend %T does not persist schema contracts", s.Storage)
+}
+
+// LoadLatestSchemaContract forwards the CH-C2 contract read.
+func (s *SecretFieldStore) LoadLatestSchemaContract(ctx context.Context, pipeline string) (*core.SchemaContract, error) {
+	if forwarder, ok := s.Storage.(interface {
+		LoadLatestSchemaContract(context.Context, string) (*core.SchemaContract, error)
+	}); ok {
+		return forwarder.LoadLatestSchemaContract(ctx, pipeline)
+	}
+	return nil, fmt.Errorf("storage backend %T does not persist schema contracts", s.Storage)
+}

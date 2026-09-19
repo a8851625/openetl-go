@@ -20,7 +20,7 @@
 | T5.2 | CH-C1：crash-window/协议等价 e2e + 文档 | T5.1 | Round 2 | `done` | commit 0714244；evidence ch_dedup_crash_window 4/4 |
 | T5.3 | CH-C3：Kafka metadata envelope 全链路 | — | Round 3 | `done` | commit e6b8b37；evidence kafka_envelope_roundtrip 2/2 |
 | T5.4 | CH-C2：schema contract 存储与校验 | — | Round 4 | `done` | commit 9144e27 |
-| T5.5 | CH-C2：e2e + migration drill + 迭代收口 | T5.4 | Round 5 | `todo` | e2e + upgrade drill + ROADMAP 回填 |
+| T5.5 | CH-C2：e2e + migration drill + 迭代收口 | T5.4 | Round 5 | `done` | evidence schema_contract_enforcement 5/5；三 backend drill PASS |
 
 ## 任务明细
 
@@ -155,10 +155,38 @@ Residual/follow-up: T5.5 e2e（加列放行/删列阻断/replay 差异）+ upgra
 
 **证据落点**：
 
-- `hack/e2e-schema-contract.sh`（新）
-- `hack/e2e-storage-upgrade-{sqlite,mysql,postgres}.sh`
-- `hack/e2e-ui.sh`（回归）
-- ROADMAP/文档 diff + evidence manifest
+- `internal/etl/e2e/schema_contract_test.go`（新，Go path 模式）
+- evidence `docs/evidence/schema_contract_enforcement.json`（5/5 passed）
+- `hack/e2e-storage-upgrade-{sqlite,mysql,postgres}.sh` 三 backend PASS
+- 全量 `-e2e.strict` 回归 PASS；docs/etl-config-schema.md 字段文档
+
+**领取记录**：
+
+```text
+Round: 5/5
+Roadmap item: CH-C2 (IT-5/T5.5) + 迭代收口
+Profile/path: standalone + mysql_batch/mysql 路径
+Objective: schema contract 四场景 e2e + 三 backend migration drill + 全量回归 + 迭代收口。
+Scope: internal/etl/e2e/schema_contract_test.go（新）、internal/etl/storage/adapters.go（SecretFieldStore 转发）、docs/etl-config-schema.md
+Non-goals: CH-C4..C8；其他 sink 的 contract provider
+Acceptance: T5.5 验收 1-4
+Evidence: e2e schema_contract_enforcement 5/5（capture/additive 放行/DROP 阻断/类型冲突阻断/restore 和解）；hack/e2e-storage-upgrade-{sqlite,mysql,postgres}.sh 全 PASS；全量 -e2e.strict PASS；SecretFieldStore 转发修复真实断言失败（e2e server 的 store 被 SecretFieldStore 包装）
+Result: delivered（迭代全部 5 轮完成）
+Residual/follow-up: 多表 table_template crash-window conformance 扩展；Schema Registry capability 字段归入后续 descriptor 迭代
+```
+
+## 迭代验收矩阵（2026-09-19 收口）
+
+| 验收 | 证据 | 结果 | 残留 |
+| --- | --- | --- | --- |
+| CH-C1 provider 实现 + 双协议 crash-window | e2e ch_dedup_crash_window 4/4（native/http token-in-envelope + crash replay FINAL 一致） | passed | 多表 table_template case 归后续 conformance |
+| CH-C1 tombstone/mutation 边界 + DLQ 不丢 | docs/etl-idempotency.md 新章节；既有 DLQ e2e 回归 PASS | passed | 无 |
+| CH-C3 headers 全链路 round-trip | e2e kafka_envelope_roundtrip 2/2（headers/timestamp/key 逐字段 + DLQ byte-exact） | passed | Registry capability 字段归后续 |
+| CH-C3 producer 源 timestamp + capability 可查 | 单测三态（源时间/零值回退/opt-out）；pass_headers/max_header_bytes/use_source_timestamp 配置文档化 | passed | 无 |
+| CH-C2 contract 持久化 + 兼容矩阵 | 单测 8 例矩阵 + storage CRUD round-trip（三 backend dialect） | passed | 无 |
+| CH-C2 阻断/放行/差异报告 | e2e schema_contract_enforcement 5/5 | passed | 无 |
+| 共同锚点：不降级 at-least-once | 全部故障注入（crash/outage/reset/replay）回归 PASS；-e2e.strict 全绿 | passed | 无 |
+| 共同锚点：指标绑定 commit | evidence manifest 绑定各轮 commit（da3f80c/0714244/e6b8b37/9144e27/本提交） | passed | amd64 认证随发布流程 |
 
 **领取记录模板**（复制到 PR / 工作日志）：
 

@@ -1,7 +1,7 @@
 {
-  "path_id": "mysql_cdc__mysql_upsert",
+  "path_id": "schema_contract_enforcement",
   "commit": "0a49f0535dc4681d9ef767de2e7e73ed2370f795",
-  "run_started_at": "2026-09-19T06:00:15Z",
+  "run_started_at": "2026-09-19T06:01:29Z",
   "runner": "local",
   "deps": {
     "harness": "e2e",
@@ -9,22 +9,26 @@
   },
   "checks": [
     {
-      "name": "happy_path",
+      "name": "contract_capture",
       "result": "passed"
     },
     {
-      "name": "crash_restart_recovery",
+      "name": "additive_pass",
       "result": "passed"
     },
     {
-      "name": "checkpoint_reset_absorption",
+      "name": "destructive_block",
       "result": "passed"
     },
     {
-      "name": "sink_outage_dlq_replay",
+      "name": "type_conflict_block",
+      "result": "passed"
+    },
+    {
+      "name": "replay_diff_restore",
       "result": "passed"
     }
   ],
   "result": "passed",
-  "finished_at": "2026-09-19T06:00:19Z"
+  "finished_at": "2026-09-19T06:01:30Z"
 }

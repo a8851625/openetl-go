@@ -48,6 +48,7 @@ dlq:
 | `source.type` | yes unless `source.connection` is set | Registered source plugin name. If omitted with `connection`, it is inferred from the saved connection. |
 | `source.connection` / `source.connection_ref` | no | Saved connection catalog entry to use as the base source config. Inline `source.config` overrides fields from the saved connection. |
 | `source.config` | no | Source-specific settings. Defaults to `{}`. |
+| `source.config.schema_contract` / `sink.config.schema_contract` | no | Opt-in additive-only schema contract (CH-C2). `"enforce"` freezes the source column set on the next successful spec validation; later preflight compares live schema against the stored contract — added columns pass with a warning, removed columns / renames / incompatible type changes block validation with an explainable diff and remediation. Requires a SQL storage backend (sqlite/mysql/postgresql). |
 | `transforms` | no | Ordered transform chain. Omit for no transforms. Each transform can also use `connection` / `connection_ref`. |
 | `sink.type` | yes unless `sink.connection` is set | Registered sink plugin name. If omitted with `connection`, it is inferred from the saved connection. |
 | `sink.connection` / `sink.connection_ref` | no | Saved connection catalog entry to use as the base sink config. Inline `sink.config` overrides fields from the saved connection. |
@@ -662,6 +663,9 @@ sink:
 | `topic` | conditional | | Static Kafka topic to produce to. Required unless `topic_template` is set. |
 | `topic_template` | no | | Per-record topic template with `{db}`/`{table}` placeholders resolved from record metadata (e.g. `cdc-{db}-{table}` routes one topic per source table). When set, OpenETL does **not** validate/auto-create topics during `Open` (there is no single static topic); ensure broker `auto.create.topics.enable=true` or pre-create all routed topics, otherwise the first send fails with `UNKNOWN_TOPIC_OR_PARTITION`. If the template references `{db}`/`{table}` but the record carries no such metadata, `Write` returns a hard error rather than emitting a malformed topic. |
 | `key_column` | no | | Column for message key. |
+| `pass_headers` | no | `true` | CH-C3: forward `Metadata.Headers` from the source record to produced messages. Internal `__`-prefixed keys are always filtered. |
+| `max_header_bytes` | no | `65536` | CH-C3: per-record total forwarded header byte budget. Records above the budget fail with an explicit error (routed to DLQ) instead of silently bloating the producer. |
+| `use_source_timestamp` | no | `true` | CH-C3: stamp produced messages with the source event time (`Metadata.Timestamp`) instead of the write clock. Zero-value timestamps fall back to the write clock. |
 | `compression` | no | `none` | `none`, `gzip`, `snappy`, or `lz4`. |
 
 ### `elasticsearch` / `es`
