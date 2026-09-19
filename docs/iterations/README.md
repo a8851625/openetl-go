@@ -156,5 +156,5 @@ AGENTS.md 默认一次执行请求上限 **5 rounds**。每个迭代的 `tasks.m
 | IT-3 | T3.1–T3.4 复核交付；T3.6 通用基线修复中 | T3.3 完成 | T3.4/T3.5 完成 | T3.6-A 基线 + T3.7 CI 接入完成 | T3.6-B 路径吞吐 + 三 backend 并发曲线闭合（2026-09-16，18/18 case）；迭代 `complete` | `complete` |
 | IT-4 | T4.1 证据复核全绿 | T4.2 无降级项 | T4.3 三 backend 升级 drill PASS | T4.4 两主链路重认证（b1deefa） | T4.5 显式 GA 判定产出 | `complete` |
 | IT-5 | T5.1 完成：dedup token + provider + 错误分类 | T5.2 完成：双协议 crash-window e2e（顺带修复 hook 遮蔽与 replay panic 两个真实 bug） | T5.3 完成：Kafka envelope 全链路 + Redpanda harness | T5.4 完成：contract 类型/存储/enforce 接入 | T5.5 完成：contract e2e 5/5 + 三 backend drill + 全量回归；迭代 `complete` | `complete` |
-| UI-C | — | — | — | — | — | `queued` |
+| UI-C | UC.1 完成：label htmlFor/id + field.* i18n 标签（38 key） | UC.2 完成：移动 toast 提示 + 多选批量删除（C 系列 9 断言） | — | — | — | `complete` |
 | UI-A | UI-A.1–A.4 完成（2026-09-12，e2e 145） | UI-B.1 完成（e2e 148） | UI-B.2 完成（e2e 153） | UI-B.3/B.4 完成（e2e 156/158） | UI-B.5 缓冲轮完成（i18n 全量，e2e 158）；迭代 `complete` | `complete` |

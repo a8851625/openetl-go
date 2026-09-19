@@ -1416,6 +1416,7 @@ export function FirstTaskWizard({
   const removeTransform = (index: number) => {
     setTransformsText(prettyJSON(transformConfigs.filter((_, i) => i !== index)));
     setStageDryRunResult(null);
+    setSelectedTransforms(new Set());
   };
 
   const moveTransform = (index: number, direction: -1 | 1) => {
@@ -1425,6 +1426,29 @@ export function FirstTaskWizard({
     [next[index], next[target]] = [next[target], next[index]];
     setTransformsText(prettyJSON(next));
     setStageDryRunResult(null);
+    // UI-C: changing step order changes downstream semantics (e.g. filter
+    // before/after project yields different records) — surface it explicitly.
+    onShowToast?.('info', t('wizard.transformMoved'));
+  };
+
+  // UI-C: batch selection over the transform chain (PipelinesPage pattern).
+  const [selectedTransforms, setSelectedTransforms] = useState<Set<number>>(new Set());
+  const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
+  const toggleTransformSelect = (index: number, checked: boolean) => {
+    setSelectedTransforms((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(index); else next.delete(index);
+      return next;
+    });
+  };
+  const removeSelectedTransforms = () => {
+    if (selectedTransforms.size === 0) return;
+    const keep = transformConfigs.filter((_, i) => !selectedTransforms.has(i));
+    setTransformsText(prettyJSON(keep));
+    setStageDryRunResult(null);
+    onShowToast?.('success', t('wizard.batchDeleteDone').replace('{n}', String(selectedTransforms.size)));
+    setSelectedTransforms(new Set());
+    setPendingBatchDelete(false);
   };
 
   const dryRunThroughStage = async (index: number) => {
@@ -1524,6 +1548,15 @@ export function FirstTaskWizard({
           if (pendingTransformRemove !== null) removeTransform(pendingTransformRemove);
           setPendingTransformRemove(null);
         }}
+      />
+      <ConfirmDialog
+        open={pendingBatchDelete}
+        onOpenChange={(open) => { if (!open) setPendingBatchDelete(false); }}
+        title={t('wizard.batchDeleteTitle')}
+        description={t('wizard.batchDeleteDesc').replace('{n}', String(selectedTransforms.size))}
+        confirmLabel={t('wizard.batchDelete')}
+        destructive
+        onConfirm={removeSelectedTransforms}
       />
       <ConfirmDialog
         open={pendingTemplateId !== null}
@@ -1891,6 +1924,21 @@ export function FirstTaskWizard({
             <div id="wizard-section-transform" className="ring-1 ring-primary/20 rounded-lg p-1">
               <h3 className="mb-1 text-lg font-semibold">{t('wizard.stepTransform')}</h3>
               <p className="mb-3 text-sm text-muted-foreground">{t('wizard.transformHint')}</p>
+              {transformConfigs.length > 1 && selectedTransforms.size > 0 && (
+                <div data-testid="wizard-transform-batch-bar" className="mb-3 flex items-center gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs dark:border-amber-800 dark:bg-amber-950/30">
+                  <span data-testid="wizard-transform-selected-count">
+                    {t('wizard.selectedCount').replace('{n}', String(selectedTransforms.size))}
+                  </span>
+                  <Button
+                    data-testid="wizard-transform-batch-delete"
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setPendingBatchDelete(true)}
+                  >
+                    {t('wizard.batchDelete')}
+                  </Button>
+                </div>
+              )}
               <div className="mb-3 flex flex-wrap gap-2">
                 <Button
                   variant="secondary"
@@ -1929,6 +1977,14 @@ export function FirstTaskWizard({
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <div className="min-w-0 flex-1" data-field-path={`transforms.${index}.type`} tabIndex={-1}>
                               <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                data-testid={`wizard-transform-select-${index}`}
+                                aria-label={`${t('wizard.transformSelect')} ${index + 1}`}
+                                checked={selectedTransforms.has(index)}
+                                onChange={(e) => toggleTransformSelect(index, e.target.checked)}
+                                className="h-3.5 w-3.5 shrink-0 accent-primary"
+                              />
                               <span className="shrink-0 text-xs font-semibold text-muted-foreground">
                                 {index + 1}.
                               </span>
@@ -1971,8 +2027,8 @@ export function FirstTaskWizard({
                                 className="px-2"
                                 onClick={() => moveTransform(index, -1)}
                                 disabled={index === 0}
-                                title="Move up"
-                                aria-label="Move up"
+                                title={t('wizard.transformMoveUp')}
+                                aria-label={t('wizard.transformMoveUp')}
                               >
                                 ↑
                               </Button>
@@ -1983,8 +2039,8 @@ export function FirstTaskWizard({
                                 className="px-2"
                                 onClick={() => moveTransform(index, 1)}
                                 disabled={index === transformConfigs.length - 1}
-                                title="Move down"
-                                aria-label="Move down"
+                                title={t('wizard.transformMoveDown')}
+                                aria-label={t('wizard.transformMoveDown')}
                               >
                                 ↓
                               </Button>

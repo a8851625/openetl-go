@@ -174,11 +174,16 @@ export function ConfigForm({
         const fieldPath = fieldPathPrefix ? `${fieldPathPrefix}.${field.name}` : field.name;
         const hasError = issues.some((issue) => issue.level !== 'warning' && issue.level !== 'info');
         const fieldId = `cfg-${fieldPathPrefix ? fieldPathPrefix.replace(/[^a-z0-9]+/gi, '-') + '-' : ''}${field.name}`;
+        // Semantic label: i18n field.<name> (falls back to the raw name when
+        // no key exists); the raw field name stays visible on hover so the
+        // docs/JSON mapping is never hidden.
+        const fieldLabel = t(`field.${field.name}`);
         const invalidClass = hasError ? 'border-rose-400 ring-1 ring-rose-200' : '';
         let input: React.ReactNode;
         if (field.enum && field.enum.length > 0) {
           input = (
             <select
+              id={fieldId}
               className={cn(selectClass, invalidClass)}
               aria-invalid={issues.length > 0}
               value={String(value)}
@@ -196,6 +201,7 @@ export function ConfigForm({
           input = (
             <div className={cn('flex h-9 items-center gap-2 rounded-md border border-transparent px-2', invalidClass)}>
               <Switch
+                id={fieldId}
                 aria-invalid={issues.length > 0}
                 checked={!!value}
                 onCheckedChange={(checked) => update(field.name, checked)}
@@ -221,6 +227,7 @@ export function ConfigForm({
         } else if (field.type === 'string_array') {
           input = (
             <Input
+              id={fieldId}
               className={invalidClass}
               aria-invalid={issues.length > 0}
               value={Array.isArray(value) ? value.join(', ') : String(value || '')}
@@ -283,8 +290,8 @@ export function ConfigForm({
               issues.length > 0 && !hasError && 'border border-amber-300 bg-amber-50/60 dark:border-amber-800 dark:bg-amber-950/20',
             )}
           >
-            <Label htmlFor={fieldId} className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
-              <span>{field.name}</span>
+            <Label htmlFor={fieldId} title={field.name} className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
+              <span>{fieldLabel}</span>
               {field.required && <span className="text-rose-500">*</span>}
               {field.secret && (
                 <ToneBadge tone="amber" className="px-1.5 py-0 text-[10px]">

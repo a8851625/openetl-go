@@ -257,6 +257,55 @@ done
 check "B7.1: transform removal asks for confirmation" "$confirm_dialog_visible"
 evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').includes('Remove step'))?.click(); return true; })()" >/dev/null
 sleep 1
+
+# ── UI-C.2: transform move semantic hint + batch delete ─────────────────
+echo "==> UI-C.2 transform move hint + batch delete"
+# After B7.1's confirm, the chain has 1 step; add two more to make the chain reorderable and batch-deletable.
+evaljs "(() => { document.querySelector('[data-testid="wizard-add-transform"]')?.click(); return true; })()" >/dev/null
+sleep 0.8
+evaljs "(() => { document.querySelector('[data-testid="wizard-add-transform"]')?.click(); return true; })()" >/dev/null
+sleep 0.8
+c2_chain3="$(evaljs "document.querySelectorAll('[data-testid^="wizard-transform-stage-"]').length === 3")"
+check "C2.0: transform chain has 3 steps for batch tests" "$c2_chain3"
+# C2.1: move fires the semantic hint toast (info, mentions downstream order).
+evaljs "(() => { document.querySelector('[data-testid="wizard-transform-move-up-2"]')?.click(); return true; })()" >/dev/null
+c2_move_hint="false"
+for _ in $(seq 1 8); do
+  c2_move_hint="$(evaljs "(() => { const toasts=Array.from(document.querySelectorAll('[data-sonner-toast]')); return toasts.some(t => (t.textContent||'').includes('downstream') || (t.textContent||'').includes('下游')); })()")"
+  if [[ "$c2_move_hint" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "C2.1: transform move shows order-semantics hint toast" "$c2_move_hint"
+# C2.2: multi-select exposes the batch bar with a count.
+evaljs "(() => { document.querySelector('[data-testid="wizard-transform-select-0"]')?.click(); return true; })()" >/dev/null
+evaljs "(() => { document.querySelector('[data-testid="wizard-transform-select-2"]')?.click(); return true; })()" >/dev/null
+c2_batch_bar="false"
+for _ in $(seq 1 8); do
+  c2_batch_bar="$(evaljs "document.querySelector('[data-testid="wizard-transform-batch-bar"]') !== null && document.querySelector('[data-testid="wizard-transform-selected-count"]')?.innerText.includes('2')")"
+  if [[ "$c2_batch_bar" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "C2.2: multi-select shows batch bar with selected count" "$c2_batch_bar"
+# C2.3: batch delete asks for confirmation naming the count.
+evaljs "(() => { document.querySelector('[data-testid="wizard-transform-batch-delete"]')?.click(); return true; })()" >/dev/null
+c2_confirm="false"
+for _ in $(seq 1 8); do
+  c2_confirm="$(evaljs "!!document.querySelector('[role=dialog]') && document.body.innerText.includes('2') && (document.body.innerText.includes('Delete selected') || document.body.innerText.includes('删除所选'))")"
+  if [[ "$c2_confirm" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "C2.3: batch delete confirms with target count" "$c2_confirm"
+# C2.4: confirmed delete leaves exactly 1 step and reports the result.
+evaljs "(() => { Array.from(document.querySelectorAll('[role=dialog] button')).find(b => (b.textContent || '').includes('Delete selected') || (b.textContent || '').includes('删除所选'))?.click(); return true; })()" >/dev/null
+c2_deleted="false"
+for _ in $(seq 1 10); do
+  c2_deleted="$(evaljs "document.querySelectorAll('[data-testid^="wizard-transform-stage-"]').length === 1")"
+  if [[ "$c2_deleted" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "C2.4: batch delete removes selected steps only" "$c2_deleted"
+c2_result="$(evaljs "(() => { const toasts=Array.from(document.querySelectorAll('[data-sonner-toast]')); return toasts.some(t => (t.textContent||'').includes('Removed 2') || (t.textContent||'').includes('已移除 2')); })()")"
+check "C2.4b: batch delete reports removed count" "$c2_result"
 evaljs "(() => { document.querySelector('[data-testid=\"wizard-add-transform\"]')?.click(); return true; })()" >/dev/null
 playwright-cli select "[data-testid='wizard-transform-type-1']" "flat_map" >/dev/null
 evaljs "(() => { const textarea=document.querySelector('[data-testid=\"wizard-transform-stage-1\"] textarea'); if (!textarea) return false; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(textarea,'error(\"ui stage failure\")'); textarea.dispatchEvent(new Event('input',{bubbles:true})); return true; })()" >/dev/null
@@ -657,6 +706,23 @@ sleep 0.8
 evaljs "(() => { document.querySelector('[data-testid=wizard-step-sink]')?.click(); return true; })()" >/dev/null
 sleep 0.6
 check "A2.4: experimental sink option labelled" "$(evaljs "Array.from(document.querySelectorAll('[data-testid=wizard-sink-type] option')).some(o=>(o.textContent||'').includes('maxcompute (Experimental'))")"
+
+# ── UI-C.1: ConfigForm a11y + semantic field labels ─────────────────────
+echo "==> UI-C.1 ConfigForm label binding"
+# The wizard sink step (currently open) exposes ConfigForm fields with ids.
+c1_label_bound="false"
+for _ in $(seq 1 10); do
+  c1_label_bound="$(evaljs "(() => { const wrap=document.querySelector('[data-testid=wizard-sink-config-form]') || document; const labels=Array.from(wrap.querySelectorAll('label')); if(!labels.length) return 'no-labels'; const withFor=labels.filter(l=>l.getAttribute('for')); if(withFor.length===0) return 'no-for'; const inp=withFor.map(l=>document.getElementById(l.getAttribute('for'))).filter(Boolean); return withFor.length===inp.length && withFor.length>0; })()")"
+  if [[ "$c1_label_bound" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "C1.1: every visible ConfigForm label has htmlFor bound to an existing input" "$c1_label_bound"
+# C1.2: clicking a label focuses its input (the a11y contract).
+c1_focus="$(evaljs "(() => { const wrap=document.querySelector('[data-testid=wizard-sink-config-form]') || document; const label=Array.from(wrap.querySelectorAll('label[for]'))[0]; if(!label) return 'no-label'; const id=label.getAttribute('for'); label.click(); const el=document.getElementById(id); const focused=document.activeElement; return !!focused && (focused.id===id || focused.contains && focused.id===id); })()")"
+check "C1.2: clicking a field label focuses its input" "$c1_focus"
+# C1.3: labels are semantic (i18n), raw field name kept on hover title.
+c1_semantic="$(evaljs "(() => { const wrap=document.querySelector('[data-testid=wizard-sink-config-form]') || document; const labels=Array.from(wrap.querySelectorAll('label[for]')); if(!labels.length) return 'no-labels'; const withTitle=labels.filter(l=>l.getAttribute('title')); if(withTitle.length!==labels.length) return 'missing-title:'+labels.length+'/'+withTitle.length; const first=withTitle[0]; const title=first.getAttribute('title'); const text=(first.textContent||'').trim(); return title && text.length>0 && text!==title; })()")"
+check "C1.3: field label is i18n-semantic, raw name on hover" "$c1_semantic"
 
 # ── UI-A.3: page truth consistency ───────────────────────────────────────
 echo "==> UI-A.3 page truth checks"
