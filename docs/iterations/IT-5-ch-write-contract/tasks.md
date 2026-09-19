@@ -19,7 +19,7 @@
 | T5.1 | CH-C1：dedup token + provider 实现与错误分类 | — | Round 1 | `done` | commit da3f80c |
 | T5.2 | CH-C1：crash-window/协议等价 e2e + 文档 | T5.1 | Round 2 | `done` | commit 0714244；evidence ch_dedup_crash_window 4/4 |
 | T5.3 | CH-C3：Kafka metadata envelope 全链路 | — | Round 3 | `done` | commit e6b8b37；evidence kafka_envelope_roundtrip 2/2 |
-| T5.4 | CH-C2：schema contract 存储与校验 | — | Round 4 | `todo` | storage + server validate/preflight |
+| T5.4 | CH-C2：schema contract 存储与校验 | — | Round 4 | `done` | commit 9144e27 |
 | T5.5 | CH-C2：e2e + migration drill + 迭代收口 | T5.4 | Round 5 | `todo` | e2e + upgrade drill + ROADMAP 回填 |
 
 ## 任务明细
@@ -126,9 +126,23 @@ Residual/follow-up: Schema Registry capability 字段（descriptor 查询 + pref
 
 **证据落点**：
 
-- `internal/etl/core/`（或 server/schema_contract.go）、`internal/etl/storage/` migration
-- `internal/etl/server/schema_test.go` 扩展
-- `hack/e2e-storage-upgrade-*.sh` 通过
+- `internal/etl/core/schema_contract{,_test}.go`（新）、`internal/etl/storage/sqlstore/schema_contract{,_test}.go`（新）、`internal/etl/storage/sqlstore/dialect.go`、migration v23
+- `internal/etl/server/schema_contract_check.go`（新）、preflight.go/server.go 接入；commit `9144e27`
+
+**领取记录**：
+
+```text
+Round: 4/5
+Roadmap item: CH-C2 (IT-5/T5.4)
+Profile/path: standalone（三 SQL backend）+ validate/preflight 面
+Objective: schema contract 类型 + fingerprint + storage 表 + validate/preflight 的 additive-only 阻断语义（opt-in）。
+Scope: internal/etl/core/schema_contract.go、internal/etl/storage/sqlstore/{store,dialect,schema_contract}.go、internal/etl/server/{schema_contract_check.go,preflight.go,server.go}
+Non-goals: 自动 ALTER sink；contract 默认强制（保持 opt-in）；删除列/重命名传播；CH Registry 客户端
+Acceptance: T5.4 验收 1-5
+Evidence: 单测（fingerprint 稳定性、8 例 diff 矩阵、CRUD round-trip/upsert/latest/list/delete、校验守卫）全绿；go test ./internal/etl/... 全绿；-race sqlstore+core 干净
+Result: delivered
+Residual/follow-up: T5.5 e2e（加列放行/删列阻断/replay 差异）+ upgrade drill + 收口
+```
 
 ### T5.5 CH-C2：e2e + migration drill + 迭代收口
 
