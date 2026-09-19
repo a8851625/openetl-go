@@ -44,6 +44,16 @@ type KafkaSink struct {
 	tlsSkipVerify   bool
 	autoCreateTopic bool
 	retryBackoff    time.Duration
+	// CH-C3: passHeaders forwards Metadata.Headers to produced messages
+	// (default true); internal "__"-prefixed keys are always filtered.
+	passHeaders bool
+	// maxHeaderBytes bounds total forwarded header bytes per record; a
+	// record above the bound goes to DLQ instead of bloating the producer.
+	maxHeaderBytes int
+	// useSourceTimestamp stamps produced messages with the source event
+	// time (Metadata.Timestamp) instead of the write clock (default true;
+	// zero-value timestamps fall back to now).
+	useSourceTimestamp bool
 	producer        kafkaSyncProducer
 	sinkCounters    // P4-20: per-sink write metrics (SK-4)
 }
@@ -75,7 +85,7 @@ type debeziumField struct {
 }
 
 func NewKafkaSink(config map[string]any) (*KafkaSink, error) {
-	s := &KafkaSink{name: "kafka", compression: "none"}
+	s := &KafkaSink{name: "kafka", compression: "none", passHeaders: true, useSourceTimestamp: true, maxHeaderBytes: 65536}
 	if v, ok := config["name"]; ok {
 		if vs, ok := v.(string); ok {
 			s.name = vs
@@ -132,6 +142,26 @@ func NewKafkaSink(config map[string]any) (*KafkaSink, error) {
 			s.autoCreateTopic = b
 		}
 	}
+	// CH-C3 envelope options.
+	if v, ok := config["pass_headers"]; ok {
+		if b, ok := v.(bool); ok {
+			s.passHeaders = b
+		}
+	}
+	if v, ok := config["max_header_bytes"]; ok {
+		switch vv := v.(type) {
+		case float64:
+			s.maxHeaderBytes = int(vv)
+		case int:
+			s.maxHeaderBytes = vv
+		}
+	}
+	if v, ok := config["use_source_timestamp"]; ok {
+		if b, ok := v.(bool); ok {
+			s.useSourceTimestamp = b
+		}
+	}
+
 	if v, ok := config["retry_backoff_ms"]; ok {
 		switch vv := v.(type) {
 		case float64:
@@ -357,9 +387,16 @@ func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error
 		}
 
 		msg := &sarama.ProducerMessage{
-			Topic:     s.topic,
-			Value:     sarama.ByteEncoder(value),
-			Timestamp: time.Now(),
+			Topic: s.topic,
+			Value: sarama.ByteEncoder(value),
+		}
+		// CH-C3: produced messages carry the SOURCE event time, not the write
+		// clock, so replay/audit identity survives the hop. Zero-value
+		// timestamps (batch sources without an event time) fall back to now.
+		if s.useSourceTimestamp && !rec.Metadata.Timestamp.IsZero() {
+			msg.Timestamp = rec.Metadata.Timestamp
+		} else {
+			msg.Timestamp = time.Now()
 		}
 		if s.topicTemplate != "" {
 			resolved, err := s.topicForRecord(rec)
@@ -376,6 +413,25 @@ func (s *KafkaSink) Write(ctx context.Context, records []core.Record) (err error
 			}
 		} else if rec.Metadata.Key != "" {
 			msg.Key = sarama.StringEncoder(rec.Metadata.Key)
+		}
+
+		// CH-C3: forward event headers. Internal "__" markers are filtered;
+		// oversized headers surface as an explicit per-record error so the
+		// record lands in DLQ instead of silently inflating producer load.
+		if s.passHeaders && len(rec.Metadata.Headers) > 0 {
+			total := 0
+			for _, v := range rec.Metadata.Headers {
+				total += len(v)
+			}
+			if s.maxHeaderBytes > 0 && total > s.maxHeaderBytes {
+				return fmt.Errorf("kafka sink: record headers exceed max_header_bytes (%d > %d)", total, s.maxHeaderBytes)
+			}
+			for k, v := range rec.Metadata.Headers {
+				if strings.HasPrefix(k, "__") {
+					continue
+				}
+				msg.Headers = append(msg.Headers, sarama.RecordHeader{Key: []byte(k), Value: append([]byte(nil), v...)})
+			}
 		}
 
 		messages = append(messages, msg)

@@ -367,6 +367,20 @@ func (h *kafkaHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 			if msg.Value != nil {
 				rec.Metadata.RawPayload = append([]byte(nil), msg.Value...)
 			}
+			// CH-C3: headers join the unified event identity (key/timestamp/
+			// partition/offset). Copied defensively — sarama reuses buffers.
+			if len(msg.Headers) > 0 {
+				hdrs := make(map[string][]byte, len(msg.Headers))
+				for _, h := range msg.Headers {
+					if h == nil || len(h.Key) == 0 {
+						continue
+					}
+					hdrs[string(h.Key)] = append([]byte(nil), h.Value...)
+				}
+				if len(hdrs) > 0 {
+					rec.Metadata.Headers = hdrs
+				}
+			}
 
 			data := make(map[string]any)
 			if h.reader.source.keyColumn != "" && msg.Key != nil {

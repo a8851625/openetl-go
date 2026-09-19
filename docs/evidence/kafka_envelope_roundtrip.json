@@ -1,0 +1,22 @@
+{
+  "path_id": "kafka_envelope_roundtrip",
+  "commit": "e5758b313550372686b1cdcad3d84bb94fb2e0ee",
+  "run_started_at": "2026-09-19T04:20:42Z",
+  "runner": "local",
+  "deps": {
+    "harness": "e2e",
+    "redpanda": "docker.io/redpandadata/redpanda:v24.1.1"
+  },
+  "checks": [
+    {
+      "name": "hop_round_trip",
+      "result": "passed"
+    },
+    {
+      "name": "dlq_envelope_headers",
+      "result": "passed"
+    }
+  ],
+  "result": "passed",
+  "finished_at": "2026-09-19T04:20:51Z"
+}

@@ -50,6 +50,11 @@ type Metadata struct {
 	// text must not be lossy-hashed into a numeric version.
 	Cursor     string           `json:"cursor,omitempty"`
 	CursorKind SourceCursorKind `json:"cursor_kind,omitempty"`
+	// Headers carries Kafka record headers (CH-C3) so key, source timestamp,
+	// partition, offset and headers form one traceable event identity along
+	// source -> transform -> sink -> DLQ -> replay. Keys with a "__" prefix
+	// are internal pipeline markers and are filtered on egress.
+	Headers map[string][]byte `json:"headers,omitempty"`
 	// PrimaryKeyColumns is the authoritative ordered declaration used to
 	// decide whether Key contains a complete row identity. Key alone cannot
 	// reveal that a composite primary key is only partially present.
