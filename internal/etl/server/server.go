@@ -4461,7 +4461,7 @@ func pluginCapabilityMetadata() map[string]any {
 			"mysql_batch":        pluginInfo([]string{"snapshot", "checkpoint", "schema_descriptor"}, "production"),
 			"mysql_cdc":          pluginInfo([]string{"cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
 			"mysql_snapshot_cdc": pluginInfo([]string{"snapshot", "cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
-			"kafka":              pluginInfo([]string{"stream", "checkpoint"}, "production"),
+			"kafka":              pluginInfo([]string{"stream", "checkpoint", "schema_registry"}, "production"),
 			"postgres_cdc":       pluginInfo([]string{"cdc", "snapshot", "checkpoint"}, "beta"),
 			"redis":              pluginInfo([]string{"stream", "checkpoint"}, "experimental"),
 			"feishu_sheet":       pluginInfo([]string{"batch", "oauth2_client_credentials", "scheduled_pull"}, "beta"),

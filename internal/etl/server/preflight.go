@@ -3172,6 +3172,20 @@ func summarizePreflightTables(tables []string) string {
 }
 
 func (s *Server) checkSchemaCompatibility(ctx context.Context, spec *pipeline.Spec, sink core.Sink, result *PreflightResult) {
+	// CH-C3 follow-up: Schema Registry is a capability/preflight signal only.
+	// The runtime has no avro client; registry-referencing configs get an
+	// explicit warning instead of silently treating them as plain JSON.
+	if spec.Source.Type == "kafka" {
+		if _, ok := spec.Source.Config["schema_registry_url"]; ok {
+			addPreflightGuidance(result, PreflightGuidance{
+				Level:    "warning",
+				Category: "schema",
+				Code:     "schema-registry-not-consumed",
+				Message:  "kafka source references a schema registry, but the runtime deserializes json/text/envelope/canal_json only",
+				Action:   "deserializing avro/protobuf requires an external decode step today; track the connector issue or remove schema_registry_url",
+			})
+		}
+	}
 	if s.checkMySQLMultiTableSchemaCompatibility(ctx, spec, result) {
 		return
 	}

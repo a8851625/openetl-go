@@ -160,6 +160,7 @@ func sourceConfigSchemas() map[string][]ConfigField {
 			{Name: "max_open_requests", Type: FieldInt, Required: false, Default: 5, Description: "Maximum outstanding requests per broker connection (Net.MaxOpenRequests)"},
 			{Name: "schema", Type: FieldMap, Required: false, Description: "Optional preflight schema hint, e.g. [{name,data_type,nullable}] or {field: type}"},
 			{Name: "sample", Type: FieldMap, Required: false, Description: "Optional preflight sample message used to infer schema without consuming Kafka"},
+			{Name: "schema_registry_url", Type: FieldString, Required: false, Description: "Schema Registry URL (capability/preflight signal only): formats stay json/text/envelope/canal_json; avro/protobuf deserialization is not implemented"},
 		},
 		"postgres_cdc": {
 			{Name: "host", Type: FieldString, Required: true, Description: "PostgreSQL host"},

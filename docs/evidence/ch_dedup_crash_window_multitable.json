@@ -1,0 +1,23 @@
+{
+  "path_id": "ch_dedup_crash_window_multitable",
+  "commit": "564e592e716f3009d4bc1fae03b9576aa51bc254",
+  "run_started_at": "2026-09-19T14:29:53Z",
+  "runner": "local",
+  "deps": {
+    "clickhouse": "docker.io/clickhouse/clickhouse-server:24.3",
+    "harness": "e2e",
+    "mysql": "docker.io/library/mysql:8.0"
+  },
+  "checks": [
+    {
+      "name": "multitable_ack_token_in_checkpoint",
+      "result": "passed"
+    },
+    {
+      "name": "multitable_crash_window_replay",
+      "result": "passed"
+    }
+  ],
+  "result": "passed",
+  "finished_at": "2026-09-19T14:29:58Z"
+}

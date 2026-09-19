@@ -1,7 +1,7 @@
 {
   "path_id": "ch_dedup_crash_window",
-  "commit": "0a49f0535dc4681d9ef767de2e7e73ed2370f795",
-  "run_started_at": "2026-09-19T05:59:54Z",
+  "commit": "564e592e716f3009d4bc1fae03b9576aa51bc254",
+  "run_started_at": "2026-09-19T14:29:38Z",
   "runner": "local",
   "deps": {
     "clickhouse": "docker.io/clickhouse/clickhouse-server:24.3",
@@ -27,5 +27,5 @@
     }
   ],
   "result": "passed",
-  "finished_at": "2026-09-19T06:00:09Z"
+  "finished_at": "2026-09-19T14:29:53Z"
 }

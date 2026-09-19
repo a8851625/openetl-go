@@ -1,7 +1,7 @@
 {
   "path_id": "kafka_envelope_roundtrip",
-  "commit": "0a49f0535dc4681d9ef767de2e7e73ed2370f795",
-  "run_started_at": "2026-09-19T06:00:10Z",
+  "commit": "564e592e716f3009d4bc1fae03b9576aa51bc254",
+  "run_started_at": "2026-09-19T14:30:00Z",
   "runner": "local",
   "deps": {
     "harness": "e2e",
@@ -18,5 +18,5 @@
     }
   ],
   "result": "passed",
-  "finished_at": "2026-09-19T06:00:15Z"
+  "finished_at": "2026-09-19T14:30:05Z"
 }
