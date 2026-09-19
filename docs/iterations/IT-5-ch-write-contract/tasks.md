@@ -18,7 +18,7 @@
 | --- | --- | --- | --- | --- | --- |
 | T5.1 | CH-C1：dedup token + provider 实现与错误分类 | — | Round 1 | `done` | commit da3f80c |
 | T5.2 | CH-C1：crash-window/协议等价 e2e + 文档 | T5.1 | Round 2 | `done` | commit 0714244；evidence ch_dedup_crash_window 4/4 |
-| T5.3 | CH-C3：Kafka metadata envelope 全链路 | — | Round 3 | `todo` | core/source/sink + e2e |
+| T5.3 | CH-C3：Kafka metadata envelope 全链路 | — | Round 3 | `done` | commit e6b8b37；evidence kafka_envelope_roundtrip 2/2 |
 | T5.4 | CH-C2：schema contract 存储与校验 | — | Round 4 | `todo` | storage + server validate/preflight |
 | T5.5 | CH-C2：e2e + migration drill + 迭代收口 | T5.4 | Round 5 | `todo` | e2e + upgrade drill + ROADMAP 回填 |
 
@@ -95,9 +95,24 @@ Residual/follow-up: 多表（table_template）crash-window case 归入后续 con
 
 **证据落点**：
 
-- `internal/etl/core/core.go`、`internal/etl/source/kafka.go`、`internal/etl/sink/kafka.go`
-- `internal/etl/e2e/kafka_envelope_test.go`（新）
-- `hack/e2e-kafka.sh` 回归通过
+- `internal/etl/core/core.go`（Headers）、`internal/etl/source/kafka.go`、`internal/etl/sink/kafka.go`、`internal/etl/sink/kafka_envelope_test.go`（新）
+- `internal/etl/e2e/harness/redpanda.go`（新 broker harness）、`internal/etl/e2e/path_kafka_envelope_test.go`（新）
+- evidence `docs/evidence/kafka_envelope_roundtrip.json`（2/2 passed）；commit `e6b8b37`
+
+**领取记录**：
+
+```text
+Round: 3/5
+Roadmap item: CH-C3 (IT-5/T5.3)
+Profile/path: standalone + kafka connector path
+Objective: key/源 timestamp/partition/offset/headers 全链路 round-trip；producer 用源事件时间；超限 header 显式进 DLQ。
+Scope: internal/etl/core/core.go、internal/etl/source/kafka.go、internal/etl/sink/kafka.go、internal/etl/e2e/harness/redpanda.go（新）、internal/etl/e2e/path_kafka_envelope_test.go（新）
+Non-goals: Schema Registry 客户端实现；avro 反序列化；CH-C2
+Acceptance: T5.3 验收 1-4
+Evidence: 单测（源时间戳三态、header 透传/__过滤/超限报错、Metadata JSON round-trip/legacy 兼容）全绿；e2e kafka_envelope_roundtrip 2/2；hack/e2e-kafka.sh 全量回归通过；go test ./internal/etl/... 全绿
+Result: delivered
+Residual/follow-up: Schema Registry capability 字段（descriptor 查询 + preflight warning）并入 T5.4 一起交付（同为 descriptor/preflight 面）
+```
 
 ### T5.4 CH-C2：schema contract 存储与校验
 
