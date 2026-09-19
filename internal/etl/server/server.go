@@ -1385,6 +1385,10 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// CH-C2: capture/refresh the additive-only schema contract baseline for
+	// opted-in pipelines (schema_contract: enforce). Capture failures degrade
+	// to guidance, never to a failed validation.
+	s.captureSchemaContract(r.Context(), &spec, preflightResult, &warnings)
 	json.NewEncoder(w).Encode(map[string]any{"valid": true, "warnings": warnings, "issues": preflightIssues, "spec": spec, "preflight": preflightResult})
 }
 

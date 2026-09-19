@@ -27,6 +27,9 @@ type Dialect interface {
 	ConnectionUpsert() string
 	SettingUpsert() string
 	SettingKeyColumn() string
+	// SchemaContractUpsert (CH-C2) upserts one (pipeline, version)
+	// contract row; dialects differ only in upsert syntax.
+	SchemaContractUpsert() string
 	BoolValue(v bool) any
 	RunHistoryInsertReturningID() bool
 	// SupportsDeleteLimit reports whether DELETE ... LIMIT N is legal.
@@ -382,6 +385,18 @@ func (s *Store) runVersionedMigrations() error {
 		{20, "add generation to pipelines", "ALTER TABLE pipelines ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"},
 		{21, "add generation to checkpoints", "ALTER TABLE checkpoints ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"},
 		{22, "add identity context to dead_letters", "ALTER TABLE dead_letters ADD COLUMN identity_context_json TEXT"},
+		// CH-C2 (IT-5/T5.4): persisted additive-only schema contracts.
+		{23, "add pipeline_schema_contracts", `CREATE TABLE IF NOT EXISTS pipeline_schema_contracts (
+			pipeline    TEXT NOT NULL,
+			version     INTEGER NOT NULL,
+			fingerprint TEXT NOT NULL,
+			columns_json TEXT NOT NULL,
+			source_type TEXT NOT NULL DEFAULT '',
+			database    TEXT NOT NULL DEFAULT '',
+			table_name  TEXT NOT NULL DEFAULT '',
+			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (pipeline, version)
+		)`},
 	}
 
 	for _, m := range migrations {

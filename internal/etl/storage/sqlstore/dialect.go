@@ -45,6 +45,19 @@ func (SQLiteDialect) SettingUpsert() string {
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP`
 }
 func (SQLiteDialect) SettingKeyColumn() string { return "key" }
+
+// SchemaContractUpsert (CH-C2): upsert one (pipeline, version) contract row.
+func (SQLiteDialect) SchemaContractUpsert() string {
+	return `INSERT INTO pipeline_schema_contracts (pipeline, version, fingerprint, columns_json, source_type, database, table_name, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(pipeline, version) DO UPDATE SET
+		   fingerprint = excluded.fingerprint,
+		   columns_json = excluded.columns_json,
+		   source_type = excluded.source_type,
+		   database = excluded.database,
+		   table_name = excluded.table_name,
+		   created_at = CURRENT_TIMESTAMP`
+}
 func (SQLiteDialect) BoolValue(v bool) any {
 	if v {
 		return 1
@@ -86,6 +99,13 @@ func (MySQLDialect) ConnectionUpsert() string {
 		 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))
 		 ON DUPLICATE KEY UPDATE kind=VALUES(kind), type=VALUES(type), config_json=VALUES(config_json), updated_at=CURRENT_TIMESTAMP(3)`
 }
+// SchemaContractUpsert mirrors the SQLite statement with MySQL upsert syntax.
+func (MySQLDialect) SchemaContractUpsert() string {
+	return `INSERT INTO pipeline_schema_contracts (pipeline, version, fingerprint, columns_json, source_type, database, table_name, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))
+		 ON DUPLICATE KEY UPDATE fingerprint=VALUES(fingerprint), columns_json=VALUES(columns_json), source_type=VALUES(source_type), database=VALUES(database), table_name=VALUES(table_name), created_at=CURRENT_TIMESTAMP(3)`
+}
+
 func (MySQLDialect) SettingUpsert() string {
 	return `INSERT INTO settings (` + "`key`" + `, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP(3))
 		 ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP(3)`
@@ -93,6 +113,9 @@ func (MySQLDialect) SettingUpsert() string {
 func (MySQLDialect) SettingKeyColumn() string { return "`key`" }
 
 type PostgresDialect struct{ SQLiteDialect }
+
+// SchemaContractUpsert reuses the SQLite (ON CONFLICT) statement verbatim —
+// PostgreSQL supports the same syntax.
 
 func (PostgresDialect) Bind(query string) string {
 	var out strings.Builder

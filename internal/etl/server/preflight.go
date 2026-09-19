@@ -3256,6 +3256,9 @@ func (s *Server) checkSchemaCompatibility(ctx context.Context, spec *pipeline.Sp
 
 	result.DDLPreview = buildPreflightDDLPreview(spec, schema)
 	validatePreflightSchema(probeCtx, spec, validator, schema, result)
+	// CH-C2: additive-only contract enforcement (preflight is read-only —
+	// capture happens on the spec validation path).
+	s.checkSchemaContractEnforcement(ctx, spec, schema, result, false)
 }
 
 func checkClickHouseSourceOrderSchema(spec *pipeline.Spec, schema core.SchemaInfo, result *PreflightResult) {
