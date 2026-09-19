@@ -173,15 +173,20 @@ Acceptance: T5.5 验收 1-4
 Evidence: e2e schema_contract_enforcement 5/5（capture/additive 放行/DROP 阻断/类型冲突阻断/restore 和解）；hack/e2e-storage-upgrade-{sqlite,mysql,postgres}.sh 全 PASS；全量 -e2e.strict PASS；SecretFieldStore 转发修复真实断言失败（e2e server 的 store 被 SecretFieldStore 包装）
 Result: delivered（迭代全部 5 轮完成）
 Residual/follow-up: 多表 table_template crash-window conformance 扩展；Schema Registry capability 字段归入后续 descriptor 迭代
+
+**残留闭环（2026-09-19 追加，commit b4ef038）**：两项残留同日交付——
+- 多表 conformance：`internal/etl/e2e/path_ch_dedup_multitable_test.go`（TestPathClickHouseDedupCrashWindowMultiTable，evidence `ch_dedup_crash_window_multitable` 2/2 passed：ack_token 覆盖 tables map、双表 crash 后 FINAL 各=3 无重复无丢失）
+- Schema Registry capability：kafka source capability 增 `schema_registry`，新增 `schema_registry_url` 配置字段 + preflight warning `schema-registry-not-consumed`（单测 ×2）；无 avro 客户端，纯 capability/preflight 信号，符合"边界先于能力"
+- 全量 `-e2e.strict` 回归 PASS（含新多表测试）
 ```
 
 ## 迭代验收矩阵（2026-09-19 收口）
 
 | 验收 | 证据 | 结果 | 残留 |
 | --- | --- | --- | --- |
-| CH-C1 provider 实现 + 双协议 crash-window | e2e ch_dedup_crash_window 4/4（native/http token-in-envelope + crash replay FINAL 一致） | passed | 多表 table_template case 归后续 conformance |
+| CH-C1 provider 实现 + 双协议 crash-window | e2e ch_dedup_crash_window 4/4 + 多表 conformance 2/2（2026-09-19 追加） | passed | 无 |
 | CH-C1 tombstone/mutation 边界 + DLQ 不丢 | docs/etl-idempotency.md 新章节；既有 DLQ e2e 回归 PASS | passed | 无 |
-| CH-C3 headers 全链路 round-trip | e2e kafka_envelope_roundtrip 2/2（headers/timestamp/key 逐字段 + DLQ byte-exact） | passed | Registry capability 字段归后续 |
+| CH-C3 headers 全链路 round-trip | e2e kafka_envelope_roundtrip 2/2（headers/timestamp/key 逐字段 + DLQ byte-exact） | passed | 无（Registry capability 2026-09-19 追加交付） |
 | CH-C3 producer 源 timestamp + capability 可查 | 单测三态（源时间/零值回退/opt-out）；pass_headers/max_header_bytes/use_source_timestamp 配置文档化 | passed | 无 |
 | CH-C2 contract 持久化 + 兼容矩阵 | 单测 8 例矩阵 + storage CRUD round-trip（三 backend dialect） | passed | 无 |
 | CH-C2 阻断/放行/差异报告 | e2e schema_contract_enforcement 5/5 | passed | 无 |
