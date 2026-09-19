@@ -136,7 +136,7 @@ Roadmap 状态只使用以下值：
 
 ### UI-C：向导行交互模型收尾（并行小项，不占 active 主任务槽）
 
-状态：`queued`（2026-09-17 立项；P2-5 残留 + 批量步骤操作）
+状态：`delivered`（UC.1+UC.2 全部交付 2026-09-19：ConfigForm a11y htmlFor/id 绑定 + field.* 语义 i18n 标签（悬停显原名）、transform 移动顺序语义 toast 提示 + 多选批量删除（ConfirmDialog 显示数量 + 结果反馈）；e2e 163→172 全绿）
 
 来源：UI-A 审计 P2-5（ConfigForm label 无 htmlFor 绑定、字段名裸露内部命名、移动/删除 transform 无风险提示）——删除确认已于 UI-B.7 交付，剩余 htmlFor 绑定、字段语义标签、移动顺序风险提示；加 UI-B.7 收口时记录的“向导 transform 链批量操作”。规模 1–2 轮。
 
