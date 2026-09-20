@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { api } from '@/lib/api';
+import { api, isTokenPersisted } from '@/lib/api';
 import type { TFunc } from '@/lib/types';
 import type { Lang } from '@/i18n';
 import { showToast } from '@/lib/toast';
@@ -24,7 +24,8 @@ type Props = {
   setLLMConfig: (c: { base_url: string; model: string; api_key: string }) => void;
   open: boolean;
   onClose: () => void;
-  onSaveToken: () => void;
+  onSaveToken: (persist: boolean) => void;
+  onClearPersistedToken: () => void;
   onSaveLLM: () => void;
 };
 
@@ -39,9 +40,18 @@ export function SettingsModal({
   open,
   onClose,
   onSaveToken,
+  onClearPersistedToken,
   onSaveLLM,
 }: Props) {
   const [workerLabels, setWorkerLabels] = useState('');
+  const [rememberToken, setRememberToken] = useState(false);
+  const [persistedToken, setPersistedToken] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const persisted = isTokenPersisted();
+    setPersistedToken(persisted);
+    setRememberToken(persisted);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -135,13 +145,41 @@ export function SettingsModal({
               <div className="space-y-2">
                 <Label>{t('settings.apiToken')}</Label>
                 <Input
+                  data-testid="settings-token-input"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   placeholder={t('settings.tokenPlaceholder')}
                 />
-                <Button variant="secondary" size="sm" onClick={onSaveToken}>
-                  {t('settings.saveToken')}
-                </Button>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    data-testid="settings-remember-token"
+                    checked={rememberToken}
+                    onChange={(e) => setRememberToken(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-primary"
+                  />
+                  {t('settings.rememberToken')}
+                </label>
+                {rememberToken && (
+                  <div data-testid="settings-remember-warning" className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                    ⚠️ {t('settings.rememberTokenWarning')}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" onClick={() => { onSaveToken(rememberToken); setPersistedToken(rememberToken && !!token.trim()); }}>
+                    {t('settings.saveToken')}
+                  </Button>
+                  {persistedToken && (
+                    <Button
+                      data-testid="settings-clear-token"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => { onClearPersistedToken(); setPersistedToken(false); setRememberToken(false); }}
+                    >
+                      {t('settings.clearPersistedToken')}
+                    </Button>
+                  )}
+                </div>
               </div>
               <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
                 💡 {t('settings.runtimeHint')}

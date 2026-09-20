@@ -314,23 +314,63 @@ function isErrorEnvelope(payload: unknown): boolean {
   if (Array.isArray(payload.errors) && payload.errors.length > 0) return true;
   return false;
 }
-// API credentials intentionally live only for the lifetime of this page.  A
+// API credentials default to memory-only for the lifetime of this page. A
 // persistent localStorage token is readable by every script running in the UI
-// origin and survives browser restarts, so it is not an acceptable default for
-// a self-hosted production console.  The settings dialog can repopulate this
-// value after an explicit user action.
+// origin and survives browser restarts, so persistence is an explicit opt-in
+// ("remember token" in Settings) rather than a default; the settings dialog
+// shows the trade-off and offers a one-click clear.
 let memoryToken = '';
+
+const TOKEN_STORAGE_KEY = 'etl_api_token';
 
 export function getToken(): string {
   return memoryToken;
 }
 
-export function setToken(value: string): void {
+/** True when the user explicitly opted into localStorage persistence. */
+export function isTokenPersisted(): boolean {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+export function setToken(value: string, opts?: { persist?: boolean }): void {
+  memoryToken = value.trim();
+  try {
+    if (opts?.persist && memoryToken) {
+      // Explicit opt-in: user accepted the localStorage trade-off.
+      localStorage.setItem(TOKEN_STORAGE_KEY, memoryToken);
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // storage unavailable (private mode/quota) — memory-only fallback
+  }
+}
+
+/** Restore a previously persisted token (app boot). Returns '' when absent. */
+export function restorePersistedToken(): string {
+  try {
+    return (localStorage.getItem(TOKEN_STORAGE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+/** Seed the in-memory token WITHOUT touching storage (boot restore path). */
+export function memorySeedToken(value: string): void {
   memoryToken = value.trim();
 }
 
 export function clearToken(): void {
   memoryToken = '';
+  try {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // ignore storage errors
+  }
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

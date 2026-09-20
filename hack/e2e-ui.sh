@@ -1412,6 +1412,36 @@ check "M4: Chinese plugins label" "$(evaljs "document.body.innerText.includes('�
 goto_page "审计"
 check "M5: Chinese audit label" "$(evaljs "document.body.innerText.includes('审计日志')")"
 
+# ── S: Settings token persistence (opt-in localStorage) ─────────────────
+echo "==> S: token persistence checks"
+open_app
+# open settings dialog
+evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.getAttribute('aria-label')?.includes('Settings') || x.textContent?.includes('Settings')); b?.click(); return !!b; })()" >/dev/null 2>&1 || true
+sleep 1
+s_settings_open="$(evaljs "document.body.innerText.includes('API Token') || document.body.innerText.includes('API 令牌')")"
+check "S1: settings dialog opens" "$s_settings_open"
+# opt-in remember + save a token
+evaljs "(() => { const tok=document.querySelector('[data-testid=settings-token-input], input[placeholder*=token i], input[placeholder*=Token]'); if(!tok) return false; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(tok,'e2e-persist-token'); tok.dispatchEvent(new Event('input',{bubbles:true})); return true; })()" >/dev/null 2>&1 || true
+evaljs "(() => { document.querySelector('[data-testid=settings-remember-token]')?.click(); return true; })()" >/dev/null 2>&1 || true
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Save Token') || (b.textContent||'').includes('保存 Token') || (b.textContent||'').includes('保存令牌'))?.click(); return true; })()" >/dev/null 2>&1 || true
+sleep 0.8
+s_persisted="$(evaljs "(() => { return localStorage.getItem('etl_api_token') === 'e2e-persist-token'; })()")"
+check "S2: remember+save persists token to localStorage" "$s_persisted"
+# reload: token survives in memory (no re-entry needed)
+evaljs "(() => { location.reload(); return true; })()" >/dev/null 2>&1 || true
+sleep 2.5
+s_restored="$(evaljs "(() => { return localStorage.getItem('etl_api_token') === 'e2e-persist-token'; })()")"
+check "S3: token survives page reload" "$s_restored"
+# clear via settings
+evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.getAttribute('aria-label')?.includes('Settings') || x.textContent?.includes('Settings')); b?.click(); return !!b; })()" >/dev/null 2>&1 || true
+sleep 1
+s_clear_visible="$(evaljs "document.querySelector('[data-testid=settings-clear-token]') !== null")"
+check "S4: clear-saved-token button appears when persisted" "$s_clear_visible"
+evaljs "(() => { document.querySelector('[data-testid=settings-clear-token]')?.click(); return true; })()" >/dev/null 2>&1 || true
+sleep 0.8
+s_cleared="$(evaljs "(() => { return localStorage.getItem('etl_api_token') === null; })()")"
+check "S5: clear removes the persisted token" "$s_cleared"
+
 playwright-cli close >/dev/null 2>&1 || true
 echo ""
 echo "═══════════════════════════════════════"

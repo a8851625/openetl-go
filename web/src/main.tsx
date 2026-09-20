@@ -17,6 +17,9 @@ import {
   normalizePipelines,
   pipelineKey,
   setToken as setApiToken,
+  restorePersistedToken,
+  memorySeedToken,
+  clearToken as clearApiToken,
   toApiErrorDetails,
   useApi,
 } from '@/lib/api';
@@ -52,7 +55,15 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedPipeline, setSelectedPipeline] = useState('');
   const [editTarget, setEditTarget] = useState('');
-  const [token, setToken] = useState(getToken());
+  const [token, setToken] = useState(() => {
+    // PR-0 keeps tokens memory-only by default; restore only what the user
+    // explicitly persisted via "remember token". Restore must NOT re-write
+    // storage: setToken without { persist } removes the stored item, which
+    // would silently undo the user's opt-in on every reload.
+    const persisted = restorePersistedToken();
+    if (persisted) memorySeedToken(persisted);
+    return persisted || getToken();
+  });
   const [showSettings, setShowSettings] = useState(false);
   const [llmConfig, setLLMConfig] = useState({ base_url: '', model: '', api_key: '' });
   const [distributedHint, setDistributedHint] = useState(false);
@@ -517,10 +528,16 @@ function App() {
           setShowSettings(false);
           if (route.page === 'settings') navigate({ page: 'dashboard' });
         }}
-        onSaveToken={() => {
-          setApiToken(token);
+        onSaveToken={(persist) => {
+          setApiToken(token, { persist });
           setRefreshKey((n) => n + 1);
-          toast('success', t('settings.tokenSaved'));
+          toast('success', persist ? t('settings.tokenSavedRemembered') : t('settings.tokenSaved'));
+        }}
+        onClearPersistedToken={() => {
+          clearApiToken();
+          setToken('');
+          setRefreshKey((n) => n + 1);
+          toast('success', t('settings.tokenCleared'));
         }}
         onSaveLLM={() => {
           api('/api/v2/settings', {
