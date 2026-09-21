@@ -4,6 +4,79 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.20] — 2026-09-21 — UI 加固 + ClickHouse 写入契约（IT-5）+ GA 收口评估
+
+交付 UI-A/UI-B/UI-C 三轮前端加固、CH 第一批写入契约迭代（IT-5，CH-C1/C3/C2），
+以及 IT-4 GA 收口评估与 IT-3 容量基线收口。**standalone 形态自本版本起可声明 production ready**
+（项目级与 distributed 仍为 beta）。
+
+### 新增
+
+- **ClickHouse 写入确认与去重令牌（CH-C1 / IT-5）**：首个生产级 `SinkCommitMetadataProvider`。
+  去重令牌由 pipeline key + 源位点（binlog file:pos / kafka partition@offset / snapshot cursor）
+  + 批次序号 + 记录数确定性推导，无时钟与随机成分，重试与重放得到同一令牌。
+  native 走 context setting、HTTP 走 URL 参数；服务端无 `insert_dedup_token` 时降级为
+  `dedup_mode=record_only` 并告警。写入错误分类 acked / not_acked / unknown，
+  失败写入阻断 checkpoint 推进（宁可重放不丢数据）。
+- **Kafka 元数据信封（CH-C3 / IT-5）**：`core.Metadata` 新增 `Headers`，Kafka source 复制
+  sarama headers，跨 source→transform→sink→DLQ→replay 全链保留。Kafka sink 新增
+  `pass_headers`（默认开，`__` 前缀内部键过滤）、`max_header_bytes`（默认 65536，超限入 DLQ）、
+  `use_source_timestamp`（默认开，零值回退写时钟）——事件时间不再是写入时间。
+  Kafka source 能力表新增 `schema_registry` 与 `schema_registry_url`（仅 capability/preflight
+  信号 + `schema-registry-not-consumed` 告警，不内置 avro 客户端）。
+- **Schema 契约（CH-C2 / IT-5）**：`schema_contract: enforce` 在下次校验成功时冻结列集合
+  （fingerprint 归一化类型 + 可空位），加列告警放行，删列/改名/类型不兼容在校验与 preflight
+  阶段阻断并给出可解释 diff 与修复指引。契约持久化到新表 `pipeline_schema_contracts`
+  （迁移 v23，三后端兼容）。
+- **UI 加固（UI-A/UI-B/UI-C）**：向导单一真值、secret 清洗、连接过滤、preflight 分层、
+  诚实状态与启动失败可见性；`spec_summary` 真值契约（管道模式/拓扑来自后端事实而非标签猜测）；
+  introspection 驱动的库/表/topic 选择器；统一 ConfirmDialog 替换全部 `window.confirm`
+  并支持暂停自动刷新；全局搜索（Enter 过滤管道列表，Escape 清空）；Dashboard 行密度切换
+  （localStorage 记忆）；DagEditor 全量 i18n；向导 ConfigForm 稳定 id + `htmlFor` 绑定 +
+  `field.<name>` 语义标签（悬停显示原始字段名）；transform 上移/下移带下游语义提示、
+  多选批量删除与二次确认；**API Token 可选持久化**（默认仍仅内存，勾选“记住”才写入
+  localStorage 并展示风险提示，可一键清除）。
+- **容量与资源基线（IT-3 / RA-8）**：可复现的路径吞吐与三后端并发曲线测量，
+  证据绑定 commit + 镜像 digest + 硬件 + 数据集构造。
+
+### 变更
+
+- **MaxCompute/ODPS 移出执行规划**：roadmap 与迭代中的真实环境认证条目标记为 deferred；
+  已交付代码保留，成熟度维持 experimental，preflight 继续阻断 writer 未实现的管道。
+- **SinkWriteHook 可选接口转发**：装饰器按需转发 `SinkCommitMetadataProvider`，
+  非 provider sink 保持通用 `sink_commit` 路径（修复崩溃后 checkpoint 停滞导致位点丢失）。
+- **SecretFieldStore 能力转发**：新增存储能力接口必须同步转发，否则生产启动路径会静默降级。
+
+### 修复
+
+- DLQ 重放 500：`finalizeDedupBatch` 在未调用 `SetPipelineKey` 的重放路径上 panic
+  （atomic.Value 未写入即断言），改用稳定兜底键。
+- 向导首版 token 恢复路径会在每次刷新时删除已保存 token，改为只种内存不触碰存储。
+
+### 认证证据
+
+- **GA 收口评估**（`docs/ga-assessment-2026-09-16.md`，基线 commit `b1deefa`）：
+  项目级 production ready **不成立**（beta 标识保留）；standalone 形态 **可声明**
+  production ready，自 v0.2.12-beta.20 发布起生效；distributed 维持 beta
+  （PR-D1 证据仍绑定旧 commit/镜像，未在本版本重验）；connector-path 按路径分别成立。
+  五项项目门禁与十项 IT-4 验收标准全部记录为 pass。
+- **容量基线**（`docs/evidence/it3-baseline-20260916/`，commit `ccc6df1`，2 CPU / 1 GiB 约束）：
+  单管道端到端 mysql_cdc→mysql upsert 49,218 rows/s、mysql_batch→ClickHouse native
+  76,640 rows/s、kafka→s3 60,065 rows/s；sqlite/mysql/postgres 三后端 n=1/4/8/16/32
+  共 15 个并发点全部 `sustained_offered_load=YES`；sqlite checkpoint p95 由
+  3.2ms 升至 n=32 的 63.4ms（p99 247ms）→ 超过 8 条并发流式管道建议改用 MySQL/PostgreSQL。
+
+### 已知残留边界
+
+- 语义为 **checkpointed at-least-once**：崩溃可能重放最后一批，重复由业务键/upsert/
+  版本列或显式去重吸收；fanout 非原子，其他 sink 可能重放。
+- standalone 单点：RPO = 最后一次持久化 checkpoint，RTO = 重启 + checkpoint 恢复。
+- MaxCompute experimental（writer 未实现）、Feishu 插件为模板、第三方插件未认证、
+  distributed 为 beta。
+- SQLite 在 >8 条并发流式管道时 checkpoint 尾延迟上升（p99 247ms@n=32）。
+- 本版本路径认证在 linux/arm64 本地完成；linux/amd64 认证依赖发布 tag 上的 CI 全量重跑。
+- 多表 `table_template` 的 Schema Registry 消费能力未实现（仅 capability 信号）。
+
 ## [v0.2.12-beta.19] — 2026-09-11 — 完整性与正确性加固（IT-2/IT-3）
 
 交付 IT-2 正确性与 IT-3 完整性/容量两轮迭代：记录身份契约、原子备份/恢复、

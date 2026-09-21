@@ -4,6 +4,108 @@
 
 ## [Unreleased]
 
+## [v0.2.12-beta.20] — 2026-09-21 — UI hardening + ClickHouse write contract (IT-5) + GA closeout
+
+Ships three frontend hardening iterations (UI-A/UI-B/UI-C), the first ClickHouse
+write-contract iteration (IT-5, CH-C1/C3/C2), the IT-4 GA closeout assessment,
+and the IT-3 capacity baseline. **The standalone form may declare production
+ready from this release** (project-level and distributed remain beta).
+
+### Added
+
+- **ClickHouse write-ack & dedup token (CH-C1 / IT-5)**: first production
+  `SinkCommitMetadataProvider`. The dedup token derives deterministically from
+  pipeline key + source position (binlog file:pos / kafka partition@offset /
+  snapshot cursor) + batch sequence + record count, with no clock or random
+  component, so retries and replays yield the same token. Native carries it as a
+  context setting, HTTP as a URL parameter; servers without `insert_dedup_token`
+  fall back to `dedup_mode=record_only` with a warning. Write errors classify as
+  acked / not_acked / unknown, and failed writes block checkpoint advancement
+  (replay over loss).
+- **Kafka metadata envelope (CH-C3 / IT-5)**: `core.Metadata` gains `Headers`;
+  the Kafka source copies sarama headers and they survive
+  source→transform→sink→DLQ→replay. The Kafka sink gains `pass_headers` (on by
+  default, `__`-prefixed internal keys filtered), `max_header_bytes` (65536,
+  over-limit records go to DLQ) and `use_source_timestamp` (on by default,
+  zero-value falls back to the write clock) — event time is no longer write
+  time. The Kafka source capability table gains `schema_registry` plus
+  `schema_registry_url` as a capability/preflight signal only, with a
+  `schema-registry-not-consumed` warning and no bundled avro client.
+- **Schema contract (CH-C2 / IT-5)**: `schema_contract: enforce` freezes the
+  column set on the next successful validation (fingerprint over normalized
+  types plus nullability); added columns pass with a warning while dropped
+  columns, renames and incompatible type changes block at validate/preflight
+  with an explainable diff and remediation. Contracts persist in the new
+  `pipeline_schema_contracts` table (migration v23, all three backends).
+- **UI hardening (UI-A/UI-B/UI-C)**: wizard single source of truth, secret
+  scrubbing, connection filtering, preflight layering, honest states and
+  startup-failure visibility; the `spec_summary` truth contract (pipeline
+  mode/topology from backend facts, not tag guessing); introspection-driven
+  database/table/topic pickers; a shared ConfirmDialog replacing every
+  `window.confirm` plus pausable auto-refresh; global search (Enter filters the
+  pipeline list, Escape clears); Dashboard row-density toggle persisted in
+  localStorage; full DagEditor i18n; wizard ConfigForm stable ids with
+  `htmlFor` binding and `field.<name>` semantic labels (raw name on hover);
+  transform move up/down with downstream-semantics hints, multi-select bulk
+  delete with confirmation; **opt-in API token persistence** (memory-only by
+  default, written to localStorage only when "remember" is checked, with a
+  stated risk notice and one-click clear).
+- **Capacity & resource baseline (IT-3 / RA-8)**: repeatable path-throughput and
+  three-backend concurrency-curve measurements with evidence bound to commit,
+  image digest, hardware and dataset construction.
+
+### Changed
+
+- **MaxCompute/ODPS moved out of execution planning**: the real-environment
+  certification entry is deferred in the roadmap and iterations; delivered code
+  stays, maturity remains experimental, and preflight keeps blocking
+  writer-disabled pipelines.
+- **SinkWriteHook forwards optional interfaces on demand**, so non-provider
+  sinks keep the generic `sink_commit` path (fixes checkpoint stalling that lost
+  sink position after crash).
+- **SecretFieldStore capability forwarding**: new storage capabilities must be
+  forwarded, otherwise the production startup path silently degrades.
+
+### Fixed
+
+- DLQ replay 500: `finalizeDedupBatch` panicked on the replay path where
+  `SetPipelineKey` was never called (unwritten atomic.Value assertion); now uses
+  a stable fallback key.
+- The first token-restore path removed the saved token on every reload; it now
+  seeds memory only and never touches storage.
+
+### Certification evidence
+
+- **GA closeout assessment** (`docs/ga-assessment-2026-09-16.md`, baseline
+  commit `b1deefa`): project-level production ready is **not** declarable (beta
+  label stays); the standalone form **may declare** production ready from the
+  v0.2.12-beta.20 release; distributed stays beta (PR-D1 evidence remains bound
+  to the older commit/image and was not re-verified here); connector-path
+  production ready holds per path. All five project gates and all ten IT-4
+  acceptance criteria are recorded as pass.
+- **Capacity baseline** (`docs/evidence/it3-baseline-20260916/`, commit
+  `ccc6df1`, 2 CPU / 1 GiB): single-pipeline end-to-end mysql_cdc→mysql upsert
+  49,218 rows/s, mysql_batch→ClickHouse native 76,640 rows/s, kafka→s3 60,065
+  rows/s; all 15 sqlite/mysql/postgres concurrency points at n=1/4/8/16/32 held
+  `sustained_offered_load=YES`; sqlite checkpoint p95 rose from 3.2 ms to
+  63.4 ms at n=32 (p99 247 ms) → beyond 8 concurrent streaming pipelines use
+  MySQL/PostgreSQL.
+
+### Known residual boundaries
+
+- Semantics are **checkpointed at-least-once**: a crash may replay the last
+  batch, with duplicates absorbed by business keys/upsert/version columns or
+  explicit dedup; fanout is not atomic and other sinks may replay.
+- Standalone is a single point: RPO = last durable checkpoint, RTO = restart plus
+  checkpoint restore.
+- MaxCompute experimental (writer not implemented), Feishu plugin is a template,
+  third-party plugins uncertified, distributed is beta.
+- SQLite checkpoint tail latency grows beyond 8 concurrent streaming pipelines
+  (p99 247 ms at n=32).
+- Path certification for this release was performed on linux/arm64 locally;
+  linux/amd64 certification relies on the CI full rerun at the release tag.
+- Schema Registry consumption is not implemented (capability signal only).
+
 ## [v0.2.12-beta.19] — 2026-09-11 — Integrity & correctness hardening (IT-2/IT-3)
 
 Delivery of the IT-2 correctness and IT-3 integrity-capacity iterations: record
