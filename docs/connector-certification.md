@@ -121,13 +121,13 @@ from hand-maintained metadata.
 
 Latest checked-in certification (2026-09-22 UTC, v0.2.12-beta.20 release
 certification; all 14 scripts re-run sequentially against the fresh image
-`sha256:93e51d8a` on the release-candidate commit `b8e8ee4`):
+`sha256:93e51d8a` on the release-candidate commit `a020ddf`):
 
-- source commit: `b8e8ee4bdbf58c838e264f524a0c8c7b65443893` (v0.2.12-beta.20 release candidate, docs-only descendant of release cut `965b062`)
+- source commit: `a020ddff1667797f38449e81ee9f68610a2b573a` (v0.2.12-beta.20 release candidate; release cut `965b062` plus evidence bookkeeping only — no runtime change after `965b062`)
 - image: `sha256:93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3`
 - environment: Linux/arm64 image, Podman `5.8.2`, Go `1.24.13`
 - dependency set: MySQL `8.0.46`, PostgreSQL `16.14`, ClickHouse `24.3.18.7`, Redpanda `24.1.1`, Doris `2.1.11`, MinIO `RELEASE.2024-07-16T23-46-41Z`
-- result: 14 unique scripts passed (window 2026-09-22 14:40-14:51 UTC); all 15 production source/sink records verified through their per-record `expires_at` (2026-10-22)
+- result: 14 unique scripts passed (window 2026-09-22 14:58-15:17 UTC); all 15 production source/sink records verified through their per-record `expires_at` (2026-10-22)
 
 | Script | UTC window | Result |
 | --- | --- | --- |
