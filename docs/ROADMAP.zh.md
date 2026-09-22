@@ -2034,6 +2034,22 @@ PR-1.3 恢复残留已在复核 Round 1/5 重新交付；RA-6 于 2026-09-08 复
 > 全部闭合，IT-1 `complete`。Doris 镜像（be-2.1.11）拉取 3 次 EOF 记 blocked，
 > 留 `hack/e2e-doris.sh` 手动路径。（明细与 run URL 见 IT-1 tasks.md。）
 >
+
+> v0.2.12-beta.20 发布记录（2026-09-22）：UI 加固（UI-A/UI-B/UI-C）+ IT-5 CH 写入契约
+> （CH-C1/C3/C2）+ IT-4 GA 收口评估 + IT-3 容量基线合入后全量重认证——认证 commit
+> `a020ddff`、镜像 `93e51d8a`（linux/arm64，podman 5.8.2），14 个 shell 认证脚本
+> （窗口 14:58-15:17 UTC）+ 6 个路径证据文件（2 条 forced primary path + 4 个 IT-5
+> 路径）在 `-e2e.strict` 下全绿。发布链：`965b062`（release cut：CHANGELOG + 版本 pin）
+> → `b8e8ee4`（证据绑定）→ `a020ddff`（IT-5 证据文件加入认证白名单）→ `902375b`
+> （manifest 重绑）→ `dc1aab4`（路径证据刷新，tag commit）。发布过程修复 2 项：
+> 认证白名单缺失 IT-5 证据路径（strict 在自身 bookkeeping commit 上失败）、check 工具
+> 二进制误入暂存。GA 判定生效：**standalone 形态自本版本起可声明 production ready**
+> （项目级与 distributed 维持 beta，见 `docs/ga-assessment-2026-09-16.md`）。tag
+> `v0.2.12-beta.20`（`dc1aab4`）三 workflow 全绿：Test gate
+> https://github.com/a8851625/openetl-go/actions/runs/35748755916、Release
+> https://github.com/a8851625/openetl-go/actions/runs/35748775310（10 资产）、Beta
+> Container https://github.com/a8851625/openetl-go/actions/runs/35748775292。
+>
 > v0.2.12-beta.19 发布记录（2026-09-11）：IT-2/IT-3 复核交付体合入后全量重认证
 > ——认证 commit `81ab3d8`、镜像 `3e63238d`（linux/arm64，podman 5.8.4），14 个 shell
 > 认证脚本 + 2 条 Go 路径 e2e 全绿（含本轮 Doris BE arm64 拉取成功补齐）。发布过程
