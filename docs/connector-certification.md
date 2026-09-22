@@ -119,7 +119,34 @@ artifacts (`PathContract.LastCertified`), so CI runs automatically update it
 to the run timestamp + source commit. No `last_certified` is ever filled
 from hand-maintained metadata.
 
-Latest checked-in certification (2026-08-23 UTC, post-beta.17 evidence rebind;
+Latest checked-in certification (2026-09-22 UTC, v0.2.12-beta.20 release
+certification; all 14 scripts re-run sequentially against the fresh image
+`sha256:93e51d8a` on the release-candidate commit `b8e8ee4`):
+
+- source commit: `b8e8ee4bdbf58c838e264f524a0c8c7b65443893` (v0.2.12-beta.20 release candidate, docs-only descendant of release cut `965b062`)
+- image: `sha256:93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3`
+- environment: Linux/arm64 image, Podman `5.8.2`, Go `1.24.13`
+- dependency set: MySQL `8.0.46`, PostgreSQL `16.14`, ClickHouse `24.3.18.7`, Redpanda `24.1.1`, Doris `2.1.11`, MinIO `RELEASE.2024-07-16T23-46-41Z`
+- result: 14 unique scripts passed (window 2026-09-22 14:40-14:51 UTC); all 15 production source/sink records verified through their per-record `expires_at` (2026-10-22)
+
+| Script | UTC window | Result |
+| --- | --- | --- |
+| `hack/e2e.sh` | 14:46:14-14:46:20 | passed |
+| `hack/e2e-http-source.sh` | 14:40:14-14:40:20 | passed |
+| `hack/e2e-mysql-postgres.sh` | 14:40:20-14:40:25 | passed |
+| `hack/e2e-cdc-mysql.sh` | 14:40:25-14:40:26 | passed |
+| `hack/e2e-cdc-postgres.sh` | 14:46:20-14:46:28 | passed |
+| `hack/e2e-snapshot-cdc.sh` | 14:46:28-14:46:30 | passed |
+| `hack/e2e-clickhouse.sh` | 14:46:30-14:46:33 | passed |
+| `hack/e2e-snapshot-cdc-clickhouse.sh` | 14:49:53-14:50:13 | passed |
+| `hack/e2e-kafka.sh` | 14:40:26-14:40:59 | passed |
+| `hack/e2e-kafka-raw-ods.sh` | 14:40:59-14:41:30 | passed |
+| `hack/e2e-debezium-mysql.sh` | 14:41:30-14:41:53 | passed |
+| `hack/e2e-s3-minio.sh` | 14:41:53-14:43:18 | passed |
+| `hack/e2e-doris.sh` | 14:50:13-14:51:55 | passed |
+| `hack/e2e-kafka-multitable-clickhouse.sh` | 14:43:18-14:43:53 | passed |
+
+Historical (superseded) — 2026-08-23 UTC record:, post-beta.17 evidence rebind;
 image builds recovered via goproxy.cn + host module cache — fresh image
 `sha256:9b887beb` ran container e2e on 2026-08-23:
 e2e-kafka-multitable-clickhouse, e2e-snapshot-cdc-clickhouse and the new

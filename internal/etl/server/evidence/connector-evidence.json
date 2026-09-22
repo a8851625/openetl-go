@@ -3,21 +3,21 @@
   "policy": {
     "max_age_hours": 720
   },
-  "certified_commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-  "certified_image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+  "certified_commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+  "certified_image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
   "records": [
     {
       "kind": "source",
       "type": "file",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4"
+        "container_runtime": "podman 5.8.2"
       },
-      "started_at": "2026-09-11T14:56:50Z",
-      "finished_at": "2026-09-11T14:56:50Z",
-      "expires_at": "2026-10-11T14:56:50Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e.sh"
       ],
@@ -26,21 +26,21 @@
         "checkpoint_persisted"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "source",
       "type": "http",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "http_fixture": "python 3.12-alpine"
       },
-      "started_at": "2026-09-11T14:57:02Z",
-      "finished_at": "2026-09-11T14:57:02Z",
-      "expires_at": "2026-10-11T14:57:02Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-http-source.sh"
       ],
@@ -49,22 +49,22 @@
         "auth_headers"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "source",
       "type": "kafka",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "redpanda": "24.1.1",
         "mysql": "8.0.46"
       },
-      "started_at": "2026-09-11T14:59:37Z",
-      "finished_at": "2026-09-11T14:59:37Z",
-      "expires_at": "2026-10-11T14:59:37Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-kafka.sh",
         "hack/e2e-kafka-raw-ods.sh"
@@ -76,22 +76,22 @@
         "rebalance"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "source",
       "type": "mysql_batch",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-09-11T14:56:50Z",
-      "finished_at": "2026-09-11T14:56:50Z",
-      "expires_at": "2026-10-11T14:56:50Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e.sh",
         "hack/e2e-mysql-postgres.sh"
@@ -102,22 +102,22 @@
         "schema_preflight"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "source",
       "type": "mysql_cdc",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-09-11T14:57:42Z",
-      "finished_at": "2026-09-11T14:57:42Z",
-      "expires_at": "2026-10-11T14:57:42Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-cdc-mysql.sh",
         "hack/e2e-cdc-postgres.sh"
@@ -128,22 +128,22 @@
         "postgres_upsert"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "source",
       "type": "mysql_snapshot_cdc",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "clickhouse": "24.3.18.7"
       },
-      "started_at": "2026-09-11T14:58:04Z",
-      "finished_at": "2026-09-11T14:58:04Z",
-      "expires_at": "2026-10-11T14:58:04Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-snapshot-cdc.sh",
         "hack/e2e-snapshot-cdc-clickhouse.sh"
@@ -155,20 +155,20 @@
         "checkpoint_reset"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "sink",
       "type": "file_sink",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4"
+        "container_runtime": "podman 5.8.2"
       },
-      "started_at": "2026-09-11T14:56:50Z",
-      "finished_at": "2026-09-11T14:56:50Z",
-      "expires_at": "2026-10-11T14:56:50Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e.sh"
       ],
@@ -177,21 +177,21 @@
         "checkpoint_persisted"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "sink",
       "type": "s3",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "minio": "RELEASE.2024-07-16T23-46-41Z"
       },
-      "started_at": "2026-09-11T14:57:41Z",
-      "finished_at": "2026-09-11T14:57:41Z",
-      "expires_at": "2026-10-11T14:57:41Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-s3-minio.sh"
       ],
@@ -201,22 +201,22 @@
         "dlq_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "sink",
       "type": "kafka",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "redpanda": "24.1.1",
         "mysql": "8.0.46"
       },
-      "started_at": "2026-09-11T14:59:37Z",
-      "finished_at": "2026-09-11T14:59:37Z",
-      "expires_at": "2026-10-11T14:59:37Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-kafka.sh",
         "hack/e2e-kafka-raw-ods.sh"
@@ -227,22 +227,22 @@
         "append_duplicate_boundary"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "sink",
       "type": "mysql",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "redpanda": "24.1.1"
       },
-      "started_at": "2026-09-11T14:57:42Z",
-      "finished_at": "2026-09-11T14:57:42Z",
-      "expires_at": "2026-10-11T14:57:42Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-cdc-mysql.sh",
         "hack/e2e-debezium-mysql.sh"
@@ -253,22 +253,22 @@
         "dlq_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "sink",
       "type": "postgres",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-09-11T14:57:47Z",
-      "finished_at": "2026-09-11T14:57:47Z",
-      "expires_at": "2026-10-11T14:57:47Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-mysql-postgres.sh",
         "hack/e2e-cdc-postgres.sh"
@@ -279,22 +279,22 @@
         "checkpoint_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "sink",
       "type": "postgresql",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-09-11T14:57:47Z",
-      "finished_at": "2026-09-11T14:57:47Z",
-      "expires_at": "2026-10-11T14:57:47Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-mysql-postgres.sh",
         "hack/e2e-cdc-postgres.sh"
@@ -305,22 +305,22 @@
         "checkpoint_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "sink",
       "type": "clickhouse",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "clickhouse": "24.3.18.7"
       },
-      "started_at": "2026-09-11T14:57:57Z",
-      "finished_at": "2026-09-11T14:57:57Z",
-      "expires_at": "2026-10-11T14:57:57Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-clickhouse.sh",
         "hack/e2e-snapshot-cdc-clickhouse.sh"
@@ -331,22 +331,22 @@
         "outage_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "sink",
       "type": "doris",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "doris": "2.1.11"
       },
-      "started_at": "2026-09-11T15:02:03Z",
-      "finished_at": "2026-09-11T15:02:03Z",
-      "expires_at": "2026-10-11T15:02:03Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-doris.sh"
       ],
@@ -356,22 +356,22 @@
         "outage_dlq_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     },
     {
       "kind": "sink",
       "type": "clickhouse_multi_table",
-      "commit": "81ab3d83f67ea109f5a2c73fb6d55045639a6c4f",
-      "image": "3e63238d3ed3073e54d23906bff3df1ba6d667a4546d6b248fe65fc1a42bd920",
+      "commit": "b8e8ee4bdbf58c838e264f524a0c8c7b65443893",
+      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
       "dependencies": {
         "go": "1.24.13",
-        "container_runtime": "podman 5.8.4",
+        "container_runtime": "podman 5.8.2",
         "clickhouse": "24.3.18.7",
         "redpanda": "v24.1.1"
       },
-      "started_at": "2026-09-11T15:02:37Z",
-      "finished_at": "2026-09-11T15:02:37Z",
-      "expires_at": "2026-10-11T15:02:37Z",
+      "started_at": "2026-09-22T14:40:14Z",
+      "finished_at": "2026-09-22T14:51:55Z",
+      "expires_at": "2026-10-22T14:51:55Z",
       "scripts": [
         "hack/e2e-kafka-multitable-clickhouse.sh"
       ],
@@ -399,7 +399,7 @@
         "year_type_uint16"
       ],
       "verified": true,
-      "note": "Kafka envelope multi-table + Debezium envelope + Date/YEAR fixes + CDC binlog-purge recovery + sqlite read/write split (BUG-3) + CDC DELETE primary-key fix (mysql_cdc fills Metadata.Key; Debezium path keeps PK in msg.Key); rerun on beta.15."
+      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; scripts re-run 2026-09-22 14:40-14:51 UTC against image 93e51d8a)."
     }
   ]
 }
