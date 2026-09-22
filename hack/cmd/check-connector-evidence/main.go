@@ -280,6 +280,13 @@ func allowedEvidenceDescendantPath(path string) bool {
 		// or connector code is allowed through this path.
 		"docs/evidence/mysql_cdc__mysql_upsert.json",
 		"docs/evidence/mysql_snap_cdc__ch_rmt.json",
+		// IT-5 path evidence (CH-C1/C3/C2): same regeneration pattern as the
+		// two forced primary paths; committed after a certification run when
+		// the manifest rebind lands.
+		"docs/evidence/ch_dedup_crash_window.json",
+		"docs/evidence/ch_dedup_crash_window_multitable.json",
+		"docs/evidence/kafka_envelope_roundtrip.json",
+		"docs/evidence/schema_contract_enforcement.json",
 		"CHANGELOG.md",
 		"CHANGELOG.zh.md",
 		"hack/e2e-production-profile.sh":
