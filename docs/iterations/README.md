@@ -32,6 +32,8 @@
 | [IT-4](./IT-4-ga-closeout/) | GA 收口评估 | 证据刷新、maturity 对齐、移除 beta 判定 | IT-1 + IT-2 + IT-3 | `complete`（2026-09-16：T4.1–T4.5 done；判定见 [ga-assessment-2026-09-16](../ga-assessment-2026-09-16.md)——standalone 可声明、项目级/distributed 保持 beta） |
 | [IT-5](./IT-5-ch-write-contract/) | CH 第一批：写入确认/去重契约 + Kafka metadata envelope + additive-only schema contract | CH-C1、CH-C3、CH-C2 | IT-2（RA-1）、RA-8/T3.6、P3.1+schema 决议 | `complete`（2026-09-19：T5.1–T5.5 全部 done；e2e ch_dedup_crash_window 4/4、kafka_envelope_roundtrip 2/2、schema_contract_enforcement 5/5） |
 | [UI-C](./UI-C-wizard-interaction/) | 向导行交互模型收尾（P2-5 残留 + 批量步骤操作） | UI 小项池 | 无 | `queued`（2026-09-17 立项） |
+| [IT-6](./IT-6-composite-pk-snapshot/) | mysql_snapshot_cdc 复合主键快照（源连接器正确性） | 新增 roadmap 条目 IT-6（2026-09-25 立项，线上实战发现） | mysql_snapshot_cdc 现有框架（delivered） | `queued`（2026-09-25 立项） |
+| [UI-D](../ROADMAP.zh.md) | 实测交互可信度与小屏可用性收口（2026-09-24 Playwright 走查；条目在 ROADMAP，暂无独立迭代目录） | 新增 roadmap 条目 UI-D | 无 | `queued`（2026-09-24 立项） |
 | [UI-A](./UI-A-frontend-hardening/) | 前端交互与向导逻辑加固（2026-09-12 审计） | 新增 roadmap 条目 UI-A | 无 | `complete`（UI-A.1–A.4 delivered 2026-09-12；缓冲窗口 UI-B.1–B.5 delivered 2026-09-14/15，e2e 158 passed / 0 failed；残留小项入小项池不阻塞） |
 
 ### 依赖关系
@@ -55,7 +57,7 @@
                     │ 证据刷新 + 移除 beta 判定      │
                     └──────────────────────────────┘
 
-  IT-5 CH 第一批（CH-C1 写入契约 + CH-C3 envelope + CH-C2 schema contract）───▶ queued
+  IT-6 mysql_snapshot_cdc 复合主键快照（线上实战：OpenCart 风格复合 PK 表存量缺失）───▶ queued
   UI-C 向导行交互收尾 ───▶ 随时可做，不阻塞主线
 ```
 

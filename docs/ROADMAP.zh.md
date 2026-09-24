@@ -140,6 +140,44 @@ Roadmap 状态只使用以下值：
 
 来源：UI-A 审计 P2-5（ConfigForm label 无 htmlFor 绑定、字段名裸露内部命名、移动/删除 transform 无风险提示）——删除确认已于 UI-B.7 交付，剩余 htmlFor 绑定、字段语义标签、移动顺序风险提示；加 UI-B.7 收口时记录的“向导 transform 链批量操作”。规模 1–2 轮。
 
+### IT-6：mysql_snapshot_cdc 复合主键快照（源连接器正确性）
+
+状态：`queued`（2026-09-25 立项；依赖已达成，待领取。不改变当前优先级——主线无 active 项、UI-D 为并行小项，按用户授权领取）。
+
+来源：v0.2.12-beta.20 线上实战发现（192.168.31.35 cct 库全量同步）。OpenCart 风格复合主键表（`(entity_id, language_id)` 的 `*_description`、`(entity_id, store_id)` 的 `*_to_store`、`(entity_id, layout_id)` 的 `*_to_layout` 及关联表，共 29 张）在 `tables: ["*"]` 快照阶段被跳过（仅单列 PK 可做游标分页），**存量数据完全缺失**；CDC 增量正常但只有跳过之后的新变更。代码核对确认缺口仅在快照游标：CDC 侧（canal `pkColumnNames` 多列）、envelope（`primary_key_columns` 数组）、ClickHouse sink（`pk_columns_from_metadata` 的 `map[string][]string` 多列 ORDER BY + 复合键 tombstone）均已支持复合键。
+
+非目标：无主键表的快照（仍跳过并 WARN，语义不变）；复合键的 `shard_*` MOD 分片（可后续扩展）；MySQL 8 以外的行值比较兼容；不新增 connector；不改 ClickHouse sink 合并语义与 at-least-once 契约。
+
+| 子项 | 内容 | 验收 |
+| --- | --- | --- |
+| T6.1 复合 PK 解析与游标分页 | `resolveOnePK`/`classifyPK` 增加复合 PK 探测（`information_schema.KEY_COLUMN_USAGE` 有序列集），新增 `pkKindComposite`（`resolvedPK.columns []string`）；分页 SQL 用行值比较 `WHERE (\`a\`,\`b\`) > (?,?) ORDER BY \`a\`,\`b\` LIMIT n`（走联合索引）；列类型约束：全部非 NULL 且可排序，否则仍归 `pkKindNone` | 单测覆盖复合 PK 解析、行值比较 SQL 构造与参数、不可排序列回退；真实 MySQL 8 复合 PK 表快照正确分页 |
+| T6.2 checkpoint 复合游标持久化 | `position` 新增可选复合游标字段（如 `last_composite_cursors`），旧 checkpoint 反序列化兼容（字段空 → 不影响既有管道）；断点续跑从复合游标恢复 | 单测：序列化/恢复、旧格式兼容、崩溃后续跑无缺行无死循环 |
+| T6.3 快照记录复合键元数据 | 快照路径 `PrimaryKeyColumns` 从写死单列改为写全部复合列（`mysql_snapshot_cdc.go:1045`），`Metadata.Key` 复用 `metadataKeyJSONMulti`；下游 envelope/CH sink 零改动 | 单测 + e2e：复合 PK 表快照 → CH 复合 ORDER BY 表建表正确、key 元数据完整 |
+| T6.4 e2e 与可见性 | 扩展现有 `mysql_snap_cdc__ch_rmt` 或新增复合键用例：快照→CDC 增量版本合并正确性（回填行 version=handoff，后续 UPDATE 覆盖）、断点续跑、重启恢复；跳过 WARN 文案区分「无主键」；preflight/specs validate 输出快照覆盖/跳过清单 | e2e 全绿；`-e2e.strict` 回归不破坏既有 6 个路径证据；文档更新 |
+| T6.5 三 backend drill 与收口 | storage 迁移无涉（无新表）；回归三 backend upgrade drill 确认无影响；文档/CHANGELOG | drill PASS；ROADMAP/iterations 看板更新 |
+
+预估 2–3 轮迭代窗口（T6.1+T6.2 一轮、T6.3+T6.4 一轮、T6.5 收口）。
+
+### UI-D：实测交互可信度与小屏可用性收口（2026-09-24 Playwright 走查）
+
+状态：`queued`（不抢占当前已完成主线的优先级；作为 UI-A/UI-B/UI-C 收口后的有界 follow-up，待用户明确授权领取）。
+
+来源与边界：2026-09-24 基于已构建 React UI 的 Playwright 实机走查（总览、问题中心、管道列表/详情、创建向导、DLQ、连接、设置；1280px 与 390px 视口）；任务流与产品设计判断见 [UI 产品与交互设计复审](./ui-product-design-review-2026-09-24.zh.md)。前端 API 使用浏览器层的代表性 fixture；因此本项先修复**可复现的 UI 表达、状态和响应式问题**，真实 runtime 成功/失败联动仍须由 `hack/e2e-ui.sh` 在应用容器内复验。不得新建 UI-only 执行语义，不改变 Source → Transform → Sink spec、at-least-once 或 connector/runtime 合约。
+
+目标：让操作者在高影响运行操作、故障修复和手机/小屏值守时，始终能看清“将要做什么、为何不可做、结果如何、下一步是什么”。
+
+| ID | 可观察结果 | 范围 / 非目标 | 验收与证据 |
+| --- | --- | --- | --- |
+| UI-D.1 | 批量启停确认框在 EN/ZH 都完整、准确地表达 action、目标数、目标名与 replay 风险；不得出现 `{action}`、`Cancel`、`Close` 等遗漏本地化产品文案。 | `PipelinesPage`、共享 Confirm/Dialog、i18n 与相关 E2E；不改变批量启停的 runtime API 或重放语义。 | EN/ZH 各覆盖 start/stop 确认：标题/描述 action 已替换、取消/关闭/确认均本地化；提交后显示成功数、失败数和失败原因；Playwright/E2E 断言无未替换 token。 |
+| UI-D.2 | 批量工具栏只允许对有匹配目标的操作；例如只选 stopped 时 Stop 显式禁用并说明原因，不能“可点但静默无结果”。 | `PipelinesPage` 选择/批量操作反馈；不改 pipeline status 派生规则。 | mixed/running-only/stopped-only/empty 四种选择均验证 Start/Stop enabled 状态、tooltip 或明确 toast；无目标不产生 API 请求；有目标保持确认与结果汇总。 |
+| UI-D.3 | 390px 小屏下 Connections、Schedules、Extensions/My Plugins 无整页横向溢出；高密度表格能完成读状态、测试/加载、删除等核心操作。 | 现有 table/card/drawer 样式与这三页；不重做桌面信息架构。 | 390px `documentElement.scrollWidth <= innerWidth`；连接信息/状态/危险操作在无需全页横向拖动时可达；桌面表格体验不回归；关键操作键盘可达。 |
+| UI-D.4 | 小屏向导能清楚发现第 4–6 步，并理解当前进度；不依赖用户猜测隐藏的横向可滚动步骤条。 | `FirstTaskWizard` 的 responsive step navigation；不改变步骤、草稿或 spec 提交逻辑。 | 390px 初始屏可看到“当前 / 共 6 步”或等价进度；任意步骤切换后自动滚入可视区；横向滚动保留时有明确 affordance；键盘和触屏路径均可达。 |
+| UI-D.5 | 顶栏刷新控件明确区分自动刷新状态、最近成功刷新和手动刷新（若提供）；所有 icon-only 控件有本地化可访问名称。 | `AppShell`、i18n、a11y E2E；不改变 refresh cadence/API。 | 运行/暂停/失败三态均可理解；主操作与状态文本不混淆；EN/ZH `aria-label`/tooltip 断言通过。 |
+
+设计约束：优先修复任务完成性与可解释性，不以堆叠额外按钮、卡片或颜色替代清晰状态；危险操作的风险说明必须保持 at-least-once/replay 边界；小屏不隐藏核心状态或把破坏性操作变成无标签图标。
+
+建议领取顺序：UI-D.1 → UI-D.2 → UI-D.3 → UI-D.4 → UI-D.5。每一项为独立可验证纵向 slice；先补相应 Playwright 断言，再改 UI，完成后更新本条证据。后续产品设计复审中发现的“任务流/信息架构”建议仅在用户显式授权时另立项，不扩张本项。
+
 ### UI-A：前端交互与向导逻辑加固（2026-09-12 审计）
 
 状态：`delivered`（UI-A.1–A.4 全部 delivered 2026-09-12：两轮审计的 P0×9/P1×19/P2×7 项全部修复；缓冲轮 UI-B.1–B.5 于 2026-09-14/15 续交付：spec_summary 真相契约、向导小项、ConfirmDialog 统一、introspection 消费、i18n 全量收口，e2e 最终 158 passed / 0 failed。缓冲窗口后 2026-09-16/17 小项池续交付 DagEditor i18n、全局搜索/密度、删除确认，e2e 163 passed / 0 failed。迭代收口）
