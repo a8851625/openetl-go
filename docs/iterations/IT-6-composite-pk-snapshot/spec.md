@@ -1,6 +1,6 @@
 # IT-6：mysql_snapshot_cdc 复合主键快照（源连接器正确性）
 
-> 状态：`queued` | 依赖：无（现有 mysql_snapshot_cdc/ClickHouse sink 均为 delivered 基线）| 归属 roadmap 条目：IT-6
+> 状态：`delivered`（2026-09-26，3 轮交付；验收矩阵见 tasks.md）| 依赖：无（现有 mysql_snapshot_cdc/ClickHouse sink 均为 delivered 基线）| 归属 roadmap 条目：IT-6
 
 ## 问题陈述
 
