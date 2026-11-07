@@ -44,6 +44,14 @@ echo "==> Wait for app healthy"
 for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/api/v2/health >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS http://127.0.0.1:8077/api/v2/health >/dev/null
 
+# Kafka topics used by the wizard defaults and the B1 probes must exist in broker
+# metadata, otherwise spec validation fails on the source instead of exercising
+# the reachability-warning path. Best-effort: without broker tooling the later
+# assertions fail loudly.
+"$CONTAINER_CLI" exec etl-redpanda rpk topic create orders >/dev/null 2>&1 || true
+"$CONTAINER_CLI" exec etl-redpanda rpk topic create t >/dev/null 2>&1 || true
+"$CONTAINER_CLI" exec etl-redpanda rpk topic create ods.orders >/dev/null 2>&1 || true
+
 echo "==> Verify reverse proxy"
 for _ in $(seq 1 30); do curl -fsS "${BASE_URL}/api/v2/health" >/dev/null 2>&1 && break; sleep 1; done
 if ! curl -fsS "${BASE_URL}/api/v2/health" >/dev/null 2>&1; then echo "ERROR: reverse proxy not working" >&2; exit 1; fi
@@ -56,6 +64,8 @@ sleep 2
 pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL  $1" >&2; FAIL=$((FAIL + 1)); }
 check() { if [[ "$2" == "true" ]]; then pass "$1"; else fail "$1 (got: ${2:0:100})"; fi; }
+# evaljs returns a JSON string (quoted); strip surrounding quotes for checks.
+unquote() { local v="$1"; v="${v%\"}"; v="${v#\"}"; printf '%s' "$v"; }
 evaljs() {
   local out
   if out="$(playwright-cli --raw eval "$1" 2>&1)"; then
@@ -113,14 +123,14 @@ echo "=== B: i18n Language Toggle ==="
 check "B1: English label 'Overview'" "$(evaljs "document.body.innerText.includes('Overview') || document.body.innerText.includes('Dashboard')")"
 
 # B2: Switch to Chinese via topbar globe button
-playwright-cli click "header button[title='Switch language']" >/dev/null 2>&1 || playwright-cli click "header button[title]" >/dev/null 2>&1 || true
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
 sleep 1
 check "B2: Switched to Chinese" "$(evaljs "document.body.innerText.includes('总览') || document.body.innerText.includes('仪表盘')")"
 check "B3: Chinese nav label '管道'" "$(evaljs "document.body.innerText.includes('管道')")"
 check "B4: Chinese metric label" "$(evaljs "document.body.innerText.includes('读取记录') || document.body.innerText.includes('需要处理') || document.body.innerText.includes('运行健康')")"
 
 # B3: Switch back to English
-playwright-cli click "header button[title='Switch language']" >/dev/null 2>&1 || playwright-cli click "header button[title]" >/dev/null 2>&1 || true
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
 sleep 1
 check "B5: Back to English" "$(evaljs "document.body.innerText.includes('Overview') || document.body.innerText.includes('Dashboard') || document.body.innerText.includes('Pipelines')")"
 
@@ -683,6 +693,15 @@ evaljs "(() => { Array.from(document.querySelectorAll('[role=dialog] button')).f
 sleep 0.8
 check "A2.2b: confirmed switch resets to template defaults" "$(evaljs "document.querySelector('[data-testid=wizard-pipeline-name]')?.value === 'ui-wizard-kafka-detail'")"
 # A2.3: unreachable source/sink validates-but-not-ready split on confirm.
+# The kafka-detail template defaults to a reachable ClickHouse, so point the sink
+# at a closed port first: a spec that is structurally valid but unreachable must
+# be reported as "not ready to start" instead of "Preflight passed".
+evaljs "(() => { document.querySelector('[data-testid=wizard-step-sink]')?.click(); return true; })()" >/dev/null
+sleep 0.6
+evaljs "(() => { const f=document.querySelector('[data-testid=wizard-sink-config-form]'); Array.from(f?.querySelectorAll('button')||[]).find(b=>b.textContent?.trim()==='JSON')?.click(); return true; })()" >/dev/null
+sleep 0.5
+playwright-cli fill "[data-testid=wizard-sink-config-form-json]" '{"host":"host.docker.internal","port":1,"database":"default","table":"wizard_output","username":"default","password":"","batch_mode":"upsert","pk_columns":["id"],"auto_create":true}' >/dev/null 2>&1
+sleep 0.5
 evaljs "(() => { document.querySelector('[data-testid=wizard-step-safety]')?.click(); return true; })()" >/dev/null
 sleep 0.6
 evaljs "(() => { document.querySelector('[data-testid=wizard-validate]')?.click(); return true; })()" >/dev/null
@@ -795,6 +814,74 @@ check "A4.1a: batch buttons target-aware (start disabled without stopped)" "$([[
 evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('Stop all')); if(b && !b.disabled){ b.click(); return true; } return 'disabled-or-missing'; })()" >/dev/null
 sleep 0.6
 check "A4.1b: cancel leaves pipelines untouched" "$(evaljs "!document.querySelector('[role=dialog]')")"
+
+# ── UI-D.1/D.2: batch confirm localization + executable-target affordance ─
+echo "==> UI-D.1/D.2 batch confirm + affordance checks"
+# Provision a genuinely stopped streaming pipeline via the API (the auth
+# fixture is a once-batch pipeline that ends up completed, which is neither a
+# start nor a stop target). Kafka pointing at a closed port keeps the runtime
+# from ever completing; stop transitions it to stopped.
+ui_d_fixture_created="false"
+ui_d_spec_json='{"name":"ui-d-stopped-fixture","source":{"type":"kafka","config":{"brokers":["127.0.0.1:1"],"topic":"none","group_id":"ui-d","format":"json"}},"sink":{"type":"file_sink","config":{"output_dir":"/app/data/output/uid","format":"jsonl"}},"schedule":{"type":"streaming"},"retry":{"max_attempts":3,"initial_interval_ms":100,"max_interval_ms":200},"allow_unsafe":true}'
+if curl -fsS -o /dev/null -X POST -H "Content-Type: application/json" -d "{\"spec\":${ui_d_spec_json}}" "${BASE_URL}/api/v2/pipelines"; then
+  sleep 1
+  curl -fsS -o /dev/null -X POST "${BASE_URL}/api/v2/pipelines/ui-d-stopped-fixture/stop" || true
+  sleep 1
+  ui_d_fixture_created="true"
+fi
+check "D0: stopped fixture provisioned via API" "$ui_d_fixture_created"
+
+open_app
+evaljs "(() => { window.location.hash = '#/pipelines'; return true; })()" >/dev/null
+d1_rows="false"
+for _ in $(seq 1 12); do
+  d1_rows="$(evaljs "Array.from(document.querySelectorAll('.pipeline-row')).some(r => (r.textContent||'').includes('ui-d-stopped-fixture'))")"
+  if [[ "$d1_rows" == "true" ]]; then break; fi
+  sleep 0.5
+done
+evaljs "(() => { const row = Array.from(document.querySelectorAll('.pipeline-row')).find(r => (r.textContent||'').includes('ui-d-stopped-fixture')); if (!row) return 'no row'; const cb = row.querySelector('input[type=checkbox]'); if (!cb) return 'no checkbox'; cb.click(); return true; })()" >/dev/null
+sleep 0.6
+# D1.1 (EN): selection Start opens a fully-English confirm with count, name,
+# replay risk, localized Cancel, and no unreplaced {…} tokens.
+d1_dialog="false"
+for _ in $(seq 1 8); do
+  evaljs "(() => { const bar = document.querySelector('[data-testid=pipelines-selection-toolbar]'); if (!bar) return false; const btns = Array.from(bar.querySelectorAll('button')); const start = btns.find(b => (b.textContent||'').trim().startsWith('Start')); if (start && !start.disabled) { start.click(); return true; } return false; })()" >/dev/null
+  sleep 0.5
+  d1_dialog="$(evaljs "!!document.querySelector('[role=dialog]')")"
+  if [[ "$d1_dialog" == "true" ]]; then break; fi
+done
+check "D1.1a: selection Start opens confirm dialog" "$d1_dialog"
+d1_en="$(unquote "$(evaljs "(() => { const dlg = document.querySelector('[role=dialog]'); if (!dlg) return 'no dialog'; const txt = (dlg.innerText || ''); if (/\\{[a-zA-Z]+\\}/.test(txt)) return 'token leak'; const ok = txt.includes('Start') && txt.includes('ui-d-stopped-fixture') && txt.toLowerCase().includes('replay'); const cancel = Array.from(dlg.querySelectorAll('button')).some(b => (b.textContent||'').trim() === 'Cancel'); const confirm = Array.from(dlg.querySelectorAll('button')).some(b => (b.textContent||'').includes('Start all')); return String(ok && cancel && confirm); })()")")"
+check "D1.1b: EN confirm complete (action/name/replay/Cancel), no {tokens}" "$([[ "$d1_en" == "true" ]] && echo true || echo false)"
+d1_close_a11y="$(unquote "$(evaljs "(() => { const dlg = document.querySelector('[role=dialog]'); if (!dlg) return 'no dialog'; const close = dlg.querySelector('button[aria-label]'); return close ? close.getAttribute('aria-label') : 'none'; })()")")"
+check "D1.1c: dialog close button has localized accessible name" "$([[ "$d1_close_a11y" == "Close" ]] && echo true || echo false)"
+# D1.2 (ZH): switch language, reopen, assert full Chinese including 取消/关闭.
+evaljs "(() => { const cancel = Array.from(document.querySelectorAll('[role=dialog] button')).find(b => (b.textContent||'').trim() === 'Cancel'); if (cancel) cancel.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { const btn = document.querySelector('[data-testid=toggle-lang]'); if (btn) { btn.click(); return true; } return false; })()" >/dev/null
+sleep 1
+evaljs "(() => { const bar = document.querySelector('[data-testid=pipelines-selection-toolbar]'); if (!bar) return false; const start = Array.from(bar.querySelectorAll('button')).find(b => (b.textContent||'').includes('启动')); if (start && !start.disabled) { start.click(); return true; } return false; })()" >/dev/null
+sleep 0.8
+d1_zh="$(unquote "$(evaljs "(() => { const dlg = document.querySelector('[role=dialog]'); if (!dlg) return 'no dialog'; const txt = (dlg.innerText || ''); if (/\\{[a-zA-Z]+\\}/.test(txt)) return 'token leak'; const ok = txt.includes('启动') && txt.includes('ui-d-stopped-fixture') && txt.includes('重放'); const cancel = Array.from(dlg.querySelectorAll('button')).some(b => (b.textContent||'').trim() === '取消'); const close = dlg.querySelector('button[aria-label=\"关闭\"]'); return String(ok && cancel && !!close); })()")")"
+check "D1.2: ZH confirm fully localized (启动/重放/取消/关闭), no {tokens}" "$([[ "$d1_zh" == "true" ]] && echo true || echo false)"
+# Cancel and switch back to EN for later sections.
+evaljs "(() => { const cancel = Array.from(document.querySelectorAll('[role=dialog] button')).find(b => (b.textContent||'').trim() === '取消'); if (cancel) cancel.click(); return true; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { const btn = document.querySelector('[data-testid=toggle-lang]'); if (btn) { btn.click(); return true; } return false; })()" >/dev/null
+sleep 1
+
+# UI-D.2: with only the stopped fixture selected, Stop is disabled with a
+# visible reason; Start is enabled. Then clear selection removes the toolbar.
+d2_stop_state="$(unquote "$(evaljs "(() => { const bar = document.querySelector('[data-testid=pipelines-selection-toolbar]'); if (!bar) return 'no toolbar'; const stop = Array.from(bar.querySelectorAll('button')).find(b => (b.textContent||'').includes('Stop') || (b.textContent||'').includes('停止')); const reason = document.querySelector('[data-testid=batch-no-stop-reason]'); return stop ? String(stop.disabled) : 'missing'; })()")")"
+check "D2.1: selection Stop disabled when no running targets" "$d2_stop_state"
+d2_reason="$(unquote "$(evaljs "(() => { const r = document.querySelector('[data-testid=batch-no-stop-reason]'); return r ? 'present' : 'missing'; })()")")"
+check "D2.1b: disabled Stop shows visible reason" "$([[ "$d2_reason" == "present" ]] && echo true || echo false)"
+d2_start_state="$(unquote "$(evaljs "(() => { const bar = document.querySelector('[data-testid=pipelines-selection-toolbar]'); if (!bar) return 'no toolbar'; const start = Array.from(bar.querySelectorAll('button')).find(b => (b.textContent||'').includes('Start')); return start ? String(!start.disabled) : 'missing'; })()")")"
+check "D2.2: selection Start enabled for stopped target" "$d2_start_state"
+# D2.3: clear selection -> toolbar gone.
+evaljs "(() => { const bar = document.querySelector('[data-testid=pipelines-selection-toolbar]'); const clear = bar && Array.from(bar.querySelectorAll('button')).find(b => (b.textContent||'').toLowerCase().includes('clear')); if (clear) clear.click(); return true; })()" >/dev/null
+sleep 0.5
+check "D2.3: clear selection removes batch toolbar" "$(evaljs "!document.querySelector('[data-testid=pipelines-selection-toolbar]')")"
 # A4.2: unknown hash renders an explicit not-found page.
 evaljs "(() => { window.location.hash = '#/pipeline-new'; return true; })()" >/dev/null
 sleep 1.5
@@ -834,6 +921,734 @@ check "B1.1: kafka pipeline renders real source mode streaming" "$(evaljs "(() =
 check "B1.2: path shows real kafka → file_sink topology" "$(evaljs "(() => { const r=Array.from(document.querySelectorAll('.pipeline-row')).find(x=>x.textContent.includes('b1-kafka-probe')); if(!r) return false; return r.textContent.includes('kafka') && r.textContent.includes('file_sink'); })()")"
 check "B1.3: cron pipeline renders scheduled mode" "$(evaljs "(() => { const r=Array.from(document.querySelectorAll('.pipeline-row')).find(x=>x.textContent.includes('b1-cron-probe')); return r ? r.textContent.includes('scheduled') : false; })()")"
 
+# ── UI-D.3: 390px operations pages stay inside the viewport ───────────────
+# These use the real app container and the saved connections / scheduled
+# pipeline seeded above. A wide data table may scroll locally, but must never
+# widen documentElement or make its keyboard-focusable primary/danger actions
+# unreachable.
+echo "==> UI-D.3 mobile containment checks"
+open_app
+playwright-cli resize 390 844 >/dev/null
+
+# Connections: table keeps a local horizontal scroller; focus on Delete must
+# scroll that container, not the whole document, and Load/Test/Delete retain
+# their visible names in DOM order.
+evaljs "(() => { window.location.hash = '#/connections'; return true; })()" >/dev/null
+sleep 1
+for _ in $(seq 1 12); do
+  d3_connections_ready="$(evaljs "document.body.innerText.includes('ui-file-source') && document.body.innerText.includes('ui-file-sink')")"
+  if [[ "$d3_connections_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "D3.1: Connections fits 390px viewport" "$(evaljs "document.documentElement.scrollWidth <= window.innerWidth + 2")"
+d3_connections_actions="$(evaljs "(() => { const names=['Load','Test','Delete']; const buttons=Array.from(document.querySelectorAll('main button')); const indices=names.map(n=>buttons.findIndex(b=>(b.textContent||'').trim()===n)); const del=buttons.find(b=>(b.textContent||'').trim()==='Delete'); const tableWrap=document.querySelector('table')?.parentElement; if (!del || indices.some(i=>i<0) || !(indices[0]<indices[1] && indices[1]<indices[2]) || !tableWrap) return false; del.focus(); const r=del.getBoundingClientRect(); return document.activeElement===del && r.left>=0 && r.right<=window.innerWidth && tableWrap.scrollWidth>tableWrap.clientWidth && document.documentElement.scrollWidth<=window.innerWidth+2; })()")"
+check "D3.2: Connections Load/Test/Delete are keyboard-reachable in local table scroller" "$d3_connections_actions"
+
+# Schedules: select the seeded cron row, then exercise the editor's primary
+# action. The dialog must open without reintroducing page overflow.
+evaljs "(() => { window.location.hash = '#/schedules'; return true; })()" >/dev/null
+sleep 1
+for _ in $(seq 1 12); do
+  d3_schedule_ready="$(evaljs "Array.from(document.querySelectorAll('tr')).some(r=>(r.textContent||'').includes('b1-cron-probe'))")"
+  if [[ "$d3_schedule_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "D3.3: Schedules fits 390px viewport" "$(evaljs "document.documentElement.scrollWidth <= window.innerWidth + 2")"
+evaljs "(() => { const row=Array.from(document.querySelectorAll('tr')).find(r=>(r.textContent||'').includes('b1-cron-probe')); if (row) row.click(); return !!row; })()" >/dev/null
+sleep 0.4
+d3_schedule_action="$(evaljs "(() => { const edit=Array.from(document.querySelectorAll('main button')).find(b=>(b.textContent||'').trim()==='Edit in dialog'); const run=Array.from(document.querySelectorAll('main button')).find(b=>(b.textContent||'').trim()==='Run now'); if (!edit || !run || edit.disabled || run.disabled) return false; edit.focus(); const r=edit.getBoundingClientRect(); return document.activeElement===edit && r.left>=0 && r.right<=window.innerWidth; })()")"
+check "D3.4: Schedule Edit/Run actions are visible and focusable" "$d3_schedule_action"
+playwright-cli click "button:has-text('Edit in dialog')" >/dev/null 2>&1 || true
+sleep 0.6
+check "D3.5: Schedule editor opens at 390px without page overflow" "$(evaljs "!!document.querySelector('[role=dialog]') && document.documentElement.scrollWidth <= window.innerWidth + 2")"
+evaljs "(() => { const cancel=Array.from(document.querySelectorAll('[role=dialog] button')).find(b=>(b.textContent||'').trim()==='Cancel'); if (cancel) cancel.click(); return true; })()" >/dev/null
+sleep 0.3
+
+# My Plugins: switch to its current primary editor workflow and verify the
+# template/install controls remain focusable on a narrow screen.
+evaljs "(() => { window.location.hash = '#/myPlugins'; return true; })()" >/dev/null
+sleep 1
+playwright-cli click "[role=tab]:has-text('Editor')" >/dev/null 2>&1 || true
+sleep 1.5
+check "D3.6: My Plugins editor fits 390px viewport" "$(evaljs "document.documentElement.scrollWidth <= window.innerWidth + 2")"
+d3_plugins_action="$(evaljs "(() => { const load=Array.from(document.querySelectorAll('main button')).find(b=>b.getAttribute('title')==='Load template'); const install=Array.from(document.querySelectorAll('main button')).find(b=>(b.textContent||'').includes('Install')); if (!load || !install) return false; load.focus(); const r=load.getBoundingClientRect(); return document.activeElement===load && r.left>=0 && r.right<=window.innerWidth; })()")"
+check "D3.7: My Plugins template/install workflow remains keyboard-reachable" "$d3_plugins_action"
+
+# Desktop remains table-dense rather than being replaced by a divergent mobile
+# handler/layout. Restore a normal desktop viewport before the remaining suite.
+playwright-cli resize 1280 900 >/dev/null
+evaljs "(() => { window.location.hash = '#/connections'; return true; })()" >/dev/null
+sleep 1
+check "D3.8: Connections keeps desktop table layout at 1280px" "$(evaljs "window.innerWidth===1280 && !!document.querySelector('table') && document.documentElement.scrollWidth<=window.innerWidth+2")"
+evaljs "(() => { window.location.hash = '#/schedules'; return true; })()" >/dev/null
+sleep 1
+check "D3.9: Schedules keeps desktop table layout at 1280px" "$(evaljs "window.innerWidth===1280 && !!document.querySelector('table') && document.documentElement.scrollWidth<=window.innerWidth+2")"
+
+# ── UI-D.4: wizard step discovery and auto-visibility at 390px ───────────
+# The mobile rail must say where the operator is, explain that more steps can
+# be reached, and actively bring the newly selected step into the rail view.
+echo "==> UI-D.4 mobile wizard-step discovery checks"
+open_app
+playwright-cli resize 390 844 >/dev/null
+evaljs "(() => { window.location.hash = '#/pipelines/new?step=scenario'; return true; })()" >/dev/null
+sleep 1.5
+for _ in $(seq 1 12); do
+  d4_wizard_ready="$(evaljs "!!document.querySelector('[data-testid=wizard-fullpage]')")"
+  if [[ "$d4_wizard_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "D4.1: wizard initial step exposes current/total progress at 390px" "$(evaljs "(() => { const p=document.querySelector('[data-testid=wizard-step-progress]'); const current=document.querySelector('[data-testid=wizard-step-scenario]'); const text=p?.textContent||''; return !!p && /1/.test(text) && /6/.test(text) && current?.getAttribute('aria-current')==='step'; })()")"
+check "D4.2: wizard gives a visible small-screen step-scroll affordance" "$(evaljs "(() => { const hint=document.querySelector('[data-testid=wizard-step-scroll-hint]'); const r=hint?.getBoundingClientRect(); return !!hint && !!hint.textContent?.trim() && !!r && r.width>0 && r.height>0; })()")"
+# Progress via Next must scroll the rail locally so the Confirm step is not
+# hidden off-screen. The page itself remains contained.
+for _ in $(seq 1 5); do
+  playwright-cli click "[data-testid=wizard-next]" >/dev/null 2>&1 || true
+  sleep 0.25
+done
+sleep 0.6
+d4_confirm_visible="$(evaljs "(() => { const rail=document.querySelector('[data-testid=wizard-step-rail]'); const step=document.querySelector('[data-testid=wizard-step-confirm]'); if (!rail || !step || step.getAttribute('aria-current')!=='step') return false; const rr=rail.getBoundingClientRect(), sr=step.getBoundingClientRect(); return rail.scrollLeft>0 && sr.left>=rr.left-1 && sr.right<=rr.right+1 && document.documentElement.scrollWidth<=window.innerWidth+2; })()")"
+check "D4.3: Next auto-scrolls active Confirm step into 390px rail view" "$d4_confirm_visible"
+# Native buttons must remain keyboard-operable; focusing a hidden first step
+# also restores it to the rail viewport before Enter activates it.
+evaljs "(() => { const step=document.querySelector('[data-testid=wizard-step-source]'); if (!step) return false; step.focus(); return document.activeElement===step; })()" >/dev/null
+playwright-cli press Enter >/dev/null 2>&1 || true
+sleep 0.5
+d4_keyboard="$(evaljs "(() => { const rail=document.querySelector('[data-testid=wizard-step-rail]'); const step=document.querySelector('[data-testid=wizard-step-source]'); if (!rail || !step) return false; const rr=rail.getBoundingClientRect(), sr=step.getBoundingClientRect(); return location.hash.includes('step=source') && step.getAttribute('aria-current')==='step' && sr.left>=rr.left-1 && sr.right<=rr.right+1; })()")"
+check "D4.4: keyboard activation selects and exposes the focused step" "$d4_keyboard"
+check "D4.5: step selection preserves wizard hash routing" "$(evaljs "location.hash === '#/pipelines/new?step=source'")"
+playwright-cli resize 1280 900 >/dev/null
+
+# ── UI-D.5: truthful refresh state + localized icon-only controls ─────────
+# Use the real app/container response for success and a controlled browser
+# transport rejection only for the failure-state assertion. No production API
+# route or UI mock is introduced; recovery returns to the real endpoint.
+echo "==> UI-D.5 refresh/a11y checks"
+open_app
+for _ in $(seq 1 16); do
+  d5_initial_ready="$(evaljs "(() => { const status=document.querySelector('[data-testid=auto-refresh-label]'); const last=document.querySelector('[data-testid=last-refresh-at]'); return !!status && !!last && !!last.textContent?.trim(); })()")"
+  if [[ "$d5_initial_ready" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "D5.1: active refresh has a state label and separate last-success text" "$(evaljs "(() => { const status=document.querySelector('[data-testid=auto-refresh-label]'); const last=document.querySelector('[data-testid=last-refresh-at]'); return status?.textContent?.trim()==='Live updates active' && (last?.textContent||'').includes('Last successful refresh:'); })()")"
+check "D5.2: manual refresh is a distinct named icon control" "$(evaljs "(() => { const b=document.querySelector('[data-testid=manual-refresh]'); return b?.getAttribute('aria-label')==='Refresh now' && b?.getAttribute('title')==='Refresh now' && b.getAttribute('aria-busy')==='false'; })()")"
+
+# Pause periodic refresh first so the manual operation below is the only
+# in-flight request. Delay (but do not replace) its real pipeline request, so
+# busy feedback is observable rather than racing localhost.
+playwright-cli click "[data-testid=auto-refresh-toggle]" >/dev/null 2>&1 || true
+sleep 0.3
+evaljs "(() => { const original=window.fetch.bind(window); window.__uiD5OriginalFetch=original; let delayed=false; window.fetch=(input, init) => { const url=typeof input==='string' ? input : input instanceof Request ? input.url : String(input); if (!delayed && url.includes('/api/v2/pipelines')) { delayed=true; return new Promise((resolve,reject) => window.setTimeout(() => original(input, init).then(resolve, reject), 3000)); } return original(input, init); }; return true; })()" >/dev/null
+playwright-cli click "[data-testid=manual-refresh]" >/dev/null 2>&1 || true
+sleep 0.15
+check "D5.3: manual refresh exposes busy/disabled feedback while real request is in flight" "$(evaljs "(() => { const b=document.querySelector('[data-testid=manual-refresh]'); return b?.getAttribute('aria-busy')==='true' && b.hasAttribute('disabled') && b.getAttribute('aria-label')==='Refreshing…'; })()")"
+for _ in $(seq 1 20); do
+  d5_manual_settled="$(evaljs "(() => { const b=document.querySelector('[data-testid=manual-refresh]'); return b?.getAttribute('aria-busy')==='false' && !b?.hasAttribute('disabled'); })()")"
+  if [[ "$d5_manual_settled" == "true" ]]; then break; fi
+  sleep 0.25
+done
+evaljs "(() => { if (window.__uiD5OriginalFetch) window.fetch=window.__uiD5OriginalFetch; delete window.__uiD5OriginalFetch; return true; })()" >/dev/null
+check "D5.4: manual refresh settles back to its ready state" "$d5_manual_settled"
+
+# Pause/resume remains the auto-refresh state toggle, not the manual action.
+# It has been paused above while the manual operation was isolated.
+check "D5.5: paused auto-refresh has independent paused state and resume name" "$(evaljs "(() => { const b=document.querySelector('[data-testid=auto-refresh-toggle]'); const label=document.querySelector('[data-testid=auto-refresh-label]'); return b?.getAttribute('aria-pressed')==='true' && b.getAttribute('aria-label')==='Resume auto-refresh' && label?.textContent?.trim()==='Auto-refresh paused'; })()")"
+playwright-cli click "[data-testid=auto-refresh-toggle]" >/dev/null 2>&1 || true
+sleep 0.4
+
+# Controlled transport rejection drives the existing real error path, then a
+# real manual retry proves recovery does not leave the top bar stale.
+evaljs "(() => { const original=window.fetch.bind(window); window.__uiD5OriginalFetch=original; let failed=false; window.fetch=(input, init) => { const url=typeof input==='string' ? input : input instanceof Request ? input.url : String(input); if (!failed && url.includes('/api/v2/pipelines')) { failed=true; return Promise.reject(new TypeError('UI-D.5 controlled transport failure')); } return original(input, init); }; return true; })()" >/dev/null
+playwright-cli click "[data-testid=manual-refresh]" >/dev/null 2>&1 || true
+for _ in $(seq 1 16); do
+  d5_failure_visible="$(evaljs "document.querySelector('[data-testid=auto-refresh-label]')?.textContent?.includes('Refresh failed')")"
+  if [[ "$d5_failure_visible" == "true" ]]; then break; fi
+  sleep 0.25
+done
+check "D5.6: failed refresh has a distinct retrying state text" "$d5_failure_visible"
+evaljs "(() => { if (window.__uiD5OriginalFetch) window.fetch=window.__uiD5OriginalFetch; delete window.__uiD5OriginalFetch; return true; })()" >/dev/null
+playwright-cli click "[data-testid=manual-refresh]" >/dev/null 2>&1 || true
+for _ in $(seq 1 16); do
+  d5_recovered="$(evaljs "document.querySelector('[data-testid=auto-refresh-label]')?.textContent?.trim()==='Live updates active'")"
+  if [[ "$d5_recovered" == "true" ]]; then break; fi
+  sleep 0.25
+done
+check "D5.7: real manual retry recovers active state" "$d5_recovered"
+
+# EN/ZH names on all app-shell icon-only controls are current-language values.
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
+sleep 0.5
+check "D5.8: ZH refresh/menu/language icon controls have localized names" "$(evaljs "(() => { const manual=document.querySelector('[data-testid=manual-refresh]'); const lang=document.querySelector('[data-testid=toggle-lang]'); const menu=document.querySelector('button[aria-label=\"打开导航\"]'); const toggle=document.querySelector('[data-testid=auto-refresh-toggle]'); return manual?.getAttribute('aria-label')==='立即刷新' && lang?.getAttribute('aria-label')==='切换语言' && !!menu && toggle?.getAttribute('aria-label')==='暂停自动刷新'; })()")"
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
+sleep 0.5
+check "D5.9: EN refresh/menu/language icon controls restore localized names" "$(evaljs "(() => { const manual=document.querySelector('[data-testid=manual-refresh]'); const lang=document.querySelector('[data-testid=toggle-lang]'); const menu=document.querySelector('button[aria-label=\"Open navigation\"]'); return manual?.getAttribute('aria-label')==='Refresh now' && lang?.getAttribute('aria-label')==='Switch language' && !!menu; })()")"
+
+# ── UI-F.1: invalid detail routes must never target another pipeline ───────
+# Capture and block unsafe requests only if a broken invalid-detail page still
+# renders an action. This tests the real app route/UI; no production route or
+# data mock is installed.
+echo "==> UI-F.1 detail route identity checks"
+open_app
+evaljs "(() => { window.location.hash = '#/pipelines/not-a-real-pipeline/overview'; return true; })()" >/dev/null
+sleep 1
+check "F1.1: direct invalid pipeline detail renders a route-tied not-found state" "$(evaljs "document.querySelector('[data-testid=pipeline-detail-not-found]')?.getAttribute('data-route-id') === 'not-a-real-pipeline'")"
+playwright-cli reload >/dev/null 2>&1 || true
+sleep 1
+check "F1.1b: reload preserves the invalid-detail not-found state" "$(evaljs "document.querySelector('[data-testid=pipeline-detail-not-found]')?.getAttribute('data-route-id') === 'not-a-real-pipeline'")"
+evaljs "(() => { const original=window.fetch.bind(window); window.__uiF1OriginalFetch=original; window.__uiF1UnsafeRequests=[]; window.fetch=(input, init={}) => { const url=typeof input==='string' ? input : input instanceof Request ? input.url : String(input); const method=(init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase(); if (method !== 'GET' && /\\/api\\/v2\\/pipelines\\/[^/]+\\/(start|stop|checkpoint\\/reset)/.test(url)) { window.__uiF1UnsafeRequests.push(method+' '+url); return Promise.reject(new TypeError('UI-F.1 blocked unsafe invalid-route request')); } return original(input, init); }; return true; })()" >/dev/null
+check "F1.2: invalid detail exposes no lifecycle or recovery actions" "$(evaljs "(() => { const unsafe=['Start','Stop','Reset checkpoint','Handle issues','Open designer']; return !Array.from(document.querySelectorAll('main button')).some(b=>unsafe.includes((b.textContent||'').trim())); })()")"
+# A correct not-found view has no button to invoke; on the pre-fix regression
+# this intentionally exercises the leaked action while the capture prevents a
+# real lifecycle mutation.
+evaljs "(() => { const unsafe=['Start','Stop','Reset checkpoint','Handle issues']; const button=Array.from(document.querySelectorAll('main button')).find(b=>unsafe.includes((b.textContent||'').trim())); if (button) button.click(); return button ? (button.textContent||'').trim() : 'no leaked action'; })()" >/dev/null
+sleep 0.4
+check "F1.3: invalid detail emits zero lifecycle/checkpoint requests" "$(evaljs "(window.__uiF1UnsafeRequests||[]).length === 0")"
+evaljs "(() => { if (window.__uiF1OriginalFetch) window.fetch=window.__uiF1OriginalFetch; delete window.__uiF1OriginalFetch; return true; })()" >/dev/null
+
+# A valid route remains route-owned across every supported detail tab.
+evaljs "(() => { window.location.hash = '#/pipelines/auth-file-to-file/overview'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f1_valid_ready="$(evaljs "document.querySelector('[data-testid=pipeline-detail-page]')?.getAttribute('data-pipeline-name') === 'auth-file-to-file'")"
+  if [[ "$f1_valid_ready" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F1.4: valid detail resolves the route object, not selection fallback" "$f1_valid_ready"
+playwright-cli go-back >/dev/null 2>&1 || true
+sleep 0.7
+check "F1.4b: back navigation restores the invalid-detail not-found state" "$(evaljs "document.querySelector('[data-testid=pipeline-detail-not-found]')?.getAttribute('data-route-id') === 'not-a-real-pipeline'")"
+playwright-cli go-forward >/dev/null 2>&1 || true
+sleep 0.7
+check "F1.4c: forward navigation restores the valid route object" "$(evaljs "document.querySelector('[data-testid=pipeline-detail-page]')?.getAttribute('data-pipeline-name') === 'auth-file-to-file'")"
+f1_tabs="true"
+for f1_tab in overview runs issues checkpoints logs topology spec; do
+  evaljs "(() => { window.location.hash = '#/pipelines/auth-file-to-file/${f1_tab}'; return true; })()" >/dev/null
+  sleep 0.35
+  f1_tab_ok="$(evaljs "(() => { const page=document.querySelector('[data-testid=pipeline-detail-page]'); const active=document.querySelector('[data-testid=detail-tab-${f1_tab}]'); return !!page && page.getAttribute('data-pipeline-name')==='auth-file-to-file' && location.hash.endsWith('/${f1_tab}') && active?.getAttribute('data-state')==='active'; })()")"
+  if [[ "$f1_tab_ok" != "true" ]]; then f1_tabs="false"; fi
+done
+check "F1.5: all seven valid detail tabs stay route-matched" "$f1_tabs"
+
+# ── UI-F.2: Settings modal is owned by the hash route ────────────────────
+# Start from a direct settings route. The assertions below intentionally use
+# the real Radix overlay and a real schedules primary action; no UI mock is
+# introduced.
+echo "==> UI-F.2 settings route/dialog checks"
+open_app
+evaljs "(() => { window.location.hash = '#/settings'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f2_settings_open="$(evaljs "location.hash === '#/settings' && !!document.querySelector('[data-testid=settings-token-input]') && !!document.querySelector('[role=dialog]')")"
+  if [[ "$f2_settings_open" == "true" ]]; then break; fi
+  sleep 0.35
+done
+check "F2.1: direct #/settings owns a visible Settings dialog" "$f2_settings_open"
+# Give the dialog a focused control, then navigate via hash. The next route
+# must fully own the interactive layer rather than leaving an overlay behind.
+evaljs "(() => { document.querySelector('[data-testid=settings-token-input]')?.focus(); window.location.hash = '#/schedules'; return true; })()" >/dev/null
+sleep 0.8
+check "F2.2: leaving #/settings removes dialog and overlay" "$(evaljs "location.hash === '#/schedules' && !document.querySelector('[role=dialog]') && !document.querySelector('[data-radix-dialog-overlay]')")"
+f2_schedules_action="$(evaljs "(() => { const action=Array.from(document.querySelectorAll('main button')).find(b=>(b.textContent||'').trim()==='Run now'); if (!action) return false; action.click(); return new Promise(resolve=>setTimeout(()=>resolve(!!document.querySelector('[role=dialog]')),150)); })()")"
+check "F2.3: Schedules Run now remains pointer-operable after route exit" "$f2_schedules_action"
+# Cancel the schedule confirmation and revisit Settings. Escape must close the
+# route-owned dialog and choose a normal route without creating another
+# settings history entry.
+evaljs "(() => { const cancel=Array.from(document.querySelectorAll('[role=dialog] button')).find(b=>(b.textContent||'').trim()==='Cancel'); cancel?.click(); window.location.hash='#/settings'; return true; })()" >/dev/null
+sleep 0.7
+playwright-cli press Escape >/dev/null 2>&1 || true
+sleep 0.7
+check "F2.4: Escape closes Settings and leaves a non-settings hash" "$(evaljs "location.hash !== '#/settings' && !document.querySelector('[role=dialog]')")"
+# Browser history must replay route/UI pairs rather than a stale local open
+# flag. Go back to settings and forward to the normal page.
+playwright-cli go-back >/dev/null 2>&1 || true
+sleep 0.7
+check "F2.5: back restores #/settings with its dialog" "$(evaljs "location.hash === '#/settings' && !!document.querySelector('[role=dialog]')")"
+playwright-cli go-forward >/dev/null 2>&1 || true
+sleep 0.7
+check "F2.6: forward restores normal route without Settings overlay" "$(evaljs "location.hash !== '#/settings' && !document.querySelector('[role=dialog]')")"
+# The visible close affordance follows the same route transition. Its focus
+# must no longer be inside a disconnected/hidden modal subtree afterwards.
+evaljs "(() => { window.location.hash='#/settings'; return true; })()" >/dev/null
+sleep 0.7
+playwright-cli click "[role=dialog] button[aria-label='Close']" >/dev/null 2>&1 || true
+sleep 0.7
+check "F2.7: visible Close exits Settings without a focus-trapping overlay" "$(evaljs "(() => { const active=document.activeElement; return location.hash !== '#/settings' && !document.querySelector('[role=dialog]') && !!active?.isConnected; })()")"
+
+# ── UI-F.3: destructive control-plane actions require informed confirmation ─
+# Seed disposable, server-backed Worker/Connection rows. The default app image
+# deliberately has no Extism WASM runtime, so the plugin row uses a *browser
+# list fixture* only; its DELETE request/error/success path is still exercised
+# against the real app UI without claiming an unavailable plugin install path.
+echo "==> UI-F.3 destructive confirmation checks"
+f3_worker_id="ui-f3-worker"
+f3_connection="ui-f3-delete-connection"
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  -d '{"id":"ui-f3-worker","host":"ui-f3-host","port":19093,"slots":1,"labels":{"e2e":"ui-f3"}}' \
+  "${BASE_URL}/api/v2/workers" >/dev/null
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  -d '{"name":"ui-f3-delete-connection","kind":"source","type":"file","config":{"path":"/app/testdata/files/customers.jsonl","format":"json"}}' \
+  "${BASE_URL}/api/v2/connections" >/dev/null
+f3_seeded="$(curl -fsS "${BASE_URL}/api/v2/workers" | grep -q "${f3_worker_id}" && curl -fsS "${BASE_URL}/api/v2/connections" | grep -q "${f3_connection}" && echo true || echo false)"
+check "F3.0: disposable Worker and Connection action fixtures seeded" "$f3_seeded"
+
+open_app
+# Capture only the three intentional destructive request shapes. A mode of
+# block returns a benign response solely to make a pre-fix direct DELETE safe;
+# pass executes the real disposable Worker/Connection DELETE; fail tests the
+# UI's server-error outcome. Plugin GET is a browser fixture because this
+# standard image intentionally has no WASM install capability.
+evaljs "(() => { const original=window.fetch.bind(window); const state={original,requests:[],modes:{worker:'block',connection:'block',plugin:'block'}}; window.__uiF3=state; window.fetch=(input, init={}) => { const url=typeof input==='string' ? input : input instanceof Request ? input.url : String(input); const method=String(init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase(); const path=new URL(url, location.href).pathname; if (method==='GET' && path==='/api/v2/plugins') { return Promise.resolve(new Response(JSON.stringify({sources:[],sinks:[],transforms:[],metadata:{},installed:[{name:'ui-f3-plugin',kind:'transform',wasm_path:'/plugins/ui-f3-plugin.wasm',version:'1.0.0',enabled:true,installed_at:'2026-09-27T00:00:00Z'}]}),{status:200,headers:{'Content-Type':'application/json'}})); } const kind=method==='DELETE' && path==='/api/v2/workers/ui-f3-worker/deregister' ? 'worker' : method==='DELETE' && path==='/api/v2/connections/ui-f3-delete-connection' ? 'connection' : method==='DELETE' && path==='/api/v2/plugins/ui-f3-plugin' ? 'plugin' : ''; if (!kind) return original(input,init); state.requests.push({kind,path,method}); const mode=state.modes[kind]; if (mode==='pass') return original(input,init); if (mode==='fail') return Promise.resolve(new Response(JSON.stringify({error:'UI-F.3 controlled delete rejection'}),{status:503,headers:{'Content-Type':'application/json'}})); return Promise.resolve(new Response(JSON.stringify({status:kind==='worker'?'deregistered':'deleted'}),{status:200,headers:{'Content-Type':'application/json'}})); }; return true; })()" >/dev/null
+
+# Worker: Escape is a cancellation path; confirm then performs one real DELETE
+# of the displayed disposable object and exposes a durable outcome.
+evaljs "(() => { window.location.hash='#/workers'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f3_worker_ready="$(evaljs "Array.from(document.querySelectorAll('tr')).some(r=>(r.textContent||'').includes('ui-f3-worker'))")"
+  if [[ "$f3_worker_ready" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F3.1: Worker fixture appears in the real control-plane list" "$f3_worker_ready"
+evaljs "(() => { const row=Array.from(document.querySelectorAll('tr')).find(r=>(r.textContent||'').includes('ui-f3-worker')); const b=row && Array.from(row.querySelectorAll('button')).find(x=>(x.textContent||'').trim()==='Deregister'); b?.click(); return !!b; })()" >/dev/null
+sleep 0.5
+check "F3.2: Worker Deregister first click opens an object-named confirmation" "$(evaljs "(() => { const d=document.querySelector('[data-testid=confirm-dialog]'); const text=d?.textContent||''; return !!d && text.includes('ui-f3-worker') && /task|assignment|unavailable/i.test(text); })()")"
+check "F3.3: Worker first click emits zero DELETE requests" "$(evaljs "(window.__uiF3?.requests||[]).filter(r=>r.kind==='worker').length===0")"
+playwright-cli press Escape >/dev/null 2>&1 || true
+sleep 0.4
+check "F3.4: Worker Escape closes confirmation with zero DELETE" "$(evaljs "!document.querySelector('[data-testid=confirm-dialog]') && (window.__uiF3?.requests||[]).filter(r=>r.kind==='worker').length===0")"
+evaljs "(() => { const row=Array.from(document.querySelectorAll('tr')).find(r=>(r.textContent||'').includes('ui-f3-worker')); const b=row && Array.from(row.querySelectorAll('button')).find(x=>(x.textContent||'').trim()==='Deregister'); b?.click(); window.__uiF3.modes.worker='pass'; return !!b; })()" >/dev/null
+sleep 0.3
+playwright-cli click "[data-testid=confirm-dialog-confirm]" >/dev/null 2>&1 || true
+for _ in $(seq 1 12); do
+  f3_worker_deleted="$(evaljs "(() => { const n=(window.__uiF3?.requests||[]).filter(r=>r.kind==='worker').length; const note=document.querySelector('[data-testid=worker-action-notice]')?.textContent||''; return n===1 && note.includes('ui-f3-worker') && !Array.from(document.querySelectorAll('tr')).some(r=>(r.textContent||'').includes('ui-f3-worker')); })()")"
+  if [[ "$f3_worker_deleted" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F3.5: Worker confirm issues exactly one displayed-target DELETE and shows result" "$f3_worker_deleted"
+
+# Connection: current APIs expose no authoritative pipeline-reference count.
+# Cancel and close must remain harmless; the real confirm removes only this
+# disposable connection and reports the result after refreshing the list.
+evaljs "(() => { window.location.hash='#/connections'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f3_connection_ready="$(evaljs "Array.from(document.querySelectorAll('tr')).some(r=>(r.textContent||'').includes('ui-f3-delete-connection'))")"
+  if [[ "$f3_connection_ready" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F3.6: Connection fixture appears in the real saved-connection list" "$f3_connection_ready"
+evaljs "(() => { const row=Array.from(document.querySelectorAll('tr')).find(r=>(r.textContent||'').includes('ui-f3-delete-connection')); const b=row && Array.from(row.querySelectorAll('button')).find(x=>(x.textContent||'').trim()==='Delete'); b?.click(); return !!b; })()" >/dev/null
+sleep 0.5
+check "F3.7: Connection Delete first click names object and states reference uncertainty" "$(evaljs "(() => { const d=document.querySelector('[data-testid=confirm-dialog]'); const text=d?.textContent||''; return !!d && text.includes('ui-f3-delete-connection') && /cannot be confirmed/i.test(text) && !/conn\.[a-z_]+/.test(text); })()")"
+check "F3.8: Connection first click emits zero DELETE requests" "$(evaljs "(window.__uiF3?.requests||[]).filter(r=>r.kind==='connection').length===0")"
+playwright-cli click "[data-testid=confirm-dialog-cancel]" >/dev/null 2>&1 || true
+sleep 0.35
+check "F3.9: Connection Cancel leaves zero DELETE requests" "$(evaljs "!document.querySelector('[data-testid=confirm-dialog]') && (window.__uiF3?.requests||[]).filter(r=>r.kind==='connection').length===0")"
+evaljs "(() => { const row=Array.from(document.querySelectorAll('tr')).find(r=>(r.textContent||'').includes('ui-f3-delete-connection')); const b=row && Array.from(row.querySelectorAll('button')).find(x=>(x.textContent||'').trim()==='Delete'); b?.click(); return !!b; })()" >/dev/null
+sleep 0.3
+playwright-cli click "[data-testid=confirm-dialog] button[aria-label='Close']" >/dev/null 2>&1 || true
+sleep 0.35
+check "F3.10: Connection Close leaves zero DELETE requests" "$(evaljs "!document.querySelector('[data-testid=confirm-dialog]') && (window.__uiF3?.requests||[]).filter(r=>r.kind==='connection').length===0")"
+evaljs "(() => { const row=Array.from(document.querySelectorAll('tr')).find(r=>(r.textContent||'').includes('ui-f3-delete-connection')); const b=row && Array.from(row.querySelectorAll('button')).find(x=>(x.textContent||'').trim()==='Delete'); b?.click(); window.__uiF3.modes.connection='pass'; return !!b; })()" >/dev/null
+sleep 0.3
+playwright-cli click "[data-testid=confirm-dialog-confirm]" >/dev/null 2>&1 || true
+for _ in $(seq 1 12); do
+  f3_connection_deleted="$(evaljs "(() => { const n=(window.__uiF3?.requests||[]).filter(r=>r.kind==='connection').length; const note=document.querySelector('[data-testid=connection-action-notice]')?.textContent||''; return n===1 && note.includes('ui-f3-delete-connection') && !Array.from(document.querySelectorAll('tr')).some(r=>(r.textContent||'').includes('ui-f3-delete-connection')); })()")"
+  if [[ "$f3_connection_deleted" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F3.11: Connection confirm sends one displayed-target DELETE and refreshes outcome" "$f3_connection_deleted"
+
+# Plugin: list row is browser-fixtured only as noted above. Check localized
+# intent, overlay cancellation and visible server rejection/success outcomes.
+evaljs "(() => { window.location.hash='#/myPlugins'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f3_plugin_ready="$(evaljs "Array.from(document.querySelectorAll('tr')).some(r=>(r.textContent||'').includes('ui-f3-plugin'))")"
+  if [[ "$f3_plugin_ready" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F3.12: browser-fixtured Plugin row is rendered by the real Extensions UI" "$f3_plugin_ready"
+evaljs "(() => { const b=document.querySelector('[data-testid=plugin-uninstall-ui-f3-plugin]'); b?.click(); return !!b; })()" >/dev/null
+sleep 0.4
+check "F3.13: Plugin Uninstall first click names object and explains unknown references" "$(evaljs "(() => { const d=document.querySelector('[data-testid=confirm-dialog]'); const text=d?.textContent||''; return !!d && text.includes('ui-f3-plugin') && /cannot (determine|be determined|be confirmed)/i.test(text) && !/myplugin\.[a-z_]+/.test(text); })()")"
+# A modal correctly blocks background pointer interaction. Cancel it, switch the
+# application language through the normal top bar, then reopen the same named
+# action to verify the Chinese dialog rather than bypassing the modal layer.
+playwright-cli click "[data-testid=confirm-dialog-cancel]" >/dev/null 2>&1 || true
+sleep 0.3
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
+sleep 0.4
+evaljs "(() => { const b=document.querySelector('[data-testid=plugin-uninstall-ui-f3-plugin]'); b?.click(); return !!b; })()" >/dev/null
+sleep 0.35
+check "F3.14: Plugin confirm is localized in ZH with named object and accessible Close" "$(evaljs "(() => { const d=document.querySelector('[data-testid=confirm-dialog]'); const text=d?.textContent||''; return !!d && text.includes('ui-f3-plugin') && text.includes('卸载') && !!d.querySelector('button[aria-label=关闭]'); })()")"
+# Radix closes on pointerdown outside the panel: dispatch a full, trusted-shape
+# pointer sequence on the overlay itself (its center is covered by the panel).
+evaljs "(() => { const o=document.querySelector('[data-testid=dialog-overlay]'); if (!o) return false; const opts={bubbles:true,cancelable:true,composed:true,view:window,button:0,buttons:1,clientX:15,clientY:15,screenX:15,screenY:15,isPrimary:true,pointerId:1,pointerType:'mouse'}; o.dispatchEvent(new PointerEvent('pointerdown',opts)); o.dispatchEvent(new PointerEvent('pointerup',opts)); o.dispatchEvent(new MouseEvent('mousedown',opts)); o.dispatchEvent(new MouseEvent('mouseup',opts)); o.dispatchEvent(new MouseEvent('click',opts)); return true; })()" >/dev/null
+sleep 0.6
+check "F3.15: Plugin overlay dismissal leaves zero DELETE requests" "$(evaljs "!document.querySelector('[data-testid=confirm-dialog]') && (window.__uiF3?.requests||[]).filter(r=>r.kind==='plugin').length===0")"
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
+sleep 0.4
+evaljs "(() => { const b=document.querySelector('[data-testid=plugin-uninstall-ui-f3-plugin]'); b?.click(); window.__uiF3.modes.plugin='fail'; return !!b; })()" >/dev/null
+sleep 0.3
+playwright-cli click "[data-testid=confirm-dialog-confirm]" >/dev/null 2>&1 || true
+for _ in $(seq 1 10); do
+  f3_plugin_failure="$(evaljs "(() => { const n=(window.__uiF3?.requests||[]).filter(r=>r.kind==='plugin').length; const err=document.querySelector('[data-testid=plugin-action-error]')?.textContent||''; return n===1 && err.includes('UI-F.3 controlled delete rejection'); })()")"
+  if [[ "$f3_plugin_failure" == "true" ]]; then break; fi
+  sleep 0.35
+done
+check "F3.16: Plugin DELETE failure remains visibly actionable (not success)" "$f3_plugin_failure"
+evaljs "(() => { window.__uiF3.requests=window.__uiF3.requests.filter(r=>r.kind!=='plugin'); const b=document.querySelector('[data-testid=plugin-uninstall-ui-f3-plugin]'); b?.click(); window.__uiF3.modes.plugin='block'; return !!b; })()" >/dev/null
+sleep 0.3
+playwright-cli click "[data-testid=confirm-dialog-confirm]" >/dev/null 2>&1 || true
+for _ in $(seq 1 10); do
+  f3_plugin_success="$(evaljs "(() => { const n=(window.__uiF3?.requests||[]).filter(r=>r.kind==='plugin').length; const note=document.querySelector('[data-testid=plugin-action-notice]')?.textContent||''; return n===1 && note.includes('ui-f3-plugin'); })()")"
+  if [[ "$f3_plugin_success" == "true" ]]; then break; fi
+  sleep 0.35
+done
+check "F3.17: Plugin confirm sends one named DELETE and shows success outcome" "$f3_plugin_success"
+evaljs "(() => { if (window.__uiF3?.original) window.fetch=window.__uiF3.original; delete window.__uiF3; return true; })()" >/dev/null
+
+# ── UI-F.4/F.6: control-plane read-state truthfulness and i18n/label semantics ─
+# F4: 503/failed reads must never masquerade as "no records / not installed".
+# The fetch override intercepts ONLY the page's read endpoints and restores
+# itself afterwards; every other request goes to the real server.
+echo "==> UI-F.4/F.6 truthfulness + i18n checks"
+open_app
+evaljs "(() => { const original=window.fetch.bind(window); const state={original,reads:[]}; window.__uiF4=state; window.fetch=(input, init={}) => { const url=typeof input==='string'?input:input instanceof Request?input.url:String(input); const method=String(init.method||(input instanceof Request?input.method:'GET')).toUpperCase(); const path=new URL(url, location.href).pathname + (new URL(url, location.href).search||''); if (method==='GET' && (path==='/api/v2/audit?limit=50' || path==='/api/v2/connectors/descriptors' || path==='/api/v2/plugins/schema' || path==='/api/v2/plugins')) { state.reads.push(path); return Promise.resolve(new Response(JSON.stringify({error:'UI-F.4 controlled read failure (503)'}),{status:503,headers:{'Content-Type':'application/json'}})); } return original(input,init); }; return true; })()" >/dev/null
+# Audit: 503 must show an error state, not the "no events" empty state.
+evaljs "(() => { window.location.hash='#/audit'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f4_audit_err="$(evaljs "(() => { const err=document.querySelector('[data-testid=audit-load-error]'); const empty=document.querySelector('[data-testid=audit-empty]'); return !!err && err.textContent.includes('503') && !empty; })()")"
+  if [[ "$f4_audit_err" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F4.1: Audit read failure shows error with status, not empty state" "$f4_audit_err"
+# Connectors: 503 must show error + retry, not the "no connectors" empty state.
+evaljs "(() => { window.location.hash='#/connectors'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f4_conn_err="$(evaljs "(() => { const err=document.querySelector('[data-testid=connectors-load-error]'); const empty=document.querySelector('[data-testid=connectors-empty]'); return !!err && err.textContent.includes('503') && !empty; })()")"
+  if [[ "$f4_conn_err" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F4.2: Connector catalog read failure shows error + retry, not empty" "$f4_conn_err"
+f4_conn_retry="$(evaljs "(() => { const retry=document.querySelector('[data-testid=connectors-load-retry]'); return !!retry && retry.tagName==='BUTTON'; })()")"
+check "F4.2b: Connector error exposes a retry control" "$f4_conn_retry"
+# Extensions: 503 on the installed-plugins read must not read "no plugins".
+evaljs "(() => { window.location.hash='#/myPlugins'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f4_plugin_err="$(evaljs "(() => { const err=document.querySelector('[data-testid=plugin-load-error]'); return !!err && err.textContent.includes('503'); })()")"
+  if [[ "$f4_plugin_err" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F4.3: Extensions read failure shows error, not 'no plugins'" "$f4_plugin_err"
+evaljs "(() => { if (window.__uiF4?.original) window.fetch=window.__uiF4.original; delete window.__uiF4; return true; })()" >/dev/null
+open_app
+# Success-empty must still show the honest empty state (mutual exclusion).
+evaljs "(() => { const original=window.fetch.bind(window); window.__uiF4e={original}; window.fetch=(input, init={}) => { const url=typeof input==='string'?input:input instanceof Request?input.url:String(input); const method=String(init.method||(input instanceof Request?input.method:'GET')).toUpperCase(); const path=new URL(url, location.href).pathname + (new URL(url, location.href).search||''); if (method==='GET' && (path==='/api/v2/audit?limit=50')) { return Promise.resolve(new Response(JSON.stringify({events:[]}),{status:200,headers:{'Content-Type':'application/json'}})); } return original(input,init); }; return true; })()" >/dev/null
+evaljs "(() => { window.location.hash='#/audit'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f4_audit_empty="$(evaljs "(() => { const err=document.querySelector('[data-testid=audit-load-error]'); const empty=document.querySelector('[data-testid=audit-empty]'); return !err && !!empty; })()")"
+  if [[ "$f4_audit_empty" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F4.4: successful empty audit shows empty state, no error remnant" "$f4_audit_empty"
+evaljs "(() => { if (window.__uiF4e?.original) window.fetch=window.__uiF4e.original; delete window.__uiF4e; return true; })()" >/dev/null
+open_app
+# Workers: with registered workers present, the task area must not claim
+# "no workers"; it states telemetry is unavailable instead.
+evaljs "(() => { window.location.hash='#/workers'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f4_worker_area="$(evaljs "(() => { const rows=Array.from(document.querySelectorAll('tr')).filter(r=>/(standalone-worker|ui-f3-worker)/.test(r.textContent||'')); const area=document.querySelector('[data-testid=worker-task-area]'); return rows.length>0 && !!area && !area.textContent.includes('No workers') && !area.textContent.includes('暂无工作节点'); })()")"
+  if [[ "$f4_worker_area" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F4.5: Workers task area never says 'no workers' when workers exist" "$f4_worker_area"
+f4_task_honest="$(evaljs "(() => { const area=document.querySelector('[data-testid=worker-task-area]'); const text=area?.textContent||''; return !!area && /unavailable|standalone/i.test(text); })()")"
+check "F4.5b: task telemetry absence is stated, not faked" "$f4_task_honest"
+# Detail Runs: the snapshot-vs-history distinction must be visible.
+evaljs "(() => { window.location.hash='#/pipelines/auth-file-to-file/runs'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  f4_runs_note="$(evaljs "(() => { const note=document.querySelector('[data-testid=detail-runs-note]'); const empty=document.body.textContent.includes('no run history') || document.body.textContent.includes('暂无运行记录'); return !!note; })()")"
+  if [[ "$f4_runs_note" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "F4.6: Detail Runs labels current-snapshot source distinctly" "$f4_runs_note"
+
+# F6: no raw i18n keys leak in the Extensions page (EN then ZH), and stable
+# field labels exist for Settings token + Schedules cron + DAG pipeline name.
+f6_ext_keys="$(evaljs "(() => { const app=document.querySelector('#root'); const text=app?.textContent||''; return !/(^|[\s>])(myplugin|plugin|common|conn|worker|pipe|dag|settings)\.[a-zA-Z_]+/.test(text.replace(/design\.name/g,'')); })()")"
+check "F6.1: Extensions page leaks no raw i18n keys (EN)" "$f6_ext_keys"
+evaljs "(() => { const input=document.querySelector('[data-testid=settings-token-input]'); const labelled=input && (input.labels?.length>0 || input.getAttribute('aria-labelledby') || input.getAttribute('aria-label')); return !!labelled; })()" >/dev/null
+open_app
+evaljs "(() => { window.location.hash='#/settings'; return true; })()" >/dev/null
+sleep 0.6
+f6_token_label="$(evaljs "(() => { const input=document.querySelector('[data-testid=settings-token-input]'); if(!input) return 'no input'; return input.labels?.length>0 || input.getAttribute('aria-labelledby') || input.getAttribute('aria-label') || 'unlabelled'; })()")"
+check "F6.2: Settings API token input has a stable label relation" "$(python3 - "$f6_token_label" <<'PY'
+import sys
+v=sys.argv[1].strip().strip('"')
+print('true' if v not in ('no input','unlabelled','false') else 'false')
+PY
+)"
+evaljs "(() => { window.location.hash='#/schedules'; return true; })()" >/dev/null
+sleep 0.6
+f6_cron_label="$(evaljs "(() => { const input=Array.from(document.querySelectorAll('input')).find(i=>(i.placeholder||'')==='*/5 * * * *'); if(!input) return 'no input'; return input.labels?.length>0 || input.getAttribute('aria-labelledby') || input.getAttribute('aria-label') || 'unlabelled'; })()")"
+check "F6.3: Schedules cron input has a stable label relation" "$(python3 - "$f6_cron_label" <<'PY'
+import sys
+v=sys.argv[1].strip().strip('"')
+print('true' if v not in ('no input','unlabelled','false') else 'false')
+PY
+)"
+evaljs "(() => { window.location.hash='#/designer'; return true; })()" >/dev/null
+sleep 0.8
+f6_dag_name="$(evaljs "(() => { const input=document.querySelector('[data-field-path=name]'); if(!input) return 'no input'; return input.labels?.length>0 || input.getAttribute('aria-labelledby') || input.getAttribute('aria-label') || 'unlabelled'; })()")"
+check "F6.4: DAG pipeline name input has a stable label relation" "$(python3 - "$f6_dag_name" <<'PY'
+import sys
+v=sys.argv[1].strip().strip('"')
+print('true' if v not in ('no input','unlabelled','false') else 'false')
+PY
+)"
+evaljs "(() => { window.location.hash='#/pipelines'; return true; })()" >/dev/null
+
+# ── UI-F.5: 390px containment for the remaining control-plane pages ─────────
+# Shared UI-D.3 baseline already covers Connections/Schedules/My Plugins; this
+# matrix adds Detail Runs, Workers, Audit, Connector catalog and DAG Designer,
+# plus local-scroller/canvas operability and a 1280px desktop regression.
+echo "==> UI-F.5 mobile containment checks"
+playwright-cli resize 390 844 >/dev/null
+sleep 0.6
+f5_pages="#/pipelines/auth-file-to-file/runs #/workers #/audit #/connectors #/designer"
+for f5_route in $f5_pages; do
+  evaljs "(() => { window.location.hash='$f5_route'; return true; })()" >/dev/null
+  sleep 1.1
+  f5_ok="$(evaljs "document.documentElement.scrollWidth <= window.innerWidth")"
+  check "F5.1: 390px no full-page overflow on $f5_route" "$f5_ok"
+done
+# UI-D.3 pages must not regress either.
+for f5_route in "#/connections" "#/schedules" "#/myPlugins"; do
+  evaljs "(() => { window.location.hash='$f5_route'; return true; })()" >/dev/null
+  sleep 1.1
+  f5_ok="$(evaljs "document.documentElement.scrollWidth <= window.innerWidth")"
+  check "F5.2: UI-D.3 containment holds on $f5_route" "$f5_ok"
+done
+# DAG palette: scrollable locally, keyboard-focusable, never widens the page.
+evaljs "(() => { window.location.hash='#/designer'; return true; })()" >/dev/null
+sleep 1.2
+f5_pal="$(evaljs "(() => { const pal=Array.from(document.querySelectorAll('div.overflow-x-auto')).find(c=>c.querySelectorAll('button').length>=9); if(!pal) return false; const btn=pal.querySelectorAll('button')[6]; btn.focus(); btn.scrollIntoView({block:'nearest', inline:'center'}); const r=btn.getBoundingClientRect(); return pal.scrollWidth>pal.clientWidth && document.activeElement===btn && r.right<=window.innerWidth+1 && document.documentElement.scrollWidth<=window.innerWidth; })()")"
+check "F5.3: DAG palette scrolls locally; focused node stays in viewport" "$f5_pal"
+# Canvas remains reachable (pannable container present) without page overflow.
+f5_canvas="$(evaljs "(() => { const canvas=Array.from(document.querySelectorAll('div')).find(d=>/(react-flow|canvas|diagram)/i.test(d.className.toString()) && d.clientWidth>0); return !!canvas && document.documentElement.scrollWidth<=window.innerWidth; })()")"
+check "F5.4: DAG canvas present and contained at 390px" "$f5_canvas"
+# Desktop density regression: 1280px keeps toolbar/canvas usable.
+playwright-cli resize 1280 900 >/dev/null
+sleep 0.8
+evaljs "(() => { window.location.hash='#/designer'; return true; })()" >/dev/null
+sleep 1.2
+f5_desk="$(evaljs "(() => { const pal=Array.from(document.querySelectorAll('div.overflow-x-auto')).find(c=>c.querySelectorAll('button').length>=9); const name=document.querySelector('[data-field-path=name]'); return !!pal && !!name && document.documentElement.scrollWidth<=window.innerWidth; })()")"
+check "F5.5: 1280px DAG designer keeps toolbar + name input, no overflow" "$f5_desk"
+
+# ── UI-G.2: restart_policy survives wizard YAML→form→submit roundtrip ───────
+echo "==> UI-G.2 restart_policy roundtrip checks"
+# Remove any leftover G2 pipelines from an earlier run so ID lookups are exact.
+for g2_name in ui-g2-restart-roundtrip ui-g2-default-no-policy; do
+  g2_old_id="$(unquote "$(evaljs "fetch('/api/v2/pipelines').then(r=>r.json()).then(d=>{ const p=(d.pipelines||[]).find(x=>x.name==='${g2_name}'); return p ? (p.id||p.name) : ''; }).catch(()=>'')")")"
+  if [[ -n "$g2_old_id" && "$g2_old_id" != "" ]]; then
+    curl -fsS -X DELETE "${BASE_URL}/api/v2/pipelines/${g2_old_id}" >/dev/null 2>&1 || true
+  fi
+done
+# Fresh wizard, clear any draft.
+evaljs "(() => { window.localStorage.removeItem('etl_wizard_draft_v1'); window.location.hash = '#/pipelines'; return true; })()" >/dev/null
+sleep 0.8
+evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('New pipeline')); b?.click(); return !!b; })()" >/dev/null
+sleep 1.5
+wizard_ensure_advanced_yaml
+g2_yaml="$(cat <<'YAML'
+name: ui-g2-restart-roundtrip
+source:
+  type: file
+  config:
+    path: /app/testdata/files/customers.jsonl
+    format: json
+sink:
+  type: file_sink
+  config:
+    path: /app/data/output/ui-g2.jsonl
+    format: jsonl
+batch_size: 50
+checkpoint_interval_sec: 1
+restart_policy:
+  mode: on-failure
+  max_restarts: 5
+  initial_delay_ms: 1000
+  max_delay_ms: 30000
+  backoff_multiplier: 2
+YAML
+)"
+set_yaml_editor '[data-testid=wizard-yaml]' "$g2_yaml"
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Apply YAML to form'))?.click(); return true; })()" >/dev/null
+sleep 0.6
+# G2.1: the form (Safety step restart-policy surface) now holds the imported policy.
+# The advanced panel is already open (set_yaml_editor wrote into it); reopening
+# the toggle would close it, so only re-open when the surface is missing.
+wizard_ensure_advanced_yaml
+g2_held="$(evaljs "(() => { const y=document.querySelector('[data-testid=wizard-yaml]')?.value||''; const rp=document.querySelector('[data-testid=wizard-restart-policy]'); const rpText=rp ? (rp.value || rp.textContent || '') : ''; return y.includes('restart_policy:') && (!rp || rpText.includes('on-failure')); })()")"
+check "G2.1: imported restart_policy is held by the wizard form" "$g2_held"
+# G2.2: edit an unrelated field, submit, then compare the stored spec values.
+evaljs "(() => { const t=document.querySelector('[data-testid=\"wizard-yaml\"]'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(t,t.value.replace(/batch_size: \d+/, 'batch_size: 77')); t.dispatchEvent(new Event('input',{bubbles:true})); t.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
+wizard_goto_step "confirm"
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-create-start\"]')?.click(); return true; })()" >/dev/null
+sleep 4
+g2_id="$(unquote "$(evaljs "fetch('/api/v2/pipelines').then(r=>r.json()).then(d=>{ const p=(d.pipelines||[]).find(x=>x.name==='ui-g2-restart-roundtrip'); return p ? (p.id||p.name) : ''; }).catch(()=>'')")")"
+g2_spec="$(evaljs "fetch('/api/v2/pipelines/' + encodeURIComponent('${g2_id}') + '/spec').then(r=>r.json()).then(d=>{ const s=(d.spec||d); const rp=s.restart_policy||{}; return JSON.stringify({mode:rp.mode, max_restarts:rp.max_restarts, initial_delay_ms:rp.initial_delay_ms, max_delay_ms:rp.max_delay_ms, backoff_multiplier:rp.backoff_multiplier, batch:s.batch_size}); }).catch(e=>'ERR:'+e)")"
+g2_ok="$(python3 - "$g2_spec" <<'PY'
+import json,sys
+raw=sys.argv[1].strip()
+try:
+    v=json.loads(raw)
+    # evaljs returns a JSON-quoted string; decode one extra layer when needed.
+    if isinstance(v, str):
+        v=json.loads(v)
+except Exception:
+    print('false'); raise SystemExit
+ok = isinstance(v, dict) and v.get('mode')=='on-failure' and v.get('max_restarts')==5 and v.get('initial_delay_ms')==1000 and v.get('max_delay_ms')==30000 and v.get('backoff_multiplier')==2 and v.get('batch')==77
+print('true' if ok else 'false')
+PY
+)"
+check "G2.2: submitted spec keeps restart_policy values after form edit" "$g2_ok"
+# G2.3: the local draft also carries restart_policy (survives a reload restore).
+evaljs "(() => { window.localStorage.removeItem('etl_wizard_draft_v1'); window.location.hash = '#/pipelines/new'; return true; })()" >/dev/null
+sleep 1
+playwright-cli reload >/dev/null 2>&1
+sleep 2
+evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('New pipeline')); b?.click(); return !!b; })()" >/dev/null
+sleep 1.5
+wizard_ensure_advanced_yaml
+evaljs "(function(){ const t=document.querySelector('[data-testid=wizard-yaml]'); if(!t) return 'NO TA'; const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; const next = 'name: ui-g2-draft-rp\nsource:\n  type: file\n  config:\n    path: /app/testdata/files/customers.jsonl\n    format: json\nsink:\n  type: file_sink\n  config:\n    path: /app/data/output/ui-g2-draft.jsonl\n    format: jsonl\nrestart_policy:\n  mode: on-failure\n  max_restarts: 3\n  initial_delay_ms: 500\n  max_delay_ms: 10000\n  backoff_multiplier: 1.5\n'; setter.call(t,next); t.dispatchEvent(new Event('input',{bubbles:true})); t.dispatchEvent(new Event('change',{bubbles:true})); return 'set'; })()" >/dev/null
+sleep 0.5
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Apply YAML to form'))?.click(); return true; })()" >/dev/null
+sleep 1.5
+# Draft saving is debounced via the save effect; force one wizard interaction.
+evaljs "(() => { const input=document.querySelector('[data-testid="wizard-batch-size"]'); if (input) { const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(input,'123'); input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true})); } return true; })()" >/dev/null
+sleep 2.5
+g2_draft="$(unquote "$(evaljs "(() => { try { const d=JSON.parse(window.localStorage.getItem('etl_wizard_draft_v1')||'{}'); return (d.restartPolicyText||'').includes('on-failure') && (d.restartPolicyText||'').includes('max_restarts'); } catch { return false; } })()")")"
+check "G2.3: wizard draft persists restart_policy" "$g2_draft"
+# G2.4: a default wizard submission must NOT emit a restart_policy key.
+evaljs "(() => { window.localStorage.removeItem('etl_wizard_draft_v1'); window.location.hash='#/pipelines'; return true; })()" >/dev/null
+sleep 0.8
+evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('New pipeline')); b?.click(); return !!b; })()" >/dev/null
+sleep 1.5
+wizard_ensure_advanced_yaml
+g2_default_yaml="$(cat <<'YAML'
+name: ui-g2-default-no-policy
+source:
+  type: file
+  config:
+    path: /app/testdata/files/customers.jsonl
+    format: json
+sink:
+  type: file_sink
+  config:
+    path: /app/data/output/ui-g2-default.jsonl
+    format: jsonl
+YAML
+)"
+set_yaml_editor '[data-testid=wizard-yaml]' "$g2_default_yaml"
+evaljs "(() => { Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Apply YAML to form'))?.click(); return true; })()" >/dev/null
+sleep 0.6
+wizard_goto_step "confirm"
+evaljs "(() => { document.querySelector('[data-testid=\"wizard-create-start\"]')?.click(); return true; })()" >/dev/null
+sleep 4
+g2d_id="$(unquote "$(evaljs "fetch('/api/v2/pipelines').then(r=>r.json()).then(d=>{ const p=(d.pipelines||[]).find(x=>x.name==='ui-g2-default-no-policy'); return p ? (p.id||p.name) : ''; }).catch(()=>'')")")"
+g2_default="$(evaljs "fetch('/api/v2/pipelines/' + encodeURIComponent('${g2d_id}') + '/spec').then(r=>r.json()).then(d=>{ const s=(d.spec||d); return s.restart_policy===undefined || s.restart_policy===null; }).catch(e=>'ERR')")"
+check "G2.4: default wizard submission omits restart_policy" "$g2_default"
+
+# ── UI-G.1: wizard Safety step discloses restart_policy as a real form ──────
+echo "==> UI-G.1 restart_policy form checks"
+# Fresh wizard; open the runtime advanced panel where the restart form lives.
+evaljs "(() => { window.localStorage.removeItem('etl_wizard_draft_v1'); window.location.hash = '#/pipelines'; return true; })()" >/dev/null
+sleep 0.8
+evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>x.textContent?.includes('New pipeline')); b?.click(); return !!b; })()" >/dev/null
+sleep 1.5
+wizard_goto_step "safety"
+for _ in $(seq 1 6); do
+  g1_panel="$(evaljs "(() => { const t=document.querySelector('[data-testid=wizard-runtime-more-toggle]'); if(t && !document.querySelector('[data-testid=wizard-runtime-advanced]')) { t.click(); return false; } return !!document.querySelector('[data-testid=wizard-runtime-advanced]'); })()")"
+  if [[ "$g1_panel" == "true" ]]; then break; fi
+  sleep 0.4
+done
+# Default is 'never' (not configured): assert BEFORE any mode selection.
+g1_default="$(evaljs "(() => { const form=document.querySelector('[data-testid=wizard-restart-policy-form]'); const sel=document.querySelector('[data-testid=wizard-restart-mode]'); const rpText=(document.querySelector('[data-testid=wizard-restart-policy]')?.textContent)||''; return (!form || !sel || sel.value==='never') && (!rpText || rpText.includes('Not configured') || rpText.includes('未配置')); })()")"
+check "G1.2: default mode never emits no restart_policy key" "$g1_default"
+# Number inputs are progressively disclosed once a mode is selected, matching
+# the acceptance wording (progressive disclosure); select first, then assert.
+evaljs "(function(){ const sel=document.querySelector('[data-testid=wizard-restart-mode]'); if(!sel) return false; const setter=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set; setter.call(sel,'on-failure'); sel.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
+sleep 0.5
+check "G1.1: restart-policy form is disclosed under runtime options" "$(evaljs "!!document.querySelector('[data-testid=wizard-restart-mode]') && !!document.querySelector('[data-testid=wizard-restart-max-restarts]') && !!document.querySelector('[data-testid=wizard-restart-initial-delay]') && !!document.querySelector('[data-testid=wizard-restart-max-delay]') && !!document.querySelector('[data-testid=wizard-restart-backoff]')")"
+# Values set for the G1.3 YAML check.
+sleep 0.2
+setnum() {
+  evaljs "(function(){ const i=document.querySelector('[data-testid=$1]'); if(!i) return false; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(i,'$2'); i.dispatchEvent(new Event('input',{bubbles:true})); i.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
+}
+setnum wizard-restart-max-restarts 5
+setnum wizard-restart-initial-delay 1000
+setnum wizard-restart-max-delay 30000
+setnum wizard-restart-backoff 2
+sleep 0.8
+wizard_ensure_advanced_yaml
+g1_yaml="$(evaljs "(() => { const y=document.querySelector('[data-testid=wizard-yaml]')?.value||''; return y.includes('restart_policy:') && y.includes('mode: on-failure') && y.includes('max_restarts: 5') && y.includes('initial_delay_ms: 1000') && y.includes('max_delay_ms: 30000') && y.includes('backoff_multiplier: 2'); })()")"
+check "G1.3: form-configured policy renders into spec YAML verbatim" "$g1_yaml"
+# Help text explains checkpoint replay boundary (EN then ZH).
+g1_help="$(evaljs "(() => { const help=document.querySelector('[data-testid=wizard-restart-help]'); const text=help?.textContent||''; return /checkpoint|replay/i.test(text); })()")"
+check "G1.4: help text states checkpoint-resume/replay boundary" "$g1_help"
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
+sleep 0.5
+g1_help_zh="$(evaljs "(() => { const help=document.querySelector('[data-testid=wizard-restart-help]'); const sel=document.querySelector('[data-testid=wizard-restart-mode]'); const text=(help?.textContent||'') + (sel?.textContent||''); return help && /检查点|重放/.test(text) && !/^[A-Za-z][A-Za-z ]*$/.test((help.textContent||'').trim()); })()")"
+check "G1.5: restart policy help/options are localized in ZH" "$g1_help_zh"
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
+sleep 0.5
+# Confirm step summarizes the configured policy.
+wizard_goto_step "confirm"
+sleep 0.6
+g1_summary="$(evaljs "(() => { const s=document.querySelector('[data-testid=wizard-confirm-restart]'); const text=s?.textContent||''; return !!s && text.includes('on-failure') && text.includes('5'); })()")"
+check "G1.6: confirm summary shows configured restart policy" "$g1_summary"
+
+# ── UI-G.3/G.4: DAG restart_policy parity + detail two-state display ────────
+echo "==> UI-G.3/G.4 DAG parity + detail display checks"
+# G3: DAG Designer form exposes the same fields and emits them into the spec.
+evaljs "(() => { window.location.hash='#/designer'; return true; })()" >/dev/null
+sleep 1.5
+# Open the Advanced drawer where the restart form lives.
+evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>(x.textContent||'').trim()===('Advanced')||x.title); return true; })()" >/dev/null
+evaljs "(() => { const btn=Array.from(document.querySelectorAll('button')).find(b=>(b.textContent||'').includes('Advanced')); if(btn) btn.click(); return !!btn; })()" >/dev/null
+sleep 0.8
+g3_form="$(evaljs "(() => { const form=document.querySelector('[data-testid=dag-restart-policy-form]'); const sel=form?.querySelector('[data-testid=dag-restart-mode]'); return !!form && !!sel && sel.value==='never'; })()")"
+check "G3.1: DAG advanced drawer discloses restart-policy form (default never)" "$g3_form"
+evaljs "(function(){ const sel=document.querySelector('[data-testid=dag-restart-mode]'); if(!sel) return false; const setter=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set; setter.call(sel,'on-failure'); sel.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
+sleep 0.4
+g3_inputs="$(evaljs "!!document.querySelector('[data-testid=dag-restart-max-restarts]') && !!document.querySelector('[data-testid=dag-restart-initial-delay]') && !!document.querySelector('[data-testid=dag-restart-max-delay]') && !!document.querySelector('[data-testid=dag-restart-backoff]')")"
+check "G3.2: DAG restart inputs disclose on mode selection" "$g3_inputs"
+# Export YAML and verify the policy is carried with configured values.
+evaljs "(function(){ const i=document.querySelector('[data-testid=dag-restart-max-restarts]'); const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(i,'7'); i.dispatchEvent(new Event('input',{bubbles:true})); i.dispatchEvent(new Event('change',{bubbles:true})); return true; })()" >/dev/null
+sleep 0.4
+evaljs "(() => { const b=Array.from(document.querySelectorAll('button')).find(x=>(x.title||'').includes('Export')||(x.textContent||'').includes('YAML')); if(b) b.click(); return true; })()" >/dev/null
+sleep 0.8
+g3_yaml="$(evaljs "(() => { const ta=Array.from(document.querySelectorAll('textarea')).find(t=>(t.value||'').includes('name:')); const y=ta?.value||''; return y.includes('restart_policy:') && y.includes('mode: on-failure') && y.includes('max_restarts: 7'); })()")"
+check "G3.3: DAG export YAML carries configured restart_policy" "$g3_yaml"
+# G4: detail overview shows the two states (configured pipeline vs default).
+evaljs "(() => { window.location.hash='#/pipelines/ui-g2-restart-roundtrip/overview'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  g4_configured="$(evaljs "(() => { const v=document.querySelector('[data-testid=detail-restart-policy-value]'); return !!v && (v.textContent||'').includes('on-failure'); })()")"
+  if [[ "$g4_configured" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "G4.1: detail shows configured restart policy values" "$g4_configured"
+evaljs "(() => { window.location.hash='#/pipelines/ui-g2-default-no-policy/overview'; return true; })()" >/dev/null
+for _ in $(seq 1 12); do
+  g4_default="$(evaljs "(() => { const v=document.querySelector('[data-testid=detail-restart-policy-value]'); const text=v?.textContent||''; return !!v && (text.includes('not configured') || text.includes('未配置')); })()")"
+  if [[ "$g4_default" == "true" ]]; then break; fi
+  sleep 0.4
+done
+check "G4.2: detail explicitly says not configured (never)" "$g4_default"
+# ZH localization of the detail label.
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
+sleep 0.5
+g4_zh="$(evaljs "(() => { const row=document.querySelector('[data-testid=detail-restart-policy]'); const text=row?.textContent||''; return !!row && /重启策略/.test(text) && !/Restart policy/.test(text); })()")"
+check "G4.3: restart policy label localized in ZH" "$g4_zh"
+playwright-cli click "[data-testid=toggle-lang]" >/dev/null 2>&1 || true
+sleep 0.4
 
 # ── UI-B.2: wizard runtime knobs, normalization, honest defaults ──────────
 echo "==> UI-B.2 wizard logic checks"
@@ -948,7 +1763,7 @@ sleep 0.5
 check "B3.2: auto-refresh toggle shows paused state" "$(evaljs "(() => { const l=document.querySelector('[data-testid=auto-refresh-label]'); return l ? (l.textContent||'').toLowerCase().includes('paused') : false; })()")"
 evaljs "(() => { const t=document.querySelector('[data-testid=auto-refresh-toggle]'); t?.click(); return true; })()" >/dev/null
 sleep 0.5
-check "B3.2b: auto-refresh resumes with timestamp" "$(evaljs "(() => { const l=document.querySelector('[data-testid=auto-refresh-label]'); if(!l) return false; const txt=(l.textContent||''); return /[0-9]/.test(txt) && !txt.toLowerCase().includes('paused'); })()")"
+check "B3.2b: auto-refresh resumes with active state and separate timestamp" "$(evaljs "(() => { const l=document.querySelector('[data-testid=auto-refresh-label]'); const last=document.querySelector('[data-testid=last-refresh-at]'); return l?.textContent?.trim()==='Live updates active' && /[0-9]/.test(last?.textContent||''); })()")"
 
 
 # ── UI-B.4: introspection-driven pickers ─────────────────────────────────
@@ -1375,6 +2190,54 @@ check "K7: /api/v2/audit works" "$(echo "$audit_json" | grep -q '"events"' && ec
 check "K8: /api/v2/dlq works" "$(echo "$dlq_json" | grep -q '"items"' && echo true || echo false)"
 
 # ════════════════════════════════════════════════
+echo "=== N: Data integrity tab (reconcile / resync) ==="
+# The integrity panel is API-only work exposed through the pipeline detail tab;
+# this section pins that the tab, the reconcile run, and the resync guard are all
+# reachable and honest in the built UI. Use the hash route directly: clicking a
+# list row races with the auto-refresh re-render.
+open_app
+evaljs "(() => { window.location.hash = '#/pipelines/auth-file-to-file/integrity'; return true; })()" >/dev/null
+n_ready="false"
+for _ in $(seq 1 12); do
+  n_ready="$(evaljs "!!document.querySelector('[data-testid=pipeline-integrity]')")"
+  if [[ "$n_ready" == "true" ]]; then break; fi
+  sleep 0.6
+done
+check "N1: Data integrity tab present on pipeline detail" "$(evaljs "!!document.querySelector('[data-testid=detail-tab-integrity]') && location.hash.includes('integrity')")"
+check "N1a: Integrity panel rendered" "$n_ready"
+check "N2: Reconcile form exposes tables + sample rows + run" "$(evaljs "!!document.querySelector('[data-testid=integrity-tables]') && !!document.querySelector('[data-testid=integrity-sample-rows]') && !!document.querySelector('[data-testid=integrity-run]')")"
+check "N3: Resync form exposes a table input and a guarded button" "$(evaljs "!!document.querySelector('[data-testid=integrity-resync-tables]') && !!document.querySelector('[data-testid=integrity-resync]')")"
+check "N3a: Resync button disabled while no table is entered" "$(evaljs "document.querySelector('[data-testid=integrity-resync]')?.disabled === true")"
+check "N3b: Resync warns that the pipeline must be stopped" "$(evaljs "document.body.innerText.includes('stop') || document.body.innerText.includes('stopped') || document.body.innerText.includes('停止')")"
+
+# A pipeline whose ends are not SQL-queryable must be rejected honestly instead
+# of reporting a fake match; this app only ships file fixtures, so the rejection
+# path is the real observable behaviour here.
+integrity_caps="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE_URL}/api/v2/pipelines/auth-file-to-file/reconcile")"
+check "N4: Reconcile capabilities endpoint answers" "$([ "$integrity_caps" = "200" ] && echo true || echo false)"
+integrity_run_http="$(curl -sS -o /tmp/ui-integrity-run.json -w '%{http_code}' -X POST "${BASE_URL}/api/v2/pipelines/auth-file-to-file/reconcile" -H 'Content-Type: application/json' -d '{"tables":["customers"]}')"
+check "N5: Reconcile rejects a non-SQL end with a clear 4xx" "$([ "$integrity_run_http" = "400" ] && echo true || echo false)"
+check "N5a: Rejection names the unsupported side" "$(grep -qiE 'unsupported|no SQL query surface' /tmp/ui-integrity-run.json && echo true || echo false)"
+resync_http="$(curl -sS -o /tmp/ui-resync.json -w '%{http_code}' -X POST "${BASE_URL}/api/v2/pipelines/auth-file-to-file/resync" -H 'Content-Type: application/json' -d '{"tables":["customers"]}')"
+check "N6: Resync rejects a non-snapshot source" "$([ "$resync_http" = "400" ] && echo true || echo false)"
+check "N6a: Resync rejection names mysql_snapshot_cdc" "$(grep -q 'mysql_snapshot_cdc' /tmp/ui-resync.json && echo true || echo false)"
+resync_get_http="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE_URL}/api/v2/pipelines/auth-file-to-file/resync")"
+check "N7: Resync is POST-only" "$([ "$resync_get_http" = "405" ] && echo true || echo false)"
+integrity_missing="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE_URL}/api/v2/pipelines/no-such-pipeline/reconcile")"
+check "N8: Reconcile 404s for an unknown pipeline" "$([ "$integrity_missing" = "404" ] && echo true || echo false)"
+# Running a reconcile from the UI must surface the server's rejection instead of
+# claiming success.
+evaljs "(() => { const inp = document.querySelector('[data-testid=integrity-tables]'); if (!inp) return false; const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(inp, 'customers'); inp.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[data-testid=integrity-run]')?.click(); return true; })()" >/dev/null
+n_err="false"
+for _ in $(seq 1 20); do
+  n_err="$(evaljs "!!document.querySelector('[data-testid=integrity-error]')")"
+  if [[ "$n_err" == "true" ]]; then break; fi
+  sleep 0.5
+done
+check "N9: UI surfaces the reconcile rejection instead of a fake verdict" "$n_err"
+check "N9a: No verdict badge is shown for a rejected run" "$(evaljs "document.querySelector('[data-testid=integrity-verdict]') === null")"
+
+# ════════════════════════════════════════════════
 echo "=== L: Auto-refresh ==="
 open_app
 l1_ready="false"
@@ -1383,7 +2246,7 @@ for _ in $(seq 1 12); do
   if [[ "$l1_ready" == "true" ]]; then break; fi
   sleep 0.5
 done
-check "L1: Auto-refresh control present" "$(evaljs "!!document.querySelector('[data-testid=auto-refresh-toggle]') && (document.body.innerText.includes('Auto-refresh') || /[0-9][0-9]?:[0-9][0-9]/.test(document.body.innerText) || document.body.innerText.includes('已暂停'))")"
+check "L1: Auto-refresh control presents a distinct refresh state" "$(evaljs "!!document.querySelector('[data-testid=auto-refresh-toggle]') && (document.body.innerText.includes('Live updates active') || document.body.innerText.includes('Auto-refresh paused') || document.body.innerText.includes('刷新失败') || document.body.innerText.includes('实时更新中') || document.body.innerText.includes('自动刷新已暂停'))")"
 
 # ════════════════════════════════════════════════
 echo "=== B6: Global search affordance + dashboard density ==="

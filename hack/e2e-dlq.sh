@@ -77,6 +77,32 @@ echo "$body"
 echo "$body" | grep 'DLQ Alice'
 echo "$body" | grep 'DLQ Bob'
 
+echo "==> Current backlog is exposed separately from the cumulative counter"
+pipelines="$(curl -fsS http://127.0.0.1:8004/api/v2/pipelines)"
+echo "$pipelines"
+# dlq_backlog is the authoritative backlog; stats.records_dlq is cumulative and
+# must not be used as one.
+echo "$pipelines" | grep '"dlq_backlog":2'
+echo "$pipelines" | grep '"dlq_backlog_known":true'
+
+echo "==> Paging reaches the second record"
+page1="$(curl -fsS 'http://127.0.0.1:8004/api/v2/dlq/file-to-missing-mysql?limit=1')"
+page2="$(curl -fsS 'http://127.0.0.1:8004/api/v2/dlq/file-to-missing-mysql?limit=1&offset=1')"
+test "$(printf '%s' "$page1" | grep -o '"job_name"' | wc -l | tr -d '[:space:]')" = "1"
+test "$(printf '%s' "$page2" | grep -o '"job_name"' | wc -l | tr -d '[:space:]')" = "1"
+test "$page1" != "$page2"
+
+echo "==> Dry run reports the replay plan without writing"
+dry="$(curl -fsS -X POST 'http://127.0.0.1:8004/api/v2/dlq/file-to-missing-mysql/replay?dry_run=1')"
+echo "$dry"
+echo "$dry" | grep '"dry_run":true'
+echo "$dry" | grep '"replayable":2'
+echo "$dry" | grep '"blocked":0'
+# The target table still does not exist, so any real write would have failed.
+# Rows and backlog must be untouched by the preview.
+body="$(curl -fsS http://127.0.0.1:8004/api/v2/dlq/file-to-missing-mysql)"
+test "$(printf '%s' "$body" | grep -o '"job_name"' | wc -l | tr -d '[:space:]')" = "2"
+
 echo "==> Repair sink and selectively replay"
 "$CONTAINER_CLI" exec "$MYSQL_CONTAINER" mysql -uroot -proot123456 -e "CREATE TABLE dzh3136_target.dlq_customers LIKE dzh3136_go.customers;"
 replay="$(curl -fsS -X POST 'http://127.0.0.1:8004/api/v2/dlq/file-to-missing-mysql/replay?contains=9901')"
@@ -101,5 +127,18 @@ test "$copied" = "2"
 body="$(curl -fsS http://127.0.0.1:8004/api/v2/dlq/file-to-missing-mysql)"
 echo "$body"
 echo "$body" | grep '"items":\[\]'
+
+echo "==> Backlog returns to zero after replay"
+pipelines="$(curl -fsS http://127.0.0.1:8004/api/v2/pipelines)"
+echo "$pipelines" | grep '"dlq_backlog":0'
+
+echo "==> Delete-all reports the real remaining count (never the -1 sentinel)"
+deleted="$(curl -fsS -X DELETE http://127.0.0.1:8004/api/v2/dlq/file-to-missing-mysql)"
+echo "$deleted"
+echo "$deleted" | grep '"deleted":0'
+if printf '%s' "$deleted" | grep -q '"deleted":-1'; then
+  echo "delete-all still returns the -1 sentinel" >&2
+  exit 1
+fi
 
 echo "DLQ E2E passed"
