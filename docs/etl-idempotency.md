@@ -89,9 +89,30 @@ Boundary semantics:
 - New DLQ rows freeze raw payload, primary-key declaration, format contract, before-image state, and
   source/target coordinates. Metadata-PK replay reconstructs identity only from those historical facts,
   then validates the transformed record again; unprovable rows remain repair-required/quarantined.
+  DAG replay applies the same gate for every metadata-PK sink reachable from the failing node.
+  Scope note: the frozen `raw_payload` is retained as forensic evidence for the exact source bytes; the
+  automatic replay path reconstructs from the frozen primary-key declaration, format contract and
+  before-image state instead of re-parsing the raw payload. `pipeline_version` is persisted as 0 because
+  the running runner has no authoritative spec-version source; identity drift is detected through the
+  frozen format contract and key declaration, not through a version number.
+- DLQ capture is idempotent: `dead_letters` has a unique `(job_name, record_hash)` key, so re-delivering
+  the same failed record (restart, rebalance, source replay) refreshes the existing row and increments
+  `attempt` instead of appending a duplicate. `attempt` starts at 1 and is never 0.
+- A boundary advances only after every record in it reached a durable destination. Source, transform,
+  identity **and sink** failures therefore allow the checkpoint to advance once the failed records are
+  durably in the DLQ; if a DLQ write fails, the checkpoint stays blocked and the records are queued for
+  retry, so an at-least-once replay of that range remains possible and no record is silently dropped.
+- The checkpoint block is recoverable: queued DLQ entries are retried on every batch and janitor tick,
+  and the block clears automatically once they are durable (no restart required).
 - DLQ replay persists `sink_acked` after the sink accepts a row and before deleting it. Failure before
   that replay checkpoint may duplicate the write; failure after it is cleanup-only on retry. The replay
   checkpoint never advances the source checkpoint.
+- Replay is serialised per pipeline instance (a second concurrent replay is rejected), drains the
+  backlog oldest-first, runs detached from the HTTP request context, and applies the same
+  `allow_unsafe` duplicate-boundary gate as pipeline creation. `POST .../replay?dry_run=1` returns the
+  per-row identity-gate verdict without writing to the sink or mutating DLQ state.
+- The authoritative backlog is the current DLQ row count (`dlq_file_count` / `dlq_backlog`), not the
+  cumulative `records_dlq` counter, which resets on restart and never decreases after replay.
 - Transient and unknown errors are retried; config/auth/schema/data/programming errors fail fast into DLQ or fail the operation.
 - ClickHouse source-order mode rejects missing/overflowed source positions and incompatible target
   schemas; it does not fall back to a wall-clock counter.

@@ -35,6 +35,47 @@ unverified record is reported as `partial` / `production_with_review` without
 changing connector maturity. Missing or malformed records are `missing`, and
 an expired verified record is `partial`.
 
+### Rebind 2026-11-03 (all 15 scripts re-run)
+
+Manifest rebound to commit `fe8692d` with the locally built image digest
+`sha256:74ee5fb8...`. Every record's script list was re-executed green with
+`CONTAINER_CLI=podman` (podman 5.8.2, MySQL 8.0, ClickHouse 24.3, Doris 2.1.11,
+Redpanda, MinIO):
+
+| Script | Result |
+| --- | --- |
+| `hack/e2e.sh` | file→file, MySQL batch→file, MySQL batch→MySQL |
+| `hack/e2e-http-source.sh` | HTTP pagination/auth headers |
+| `hack/e2e-s3-minio.sh` | S3 sink, deterministic replay |
+| `hack/e2e-kafka.sh` | file→Kafka, Kafka→file |
+| `hack/e2e-kafka-raw-ods.sh` | raw protocol → Lua flat_map → MySQL lookup → Kafka ODS |
+| `hack/e2e-mysql-postgres.sh` | MySQL batch JOIN→PostgreSQL upsert, preflight reject, checkpoint replay |
+| `hack/e2e-cdc-mysql.sh` | MySQL CDC→MySQL |
+| `hack/e2e-cdc-postgres.sh` | MySQL CDC→PostgreSQL insert/update/delete |
+| `hack/e2e-snapshot-cdc.sh` | integrated snapshot+CDC→MySQL |
+| `hack/e2e-clickhouse.sh` | MySQL CDC→ClickHouse |
+| `hack/e2e-debezium-mysql.sh` | Debezium Kafka→MySQL ODS |
+| `hack/e2e-kafka-multitable-clickhouse.sh` | Kafka multi-table→ClickHouse |
+| `hack/e2e-snapshot-cdc-clickhouse.sh` | snapshot+CDC→ClickHouse incl. outage DLQ/replay |
+| `hack/e2e-doris.sh` | MySQL→Doris Stream Load / insert fallback |
+| `hack/e2e-doris-source-order.sh` | Doris `source_order` sequence injection + stale-write rejection (new) |
+| `hack/e2e-postgres-cdc.sh` | PostgreSQL 16 pgoutput: insert/update/delete, metadata PK upsert, keepalive, restart, TRUNCATE (new; promotes `postgres_cdc` to production) |
+
+The Doris record additionally carries the `source_order_replay` case, and
+`hack/e2e-doris-source-order.sh` is now the ordering proof referenced by IT-7
+T7.5. A new `source/postgres_cdc` record carries the real-PostgreSQL path and
+promotes that connector from beta to production. Strict mode passes locally:
+
+```sh
+./hack/check-connector-evidence.sh -strict \
+  -commit "$(git rev-parse HEAD)" \
+  -image "$(podman image inspect openetl-go-etl:dev --format '{{.Id}}')"
+```
+
+Note on cadence: nothing schedules re-certification, so the records go `partial`
+again 30 days after `finished_at`. Re-running the same 15 scripts and rebinding
+the manifest is the whole refresh procedure.
+
 ### Rebind 2026-09-02 (IT-1/T1.12)
 
 Manifest rebound from `d75600be` to `d30fee9` with image `sha256:d180c62c...`

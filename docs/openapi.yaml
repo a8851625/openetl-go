@@ -31,6 +31,105 @@ components:
       in: header
       name: X-API-Token
   schemas:
+    OutputCompactResult:
+      type: object
+      properties:
+        dry_run: { type: boolean }
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              day: { type: string }
+              merged_key: { type: string }
+              manifest_key: { type: string }
+              replaced_keys: { type: array, items: { type: string } }
+              source_batch_ids: { type: array, items: { type: string } }
+              rows: { type: integer }
+              bytes_before: { type: integer }
+              bytes_after: { type: integer }
+        skipped_groups: { type: integer }
+        objects_considered: { type: integer }
+        objects_after: { type: integer }
+        bytes_before: { type: integer }
+        bytes_after: { type: integer }
+        compacted_at: { type: string, format: date-time }
+        committed_via: { type: string, enum: [compaction_manifest] }
+    ReconcileReport:
+      type: object
+      required: [pipeline_id, source, target, deep, buckets, tables, summary, verdict, limits]
+      properties:
+        pipeline_id: { type: string }
+        pipeline_name: { type: string }
+        pipeline_status: { type: string }
+        source: { $ref: '#/components/schemas/ReconcileSideInfo' }
+        target: { $ref: '#/components/schemas/ReconcileSideInfo' }
+        deep: { type: boolean }
+        buckets: { type: integer }
+        verdict:
+          type: string
+          enum: [match, count_mismatch, content_mismatch, schema_mismatch, missing_target_table, unsupported, error]
+        tables:
+          type: array
+          items: { $ref: '#/components/schemas/ReconcileTableReport' }
+        summary:
+          type: object
+          properties:
+            tables: { type: integer }
+            matched: { type: integer }
+            count_mismatch: { type: integer }
+            content_mismatch: { type: integer }
+            schema_mismatch: { type: integer }
+            errors: { type: integer }
+            unsupported: { type: integer }
+        limits:
+          type: array
+          items: { type: string }
+          description: Explicit boundaries of the comparison; the report is not an exactly-once proof.
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        duration_ms: { type: integer, format: int64 }
+    ReconcileSideInfo:
+      type: object
+      properties:
+        role: { type: string, enum: [source, target] }
+        type: { type: string }
+        dialect: { type: string, enum: [mysql, doris, postgres, clickhouse] }
+        database: { type: string }
+        endpoint: { type: string }
+    ReconcileTableReport:
+      type: object
+      required: [source_table, target_table, verdict, source_rows, target_rows]
+      properties:
+        source_table: { type: string }
+        target_table: { type: string }
+        verdict:
+          type: string
+          enum: [match, count_mismatch, content_mismatch, schema_mismatch, missing_target_table, unsupported, error]
+        source_rows: { type: integer, format: int64 }
+        target_rows: { type: integer, format: int64 }
+        row_delta: { type: integer, format: int64 }
+        source_digest: { type: string }
+        target_digest: { type: string }
+        compared_columns: { type: array, items: { type: string } }
+        target_columns_used: { type: array, items: { type: string } }
+        missing_target_columns: { type: array, items: { type: string } }
+        extra_target_columns: { type: array, items: { type: string } }
+        bucket_key: { type: string }
+        buckets: { type: integer }
+        bucket_mismatches:
+          type: array
+          items:
+            type: object
+            properties:
+              bucket: { type: integer }
+              source_rows: { type: integer, format: int64 }
+              target_rows: { type: integer, format: int64 }
+              source_digest: { type: string }
+              target_digest: { type: string }
+        bucket_scan_truncated: { type: boolean }
+        detail: { type: string }
+        duration_ms: { type: integer, format: int64 }
     PipelineSpec:
       type: object
       properties:
@@ -201,6 +300,23 @@ components:
         replay_attempt: { type: integer }
         replay_error: { type: string }
         sink_acknowledged_at: { type: string, format: date-time }
+    DLQDryRunItem:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        dag_node: { type: string }
+        replayable: { type: boolean }
+        state: { type: string, description: Replay state when the row would be blocked. }
+        reason: { type: string }
+    DLQDryRunResult:
+      type: object
+      properties:
+        dry_run: { type: boolean }
+        replayable: { type: integer }
+        blocked: { type: integer }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/DLQDryRunItem' }
     DLQReplayGateError:
       type: object
       required: [error, id, replay_state, reason]
@@ -477,6 +593,156 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineNotQuiescent' }
 
+  /pipelines/{id}/resync:
+    post:
+      tags: [Pipelines, Checkpoints]
+      summary: Re-run the snapshot phase for named tables of a mysql_snapshot_cdc pipeline
+      description: |
+        Targeted table re-synchronisation. Drops the per-table snapshot cursors of the named tables,
+        keeps the existing binlog anchor as the new snapshot handoff, and sets the checkpoint phase
+        back to snapshot. Tables that are not named keep their cursor and emit nothing on the next
+        start. Requires a quiescent pipeline and a sink that absorbs re-delivered rows. Only
+        mysql_snapshot_cdc sources have per-table snapshot cursors; use checkpoint/reset for a full
+        re-snapshot.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                table: { type: string, description: Single table to re-snapshot. }
+                tables:
+                  type: array
+                  items: { type: string }
+                  description: Tables to re-snapshot. Combined with `table` and de-duplicated.
+      responses:
+        '200':
+          description: Resync scheduled; the pipeline must be started for it to take effect.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, generation, tables, semantics]
+                properties:
+                  status: { type: string, enum: [resync_scheduled] }
+                  generation: { type: integer, format: int64 }
+                  tables:
+                    type: array
+                    items: { type: string }
+                  details:
+                    type: object
+                    properties:
+                      tables: { type: array, items: { type: string } }
+                      phase: { type: string, enum: [snapshot] }
+                      binlog_anchor: { type: string, description: 'Reused handoff position, e.g. mysql-bin.000010:4242.' }
+                      cleared_cursor_keys: { type: array, items: { type: string } }
+                      kept_tables: { type: array, items: { type: string } }
+                  semantics:
+                    type: object
+                    description: Operator-facing contract (effect, sink_requirement, cdc_anchor, checkpoint, scope).
+                    additionalProperties: true
+        '400':
+          description: Unsupported source type, unknown table name, no checkpoint yet, or an unusable position.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Pipeline is still running.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineNotQuiescent' }
+
+  /pipelines/{id}/output/compact:
+    post:
+      tags: [Pipelines]
+      summary: Compact committed file / object-store output for one day
+      description: |
+        Folds the committed data objects of a date partition into a single object and publishes a
+        compaction manifest that retires the replaced keys (`replaces`). Readers resolve the committed
+        view through the manifest set, so each row is visible exactly once; the replaced objects are
+        not deleted, which keeps the operation reversible. Requires sink.config.manifest=true and an
+        s3 / file_sink sink. This is a metadata rewrite, not an atomic multi-object commit.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                day: { type: string, description: "Date partition (yyyy/mm/dd/); empty = every day." }
+                min_objects: { type: integer, default: 4, description: "Smallest group worth compacting." }
+                max_objects: { type: integer, default: 32, description: "Objects merged into one." }
+                max_object_bytes: { type: integer, default: 1048576, description: "Skip groups that already hold larger objects." }
+                dry_run: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Compaction result (groups, replaced keys, byte deltas).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OutputCompactResult' }
+        '400':
+          description: Sink is not s3/file_sink, manifest is disabled, or the pass failed.
+  /pipelines/{id}/reconcile:
+    get:
+      tags: [Pipelines, Verification]
+      summary: Describe the supported reconciliation matrix and limits
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Supported sources, sinks, verdicts, request shape, and limits.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Pipelines, Verification]
+      summary: Compare source and target tables (row count, content digest, bucket drift)
+      description: |
+        On-demand, read-only data verification. Per table it compares row counts, then a content
+        digest over the columns both sides share, then - when the sides disagree and the table has a
+        single numeric key - a bucketed digest comparison that localises the drifted key range. Both
+        ends must expose a SQL query surface (mysql_batch/mysql_cdc/mysql_snapshot_cdc or
+        postgres_cdc against mysql/doris/clickhouse/postgres). Pipelines that declare transforms are
+        rejected because transformed fields cannot be aligned column by column.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tables:
+                  type: array
+                  items: { type: string }
+                  description: Subset of configured source tables to compare. Unknown names are rejected.
+                deep: { type: boolean, default: true, description: 'Compute content digests; false compares row counts only.' }
+                buckets: { type: integer, default: 16, minimum: 1, maximum: 64 }
+                key_columns:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Per-table numeric key override used for bucket localisation.
+                timeout_sec: { type: integer, default: 60, description: Per-table comparison timeout. }
+      responses:
+        '200':
+          description: Reconciliation report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconcileReport' }
+        '400':
+          description: Unsupported source/sink pair, transform pipeline, unknown table, or a connection failure.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
   /metrics:
     get:
       tags: [Monitoring]
@@ -504,17 +770,34 @@ paths:
       summary: List dead-letter records
       parameters:
         - { name: id, in: path, required: true, schema: { type: string }, description: Pipeline instance UUID; a unique legacy display name is accepted for compatibility. }
-        - { name: limit, in: query, schema: { type: integer } }
-        - { name: contains, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer }, description: Page size (default 100). }
+        - { name: offset, in: query, schema: { type: integer }, description: Rows to skip. Listings are newest-first. }
+        - { name: contains, in: query, schema: { type: string }, description: Substring match on the serialized record; LIKE wildcards in the value are escaped. }
+        - { name: error_contains, in: query, schema: { type: string }, description: Substring match on the error string. }
+        - { name: error_class, in: query, schema: { type: string }, description: Exact match on the indexed error_class column. }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: until, in: query, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: DLQ items, including stable id, frozen identity_context, and dag_node when available }
+        '200': { description: DLQ items, including stable id, attempt, record_hash, frozen identity_context, and dag_node when available }
     delete:
       tags: [DLQ]
       summary: Delete DLQ records
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: error_class, in: query, schema: { type: string } }
+        - { name: contains, in: query, schema: { type: string } }
+        - { name: error_contains, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: until, in: query, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: Deleted }
+        '200':
+          description: Deleted. With no selective filter every row for the pipeline is removed and the response reports the real count.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: integer, description: Number of rows actually deleted (never a -1 sentinel). }
 
   /dlq/{id}/replay:
     post:
@@ -522,9 +805,21 @@ paths:
       summary: Replay DLQ records
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: dry_run, in: query, schema: { type: boolean }, description: Preview the identity gate per row without writing to the sink or mutating DLQ state. }
+        - { name: contains, in: query, schema: { type: string } }
+        - { name: error_class, in: query, schema: { type: string } }
       responses:
-        '200': { description: Replayed }
-        '400': { description: DAG DLQ replay requires dag_node context on legacy records }
+        '200':
+          description: Replayed, or the dry-run preview when dry_run=1.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      replayed: { type: integer }
+                  - $ref: '#/components/schemas/DLQDryRunResult'
+        '400': { description: DAG DLQ replay requires dag_node context; or a concurrent replay is already running; or the pipeline needs allow_unsafe for its duplicate boundary }
         '409':
           description: Identity cannot be proven; the row remains repair-required or quarantined
           content:

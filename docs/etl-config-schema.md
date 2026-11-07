@@ -37,6 +37,12 @@ retry:
   max_attempts: 3
   initial_interval_ms: 1000
   max_interval_ms: 30000
+restart_policy:
+  mode: on-failure
+  max_restarts: 5
+  initial_delay_ms: 1000
+  max_delay_ms: 30000
+  backoff_multiplier: 2
 dlq:
   enable: true
 ```
@@ -61,8 +67,10 @@ dlq:
 | `checkpoint_interval_sec` | no | Reserved interval setting; checkpoints currently advance after successful writes. Default `30`. |
 | `backpressure_buffer` | no | Internal record channel size. Default `100`. |
 | `parallelism` | no | Optional sharding and runtime concurrency. New specs should use `parallelism.sharding.logical_shards` for stable data ownership and `parallelism.execution.max_active_shards` for current process concurrency. Legacy `parallelism.count`, `shard_strategy`, `shard_key`, and `shard_total` are still accepted and mapped for compatibility. |
-| `retry` | no | Retry policy. Defaults shown above. |
-| `dlq.enable` | no | Enable file DLQ. |
+| `retry` | no | Retry policy. Defaults shown above. This is **record-level write retry**: it re-attempts a failed batch write inside the running pipeline and does not restart the process. |
+| `restart_policy` | no | Automatic pipeline restart when the pipeline fails (fail-stop). `mode` is `never` (default — omit the key entirely for this), `on-failure`, or `always`; `max_restarts` limits attempts; `initial_delay_ms`/`max_delay_ms`/`backoff_multiplier` control exponential restart backoff. Restarts resume from the durable checkpoint, so the last in-flight batch may be re-delivered (at-least-once) — pair with idempotent sinks (upsert/ReplacingMergeTree). This is process-level recovery and is distinct from `retry`. Since v0.2.13 the wizard and DAG Designer preserve and configure this field. |
+| `dlq.enable` | no | Deprecated and ignored. DLQ is always enabled at runtime: failed records are persisted to the control-plane SQL storage backend so they can never be dropped silently. `false` is accepted for backward compatibility and produces a validation warning. |
+| `dlq.sink` | no | Deprecated and ignored. It was never wired to the DLQ writer; DLQ rows live in the configured SQL storage backend. Setting it produces a validation warning. |
 | `table_mapping` | no | Pipeline-level source→target table rename applied before transforms. Used for multi-table A→B sync. |
 
 ### Table mapping (multi-table A→B)
@@ -364,7 +372,8 @@ source:
 | `tables` | no | | Source tables for multi-table/whole-database snapshot+CDC. Use `["*"]` to snapshot every base table in `database`. Required when `table` is not set. |
 | `pk_column` | no | `id` | Fallback primary key column for snapshot pagination, applied to every table that does not override it via `pk_columns` and does not expose a single-column PRIMARY KEY. If a table lacks this column, it is auto-detected instead of failing. |
 | `pk_columns` | no | | Per-table primary key overrides, e.g. `{orders: order_id, users: user_no}`. Takes precedence over `pk_column` and auto-detection. |
-| `skip_no_pk_tables` | no | `false` | Skip snapshot for explicitly-listed tables that have no single-column primary key (composite-PK or keyless tables) instead of failing. Whole-database snapshots (`tables: ["*"]`) always skip such tables with a warning; those tables are still streamed via CDC. |
+| `skip_no_pk_tables` | no | `false` | Skip snapshot for explicitly-listed tables that have no usable snapshot key (keyless tables) instead of failing. Whole-database snapshots (`tables: ["*"]`) always skip such tables with a warning; those tables are still streamed via CDC. |
+| `no_pk_snapshot` | no | `skip` | How to snapshot tables with **no usable primary key**. `skip` leaves their existing rows unsynced (CDC only, the historical behaviour). `hash` streams the table and writes a synthetic `_row_hash` content key so the snapshot is idempotent; it requires a sink with `pk_columns_from_metadata: true` (validated at spec load) and collapses rows whose column values are identical. |
 | `limit` | no | `1000` | Rows per snapshot query page. |
 | `server_id` | no | `1101` | Unique replication server ID. |
 | `server_id_base` | no | | Base replication server ID used with sharding. |
@@ -374,7 +383,13 @@ source:
 
 Snapshots by primary-key chunks, captures a binlog handoff before the consistent read, then switches to CDC. Checkpoints survive crash during both phases. Every snapshot record carries `snapshot_handoff_file` / `snapshot_handoff_pos`; ClickHouse source ordering uses that boundary even when the pagination key is text.
 
-For whole-database snapshots, set `tables: ["*"]` and omit `pk_column`: each table's snapshot cursor is derived from its own single-column PRIMARY KEY (auto-detected from `information_schema`), so heterogeneous-PK databases no longer require a single global key. Integer keys page with a numeric cursor (and optional `shard_*` hashing); non-integer orderable keys (e.g. `VARCHAR`, `DATETIME`) page with a lexicographic string cursor. Tables without a usable single-column key (composite PK or no PK) are skipped during the historical snapshot but still captured by the CDC phase.
+Snapshot cursor resolution order per table: explicit `pk_columns` override > `pk_column` fallback (when the column exists on the table) > auto-detected single-column PRIMARY KEY > auto-detected composite PRIMARY KEY. Composite keys are supported since v0.2.13 when **every** key column is `NOT NULL` and of an orderable type (integer family, `CHAR`/`VARCHAR`, `BINARY`/`VARBINARY`, `DATE`/`DATETIME`/`TIMESTAMP`); such tables page with a row-value comparison cursor (`WHERE (a, b) > (?, ?) ORDER BY a, b LIMIT n`, walking the joint index) and snapshot records carry the full composite key in `PrimaryKeyColumns` plus a JSON-object `Metadata.Key` (same format as CDC records, so metadata-driven sinks like ClickHouse `pk_columns_from_metadata` auto-create `ORDER BY (a, b)` tables and merge versions without any extra config). Composite keys do not participate in `shard_*` MOD sharding — a sharded pipeline snapshots composite-key tables unsharded (INFO log). A composite PK containing nullable or non-orderable columns (e.g. `DECIMAL`, `FLOAT`, `TEXT`, `BLOB`, `JSON`, `ENUM`, `SET`) falls back to skip-with-warning, same as a keyless table.
+
+For whole-database snapshots, set `tables: ["*"]` and omit `pk_column`: each table's snapshot cursor is derived from its own PRIMARY KEY (auto-detected from `information_schema`; single-column or composite), so heterogeneous-PK databases no longer require a single global key. Integer keys page with a numeric cursor (and optional `shard_*` hashing); non-integer orderable keys (e.g. `VARCHAR`, `DATETIME`) page with a lexicographic string cursor; orderable composite keys page with the row-value cursor above. Tables without a usable key are skipped during the historical snapshot but still captured by the CDC phase.
+
+**Keyless tables (`no_pk_snapshot: hash`)**: with `hash`, a table that has no usable primary key is no longer skipped. The snapshot streams the table inside the consistent snapshot transaction and synthesises `_row_hash` = sha256 over the row's sorted column values (NULL hashed distinctly from `''`). The key is delivered through `Metadata.PrimaryKeyColumns` / `Metadata.Key`, so a sink with `pk_columns_from_metadata: true` upserts on it and a re-snapshot (or a restart mid-table) is idempotent. Trade-offs, all deliberate: two rows with identical column values collapse into one; the scan is not resumable, so an interrupted table restarts from its first row (correct, because the write is idempotent); and the read holds the snapshot transaction's undo log for the duration of the table. A pipeline using `hash` without `sink.config.pk_columns_from_metadata: true` fails spec validation.
+
+**Visibility**: `spec validate` / preflight reports a `snapshot_coverage` field issue for `mysql_snapshot_cdc` sources, listing the per-table snapshot plan (`numeric` / `ordered` / `composite` / `row_hash` cursors) and the skipped-table list (with a `snapshot-coverage` warning per skipped table, plus a `no_pk_snapshot: hash` recommendation) so existing-data gaps are visible before the pipeline starts, not only in runtime logs.
 
 Schema preflight for `mysql_cdc` / `mysql_snapshot_cdc` treats a list with more than one table, or `tables: ["*"]`, as a multi-table contract. It inspects every resolved table, reports missing/no-key tables on `source.config.tables`, and does not emit a single target DDL preview. Dynamic per-record target routing is allowed with a partial warning. A fixed single target is blocked unless `table_mapping` or explicit filtering/schema-normalizing transforms make the consolidation intentional; even then preflight reports a partial warning because it does not infer the post-transform schema.
 
@@ -477,8 +492,21 @@ sink:
 | `output_dir` | yes | `/tmp/etl-output` | Output directory path. |
 | `format` | no | `json` | `json`, `jsonl`, `csv`, or `parquet`. |
 | `prefix` | no | | File name prefix. |
+| `manifest` | no | `false` | Two-step commit: after the data object is written, write a manifest that lists it (key, sha256, bytes, rows, batch sequence). Readers treat "listed in a manifest" as the commit boundary; an object no manifest references is a crash-window leftover. The manifest key is also recorded in the checkpoint (`sink_commit.native.manifest_key`). |
+| `manifest_prefix` | no | `_manifests/` | Where manifests are written inside the sink prefix. |
 
 Parquet format writes all columns as strings in a flat schema.
+
+#### Object commit semantics (`manifest: true`)
+
+Without a manifest, a crash between the object write and the checkpoint save leaves an object that no reader can classify: it may be a committed batch that lost its checkpoint, or a half-finished attempt. `manifest: true` makes the boundary explicit:
+
+1. the data object is written first (content-addressed, so replaying the same batch overwrites instead of duplicating);
+2. the manifest object is written second and lists the data object, its sha256, row count and batch sequence.
+
+The manifest name is derived from its content, so a retried batch rewrites the same manifest instead of adding a second commit marker. Layout: `<prefix><manifest_prefix><date>/<hash>.manifest.json` — with `prefix: batch_` and the default manifest prefix the manifest lands in `batch__manifests/2026/11/01/....manifest.json`. The `.manifest.json` suffix keeps commit markers distinguishable from `*.json` data objects. To read the committed view, list the manifest prefix and take the union of referenced object keys; anything else under the sink prefix is uncommitted and safe to delete. `file_sink` callers can use `sink.ReadLocalManifests` / `sink.CommittedObjectKeys` instead of reimplementing the layout.
+
+Documented boundary: a content-addressed data key also embeds the write date, so replaying the same batch on a later day produces a second (equally valid, equally committed) object. The manifest makes that duplicate visible rather than silently doubling the data.
 
 ### `s3`
 
@@ -505,8 +533,10 @@ sink:
 | `output_dir` | no | `/tmp/etl-output` | Local staging/fallback directory used only by file-compatible writes; use `file_sink` for intentional local output. |
 | `format` | no | `json` | `json`, `jsonl`, `csv`, or `parquet`. |
 | `prefix` | no | | Object key prefix. |
+| `manifest` | no | `false` | Two-step commit: write the data object, then a manifest object that lists it. Readers resolve the commit boundary from `_manifests/`; unreferenced objects are crash-window leftovers. Same semantics as `file_sink` above. |
+| `manifest_prefix` | no | `_manifests/` | Manifest key prefix inside the sink prefix. |
 
-Uses MinIO-compatible API. `endpoint` and `bucket` are required; use `file_sink` for local file output.
+Uses MinIO-compatible API. `endpoint` and `bucket` are required; use `file_sink` for local file output. Preflight recommends `manifest: true` for every `s3`/`file_sink` pipeline, because without it the sink cannot distinguish committed data from crash-window leftovers.
 
 ### `mysql`
 
@@ -686,8 +716,10 @@ sink:
 | `hosts` | yes | | Elasticsearch/OpenSearch host URLs. |
 | `username` | no | | ES username (**secret**). |
 | `password` | no | | ES password (**secret**). |
-| `index` | yes | | Target index name. |
+| `index` | no | | Target index name. Required unless `index_template` routes per record. |
+| `index_template` | no | | Per-record index template (`{table}`/`{db}` substitution) for multi-table fan-out; without `index`, every record must carry table metadata. |
 | `id_column` | no | `id` | Column for document ID (enables upsert). |
+| `pk_columns_from_metadata` | no | `false` | Build the document `_id` from the record's declared metadata primary key, so a CDC UPDATE or replay of the same business row rewrites the same document even when the source position differs. Incomplete identity fails closed. |
 | `mappings` | no | | Optional Elasticsearch mapping used by preflight schema validation. If omitted, preflight reads `/{index}/_mapping` from the target when reachable. |
 | `properties` | no | | Optional mapping properties shorthand, for example `{id: {type: long}, status: {type: keyword}}`. |
 | `chunk_size` | no | `500` | Records per bulk request. |
@@ -777,9 +809,44 @@ sink:
 | `insert_chunk_size` | no | `500` | Rows per INSERT statement when `write_mode: insert` is used. |
 | `tls_skip_verify` | no | `false` | Skip TLS certificate verification. |
 | `auto_create` | no | `false` | Auto-create missing Doris Unique Key tables. Type resolution is `column_types` override → record `Metadata.ColumnTypes`/source declaration → sample inference. If neither `pk_columns` nor `pk_columns_from_metadata: true` is set, an `id` column is required. |
-| `schema_drift` | no | `ignore` | `ignore`, `fail`, or `add_columns`. |
+| `schema_drift` | no | `ignore` | `ignore`, `fail`, `add_columns`, or `sync`. `sync` behaves like `add_columns` and additionally `ALTER ... MODIFY COLUMN`s a column whose type widened (e.g. `INT` -> `BIGINT`, `VARCHAR(32)` -> `VARCHAR(128)`); a narrowing request is refused instead of truncating data. |
 | `ddl_policy` | no | `reject` | `reject`, `ignore`, or `apply`. The production default rejects source DDL; Doris `apply` is limited to safe `ALTER TABLE ... ADD COLUMN` statements. |
 | `allow_mixed_cdc_non_atomic` | no | `false` | Allow mixed write/delete CDC batches even though Stream Load and MySQL DELETE are not atomic together. |
+| `version_mode` | no | `off` | `off` (default) keeps Doris last-write-wins. `source_order` injects the connector-owned numeric source position into `sequence_column`, so an older replay is ignored instead of overwriting newer state. Requires `batch_mode: upsert`, `write_mode: stream_load`, and a Unique Key table with merge-on-write + `function_column.sequence_col` — existing tables cannot acquire that contract (see below). |
+| `sequence_column` | no | `_version` | Column carrying the source-order version. Must be declared at `CREATE TABLE` time via `PROPERTIES("function_column.sequence_col")`, must not be part of the `UNIQUE KEY`, and must be `LARGEINT` unless `sequence_type: bigint` is set explicitly. |
+| `sequence_type` | no | `largeint` | Declared type of `sequence_column`. `largeint` holds the full `uint64` source-order domain (binlog position, Kafka offset). `bigint` is an opt-in that rejects values above `math.MaxInt64` because Doris silently wraps them to negative numbers. |
+
+#### Doris source-order (`version_mode: source_order`)
+
+`source_order` makes the sink replay-safe against out-of-order delivery: each written row carries the connector's durable numeric position (`core.SourceOrder`: MySQL binlog file/pos, PostgreSQL LSN, Kafka partition+offset, numeric cursor), and Doris keeps the row with the greatest sequence value. Sources without a durable numeric position (file, http, redis, streaming window aggregates) are rejected by preflight instead of silently degrading.
+
+Auto-create emits the required contract:
+
+```sql
+CREATE TABLE IF NOT EXISTS `customers` (
+  `id` bigint NOT NULL,
+  `_version` LARGEINT NOT NULL,
+  ...
+) ENGINE=OLAP
+UNIQUE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 10
+PROPERTIES (
+  "replication_allocation" = "tag.location.default: 1",
+  "light_schema_change" = "true",
+  "enable_unique_key_merge_on_write" = "true",
+  "function_column.sequence_col" = "_version"
+)
+```
+
+Existing tables are validated, never mutated. Doris cannot add the sequence contract after the fact (`ALTER TABLE ... SET ("function_column.sequence_col")` fails with "Unknown table property", and `ADD COLUMN ... DEFAULT` is a syntax error), so a mismatching table fails closed with a new-table migration path: create the table with the contract, backfill current state with monotonically increasing sequence values, reconcile counts/checksums, then switch the pipeline and keep the old table for rollback.
+
+Guarantees and known boundaries (verified on Doris 2.1.11; see `docs/iterations/IT-7-doris-source-order/findings.md`):
+
+- **Guaranteed**: an older write never overwrites a newer one; an older replay does not resurrect a row deleted at a newer version.
+- **Boundary 1**: deleting a key that is not present in Doris writes no tombstone (0 rows affected), so a later *older* insert can create the row.
+- **Boundary 2**: sequence comparison is strict — on equal sequence the later arrival wins. A key-changing UPDATE tombstones the old key at the old row's sequence, so replaying that exact version can revive the old key.
+- **Boundary 3**: `enable_unique_key_merge_on_write=false` tables are rejected, because there the `DELETE` tombstone does not participate in sequence comparison and an older replay resurrects the deleted row.
+- Deletes stay on the MySQL `DELETE` path; `__DORIS_DELETE_SIGN` cannot be written through Stream Load on this version, and `allow_mixed_cdc_non_atomic` is unaffected by this mode.
 
 ## Transforms
 
@@ -1018,7 +1085,11 @@ transforms:
 | `join_key` | no | `id` | Field in the input record. |
 | `dim_key` | no | `id` | Field in the dimension result. |
 | `fields` | yes | | Dimension fields copied into the record. |
-| `refresh_interval_sec` | no | `300` | Full refresh interval, `0` means load once. |
+| `refresh_interval_sec` | no | `300` | Refresh interval, `0` means load once. With `incremental_column` set this is the incremental poll interval instead of a full reload. |
+| `incremental_column` | no | | Opt-in incremental dimension refresh (CDC-lite): a monotonic column such as `updated_at` or an auto-increment id. After the first full load only rows newer than the high-water mark are fetched and merged into the cache, instead of reloading the whole table. |
+| `incremental_query` | no | | Watermark query used with `incremental_column`. Must take exactly one placeholder (`?`/`$1`) and project `dim_key`, the copied `fields` and `incremental_column`. |
+| `incremental_delete_column` | no | | Optional soft-delete flag column: a truthy value in an incremental row removes that key from the cache instead of upserting it. |
+| `full_refresh_interval_sec` | no | `0` | Safety-net full reload interval when `incremental_column` is set (`0` = never). Hard `DELETE`s and rows whose marker did not change are only visible through a full reload. |
 | `max_cache_entries` | no | `0` | Maximum distinct dimension cache entries, `0` means unlimited. Exceeding the cap fails the refresh/restore and increments `cache_limit_exceeded`. |
 | `on_miss` | no | `pass` | Action when no dimension row is found: `pass` keeps the record unchanged, `null` writes the configured fields with null values, `dlq`/`error` returns an error so the runner routes the record to DLQ. |
 | `on_refresh_error` | no | `pass` | Action when dimension refresh fails and no usable cache can be loaded: `pass` keeps the record unchanged, `error` returns an error so the runner routes the record to DLQ. |
@@ -1026,6 +1097,37 @@ transforms:
 | `state_pipeline` | no | pipeline name | Pipeline namespace for persisted lookup cache. Runtime injects the pipeline name when omitted. |
 | `state_node` | no | transform node id | Node namespace for persisted lookup cache. Runtime injects the transform node id when omitted. |
 | `state_ttl_seconds` | no | `0` | TTL for persisted lookup rows, `0` means no expiry. |
+
+#### Incremental dimension refresh
+
+Loading a large dimension table on every `refresh_interval_sec` is the usual
+bottleneck in wide-table pipelines. With `incremental_column`, the first load is
+a full `query`, and every later refresh issues `incremental_query` with the
+current high-water mark as its single parameter, then merges only the returned
+rows into the cache:
+
+```yaml
+transforms:
+  - type: lookup
+    config:
+      dsn: root:root123456@tcp(mysql:3306)/app
+      query: SELECT id, name, tier, updated_at FROM dim_users
+      incremental_column: updated_at
+      incremental_query: SELECT id, name, tier, updated_at FROM dim_users WHERE updated_at > ?
+      full_refresh_interval_sec: 3600
+      join_key: user_id
+      dim_key: id
+      fields: [name, tier]
+      refresh_interval_sec: 30
+```
+
+Contract and boundaries:
+
+- `query` must project `incremental_column` (the first load derives the watermark from it) and `incremental_query` must return it too; a query that omits it fails loudly instead of refreshing forever without advancing.
+- Rows are upserted by `dim_key`. Hard `DELETE`s are invisible to an incremental refresh — either soft-delete with `incremental_delete_column` or set `full_refresh_interval_sec` as the safety net.
+- Any incremental failure falls back to a full reload (logged, counted as `incremental_skips`); a partial merge is never left behind.
+- The watermark is per-process: after a restart the next refresh is a full load. Persisted cache state (`state_backend: redis`) is still restored, so a restart does not lose enrichment data.
+- Metrics: `incremental_merge` (successful incremental refreshes), `incremental_rows` (rows merged), `incremental_deleted` (soft deletes applied), `incremental_skips` (refreshes that fell back to a full reload or were skipped for the safety-net interval).
 
 When `state_backend` is enabled, every successful dimension refresh is persisted
 to `StateStore`. If the dimension query later fails, lookup can restore the last

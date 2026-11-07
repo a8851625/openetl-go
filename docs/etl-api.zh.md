@@ -161,6 +161,87 @@ source：
 调用任一 checkpoint 管理端点前，先 stop 或 pause 并等待 pipeline 静止。系统不会自动
 重置外部 broker group、replication slot 或数据库日志位置。
 
+### 压缩文件 / 对象存储输出
+
+`POST /api/v2/pipelines/{id}/output/compact`
+
+把某个日期分区内「已提交」的数据对象合并成一个对象，并发布一条 compaction manifest 通过
+`replaces` 退役被替换的 key。读取侧用 manifest 集合解析已提交视图（`CommittedObjectKeys`），
+因此每行只可见一次；被替换的对象不会删除，整个操作可回滚。需要 `s3` / `file_sink` 且
+`manifest: true`。
+
+请求体（全部可选）：`day`、`min_objects`（默认 4）、`max_objects`（默认 32）、
+`max_object_bytes`（默认 1 MiB）、`dry_run`。
+
+响应：`groups[]`（`merged_key`、`manifest_key`、`replaced_keys`、`source_batch_ids`、`rows`、
+`bytes_before`、`bytes_after`）以及总计与 `skipped_groups`。
+
+配套的两个保证：
+
+- **跨日重放去重**：内容相同的批次只会提交一次。跨日重放会在当天前缀下写入数据对象，但不再
+  产生第二条 manifest，因此重复对象保持「未提交」（读侧不可见，可安全清理）。
+- **可回滚压缩**：压缩从不删除数据，只改写「哪些对象算已提交」。
+
+这不是湖仓事务：没有多对象原子提交、没有跨表快照隔离，也没有半途失败后的自动续跑（重跑即可，
+压缩本身幂等）。
+
+## 单表重同步（snapshot+CDC）
+
+`POST /api/v2/pipelines/{pipeline}/resync`
+
+只对**指定表**重新执行 snapshot 阶段，而不是重置整个 checkpoint 后重投所有表。
+
+```sh
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"tables":["orders"]}' \
+  'http://127.0.0.1:8001/api/v2/pipelines/shop-sync/resync'
+```
+
+实现方式：每张表的 snapshot 游标本来就存在 checkpoint 里，端点只删除指定表的游标、
+沿用现有 binlog 位点作为新的 snapshot handoff、并把 phase 改回 `snapshot`。未指定的表
+保留自己的游标，下次启动不会重复投递。
+
+| 项目 | 行为 |
+| --- | --- |
+| Source 类型 | 仅 `mysql_snapshot_cdc`；其他源没有按表快照游标（请用 `checkpoint/reset`）。 |
+| Pipeline 状态 | 必须已静止（stopped/paused），否则返回 409 `pipeline_not_quiescent`。 |
+| Sink | 必须能吸收重复投递（upsert / 业务键 / 版本列）。纯 insert sink 会产生重复行。 |
+| 顺序 | 复用较旧的 binlog 位点作为 handoff，因此重读行的源序不会晚于实时 CDC 行。 |
+| 表名 | 必须出现在 pipeline 的 `source.config.tables`（或 `table`）中，否则返回 400。 |
+
+### 源端与目标端对账（数据校验）
+
+`POST /api/v2/pipelines/{pipeline}/reconcile` 按需比较源库与目标库；同路径 `GET`
+返回支持矩阵与限制说明。
+
+```sh
+curl -X POST -H "X-API-Token: $ETL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"tables":["orders"],"deep":true,"buckets":16}' \
+  'http://127.0.0.1:8001/api/v2/pipelines/shop-sync/reconcile'
+```
+
+每张表依次比较：行数 → 两端共有列的整表内容摘要（`deep:false` 可跳过）→ 若不一致且
+该表有单一数值主键，则再做分桶摘要比较，定位是哪一段 key 漂移。
+
+判定值：`match`、`count_mismatch`、`content_mismatch`、`schema_mismatch`、
+`missing_target_table`、`error`。每次响应都带 `limits`，明确它不是 exactly-once 证明。
+
+支持的组合（两端都需要 SQL 查询面）：
+
+| Source | Sink |
+| --- | --- |
+| `mysql_batch`、`mysql_cdc`、`mysql_snapshot_cdc` | `mysql`、`doris`、`clickhouse`、`postgres` |
+| `postgres_cdc` | `postgres` |
+
+Kafka / 文件 / HTTP / 对象存储 / Elasticsearch 端没有 SQL 查询面，会带明确原因拒绝。
+声明了 `transforms` 的 pipeline 也会被拒绝：对账比较的是源与目标原始列，转换后的字段
+无法逐列对齐。
+
+对账是只读的时间点比较，不锁源表；pipeline 运行中执行可能看到在途差异，需要决策级
+结论时请在 checkpoint 静默后重跑。
+
 ## 插件元数据
 
 发现已注册的插件及其基本能力。

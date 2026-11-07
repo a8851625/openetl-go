@@ -1,0 +1,35 @@
+{
+  "path_id": "mysql_snap_cdc__ch_rmt_composite_pk",
+  "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+  "run_started_at": "2026-09-26T12:07:14Z",
+  "runner": "local",
+  "deps": {
+    "clickhouse": "docker.io/clickhouse/clickhouse-server:24.3",
+    "harness": "e2e",
+    "mysql": "docker.io/library/mysql:8.0"
+  },
+  "checks": [
+    {
+      "name": "preflight_snapshot_coverage",
+      "result": "passed"
+    },
+    {
+      "name": "snapshot_composite_exhaustive",
+      "result": "passed"
+    },
+    {
+      "name": "cdc_composite_update_delete",
+      "result": "passed"
+    },
+    {
+      "name": "restart_recovery",
+      "result": "passed"
+    },
+    {
+      "name": "checkpoint_reset_composite_replay",
+      "result": "passed"
+    }
+  ],
+  "result": "passed",
+  "finished_at": "2026-09-26T12:07:18Z"
+}

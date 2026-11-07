@@ -58,6 +58,34 @@ CDC restart, checkpoint reset, and heterogeneous numeric/string-PK paths are
 covered by the snapshot E2E scripts listed below; exact cross-source/sink
 transactions are not claimed.
 
+## Keyless Tables and Targeted Resync
+
+Two operational gaps used to require a full re-snapshot of the whole pipeline:
+
+**Keyless tables** stay skipped by default (`no_pk_snapshot: skip`): their
+historical rows never reach the sink, only later CDC changes. `no_pk_snapshot:
+hash` instead streams the table inside the consistent snapshot transaction and
+writes a synthetic `_row_hash` key (sha256 over the row's sorted column values,
+with NULL hashed distinctly from the empty string). The key travels through
+`Metadata.PrimaryKeyColumns` / `Metadata.Key`, so a sink with
+`pk_columns_from_metadata: true` upserts on it and re-snapshot/restart is
+idempotent. Trade-offs, all deliberate and documented: rows whose column values
+are identical collapse into one; the scan is not resumable, so an interrupted
+table restarts from its first row (correct because writes are idempotent); and
+the read holds the snapshot transaction's undo log for the table's duration.
+Spec validation rejects `no_pk_snapshot: hash` without
+`sink.config.pk_columns_from_metadata: true`.
+
+**Targeted resync** (`POST /api/v2/pipelines/{id}/resync` with
+`{"tables":["orders"]}`) re-runs the snapshot phase for the named tables only.
+The endpoint rewrites the checkpoint: the named tables' cursors are dropped, the
+existing binlog anchor is reused as the new snapshot handoff, and the phase goes
+back to `snapshot`. Unnamed tables keep their cursors and emit nothing. Because
+the older anchor is reused, re-read rows never order after live CDC rows, so a
+versioned sink can never let re-snapshot data overwrite newer state. The
+pipeline must be quiescent (otherwise HTTP 409) and the sink must absorb
+re-delivered rows.
+
 ## Example
 ```yaml
 source:
@@ -76,6 +104,10 @@ Unit evidence: `internal/etl/source/mysql_snapshot_cdc_checkpoint_test.go`,
 linear/DAG batch checkpoint tests, multi-table preflight tests in
 `internal/etl/server/pipelines_preflight_test.go`, and source package
 race/static checks.
+Targeted resync and the keyless-table snapshot are covered by
+`internal/etl/server/resync_test.go`,
+`internal/etl/source/mysql_snapshot_cdc_nopk_test.go`, and
+`hack/e2e-data-integrity.sh`.
 Path evidence: `hack/e2e-snapshot-cdc.sh`,
 `hack/e2e-snapshot-cdc-crash.sh`, and
 `hack/e2e-snapshot-cdc-heteropk.sh`. The broader ClickHouse path matrix is

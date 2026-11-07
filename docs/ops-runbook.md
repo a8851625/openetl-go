@@ -210,8 +210,12 @@ rep, err := storage.ApplyRetention(ctx, db, time.Now().UTC(), storage.RetentionP
 })
 ```
 
-DLQ TTL: `ETL_DLQ_TTL` (default production `168h`). Monitor `dlq_file_count` /
-`records_dlq` and alert queue drops (`etl_alert_dropped_total`).
+DLQ TTL: `ETL_DLQ_TTL` (default production `168h`). Monitor the current backlog with
+`dlq_file_count` / the `dlq_backlog` field of `GET /api/v2/pipelines`; `records_dlq` is a
+cumulative per-process counter (it resets on restart and never decreases after replay) and is
+not a backlog. Alert queue drops (`etl_alert_dropped_total`) and retention evictions
+(`etl_dlq_evicted_total`, which also raises a warning alert when `ETL_DLQ_MAX_COUNT` evicts
+rows). Max-count eviction always removes the oldest rows first.
 
 ## 2. Restore
 
@@ -291,10 +295,34 @@ RTO: container restart + restore time (target < 15 minutes for single-node metad
 
 ### DLQ backlog
 
-1. `GET /api/v2/dlq/{pipeline}?limit=100`
-2. Fix sink/schema root cause
-3. `POST /api/v2/dlq/{pipeline}/replay`
-4. Confirm `records_dlq` / `dlq_file_count` decline
+1. `GET /api/v2/pipelines` → confirm `dlq_backlog` > 0 for the pipeline (`dlq_backlog_known=false` means the count failed, not that the backlog is empty).
+2. `GET /api/v2/dlq/{pipeline}?limit=50&offset=0` (page with `offset`; filter with `error_class` / `contains`). Inspect `identity_context.replay_state` for `repair_required` / `quarantined` rows.
+3. Preview: `POST /api/v2/dlq/{pipeline}/replay?dry_run=1` → `replayable` / `blocked` counts and per-row reasons. Nothing is written.
+4. Fix sink/schema root cause (and repair or quarantine any blocked identity rows).
+5. `POST /api/v2/dlq/{pipeline}/replay` (drains oldest-first; a second concurrent replay is rejected).
+6. Confirm `dlq_backlog` / `dlq_file_count` decline to 0. Do **not** expect `records_dlq` to decline — it is cumulative.
+
+A pipeline that keeps failing at the sink now advances its checkpoint once the failures are durably in the DLQ, so the replay window no longer grows with every restart. If the DLQ itself is unavailable the checkpoint stays blocked and queued records are retried automatically; watch for the "DLQ write failure" alert and `checkpoint blocked` health state.
+
+### Suspected data mismatch between source and target
+
+1. `POST /api/v2/pipelines/{pipeline}/reconcile` (optionally `{"tables":["orders"]}`) → per-table verdicts: `match`, `count_mismatch`, `content_mismatch`, `schema_mismatch`, `missing_target_table`, `error`.
+2. Read `limits` in the response before drawing conclusions — the report is a point-in-time comparison, not an exactly-once proof. Run it after the checkpoint goes quiet for a decision-grade result.
+3. If the report localises drift to specific buckets, `bucket_mismatches[].bucket` tells you the key range: rows with `key % buckets == bucket` are affected. Inspect those rows on both sides.
+4. Recover a single drifted table on a `mysql_snapshot_cdc` pipeline: stop it (resync refuses a running pipeline with 409), then `POST /api/v2/pipelines/{pipeline}/resync` with `{"tables":["orders"]}`, then start it. Only the named tables re-run their snapshot; other tables keep their cursors.
+5. Confirm with `reconcile` again — `verdict` must return to `match` and `row_delta` to 0.
+
+Notes: resync requires an **upsert-capable sink** (it re-delivers rows). Tables snapshotted with `no_pk_snapshot: hash` have no cursor, so any snapshot re-entry re-reads them (idempotent, and reconcile explains the duplicate-collapse delta instead of reporting data loss). For a full reprocess use `checkpoint/reset` instead — see the reset semantics table above.
+
+### Object-store output: committed vs crashed data
+
+If a `s3` / `file_sink` pipeline crashed between the object write and the checkpoint save,
+objects that no manifest references are uncommitted leftovers:
+
+1. List the manifest prefix (`<prefix>_manifests/`, files `*.manifest.json`).
+2. Take the union of `objects[].key` across manifests — that is the committed view downstream readers should consume.
+3. Anything else under the sink prefix is uncommitted and safe to delete.
+4. If `manifest: false` is set, this boundary does not exist: enable it (preflight recommends it) before relying on prefix scans.
 
 ### Checkpoint stale / CDC lag
 

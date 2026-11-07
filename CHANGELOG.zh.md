@@ -4,6 +4,89 @@
 
 ## [Unreleased]
 
+### 新增
+- **postgres_cdc 升级为 production**，并补齐真实 PostgreSQL 16 认证链路
+  （`hack/e2e-postgres-cdc.sh`）：insert/update/delete 经 metadata 主键 upsert 落库、空闲跨越
+  `wal_sender_timeout` 的 keepalive、checkpoint 重启不重复回放、TRUNCATE 按默认策略 fail-closed。
+  该链路同时发现并修复四个解码缺陷：主键发现 SQL 引用了不存在的别名（`rc.relname`），导致记录
+  从不携带 `Metadata.Key`；仅含键的旧元组（`K`）被按"前 N 列"解码而非 replica identity 列；
+  默认 replica identity（`d`）对主键未变的 UPDATE 不发旧元组，这类更新被判 `update_before_image_missing`
+  进入 DLQ；TRUNCATE 解析把关系计数读晚一个字节，导致 TRUNCATE 被静默忽略却仍报告安全策略。
+- **连接器证据回写**：16 个认证脚本在当前 commit/image 上全部重跑通过并回写 manifest，含新增的
+  Doris `source_order` 排序证明与 `postgres_cdc` 记录；`hack/check-connector-evidence.sh -strict` 恢复通过。
+- **数据完整性页签的 UI e2e 覆盖**（`hack/e2e-ui.sh` N1-N9a）：页签、对账表单、重同步表单与禁用/守卫态，
+  以及 pipeline 两端无 SQL 查询面时的诚实拒绝路径。同时修复 `GET /pipelines/{id}/reconcile` 对未知
+  pipeline 返回 200（现为 404），并把对账拒绝信息改为可操作的英文提示。
+
+### Added
+
+- **Doris 源序写入 + 写入确认 + 类型同步 + 三类 sink 的 metadata 主键 + 对账行级差异 +
+  对象输出压缩 + beta 连接器加固**：详见英文 CHANGELOG 的对应条目（IT-7 T7.3/T7.4、Doris
+  `SinkCommitMetadata` 与 `schema_drift: sync`、JDBC/ES/Redis 的 `pk_columns_from_metadata`、
+  reconcile `sample_rows`、`output/compact`、REST `next_url_field` 与限流重试、飞书重试与 token
+  刷新、ES `index_template` 与删除 id fail-closed、前端「数据完整性」页签）。
+- **维表增量刷新**：`lookup` 新增 `incremental_column` / `incremental_query` /
+  `incremental_delete_column` / `full_refresh_interval_sec`，把「每 N 秒整表重载」变成
+  「高水位增量合并」，并新增 `incremental_*` 指标与 spec 校验。
+- **数据完整性闭环（对账 / 对象提交清单 / 单表重同步 / 无主键表快照）**：
+  新增 `POST /api/v2/pipelines/{id}/reconcile` 源目标对账（行数 + 内容摘要 + 分桶定位，
+  响应固定带 `limits`，支持 mysql/doris/clickhouse/postgres 目标，Kafka/文件端显式拒绝）；
+  `s3`/`file_sink` 新增 `manifest`/`manifest_prefix` 两步提交（数据对象 + manifest 对象，
+  manifest key 写入 checkpoint，未引用对象即崩溃残留），并提供
+  `sink.ReadLocalManifests`/`sink.CommittedObjectKeys`；新增
+  `POST /api/v2/pipelines/{id}/resync` 只对指定表重跑 snapshot（此前只能全库
+  `checkpoint/reset`）；`mysql_snapshot_cdc` 新增 `no_pk_snapshot: skip|hash`，用合成
+  `_row_hash` 主键快照无主键表（强制 sink `pk_columns_from_metadata: true`）。
+  详见 `CHANGELOG.md` 英文条目与 `docs/etl-api*.md`、`docs/etl-config-schema*.md`。
+
+- **DLQ 语义加固（去重 / checkpoint 不变量 / replay 状态机 / 指标口径）**：
+  DLQ 写入幂等（`(job_name, record_hash)` 唯一键 + `attempt` 累加、历史行迁移去重）；
+  sink 失败但记录已 durable 落 DLQ 后允许推进 checkpoint，DLQ 写失败则有界重试队列 +
+  自动解除阻断；replay 串行化、脱离请求 context、oldest-first、复用 `allow_unsafe` 门禁；
+  DAG replay 复用 identity 门禁；新增服务端 dry-run；`dlq_backlog` 与
+  `etl_dlq_evicted_total` 指标；全量删除返回真实计数；`offset`/`error_class` 过滤；
+  max-count 保留确定性 oldest-first + 告警；删除 pipeline 同步清理 DLQ；
+  删除死代码文件 DLQ 实现，`dlq.enable`/`dlq.sink` 标注 deprecated+ignored；
+  UI backlog 口径统一并新增分页/筛选/防抖/replay_state/真实 dry-run。
+- **restart_policy 的 UI 配置与 spec 往返保持（UI-G）**：向导 Safety 步与
+  DAG Designer Advanced 抽屉均提供 `restart_policy`（mode/max_restarts/
+  initial_delay_ms/max_delay_ms/backoff_multiplier）渐进披露表单（EN/ZH，
+  默认未配置等价 `never` 且不改变现有行为，帮助文本说明 checkpoint 恢复
+  与 at-least-once 重放边界）；含 `restart_policy` 的 spec 经向导 YAML 导入
+  →表单编辑→提交后字段逐值保留（修复 UI 再保存静默丢失该保护的缺陷，
+  草稿恢复同样保留）；Pipeline 详情页如实显示已配置 policy 或「未配置
+  （never）」两态；`docs/etl-config-schema.md` 补齐该顶层字段文档。
+  真实容器 UI E2E 281/281（G1.1–G4.3）。
+- **UI-F 控制面真实性与安全（UI-F.1–F.7）**：无效 Pipeline Detail 路由
+  fail-closed 不再回退到选中/默认管道；Settings 弹窗路由单一真相源；
+  Worker/Connection/Plugin 删除强制对象化确认（取消/Esc/overlay/Close 零
+  DELETE，confirm 恰一次目标请求，connection 引用关系不可确认时明确声明，
+  不臆造影响）；Audit/Connectors/Extensions 读取失败与空态互斥（503 显示
+  可解释错误 + retry）；Workers 任务区 telemetry 缺席如实声明；关键输入
+  稳定 label 关联；390px 全控制面页无整页横滚（DAG palette 局部滚动）。
+  真实容器 UI E2E 265/265（F1–F6 全断言）。
+
+- **UI 交互与小屏加固（UI-D.1–D.6）**：批量启停确认与结果本地化（EN/ZH）
+  并如实声明流式管道中断/重放边界，无目标时禁用+原因可见；Connections/
+  Schedules/My Plugins 390px 无整页横滚；向导步进栏移动端可发现（进度/
+  aria-current/自动滚动）；顶栏刷新态真实（首次加载/保数据刷新/失败
+  三态，图标按钮可访问标签）。真实容器 UI E2E 209/209（D1–D5）。
+
+- **mysql_snapshot_cdc 复合主键快照（IT-6）**：快照游标支持复合 PRIMARY KEY。
+  自动探测（`information_schema.KEY_COLUMN_USAGE`，按 `ORDINAL_POSITION` 排序），
+  当全部键列 `NOT NULL` 且为可排序类型（整数族/`CHAR`/`VARCHAR`/`BINARY`/
+  `VARBINARY`/`DATE`/`DATETIME`/`TIMESTAMP`）时，按行值比较游标分页
+  （`WHERE (a, b) > (?, ?) ORDER BY a, b LIMIT n`，走联合索引）；快照记录携带
+  完整复合键元数据（`PrimaryKeyColumns` 全列 + JSON 对象 `Metadata.Key`，与
+  CDC 记录同格式），ClickHouse `pk_columns_from_metadata` 零改动自动建
+  `ORDER BY (a, b)` 表并合并版本。checkpoint 新增可选 `last_composite_cursors`
+  字段（旧 checkpoint 字节级兼容）；崩溃/重启从复合游标恢复无缺行、无前缀重放。
+  `spec validate`/preflight 新增 `snapshot_coverage` 可见性：启动前输出每表快照
+  计划（numeric/ordered/composite 游标）与跳过表清单（逐表 WARN）。
+  e2e `mysql_snap_cdc__ch_rmt_composite_pk` 5/5 case 通过；全量 `-e2e.strict`
+  回归通过。复合键不参与 `shard_*` MOD 分片（降级不分片，INFO）；含
+  nullable/不可排序列的复合键回退为跳过（语义同无主键表）。
+
 ## [v0.2.12-beta.20] — 2026-09-21 — UI 加固 + ClickHouse 写入契约（IT-5）+ GA 收口评估
 
 交付 UI-A/UI-B/UI-C 三轮前端加固、CH 第一批写入契约迭代（IT-5，CH-C1/C3/C2），

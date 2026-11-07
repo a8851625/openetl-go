@@ -92,6 +92,25 @@ Production ready 必须同时满足以下目标：
 - standalone/master/worker/headless 运行文档、CLI smoke 和最小生产 runbook。
 - MySQL/PostgreSQL `pre_write`、`increment`、生成列跳过、Debezium metadata PK 提取，以及多表映射/CDC 宽表生产候选链路。
 
+### DLQ 语义加固（2026-10-29，delivered）
+
+针对「DLQ 安全网可信度」的定向加固，不新增产品线，全部在既有 `Source -> Transform -> Sink` 与 SQL DLQ 上收口。状态：`delivered`。
+
+| 交付内容 | 证据 | 结果 |
+| --- | --- | --- |
+| 累计值 / 当前 backlog 口径分离：`dlq_backlog`（当前行数，`dlq_backlog_known` 表示是否读到）+ `dlq_file_count` 为唯一 backlog 口径；`records_dlq` 降级为累计写入计数 | `TestPipelinesListExposesCurrentDLQBacklog`、`TestDerivePipelineHealth`（累计计数与 sticky last_error 不再影响 health）、`hack/e2e-dlq.sh`（`dlq_backlog:2` → replay → `0`，同期 `records_dlq` 仍为 2） | passed |
+| DLQ 写入幂等：`(job_name, record_hash)` 唯一键 + upsert，重复捕获刷新原行并累加 `attempt`；迁移回填 hash 并去重历史重复行 | `TestMigrationDeduplicatesLegacyDeadLetters`、`TestDLQ`（conformance，含 attempt=2 断言）、`hack/e2e-dlq.sh`（`attempt:1`） | passed |
+| checkpoint 不变量对齐：sink 失败记录已 durable 落 DLQ 后允许推进 checkpoint（与 source/transform/identity 路径一致）；DLQ 写失败则保持阻断并把记录放入有界重试队列，DLQ 恢复后自动解除，无需重启 | `TestRunnerIsolationCheckpointFollowsDLQDurability`、`TestRunnerDLQRetryRecoversCheckpointBlock`、`TestRunnerWritesDLQAfterSinkContextDeadline`、`TestRunnerIsolationUsesFreshContextAfterCommitBudgetExhausted` | passed |
+| replay 状态机：按 pipeline 串行化（并发 replay 返回 400）、脱离 HTTP 请求 context（10 分钟上限）、oldest-first 排空、复用 `allow_unsafe` 重复边界门禁 | `TestDLQReplaySerializesConcurrentRequests`、`TestDLQReplayRefusesUnsafeDuplicateBoundary`、`TestDLQReplayDrainsOldestFirst` | passed |
+| DAG replay 复用 identity 门禁；legacy 身份修复不再拒绝 DAG 行 | `TestDAGDLQReplayEnforcesMetadataIdentityGate`、`TestDAGDLQIdentityRepairIsSupported` | passed |
+| 真实 dry-run：`POST /api/v2/dlq/{id}/replay?dry_run=1` 返回逐行 identity 判定，不写 sink、不改 DLQ 状态（替换前端假 dry-run） | `TestDLQReplayDryRunReportsIdentityGate`、`hack/e2e-dlq.sh`（`replayable:2` / `blocked:0` 且行数不变） | passed |
+| API 真实性：全量删除返回真实计数（不再返回 `-1`、`dlq_delete_count` 不会变负）、新增 `offset` / `error_class` 过滤、LIKE 通配符转义 | `TestDLQDeleteAllReportsRealCount`、`TestDLQListSupportsOffsetAndErrorClassFilter`、`TestDLQFilterParsesReplayAndListOptions`、`hack/e2e-dlq.sh`（`deleted:0`） | passed |
+| 保留策略治理：`ETL_DLQ_MAX_COUNT` 改为确定性 oldest-first 专用清理路径，新增 `etl_dlq_evicted_total` 与驱逐告警；删除 pipeline 同步清理其 DLQ 行 | `TestRetentionJanitorMaxCountEvictsOldest`、`TestPurgeOldestDeadLettersIsDeterministic`、`TestDeletePipelineWithCheckpointPurgesDeadLetters` | passed |
+| 配置面收敛：删除无引用的文件 DLQ 实现；`dlq.enable` / `dlq.sink` 明确标注 deprecated+ignored 并给出校验告警；移除误导性的 "DLQ disabled" preflight/AI 建议 | `TestRunPreflightGuidesAppendOnlyReplayRisk`（断言不再推荐 `dlq.enable`）、`go build ./...`、`npm run typecheck` | passed |
+| UI 口径：backlog 全部改用 `dlq_backlog`；DLQ 页新增分页、`error_class` 筛选、300ms 防抖、replay_state 展示与阻断提示、真实 dry-run 结果 | `npm run typecheck`、`npm run lint`（0 error）、`npm run build`、`hack/e2e-ui.sh` | passed |
+
+已知边界（保留并记录，不在本轮扩大）：`pipeline_version` 仍写 0（运行期没有权威 spec 版本来源，身份漂移由冻结的 format contract / PK 声明覆盖）；`identity_context.raw_payload` 保留但自动 replay 不使用（作为取证/重建素材，文档已如实描述）；DAG executor 仍用节点级 circuit breaker 作为 DLQ 故障的 stop-the-line 机制（线性 runner 使用有界重试队列）。
+
 当前公开成熟度必须继续以 descriptor/readiness、组件文档和可重复测试证据为准。没有真实环境证据的 MaxCompute（2026-09-17 起移除认证主线，实现保留、maturity 维持 experimental）、Feishu 和第三方插件不得提升为 production。
 
 ## 执行规则
@@ -142,7 +161,7 @@ Roadmap 状态只使用以下值：
 
 ### IT-6：mysql_snapshot_cdc 复合主键快照（源连接器正确性）
 
-状态：`queued`（2026-09-25 立项；依赖已达成，待领取。不改变当前优先级——主线无 active 项、UI-D 为并行小项，按用户授权领取）。
+状态：`delivered`（2026-09-26：T6.1–T6.5 全部交付。复合 PK 解析/行值比较分页/checkpoint 复合游标（旧格式兼容）/复合键元数据/preflight snapshot_coverage 可见性；e2e `mysql_snap_cdc__ch_rmt_composite_pk` 5/5 + `TestSourceCompositePKSnapshotPaging`（真实 MySQL 8 穷举+断点续跑）；全量 `-e2e.strict` 8/8 回归；三 backend upgrade drill PASS（SQLite/MySQL/PostgreSQL）；3 条 snapshot_cdc 认证脚本回归 PASS；文档更新（etl-config-schema.md 复合 PK 行为 + CHANGELOG）。残留：无——非目标内的复合键 hash 分片归后续候选）
 
 来源：v0.2.12-beta.20 线上实战发现（192.168.31.35 cct 库全量同步）。OpenCart 风格复合主键表（`(entity_id, language_id)` 的 `*_description`、`(entity_id, store_id)` 的 `*_to_store`、`(entity_id, layout_id)` 的 `*_to_layout` 及关联表，共 29 张）在 `tables: ["*"]` 快照阶段被跳过（仅单列 PK 可做游标分页），**存量数据完全缺失**；CDC 增量正常但只有跳过之后的新变更。代码核对确认缺口仅在快照游标：CDC 侧（canal `pkColumnNames` 多列）、envelope（`primary_key_columns` 数组）、ClickHouse sink（`pk_columns_from_metadata` 的 `map[string][]string` 多列 ORDER BY + 复合键 tombstone）均已支持复合键。
 
@@ -158,11 +177,108 @@ Roadmap 状态只使用以下值：
 
 预估 2–3 轮迭代窗口（T6.1+T6.2 一轮、T6.3+T6.4 一轮、T6.5 收口）。
 
+### IT-7：Doris sink 源序写入（sequence column + delete sign）
+
+状态：`delivered`（2026-10-30：T7.1、T7.2 已完成；2026-11-01：T7.3 序列注入、T7.4 preflight 门禁、T7.5 排序 e2e 已完成；2026-11-03：认证 case 回写与 connector-evidence 复认证完成）
+
+领取记录：
+
+**T7.2 实现结论（2026-10-30）**：
+
+- 配置面：doris 新增 `version_mode`（`off` 默认 / `source_order`）、`sequence_column`（默认 `_version`）、`sequence_type`（默认 `largeint`）；`off` 路径构造校验完全不触发，存量管道零影响。
+- 构造期 fail-closed：未知模式/类型、显式空列名、与 `pk_columns` 重名、使用保留名 `__DORIS_DELETE_SIGN`、`write_mode=insert`、`batch_mode!=upsert`（后两者会绕过 UNIQUE KEY + merge-on-write 校验）。
+- auto-create：`source_order` 下注入序列列并**强制**配置类型（不从样本值推断，避免首批小值推断成 BIGINT 后被大值静默回绕），追加 `enable_unique_key_merge_on_write=true` + `function_column.sequence_col`；`off` 路径 DDL 做了**全字符串逐字比对**，确认零变更。
+- 存量表：`validateSourceOrderStatement` 校验 UNIQUE KEY 模型、序列列不在 key 内、mow=true、属性指向配置列、类型可容纳序域；每类失败附带「新建表 + 回填 + 对账 + 切换」迁移路径，并明确写出 `ALTER TABLE ... SET` 不可用（实测结论）。
+- 覆盖范围补强：`ValidateSchema` 改为一次 `SHOW CREATE TABLE` 同时服务 UNIQUE KEY 与 source_order 两个契约；新增 `ensureSourceOrderTables` 在 `Write` 前按路由表惰性校验（每进程每表一次），覆盖 `table_template` 扇出（该场景 `ValidateSchema` 按设计跳过单表预检）——避免多表 CDC 场景静默退化为 last-write-wins。
+- 证据：`go test ./internal/etl/sink -run Doris`（新增 7 个测试/25 个子测）、`go test ./internal/etl/...` 24 包全绿、`-race` 于 sink+server 全绿、`go vet` clean。
+
+```text
+Round: 2/5
+Roadmap item: IT-7 (IT-7/T7.2)
+Profile/path: connector path (doris sink 配置面与表契约)
+Objective: version_mode=source_order 的配置/DDL/存量表契约可被表达并 fail-closed
+Scope: internal/etl/sink/doris.go + doris_test.go、internal/etl/server/schema.go
+Non-goals: 不注入序列值（T7.3）；不改删除路径；不改 version_mode=off 任何行为
+Acceptance: T7.2 验收 1–5（见 tasks.md）
+Evidence: go test ./internal/etl/sink -run Doris
+Result: active
+Residual/follow-up: T7.3 序列注入
+```
+
+Round 1/5 记录（已完成 T7.1）：
+
+```text
+Round: 1/5
+Roadmap item: IT-7 (IT-7/T7.1)
+Profile/path: connector path (doris sink 语义实测，未涉及数据面写入)
+Objective: 在真实 Doris 2.1.11 上证明 sequence 比较 / delete-sign 可写性 / 部分列载荷 / 存量表属性
+Scope: docs/iterations/IT-7-doris-source-order/{spec,plan,tasks,findings}.md + hack/it7-doris-semantics-probe.sh
+Non-goals: 不实现写入路径；不改 version_mode 默认值；不新增 connector
+Acceptance: T7.1 验收 1–5
+Evidence: findings.md（fe/be 2.1.11 实测，hack/it7-doris-semantics-probe.sh）
+Result: delivered (T7.1 done → 迭代仍 active，T7.2 起继续)
+Residual/follow-up: T7.2/T7.3 范围已按实测收缩（不含墓碑载荷、序列类型 LARGEINT）
+```
+
+**T7.1 实测结论（2026-10-30，`hack/it7-doris-semantics-probe.sh` + Doris fe/be 2.1.11，逐条证据见 [findings.md](./iterations/IT-7-doris-source-order/findings.md)）**：
+
+- ✅ 写侧序保护成立：`function_column.sequence_col` 生效，旧写不覆盖新写（INSERT 与 Stream Load 均验证）。
+- ⚠️ 删除侧保护成立但只覆盖「严格更旧」：Doris 的 `DELETE` 写入的 delete-sign 行继承**被删行当时的序列**，因此两个下界成立——删除从未存在的行不产生墓碑（旧写会插入幽灵行）、等序后写者胜。
+- ❌ `__DORIS_DELETE_SIGN` 无法通过 Stream Load 写入（`columns`/`hidden_columns`/`partial_columns`/CSV 四种写法全部 `Status=Success` 但不删除）→ **删除保留现有 MySQL `DELETE`，不实现墓碑载荷**，原「混合批放行」收益随之删除。
+- ❌ 存量表不能后设 `function_column.sequence_col`（`Unknown table property`）→ 只能 fail-closed + 新表迁移。
+- 🔧 类型修正：`DECIMAL` 被拒（`Sequence type only support integer types and date types`）、`BIGINT` 写 `2^63` **静默回绕成负数** → 默认 `LARGEINT`，`bigint` 仅 opt-in 且越界 fail-closed。
+- 🔧 `enable_unique_key_merge_on_write=true` 是删除保护的前提（mow=false 下旧重放会复活已删行）→ 强制校验。
+
+来源：2026-10-30 的「Doris vs ClickHouse sink 成熟度」核对。可追溯事实：`internal/etl/sink/doris.go` 中不存在 `sequence`/`source_order`/`delete_sign` 引用，`core.SourceOrder`（`internal/etl/core/record_contract.go:92`）的 sink 侧消费方只有 ClickHouse；`DorisSink.batchDeleteRecords`（`doris.go:824`）走 MySQL 物理 `DELETE`，行删除后更旧但更晚到达的 INSERT/UPDATE（延迟 DLQ replay、checkpoint reset、并发 replay）会把它写回；Stream Load 与 INSERT 回退按 Unique Key 后写者胜，**旧记录可覆盖新状态**；混合写/删批因缺少墓碑表达而在 `doris.go:421` 被拒绝，需 `allow_mixed_cdc_non_atomic` 手动放宽。对照 ClickHouse：`clickhouse.go:700` 的 `prepareSourceOrderRecords` + `_version`/`_is_deleted` + 双参数 `ReplacingMergeTree`，`clickhouse.go:1505/1532` 对不兼容存量表 fail-closed，`hack/e2e-clickhouse-replay-ordering.sh` 有"旧 INSERT 不复活已删除行""旧 UPDATE 不覆盖新 UPDATE"实测。
+
+核心判断：这是**同一份 at-least-once 契约在两个 OLAP sink 上的语义不一致**，不是新增能力。Doris 原生有对应机制（Unique Key merge-on-write 的 sequence column 与 `__DORIS_DELETE_SIGN`），因此可以在不改变 source、不引入跨 sink 事务的前提下补齐。
+
+非目标：不做跨 sink exactly-once；**不改变 `version_mode: off` 默认值与既有行为**（存量管道零迁移）；不覆盖 Doris 1.x 与非 Unique Key 表；不为 `insert` 回退路径发明墓碑语义；不新增 connector，不改 source 侧。
+
+| 子项 | 内容 | 验收 |
+| --- | --- | --- |
+| T7.1 语义实测与设计冻结 | 在真实 Doris 2.1.11 上证明 sequence 比较、delete-sign 可写性、部分列载荷、存量表属性；结论写 `findings.md` 并作为实现 gate | ✅ **done**：写侧成立、delete-sign 不可写、属性不可后设、类型定为 LARGEINT，范围已收缩 |
+| T7.2 配置面与表契约 | `version_mode: off\|source_order`（默认 off）、`sequence_column`、`sequence_type`（默认 **largeint**）；auto-create 输出 `LARGEINT` 序列列 + `enable_unique_key_merge_on_write` + `function_column.sequence_col`；存量表/mow=false fail-closed 并给新表迁移步骤 | ✅ **done**：DDL 逐字不变已断言、9 类构造期拒绝、`SHOW CREATE TABLE` 六类契约拒绝 + 迁移文案、`table_template` 扇出惰性校验 |
+| T7.3 写入路径 | 仅 `prepareDorisSourceOrder` 注入序列值（非 DELETE 记录）；DELETE 路径**不变**（序保护来自 Doris 隐式 delete-sign）；bigint 越界 fail-closed | 单测：序列注入、bigint 越界、DELETE 透传、SourceOrder 缺失、CSV 列序；`off` 路径零改动 |
+| T7.4 能力门禁 | `checkClickHouseSourceOrderCapability` 泛化为 `checkSourceOrderCapability(spec, sinkLabel, result)` 并供 Doris 复用；无持久数值序的源 fail-closed | CH 既有 preflight 测试不改动即通过（等价性）；Doris 源矩阵用例通过 |
+| T7.5 e2e 与收口 | 新增 `hack/e2e-doris-source-order.sh`（真实 mysql_cdc 写入 `_version` 注入值/更新后递增/迟到低序写入被拒；T7.1 spike 证明 delete-sign 无法随 Stream Load 携带，故 e2e 收敛为写入侧排序）；认证 manifest 追加 `source_order_replay`；文档写明四条残窗与 CHANGELOG | 脚本退出 0（已 PASS）；既有 `e2e-doris.sh`/`e2e-data-integrity.sh` 不回归；`check-connector-evidence.sh -strict` 通过 |
+
+验收（12 项）与交付约束见 [IT-7 spec](./iterations/IT-7-doris-source-order/spec.md)；技术方案见 [plan](./iterations/IT-7-doris-source-order/plan.md)；5 轮任务切分见 [tasks](./iterations/IT-7-doris-source-order/tasks.md)。
+
+预估 5 轮（T7.1 一轮含 gate、T7.2+T7.3 两轮、T7.4 一轮、T7.5 一轮）。
+
+### IT-8：数据完整性闭环（对账 / 对象提交清单 / 单表重同步 / 无主键表快照）
+
+状态：`delivered`（2026-11-01）
+
+来源：2026-10-31「除验证类之外还有哪些实质功能没完成」盘点。该盘点结论是：roadmap 上的条目
+只剩 UI-E（`blocked_external`）与 P0 MaxCompute 认证（`deferred`），但**代码层面仍有四条实质
+功能缺口**无人认领——没有数据对账、S3/文件输出没有提交清单、只能整条 pipeline 重同步、无主键
+表无法快照。本条把这四条从「分析结论」变成「有实现 + 有测试 + 有文档」的交付项。
+
+| ID | 可观察结果 | 范围 / 非目标 | 验收与证据 |
+| --- | --- | --- | --- |
+| T8.1 数据对账 | `POST /api/v2/pipelines/{id}/reconcile` 逐表给出行数/内容摘要判定（`match`/`count_mismatch`/`content_mismatch`/`schema_mismatch`/`missing_target_table`/`error`），不一致且存在单一数值主键时用分桶定位漂移的 key 段；`GET` 同路径返回支持矩阵；响应固定带 `limits`。**done** | 支持 `mysql_batch`/`mysql_cdc`/`mysql_snapshot_cdc`/`postgres_cdc` → `mysql`/`doris`/`clickhouse`/`postgres`；Kafka/文件/对象存储端与声明 `transforms` 的 pipeline 显式拒绝。不改 sink/runtime 语义 | 单测 4 方言 SQL 生成 + 判定矩阵 + 分桶定位 + 端点；容器 e2e 场景 1/1b（真实 MySQL：先 match，删行后 count_mismatch + `row_delta:1` + `bucket_mismatches`） |
+| T8.2 对象提交清单 | `s3`/`file_sink` 的 `manifest: true` 先写数据对象、再写 `<prefix>_manifests/<date>/<hash>.manifest.json`（含 key/sha256/bytes/rows/batch_seq），manifest 名由内容派生；manifest key 进入 checkpoint（`sink_commit.native.manifest_key`）；未被引用的对象即崩溃窗口残留。**done** | 默认关闭（`manifest: false` 路径零变化），preflight 建议开启；不做湖仓事务（元数据改写/小文件合并）；跨日重放产生的第二个已提交对象如实记录 | 单测提交/幂等/legacy 零变化/孤儿/前缀覆盖/checkpoint 元数据；容器 e2e 场景 2（file）与 2b（MinIO：manifest 内容、对象存在、孤儿不提交、checkpoint token） |
+| T8.3 单表重同步 | `POST /api/v2/pipelines/{id}/resync` 只清指定表的快照游标、复用现有 binlog 位点作 handoff、phase 回 `snapshot`；未指定表保留游标不重投；响应带 `semantics`。**done** | 仅 `mysql_snapshot_cdc`；运行中返回 409；sink 必须能吸收重复投递（响应显式说明）；不做点位自定义（用 `checkpoint/set`） | 单测游标清理/envelope 保留/409/400/405/持久化改写；容器 e2e 场景 3（删行 → resync → 目标恢复 5 行、另一表仍 3 键、对账回到 match/row_delta=0） |
+| T8.4 无主键表快照 | `mysql_snapshot_cdc` 新增 `no_pk_snapshot: skip\|hash`；`hash` 下无主键表在一致性快照事务内流式读取并写合成 `_row_hash`（sha256）作为 metadata 主键，重放/重启幂等；preflight 的 `snapshot_coverage` 新增 `row_hash` 类别与建议。**done** | 默认 `skip`（旧行为不变）；强制 sink `pk_columns_from_metadata: true`；明确不做断点续传；列值完全相同的行折叠，reconcile 会解释该差异 | 单测 hash 稳定性/合成键/checkpoint 生成/hash 与 skip 的 PK 解析/校验；容器 e2e 场景 4（真实 MySQL：4 行 → 3 个不同 `_row_hash`、目标列存在、64 位 sha256） |
+| T8.6 维表增量刷新 | `lookup` 新增 `incremental_column`/`incremental_query`：首次全量、之后只拉取单调列更新的行并合并进缓存；`incremental_delete_column` 软删除、`full_refresh_interval_sec` 兜底全量；增量失败回退全量不留半更新；新增 `incremental_*` 指标。**done** | 不做 binlog 驱动维表 CDC（属任意 keyed state 边界）；高水位不持久化（重启首次全量）；硬 DELETE 需软删除列或兜底全量 | 单测 6 组（合并/软删除/回退/标记列/比较/配置）+ spec 校验 7 子测；容器 e2e 场景 5（真实 MySQL `TIMESTAMP`：运行中改维表行，后续记录取到新值，`incremental_merge`=6 而非全量重载） |
+| T8.5 e2e 与文档收口 | 四条能力在真实容器里端到端通过；文档与 CHANGELOG 同步；全量测试与 `-race` 全绿。**done** | —— | `hack/e2e-data-integrity.sh`（podman，MySQL + MinIO）全绿；`go test ./...` 29 包 ok；`-race`（server/sink/source/pipeline/checkpoint）全绿；`go vet`/`gofmt`/`git diff --check` 干净 |
+
+已知边界（写入文档，不以"已实现"掩盖）：对账是时间点只读比较、不是 exactly-once 证明；manifest
+不是湖仓事务；resync 依赖 sink 幂等；无主键表 hash 快照不可断点续传且会折叠完全重复的行。
+
+Residual（本迭代不做）：对账/重同步的前端呈现；对账的行级 diff；manifest 的湖仓事务化。
+
+验收（16 项）与交付约束见 [IT-8 spec](./iterations/IT-8-data-integrity-closure/spec.md)；技术方案见
+[plan](./iterations/IT-8-data-integrity-closure/plan.md)；任务切分与证据落点见
+[tasks](./iterations/IT-8-data-integrity-closure/tasks.md)。
+
 ### UI-D：实测交互可信度与小屏可用性收口（2026-09-24 Playwright 走查）
 
-状态：`queued`（不抢占当前已完成主线的优先级；作为 UI-A/UI-B/UI-C 收口后的有界 follow-up，待用户明确授权领取）。
+状态：`delivered`（2026-09-26；UI-D.1–UI-D.6 全部交付，真实 app 容器 UI E2E 209 passed / 0 failed）。
 
-来源与边界：2026-09-24 基于已构建 React UI 的 Playwright 实机走查（总览、问题中心、管道列表/详情、创建向导、DLQ、连接、设置；1280px 与 390px 视口）；任务流与产品设计判断见 [UI 产品与交互设计复审](./ui-product-design-review-2026-09-24.zh.md)。前端 API 使用浏览器层的代表性 fixture；因此本项先修复**可复现的 UI 表达、状态和响应式问题**，真实 runtime 成功/失败联动仍须由 `hack/e2e-ui.sh` 在应用容器内复验。不得新建 UI-only 执行语义，不改变 Source → Transform → Sink spec、at-least-once 或 connector/runtime 合约。
+来源与边界：2026-09-24 基于已构建 React UI 的 Playwright 实机走查（总览、问题中心、管道列表/详情、创建向导、DLQ、连接、设置；1280px 与 390px 视口）；任务流与产品设计判断见 [UI 产品与交互设计复审](./ui-product-design-review-2026-09-24.zh.md)，可领取增量见 [UI-D iteration](./iterations/UI-D-interaction-mobile-hardening/spec.md)。前端 API 使用浏览器层的代表性 fixture；因此本项先修复**可复现的 UI 表达、状态和响应式问题**，真实 runtime 成功/失败联动仍须由 `hack/e2e-ui.sh` 在应用容器内复验。不得新建 UI-only 执行语义，不改变 Source → Transform → Sink spec、at-least-once 或 connector/runtime 合约。
 
 目标：让操作者在高影响运行操作、故障修复和手机/小屏值守时，始终能看清“将要做什么、为何不可做、结果如何、下一步是什么”。
 
@@ -176,7 +292,90 @@ Roadmap 状态只使用以下值：
 
 设计约束：优先修复任务完成性与可解释性，不以堆叠额外按钮、卡片或颜色替代清晰状态；危险操作的风险说明必须保持 at-least-once/replay 边界；小屏不隐藏核心状态或把破坏性操作变成无标签图标。
 
-建议领取顺序：UI-D.1 → UI-D.2 → UI-D.3 → UI-D.4 → UI-D.5。每一项为独立可验证纵向 slice；先补相应 Playwright 断言，再改 UI，完成后更新本条证据。后续产品设计复审中发现的“任务流/信息架构”建议仅在用户显式授权时另立项，不扩张本项。
+交付证据（2026-09-26）：
+
+| Criterion | Evidence | Result |
+| --- | --- | --- |
+| UI-D.1 EN/ZH 批量确认可信度 | D0/D1.1a–D1.2：真实 API 预置 stopped streaming pipeline，确认 action/目标/replay/Cancel/Close 与无 token | passed |
+| UI-D.2 可执行目标供给 | D2.1–D2.3：Stop disabled + 可见原因、Start enabled、Clear selection | passed |
+| UI-D.3 390px 值守页面 | D3.1–D3.9：Connections/Schedules/My Plugins containment、local scroller/focus、1280px table | passed |
+| UI-D.4 向导发现性 | D4.1–D4.5：1/6 progress、scroll affordance、Next/keyboard local auto-scroll、hash | passed |
+| UI-D.5 刷新与 a11y | D5.1–D5.9：active/paused/failure、last-success 分层、manual busy/recovery、EN/ZH names | passed |
+| 完整验证 | `cd web && npm run typecheck && npm run lint && npm run build`（lint 0 errors / 29 existing warnings）；`CONTAINER_CLI=podman ./hack/e2e-ui.sh`（重建真实 app image，209/209） | passed |
+
+任务流/信息架构类建议仍在后续 UI-E，未扩张本项。
+
+### UI-E：首次成功与故障恢复的任务型产品闭环（2026-09-24 产品/交互复审）
+
+状态：`blocked_external`（2026-09-26：UI-E.1 已领取并完成研究前置，但缺 3–5 名目标画像外部参与者；不得以内部熟练贡献者替代后宣称完成。UI-D 处理的可复现交互/小屏缺陷已交付；UI-E 的实现仍须先完成用户任务验证和 API 契约核对。）
+
+**结果导向**：使兼任数据运维的应用工程师可以**不先理解 worker、插件 ABI、DAG 内部结构或 YAML**，完成「首条安全管道 → 首批交付验证 → 发现异常 → 修复 → 安全 replay → 核对恢复」；从而降低首次配置和故障恢复的不确定性。完整产品判断、用户旅程和不建议做的方向见 [UI 产品与交互设计复审](./ui-product-design-review-2026-09-24.zh.md)。
+
+来源：在已构建 UI 的 Playwright 操作证据基础上，结合代码路径复审。已确认的设计/事实缺口包括：Issues 可为同一 pipeline 的 DLQ、lag/checkpoint 或 last error 分别生成多项技术信号；`#/dlq` 不承载选择的 pipeline，刷新或直接链接时丢失修复上下文；创建向导仍同时暴露大量专家配置；总览虽已区分累计指标，但「待行动、是否推进、历史累计」尚未完全按用户问题拆开。不得由前端凭文本猜测根因或杜撰 incident 关系。
+
+| ID | 用户结果 / 待验证假设 | 有界范围与非目标 | 验收与证据 |
+| --- | --- | --- | --- |
+| UI-E.1 | 新用户能在默认路径完成已验证的首条 Source → Transform → Sink，而不被非必填 YAML、运行参数或专家对象阻塞。 | 先做 3–5 名目标用户的任务走查和向导字段分层方案；后续只渐进披露，隐藏字段不得丢失或重写。非目标：新 connector、第二份 spec 或强制线性 wizard。 | 记录基线与关键卡点；默认路径不要求编辑 YAML；复验 P4 已定目标「空环境到首条已验证链路中位 ≤30 分钟」或记录明确 blocker。 |
+| UI-E.2 | 操作者面对一个故障时先看到一个可解释的恢复任务和下一步，而不是先理解 last error、DLQ、lag、checkpoint 等多条技术信号。 | 先核对 API 是否能提供可靠关联 ID/错误类别；可用时定义 server-backed incident/关联契约与 UI 闭环。非目标：UI 仅凭相似错误文本强行合并或自动执行 replay。 | 一个 sink outage + DLQ 场景能呈现根因、影响、推荐下一步及 `修复 → 验证 → dry-run → replay → 核对`；用户走查记录从问题入口到 remediation/人工升级路径的耗时，目标沿用 P4 的 ≤10 分钟。 |
+| UI-E.3 | 用户可刷新、分享和返回到同一条 DLQ/Issue/Connection 修复上下文，不因页面跳转而丢失当前对象。 | `#/dlq` 选中管道、Issue 高亮、Connection 上下文的稳定 URL；沿用 hash router。非目标：迁移到新 router 框架、把 transient secret 放入 URL。 | 直接打开、刷新、浏览器前进/后退后仍恢复同一 pipeline、issue/filter/tab；敏感信息不进入 URL；新增 Playwright deep-link 回归。 |
+| UI-E.4 | 总览首先回答「现在先处理什么」，详情回答「是否持续推进/为什么」，累计数据保持次级且有明确时间口径。 | 用现有 metrics / health 契约核对可显示的推进证据；必要时提出最小后端字段契约。非目标：伪造时间窗口、增加无行动价值的图表或第二套 health 规则。 | 任务测试中用户能正确区分 running、healthy/degraded、last successful write、checkpoint age 和累计处理量；Dashboard/列表/详情口径一致并有自动化证据。 |
+| UI-E.5 | 管理连接时，用户能先判断其健康、被哪些管道引用及删除影响，再完成测试、加载或删除。 | 先核对 connection reference / health 的 API 数据可用性；小屏布局缺陷仍归 UI-D.3。非目标：从 UI 推测引用关系、弱化删除确认。 | 有引用的连接删除前显示受影响管道和下一步；连接测试结果可回到相关创建/修复流程；3–5 人任务走查验证理解度。 |
+
+**当前外部阻塞与解除条件（2026-09-26）**：产品 owner / 研究协调人需安排至少 3 位（目标 3–5 位）此前未使用 OpenETL 的小团队应用/后端工程师、已约时间和可重置隔离环境；每位完成下列 T1–T5 并交付去标识观察矩阵后，UI-E.1 才解除阻塞。匿名招募、隔离、任务和记录协议见 [UI-E research protocol](./iterations/UI-E-task-flow-recovery/research-protocol.md)。UI-E.2/UI-E.4/UI-E.5 在此之前保持不可实施；UI-E.3 的只读 API 契约盘点可以在后续独立 claim 准备，但不替代用户研究。
+
+**产品验证门槛**：UI-E 在任何大规模信息架构改动前，先完成以下定性任务走查：
+
+1. 空环境创建并验证 `orders → ClickHouse` 的首批交付；
+2. 注入 sink timeout + 20 条 DLQ，完成修复、dry-run、replay 和恢复核对；
+3. 390px 小屏下测试连接、查看问题和执行安全 replay；
+4. 比较 `Diagnose/Locate` 与以结果命名的动作，记录首击正确率；
+5. 让用户解释同一页的 running、healthy、last successful write、checkpoint age 与累计量，记录误解来源。
+
+**设计约束**：不以更多卡片、图表、颜色或 AI 文案取代明确的下一步；保持 Source → Transform → Sink 与 at-least-once/replay 边界；生产 UI 的任何“推荐修复”必须能说明依据，无法自动判断时给出明确人工升级路径。
+
+**建议顺序**：UI-E.1 / UI-E.3 的研究与稳定上下文可以先行准备；UI-E.2 / UI-E.4 / UI-E.5 的实现必须等待 API 契约和用户任务证据。可领取计划见 [UI-E iteration](./iterations/UI-E-task-flow-recovery/spec.md)。
+
+### UI-F：控制面路由安全与运行状态真实性（2026-09-25 Playwright 补充实测）
+
+状态：`delivered`（2026-09-27：UI-F.1–UI-F.7 全部完成，收口轮真实容器 265/265。IT-6/UI-D 均已 delivered；UI-E.1 已 `blocked_external`，缺外部用户研究输入。依据用户“roadmap 清空前不要停下”的持续授权，领取下一可实施的安全修复。PW-R1 的 `P0` 是严重度标识，不改变后续 UI-F slice 的有界顺序。）
+
+来源与边界：见 [Playwright CLI 补充实测复审](./ui-playwright-supplemental-review-2026-09-25.zh.md) 与 [UI-F iteration](./iterations/UI-F-control-plane-truthfulness/spec.md)。走查实际操作了已构建 React UI 的 Pipeline Detail、Settings、Workers、Audit、Connector catalog、Extensions、Schedules、DAG Designer、移动抽屉和主题，使用浏览器层代表性 API fixture（桌面 `1280×900`、小屏 `390×844`）。因此 UI-F 先处理可复现的**控制面对象身份、路由/弹层状态、危险操作确认、读取状态真实性、i18n/a11y 与小屏 containment**；不把 fixture 成功误称为真实 runtime、持久化删除、认证或 replay 证据。交付前必须在 app container 运行 `hack/e2e-ui.sh`。
+
+目标：让自托管操作者在失效链接、跨页导航、删除对象、读取控制面数据和小屏值守时，始终能确定「当前对象是谁、动作会不会发生、读取结果是否可信、该数据是否仅为当前快照」。
+
+| ID | 可观察结果 | 范围 / 非目标 | 验收与证据 |
+| --- | --- | --- | --- |
+| UI-F.1 | 无效 `#/pipelines/<id>/<tab>` 显示明确 not-found，绝不回退为列表第一条或先前 selected pipeline；任何 Start/Stop/Reset/DLQ 动作只可引用已验证、与 route ID 一致的对象。**`delivered` 2026-09-27。** | `main.tsx`、Pipeline Detail、必要 route 测试；不扩展 DLQ/Issue/Connection 的 shareable context（UI-E.3）。 | 真实 app container `CONTAINER_CLI=podman ./hack/e2e-ui.sh` 217/217 PASS：F1.1 direct、F1.1b reload、F1.2/F1.3 零 action/request、F1.4b/c back/forward、F1.5 七 tab；typecheck/build PASS，lint 0 error/29 existing warnings。 |
+| UI-F.2 | Settings dialog 与 hash 路由单一真相源：离开 `#/settings` 后不会遗留 overlay，Close/Esc/back/forward 后 URL、焦点、可交互层一致。**`delivered` 2026-09-27。** | `main.tsx`、Settings/Dialog；不改 token/LLM/worker settings API 或存储语义。 | `showSettings` local state removed; route-derived dialog. Real app container: F2.1–F2.7 direct/exit/Run now/Esc/back-forward/Close PASS; full 223/223 non-skip and 224/224 E2E pass after final assertion; typecheck/build PASS, lint 0 error/29 existing warnings. |
+| UI-F.3 | Worker deregister、Connection delete、Plugin uninstall 在 DELETE 前都显示本地化确认、对象与影响已知性；无 reference API 时明确“引用关系不可确认”。**`delivered` 2026-09-27。** | 三页面、共享 ConfirmDialog、i18n；不猜 connection impact，不改变 DELETE endpoint/服务端授权（权威引用契约归 UI-E.5）。 | 三页面首击均弹 ConfirmDialog（对象名 + 影响未知性/恢复边界，EN/ZH）；F3.1–F3.17 于修复前写入；真实 app container `CONTAINER_CLI=podman ./hack/e2e-ui.sh` 242/242 PASS（含受控 503 可见失败与真实 Worker/Connection DELETE 后行消失）；typecheck/build PASS，lint 0 error/29 existing warnings。 |
+| UI-F.4 | Audit、Connector catalog、Extensions 严格区分 loading/error/empty/data；Workers 的任务区和 Detail Runs 如实表达 telemetry 或 current snapshot，而不把错误/缺数据伪装成正常空态/历史。**`delivered` 2026-09-27。** | Audit/Connectors/My Plugins/Workers/Detail 及 i18n；不新增任务 telemetry、run history、incident API 或改 polling。 | 受控 503/空响应互斥断言 F4.1–F4.4（error + retry，empty 仅在成功空响应）；F4.5/F4.5b 任务区 telemetry 不可用如实声明；F4.6 Runs snapshot 注记；真实 app container `CONTAINER_CLI=podman ./hack/e2e-ui.sh` 254/254。 |
+| UI-F.5 | 在 UI-D.3 的共享响应式边界已冻结后，Detail Runs、Workers、Audit、Connector catalog、DAG Designer 的 390px 页面不再整页横滚；宽表/画布只在局部容器内操作。**`delivered` 2026-09-27。** | AppShell/table、上述未被 UI-D.3 覆盖的页面/DAG；不以全局 `overflow-x:hidden`、隐藏危险操作或第二套移动数据模型修复。 | 实测仅 DAG Designer 溢出（palette 行 713px），修复为局部 `overflow-x-auto`；F5.1 五页 390px + F5.2 UI-D.3 三页无回退 + F5.3/F5.4 palette/canvas 可达 + F5.5 1280px 回归全 PASS；真实 app container 265/265。 |
+| UI-F.6 | Extensions 不再显示 raw i18n key；token、cron、DAG pipeline name 等字段以稳定 label（非仅 placeholder）提供语义和帮助/错误关联。**`delivered` 2026-09-27。** | My Plugins、Settings、Schedules、DAG、i18n；不改 token storage、cron parser、DAG spec 或 plugin ABI。 | F6.1 全页 raw-key 扫描（EN）；F6.2/F6.3 `id+htmlFor`、F6.4 `aria-label` 断言通过；真实 app container 254/254。 |
+| UI-F.7 | 所有 UI-F slice 以真实 app container 收口，文档只回填已执行证据。**`delivered` 2026-09-27。** | 受影响 UI/test/docs；不借收口新增产品能力或后端关联模型。 | 非 skip 全量 `CONTAINER_CLI=podman ./hack/e2e-ui.sh` 265/265（F1–F6 全部断言单次通过）；typecheck/build PASS、lint 0 error/29 pre-existing warnings；ROADMAP/board/spec/review 四处回填且保留原始发现；git diff --check 通过。 |
+
+设计约束：route ID 是高影响动作的安全边界，加载失败或无效 ID 时必须零动作；empty 仅表示成功且为空，error 要说明当前无法判断的范围；删除影响只呈现服务端已知事实或明确未知；小屏修复保留局部可达性而不是遮住内容；不改变 Source → Transform → Sink、at-least-once、checkpoint、DLQ/replay、worker/plugin 生命周期或 connector/runtime 合约。
+
+进度（2026-09-27）：UI-F.1–UI-F.7 全部 delivered；最终真实容器复验（非 skip 全量镜像重建）265 passed / 0 failed，单次覆盖 F1–F6 全部断言。迭代关闭，无残留 follow-up；UI-E.5 权威 connection reference API 仍归 blocked_external 的 UI-E。每项均为独立可验证 slice；完整技术方案与 round 分组见 [UI-F iteration](./iterations/UI-F-control-plane-truthfulness/tasks.md)。
+
+### UI-G：restart_policy 的 UI 配置与 spec 往返保持（2026-09-26 线上恢复复盘）
+
+状态：`delivered`（2026-09-27：UI-G.1–UI-G.5 全部完成，最终非 skip 真实容器回归 281/281；reconciler 语义/重启模式/checkpoint 契约零改动。）
+
+来源：v0.2.12 线上实战复盘 —— Kafka consumer group rebalance 窗口期内 checkpoint 外部确认失败（`kafkaReader.AckCheckpoint` 对 session 不可用按设计 fail-stop），pipeline 主动停止、数据零丢失（written=read, failed=0）。后端 `restart_policy` + reconciler（`server.go` `reconcilerLoop`，指数退避、从 durable checkpoint 恢复）本可自动恢复此类故障，但该字段当前**只能通过手写 YAML/API 配置**：代码核对确认创建向导 `buildSpec` 不生成该字段、`syncFromYaml` 导入后表单成为唯一真相源会在提交时静默丢弃它（违反 P4 已交付的「同一 spec 在 UI、YAML 和 API 间往返不丢失隐藏字段」验收）、DAG Designer 同样无该字段（`orchestrator/executor.go` 的 DAG spec 已支持）、`docs/etl-config-schema.md` 顶层字段表亦未记载。
+
+目标：让操作者在向导/Designer 的安全步骤中显式配置 pipeline 自动重启策略，并保证该字段在 UI ↔ YAML ↔ API 往返与编辑既有 pipeline 时不丢失；后端 reconciler 语义不变。
+
+| ID | 可观察结果 | 范围 / 非目标 | 验收与证据 |
+| --- | --- | --- | --- |
+| UI-G.1 | 向导安全步骤渐进披露 `restart_policy`（mode/max_restarts/initial_delay_ms/max_delay_ms/backoff_multiplier），默认（未配置）等价 `never` 且不改变现有行为，EN/ZH 标签与帮助文本说明 on-failure 的 at-least-once 重放边界与「重启从 durable checkpoint 恢复、可能重放最后批次」。**`delivered` 2026-09-27。** | `first-task-wizard.tsx` Safety 步、i18n；不改 `pipeline.RestartPolicy` 结构与 reconciler。 | G1.1–G1.6 全 PASS（275/275）：渐进披露表单、默认 never 不输出键、表单值逐字进入 spec YAML、EN/ZH 帮助文本含 checkpoint 重放边界、确认页摘要；JSON 文本单一真相源且 G2 断言复跑通过。 |
+| UI-G.2 | 含 `restart_policy` 的 spec 经向导 YAML 导入 → 表单编辑 → 提交后字段不丢失；编辑既有带该字段的 pipeline 保存后字段保持不变。**`delivered` 2026-09-27。** | `syncFromYaml`/`buildSpec`/草稿恢复；非目标：通用未知字段透传框架（只修此已知顶层字段）。 | G2.1–G2.4 于真实 app container 全 PASS（269/269）：导入后表单持有（`restartPolicyText` + Safety 步镜像面）、改 batch_size 后提交 spec 逐值相等（`/spec` 端点比对 mode/max_restarts/initial/max/multiplier）、草稿恢复保留、默认路径不输出键。字段名对齐服务端 `max_restarts`（原文 max_retries 为笔误）。 |
+| UI-G.3 | DAG Designer 暴露同等 `restart_policy` 配置，线性与 DAG spec 口径一致。**`delivered` 2026-09-27。** | DAG Designer 表单；不改 DAG 执行/reconcile 语义。 | G3.1–G3.3 PASS（281/281）：Advanced 抽屉渐进披露表单、模式选择后显示四输入、导出 YAML 携带配置值；DAG/线性两 spec 分支与 `loadSpecIntoCanvas` 回填一致。 |
+| UI-G.4 | Pipeline 详情展示已配置的 restart policy（mode、max_restarts、当前退避参数），未配置时明确显示「未配置（失败后不自动重启）」。**`delivered` 2026-09-27。** | 详情摘要区；不新增 restart-attempt telemetry API，不展示 UI 侧猜测的重启状态。 | G4.1–G4.3 PASS（281/281）：已配置管线显示 mode/次数/延迟/倍数、未配置显示 not configured、ZH 标签本地化；仅展示存储 spec 静态值。 |
+| UI-G.5 | 文档与回归收口：`docs/etl-config-schema.md` 顶层字段表补 `restart_policy`（默认行为、字段表、与 reconciler 退避/max_restarts 语义及与 retry 的区别——retry 是记录级写入重试）；全量 UI 回归。**`delivered` 2026-09-27。** | docs、CHANGELOG；不改 runtime。 | etl-config-schema.md 字段表/示例/语义说明补齐（含 at-least-once 重放与 retry 区别）；CHANGELOG 双语条目；非 skip 全量容器回归 281/281；typecheck/build PASS、lint 0 error；`go build ./...` PASS；git diff --check 通过。 |
+
+设计约束：不得改变 reconciler 的重启判定、退避算法或 at-least-once/checkpoint 契约；不新增 restart 模式或 per-node restart（只做 pipeline 级）；无服务端契约前 UI 不得伪装重启进度或结果；向导渐进披露遵循 UI-E.1 的字段分层原则，隐藏时不丢失或重写字段。
+
+建议领取顺序：UI-G.2 → UI-G.1 → UI-G.3 → UI-G.4 → UI-G.5（**全部 delivered 2026-09-27**）。可与 UI-D/UI-E 的向导 slice 合并交付，但验收按本表逐项闭合。
 
 ### UI-A：前端交互与向导逻辑加固（2026-09-12 审计）
 
@@ -1289,6 +1488,20 @@ Residual/follow-up: none
 
 ### GAP-1：`postgres_cdc` 三个 Metadata 契约全缺（2026-08-21 已实现；2026-09-01 PG 实例 e2e 闭合，`delivered`）
 
+**2026-11-03 复认证与缺陷修复**：`hack/e2e-postgres-cdc.sh` 在真实 PostgreSQL 16
+（`wal_level=logical`）上重跑 PASS，并把该源升为 `production`。这一轮证明
+"元数据契约已实现"并不等于"能用"：四条链路实测出四个解码缺陷并已修复 ——
+(1) `loadTablePKs` 的主键查询引用了 FROM 里不存在的别名 `rc.relname` 且忽略错误，
+所以 `Metadata.PrimaryKeyColumns/Key` 实际永远为空，metadata-PK sink 直接判
+`primary_key_columns_missing` 进 DLQ；(2) 仅含键的旧元组（`K`）按"前 N 列"解码
+而不是 replica identity 列，UPDATE 的 before image 错位；(3) 默认 replica identity
+（`d`）对主键未变的 UPDATE 不发旧元组，这类更新被判 `update_before_image_missing`
+全部进 DLQ —— 现按"pgoutput 只在键未变时才省略旧元组"这一契约用 after image 重建
+仅键 before image（`BeforeImageState=partial`）；(4) TRUNCATE 解析把关系计数读晚
+一个字节，导致 TRUNCATE 被静默忽略却仍报告 `on_truncate: error` 的安全语义。
+回归测试：`postgres_cdc_tablepk_test.go`（查询形状、`K`/`O`/`N` 三种旧元组、
+relation 标记位、TRUNCATE fail-closed/skip/畸形帧）。
+
 **2026-09-01 e2e 证据**：`hack/e2e-postgres-cdc.sh` 实跑（重建镜像 = 当前 HEAD 代码）PASS
 ——真实 pgoutput 流 INSERT/UPDATE/DELETE 经 postgres_cdc 源写入 MySQL sink，含
 checkpoint stop/restart 后停止期事件补收（`Verify checkpoint restart consumed
@@ -2346,8 +2559,9 @@ RA-1 / IT-2 源序与删除复活
   三件套落地前，不进入当前执行 backlog。优先关注 CH-C1 ack/dedup、CH-C2 additive-only schema、
   CH-C3 Kafka metadata、CH-C4 manifest、CH-C5 资源预算、CH-C6 诊断事件、CH-C7 原子 rollout、
   CH-C8 确定性插件 ABI。
-- S3/File first-class manifest（即 CH-C4）；当前 content-addressed key 只吸收相同 batch 边界的重放，
-  不宣称通用 exactly-once 文件输出。
+- S3/File first-class manifest（即 CH-C4）：**主体已由 IT-8 交付**（`manifest: true` 两步提交 +
+  checkpoint `manifest_key` + 读取侧 `ReadLocalManifests`/`CommittedObjectKeys`）。仍未做的是湖仓事务化
+  （元数据改写、小文件合并、跨日重放去重），因此仍不宣称通用 exactly-once 文件输出。
 - ODPS/MaxCompute lookup/source 方向；MaxCompute sink 认证主线已于 2026-09-17 移除（deferred），此方向一并下线；优先推荐将维表镜像到 MySQL/PostgreSQL/Redis。
 - Feishu 内置 source 和插件样板的真实环境、429/rate-limit、token failure 和 restart 证据；完成前保持 beta/dev-only。
 - JS/TS/WASM parser 示例扩展；不得将具体行业协议硬编码进核心。

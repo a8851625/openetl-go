@@ -59,3 +59,26 @@ sink:
 
 ## Evidence
 Covered by `hack/e2e-doris.sh`, `hack/e2e-doris-table-template.sh`, and Doris sink/preflight tests. The standard e2e covers Stream Load JSON/CSV, MySQL-protocol insert fallback, Unique Key auto-create/schema typing, MySQL CDC -> Doris insert/delete, MySQL snapshot+CDC -> Doris snapshot/update/insert, app restart recovery, checkpoint reset replay absorption, schema drift add-columns, Doris BE outage -> transient DLQ, BE/FE recovery, and DLQ replay. The table-template e2e covers Kafka `format: envelope` fan-out with heterogeneous JSON-object metadata keys, metadata-driven Unique Key auto-create, upsert/update, and DELETE; it requires a live Doris FE/BE and Redpanda. Preflight opens the Doris MySQL protocol target, validates table/Unique Key metadata when reachable, emits DDL preview, and reports field-level schema issues.
+
+## Source-order writes (IT-7)
+
+`version_mode: source_order` injects the connector-owned numeric source position into the sequence
+column of a Unique Key merge-on-write table (`function_column.sequence_col`), so a record that arrives
+late but carries an older position is ignored instead of overwriting newer state. Deletes keep the
+native `DELETE` path, which is order-aware on such a table; a primary-key change expands into a write
+for the new key plus a delete for the old one.
+
+Preflight fail-closes when the combination cannot work: `write_mode=insert`, `batch_mode!=upsert`, a
+sequence column inside the `UNIQUE KEY`, the reserved `__DORIS_DELETE_SIGN` name, a window transform,
+or a source with no durable numeric order (shared gate with ClickHouse:
+`checkSourceOrderCapability`). `sequence_type` defaults to `largeint` because Doris `BIGINT` silently
+wraps positions above `math.MaxInt64` (a MySQL binlog position is already above it in practice).
+
+Evidence: `hack/e2e-doris-source-order.sh` (real Doris 2.1.11 + MySQL binlog: the row lands with
+`_version = 9223372049739678695`, the sequence advances on update, and a stale lower-sequence write is
+rejected), plus `internal/etl/sink/doris_source_order_write_test.go` and
+`internal/etl/server/doris_source_order_preflight_test.go`.
+
+Residual windows (Doris semantics, documented not claimed away): deleting a row that does not exist yet
+affects 0 rows, so a later older insert can create a ghost key; sequence comparison is strict
+less-than, so equal sequences are last-arrival-wins.

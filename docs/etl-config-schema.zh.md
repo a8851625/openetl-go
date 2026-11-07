@@ -269,6 +269,7 @@ source:
 | `pk_column` | 否 | `id` | 快照分页的兜底主键列，应用于所有未在 `pk_columns` 中覆盖、且没有单列主键的表。如果某表没有该列，则改为自动探测，不会直接报错。 |
 | `pk_columns` | 否 | | 按表指定主键覆盖，如 `{orders: order_id, users: user_no}`。优先级高于 `pk_column` 和自动探测。 |
 | `skip_no_pk_tables` | 否 | `false` | 跳过显式列出但没有单列主键（复合主键或无主键）的表，而不是报错。全库快照（`tables: ["*"]`）始终以 warning 跳过这类表；这些表仍会通过 CDC 阶段采集变更。 |
+| `no_pk_snapshot` | 否 | `skip` | 对**没有可用主键**的表如何处理快照。`skip` 保持历史行为：不做历史快照、只靠 CDC。`hash` 会流式读取该表并写入合成的 `_row_hash` 内容键，使快照可重复执行；要求 sink 配置 `pk_columns_from_metadata: true`（在 spec 校验阶段强制），且列值完全相同的多行会合并为一行。 |
 | `limit` | 否 | `1000` | 每次快照查询的行数。 |
 | `server_id` | 否 | `1101` | 唯一复制 server ID。 |
 | `server_id_base` | 否 | | 分片时使用的复制 server ID 基准值。 |
@@ -401,8 +402,21 @@ sink:
 | `output_dir` | 是 | `/tmp/etl-output` | 输出目录路径。 |
 | `format` | 否 | `json` | `json`、`jsonl`、`csv` 或 `parquet`。 |
 | `prefix` | 否 | | 文件名前缀。 |
+| `manifest` | 否 | `false` | 两步提交：数据对象写完后，再写一个列出该对象的 manifest（key、sha256、字节数、行数、批次序号）。读取侧以"被 manifest 引用"作为提交边界；未被任何 manifest 引用的对象就是崩溃窗口残留。manifest key 同时写入 checkpoint（`sink_commit.native.manifest_key`）。 |
+| `manifest_prefix` | 否 | `_manifests/` | manifest 在 sink 前缀内的写入位置。 |
 
 Parquet 格式将所有列写入为字符串的扁平 schema。
+
+#### 对象提交语义（`manifest: true`）
+
+不开 manifest 时，数据对象写入与 checkpoint 保存之间崩溃会留下一个无法分类的对象：既可能是"提交成功但 checkpoint 丢了"，也可能是半途失败。`manifest: true` 把边界显式化：
+
+1. 先写数据对象（内容寻址，同一批次重放是覆盖而不是新增）；
+2. 再写 manifest 对象，列出该数据对象、其 sha256、行数与批次序号。
+
+manifest 名称由内容派生，所以重试同一批次只会重写同一个 manifest，不会多出第二个提交标记。布局为 `<prefix><manifest_prefix><date>/<hash>.manifest.json`；例如 `prefix: batch_` + 默认 manifest 前缀时落在 `batch__manifests/2026/11/01/....manifest.json`。`.manifest.json` 后缀使提交标记不会和数据对象（`*.json`）混淆。读取侧列举 manifest 前缀并取被引用对象 key 的并集即为已提交视图，其余对象都是未提交、可安全删除的残留。`file_sink` 调用方可以直接使用 `sink.ReadLocalManifests` / `sink.CommittedObjectKeys`。
+
+已知边界：内容寻址的数据 key 里还包含写入日期，因此同一批次在另一天重放会产生第二个（同样合法、同样已提交的）对象；manifest 让这个重复可见，而不是让数据静默翻倍。
 
 ### `s3`
 
@@ -429,8 +443,10 @@ sink:
 | `output_dir` | 否 | `/tmp/etl-output` | 仅用于文件兼容写入的本地暂存/回退目录；明确需要本地输出时请使用 `file_sink`。 |
 | `format` | 否 | `json` | `json`、`jsonl`、`csv` 或 `parquet`。 |
 | `prefix` | 否 | | 对象 key 前缀。 |
+| `manifest` | 否 | `false` | 两步提交：先写数据对象，再写列出它的 manifest 对象。读取侧以 `_manifests/` 解析提交边界，未被引用的对象是崩溃窗口残留。语义与上文 `file_sink` 一致。 |
+| `manifest_prefix` | 否 | `_manifests/` | manifest 在 sink 前缀内的 key 前缀。 |
 
-使用 MinIO 兼容 API。`endpoint` 和 `bucket` 必填；明确需要本地文件输出时请使用 `file_sink`。
+使用 MinIO 兼容 API。`endpoint` 和 `bucket` 必填；明确需要本地文件输出时请使用 `file_sink`。preflight 会对每个 `s3` / `file_sink` pipeline 建议开启 `manifest: true`：不开时 sink 无法区分已提交数据与崩溃残留。
 
 ### `mysql`
 
@@ -957,7 +973,11 @@ transforms:
 | `join_key` | 否 | `id` | 输入记录中的关联字段。 |
 | `dim_key` | 否 | `id` | 维表查询结果中的关联字段。 |
 | `fields` | 是 | | 要复制到记录中的维表字段。 |
-| `refresh_interval_sec` | 否 | `300` | 维表全量刷新间隔，`0` 表示只加载一次。 |
+| `refresh_interval_sec` | 否 | `300` | 刷新间隔，`0` 表示只加载一次。配置 `incremental_column` 后表示增量轮询间隔。 |
+| `incremental_column` | 否 | | 开启增量维表刷新（CDC-lite）：一个单调列（如 `updated_at` 或自增 id）。首次全量加载后，只拉取大于高水位的新行并合并进缓存，不再整表重载。 |
+| `incremental_query` | 否 | | 与 `incremental_column` 配套的高水位查询，必须恰好一个占位符（`?`/`$1`），并投影 `dim_key`、要复制的 `fields` 与 `incremental_column`。 |
+| `incremental_delete_column` | 否 | | 可选的软删除标记列：增量行中该列为真时，把该 key 从缓存移除而不是写入。 |
+| `full_refresh_interval_sec` | 否 | `0` | 配置 `incremental_column` 时的兜底全量刷新间隔（`0` 表示从不）。硬 DELETE 和未改变标记列的行只能靠全量重载发现。 |
 | `max_cache_entries` | 否 | `0` | 维表缓存最多保留的不同 key 数，`0` 表示不限。超过上限会让刷新/恢复失败，并递增 `cache_limit_exceeded` 指标。 |
 | `on_miss` | 否 | `pass` | 维表未命中时的动作：`pass` 保持记录不变，`null` 将配置的维表字段显式写成 null，`dlq`/`error` 返回错误并进入 runner 的 DLQ 路径。 |
 | `on_refresh_error` | 否 | `pass` | 维表刷新失败且没有可用缓存时的动作：`pass` 保持记录不变，`error` 返回错误并进入 runner 的 DLQ 路径。 |
