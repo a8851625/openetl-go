@@ -6,6 +6,7 @@ import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { StatusDot, ToneBadge } from '@/components/shared/status-badge';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { api, normalizePipelines, pipelineKey, pipelineRef, useApi } from '@/lib/api';
+import { pipelineDLQBacklog, replayBlockedReason } from '@/lib/dlq';
 import { fmtTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { ApiState, DLQItem, Pipeline, TFunc } from '@/lib/types';
@@ -54,12 +55,23 @@ function SampleRow({
   t: TFunc;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const replayState = item.identity_context?.replay_state;
   return (
     <div className="rounded-lg border border-border bg-card p-3">
       <div className="flex flex-wrap items-center gap-2">
         <ToneBadge tone="slate">{item.record.operation}</ToneBadge>
         {item.id ? <ToneBadge tone="slate">#{item.id}</ToneBadge> : null}
         <span className="text-xs text-muted-foreground">{fmtTime(item.timestamp)}</span>
+        {replayState ? (
+          <ToneBadge tone={replayState === 'sink_acked' ? 'emerald' : 'amber'}>
+            {replayState}
+          </ToneBadge>
+        ) : null}
+        {!!item.attempt && item.attempt > 1 ? (
+          <ToneBadge tone="slate">
+            {t('dlq.attempts')} {item.attempt}
+          </ToneBadge>
+        ) : null}
         <div className="min-w-0 flex-1">
           <div className="truncate font-mono text-xs text-rose-600 dark:text-rose-400">
             {item.error}
@@ -106,6 +118,13 @@ function SampleRow({
         <div className="mt-2 rounded-lg bg-muted/40 p-3">
           <div className="mb-2 grid gap-1 text-[11px] text-muted-foreground md:grid-cols-3">
             {item.record_hash && <div className="truncate font-mono">hash {item.record_hash}</div>}
+            {replayState && <div>replay_state {replayState}</div>}
+            {item.identity_context?.replay_provenance && (
+              <div>provenance {item.identity_context.replay_provenance}</div>
+            )}
+            {!!item.identity_context?.replay_attempt && (
+              <div>attempts {item.identity_context.replay_attempt}</div>
+            )}
             {!!item.pipeline_version && <div>version {item.pipeline_version}</div>}
             {item.dag_node && (
               <div>
@@ -127,6 +146,11 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
   // UI-B.3: pending confirmation for destructive DLQ purge.
   const [pendingPurge, setPendingPurge] = useState(false);
   const [filter, setFilter] = useState('');
+  // Debounced copy of the free-text filter: refetching on every keystroke made
+  // the page issue one request per character.
+  const [appliedFilter, setAppliedFilter] = useState('');
+  const [errorClass, setErrorClass] = useState('');
+  const [offset, setOffset] = useState(0);
   const [pipeFilter, setPipeFilter] = useState('');
   const [showBacklogOnly, setShowBacklogOnly] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -136,17 +160,31 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
     remaining: number;
     failed?: number;
     dryRun?: boolean;
+    blocked?: number;
+    blockedReasons?: string[];
   } | null>(null);
   const [expandedAgg, setExpandedAgg] = useState<Record<string, boolean>>({});
   const [showConfirm, setShowConfirm] = useState(false);
   const [dryRunOnly, setDryRunOnly] = useState(false);
-  const query = filter ? `limit=50&contains=${encodeURIComponent(filter)}` : 'limit=50';
+  const pageSize = 50;
+  const queryParams = new URLSearchParams();
+  queryParams.set('limit', String(pageSize));
+  if (offset > 0) queryParams.set('offset', String(offset));
+  if (appliedFilter) queryParams.set('contains', appliedFilter);
+  if (errorClass) queryParams.set('error_class', errorClass);
+  const query = queryParams.toString();
   const selectedRef = pipelineRef(selected);
   const dlq = useApi<{ items: DLQItem[] }>(
     selected ? `/api/v2/dlq/${selectedRef}?${query}` : '/api/v2/dlq/_missing',
     selected ? refreshKey : -1,
   );
-  const dlqItems = dlq.data?.items || [];
+  const dlqItems = useMemo(() => dlq.data?.items || [], [dlq.data]);
+  // error_class options are derived from the loaded page; the server-side filter
+  // still applies to the whole backlog.
+  const errorClasses = useMemo(
+    () => Array.from(new Set(dlqItems.map((i) => i.error_class || 'unknown'))).sort(),
+    [dlqItems],
+  );
   const isDAG = Boolean(selected?.dag);
   const missingDagNodeCount = isDAG ? dlqItems.filter((item) => !item.dag_node).length : 0;
   const bulkReplayDisabled = !selected || missingDagNodeCount > 0 || dlqItems.length === 0;
@@ -175,8 +213,18 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
   }, [dlqItems]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => setAppliedFilter(filter.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [filter]);
+
+  useEffect(() => {
     setLastReplayResult(null);
     setShowConfirm(false);
+    setOffset(0);
+  }, [selectedRef, appliedFilter, errorClass]);
+
+  useEffect(() => {
+    setOffset(0);
   }, [selectedRef]);
 
   const sinkMode =
@@ -184,19 +232,11 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
     (selected as any)?.spec?.sink?.config?.batch_mode ||
     'unknown';
 
-  const replayResultToast = (label: string, result: { replayed?: number }, dryRun = false) => {
+  const replayResultToast = (label: string, result: { replayed?: number }) => {
     const replayed = Number(result.replayed) || 0;
-    const remaining = Math.max(0, dlqItems.length - (dryRun ? 0 : replayed));
-    setLastReplayResult({
-      label,
-      replayed,
-      remaining,
-      dryRun,
-    });
-    const message = dryRun
-      ? `${label} · dry-run · would replay ${replayed || dlqItems.length}`
-      : `${label} · ${t('dlq.replayed')}: ${replayed}`;
-    return { toastMessage: message };
+    const remaining = Math.max(0, dlqItems.length - replayed);
+    setLastReplayResult({ label, replayed, remaining });
+    return { toastMessage: `${label} · ${t('dlq.replayed')}: ${replayed}` };
   };
 
   const deleteOne = async (item: DLQItem) => {
@@ -215,36 +255,65 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
     }
   };
 
-  const runBulkReplay = async (dryRun: boolean) => {
+  const replayQuery = (() => {
+    const params = new URLSearchParams();
+    if (appliedFilter) params.set('contains', appliedFilter);
+    if (errorClass) params.set('error_class', errorClass);
+    const qs = params.toString();
+    return qs ? `?${qs}` : '';
+  })();
+
+  // A real server-side dry run: the server applies the replay identity gate to
+  // every selected row and reports what would replay vs. what is blocked. It
+  // writes nothing to the sink and mutates no DLQ state.
+  const runDryRun = async () => {
     if (!selected) return;
-    const q = filter ? `?contains=${encodeURIComponent(filter)}` : '';
-    if (dryRun) {
-      // No dedicated dry-run API — surface impact panel only
+    await onAction(`${t('dlq.dryRun')}: ${selected.name}`, async () => {
+      const result = await api<{
+        dry_run?: boolean;
+        replayable?: number;
+        blocked?: number;
+        items?: { replayable?: boolean; reason?: string }[];
+      }>(`/api/v2/dlq/${selectedRef}/replay${replayQuery}${replayQuery ? '&' : '?'}dry_run=1`, {
+        method: 'POST',
+      });
+      const blockedReasons = (result.items || [])
+        .filter((i) => i.replayable === false && i.reason)
+        .map((i) => String(i.reason))
+        .slice(0, 5);
       setLastReplayResult({
-        label: `${t('toast.replayDlq')}: ${selected.name}`,
-        replayed: dlqItems.length,
+        label: `${t('dlq.dryRunResult')}: ${selected.name}`,
+        replayed: Number(result.replayable) || 0,
+        failed: Number(result.blocked) || 0,
         remaining: dlqItems.length,
         dryRun: true,
+        blockedReasons,
       });
       setDryRunOnly(false);
-      return;
-    }
+      return {
+        toastMessage: `${t('dlq.dryRunResult')} · ${t('dlq.resultSuccess')}: ${Number(result.replayable) || 0} · ${t('dlq.resultFailed')}: ${Number(result.blocked) || 0}`,
+      };
+    });
+  };
+
+  const runBulkReplay = async () => {
+    if (!selected) return;
     await onAction(`${t('toast.replayDlq')}: ${selected.name}`, async () => {
       const result = await api<{ replayed?: number }>(
-        `/api/v2/dlq/${selectedRef}/replay${q}`,
+        `/api/v2/dlq/${selectedRef}/replay${replayQuery}`,
         { method: 'POST' },
       );
       setRefreshKey((n) => n + 1);
       setShowConfirm(false);
-      return replayResultToast(`${t('toast.replayDlq')}: ${selected.name}`, result, false);
+      return replayResultToast(`${t('toast.replayDlq')}: ${selected.name}`, result);
     });
   };
 
   const allPipes = normalizePipelines(pipelines.data);
   const sortedPipes = useMemo(() => {
     return [...allPipes].sort((a, b) => {
-      const da = a.stats.records_dlq || 0;
-      const db = b.stats.records_dlq || 0;
+      const da = pipelineDLQBacklog(a);
+      const db = pipelineDLQBacklog(b);
       if (db !== da) return db - da;
       return a.name.localeCompare(b.name);
     });
@@ -255,7 +324,7 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
     return sortedPipes.filter((p) => p.name.toLowerCase().includes(q));
   }, [sortedPipes, pipeFilter]);
   const backlogOnly = showBacklogOnly
-    ? filteredPipes.filter((p) => (p.stats.records_dlq || 0) > 0)
+    ? filteredPipes.filter((p) => pipelineDLQBacklog(p) > 0)
     : filteredPipes;
 
   return (
@@ -292,7 +361,7 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
             backlogOnly.map((p) => {
               const key = pipelineKey(p);
               const active = pipelineKey(selected) === key;
-              const dlq = p.stats.records_dlq || 0;
+              const dlq = pipelineDLQBacklog(p);
               return (
                 <button
                   type="button"
@@ -336,12 +405,23 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
               className="w-56"
               placeholder={t('dlq.filter')}
               value={filter}
-              onChange={(e) => {
-                setFilter(e.target.value);
-                setRefreshKey((n) => n + 1);
-              }}
+              onChange={(e) => setFilter(e.target.value)}
               data-testid="dlq-record-filter"
             />
+            <select
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              value={errorClass}
+              onChange={(e) => setErrorClass(e.target.value)}
+              aria-label={t('dlq.class')}
+              data-testid="dlq-error-class-filter"
+            >
+              <option value="">{t('dlq.allClasses')}</option>
+              {errorClasses.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
             <Button
               variant="secondary"
               size="sm"
@@ -416,6 +496,15 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
                   </span>
                 </div>
               </div>
+              {lastReplayResult.blockedReasons?.length ? (
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px]">
+                  {lastReplayResult.blockedReasons.map((reason, i) => (
+                    <li key={i} className="break-all">
+                      {reason}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           )}
 
@@ -458,8 +547,11 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
                     {open && (
                       <div className="space-y-2 border-t border-border bg-muted/20 p-3">
                         {g.items.map((item, i) => {
+                          const stateReason = replayBlockedReason(item);
                           const replayDisabledReason =
-                            isDAG && !item.dag_node ? t('dlq.dagNodeMissingRecord') : undefined;
+                            isDAG && !item.dag_node
+                              ? t('dlq.dagNodeMissingRecord')
+                              : stateReason;
                           return (
                             <SampleRow
                               key={item.id || `${g.key}-${i}`}
@@ -502,6 +594,35 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
               className="border-emerald-200 bg-emerald-50/40 dark:border-emerald-900 dark:bg-emerald-950/20"
             />
           )}
+          {selected && (offset > 0 || dlqItems.length >= pageSize) && (
+            <div
+              className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground"
+              data-testid="dlq-pager"
+            >
+              <span className="tabular">
+                {t('dlq.pageRange')} {offset + 1}
+                {dlqItems.length > 0 ? `–${offset + dlqItems.length}` : ''}
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={offset === 0}
+                  onClick={() => setOffset((n) => Math.max(0, n - pageSize))}
+                >
+                  {t('dlq.prevPage')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={dlqItems.length < pageSize}
+                  onClick={() => setOffset((n) => n + pageSize)}
+                >
+                  {t('dlq.nextPage')}
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -522,7 +643,12 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
               <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3 text-xs">
                 <div className="flex justify-between gap-2">
                   <span className="text-muted-foreground">{t('dlq.targetCount')}</span>
-                  <span className="tabular font-semibold">{dlqItems.length}</span>
+                  <span className="tabular font-semibold">
+                    {dlqItems.length}
+                    <span className="ml-1 font-normal text-muted-foreground">
+                      {t('dlq.pageHint')}
+                    </span>
+                  </span>
                 </div>
                 <div className="flex justify-between gap-2">
                   <span className="text-muted-foreground">{t('dlq.filterScope')}</span>
@@ -546,7 +672,7 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
                     <Button
                       size="sm"
                       variant="secondary"
-                      onClick={() => runBulkReplay(true)}
+                      onClick={runDryRun}
                       data-testid="dlq-dry-run"
                     >
                       <Play className="h-3.5 w-3.5" />
@@ -555,7 +681,7 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
                     <Button
                       size="sm"
                       disabled={bulkReplayDisabled}
-                      onClick={() => runBulkReplay(false)}
+                      onClick={runBulkReplay}
                       data-testid="dlq-confirm-replay"
                     >
                       <RotateCcw className="h-3.5 w-3.5" />

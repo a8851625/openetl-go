@@ -5,6 +5,7 @@ import { EmptyState } from '@/components/shared/empty-state';
 import { PipelineHealthBadge, HealthDot } from '@/components/shared/pipeline-health-badge';
 import { PipelinePath } from '@/components/shared/pipeline-path';
 import { normalizePipelines, pipelineKey } from '@/lib/api';
+import { pipelineDLQBacklog } from '@/lib/dlq';
 import {
   countHealth,
   deriveIssues,
@@ -406,9 +407,9 @@ export function DashboardPage({
               </div>
               <PipelinePath pipeline={p} />
               <div className="tabular text-xs">
-                {(p.stats.records_dlq || 0) > 0 ? (
+                {pipelineDLQBacklog(p) > 0 ? (
                   <>
-                    <div className="font-semibold">{p.stats.records_dlq.toLocaleString()}</div>
+                    <div className="font-semibold">{pipelineDLQBacklog(p).toLocaleString()}</div>
                     <div className="text-muted-foreground">DLQ</div>
                   </>
                 ) : m && m.cdc_lag_ms > 0 ? (

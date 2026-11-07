@@ -228,8 +228,11 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
-        <div className="space-y-6">
+      {/* UI-D.3: grid items otherwise use their min-content width at 390px,
+          allowing editor controls to widen the whole application. Keep both
+          columns shrinkable; desktop retains the xl detail layout. */}
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-6">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm">{t('sched.editor')}</CardTitle>
@@ -283,8 +286,12 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
               <CardTitle className="text-sm">{t('common.cron')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              <label htmlFor="schedules-cron-input" className="sr-only">
+                {t('common.cron')}
+              </label>
               <div className="flex gap-2">
                 <Input
+                  id="schedules-cron-input"
                   className="flex-1 font-mono"
                   placeholder="*/5 * * * *"
                   value={cronInput}
@@ -313,7 +320,7 @@ export function SchedulesPage({ t, lang, pipelines }: { t: TFunc; lang: Lang; pi
           </Card>
         </div>
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
               <CardTitle className="text-sm">{t('sched.title')}</CardTitle>

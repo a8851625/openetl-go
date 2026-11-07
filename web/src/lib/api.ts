@@ -4,6 +4,9 @@ import type {
   ConnectionEntry,
   Pipeline,
   PipelineStats,
+  ReconcileCapabilities,
+  ReconcileReport,
+  ResyncResult,
 } from './types';
 
 export type ApiIssue = {
@@ -388,25 +391,29 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export function useApi<T>(path: string, refreshKey: number): ApiState<T> {
-  const [state, setState] = useState<ApiState<T>>({ loading: true });
+  const [state, setState] = useState<ApiState<T>>({ loading: true, refreshing: true });
   const firstRender = useRef(true);
   useEffect(() => {
     let cancelled = false;
-    // 仅首次请求显示 loading，后续刷新保留旧数据避免闪烁
-    if (firstRender.current) {
-      setState((p) => ({ ...p, loading: true }));
-    }
+    // Keep prior data during refreshes to avoid a visual flash, while exposing
+    // the real in-flight state to controls such as the top-bar Refresh now.
+    setState((p) => ({
+      ...p,
+      loading: firstRender.current ? true : p.loading,
+      refreshing: true,
+      error: undefined,
+    }));
     api<T>(path)
       .then((d) => {
         if (!cancelled) {
           firstRender.current = false;
-          setState({ data: d, loading: false });
+          setState({ data: d, loading: false, refreshing: false });
         }
       })
       .catch((e) => {
         if (!cancelled) {
           firstRender.current = false;
-          setState((p) => ({ ...p, error: apiErrorSummary(e), loading: false }));
+          setState((p) => ({ ...p, error: apiErrorSummary(e), loading: false, refreshing: false }));
         }
       });
     return () => {
@@ -447,6 +454,10 @@ export function normalizePipeline(raw: unknown): Pipeline | null {
     name,
     status: typeof p.status === 'string' && p.status ? p.status : 'unknown',
     stats: zeroPipelineStats(p.stats),
+    // Current backlog, distinct from the cumulative stats.records_dlq counter.
+    dlq_backlog: Number.isFinite(Number(p.dlq_backlog)) ? Number(p.dlq_backlog) : undefined,
+    dlq_backlog_known:
+      typeof p.dlq_backlog_known === 'boolean' ? p.dlq_backlog_known : p.dlq_backlog === undefined ? undefined : true,
     tags: Array.isArray(p.tags)
       ? p.tags.filter((tag: unknown): tag is string => typeof tag === 'string' && tag.trim() !== '')
       : [],
@@ -462,6 +473,23 @@ export function pipelineRef(p?: Pick<Pipeline, 'id' | 'name'> | null): string {
 
 export function pipelineKey(p?: Pick<Pipeline, 'id' | 'name'> | null): string {
   return (p?.id || p?.name || '').trim();
+}
+
+/**
+ * Resolve a pipeline detail hash segment without a list-selection fallback.
+ * IDs win over display names so a legacy name bookmark remains compatible
+ * without making an ambiguous route target depend on list ordering.
+ */
+export function resolvePipelineRoute(
+  pipelines: readonly Pipeline[],
+  routeID?: string | null,
+): Pipeline | undefined {
+  const target = routeID?.trim();
+  if (!target) return undefined;
+  return (
+    pipelines.find((pipeline) => pipeline.id === target) ||
+    pipelines.find((pipeline) => pipeline.name === target)
+  );
 }
 
 export function normalizePipelines(data?: { pipelines?: Pipeline[] | null }): Pipeline[] {
@@ -485,4 +513,41 @@ export function normalizeConnectionEntry(raw: any): ConnectionEntry | null {
     last_tested_at: raw.last_tested_at || raw.LastTestedAt,
     config: raw.config || raw.Config,
   };
+}
+
+// ── data integrity: reconcile + single-table resync ──────────────────────────
+
+export type ReconcileOptions = {
+  tables?: string[];
+  deep?: boolean;
+  buckets?: number;
+  /** Opt into the row-level diff (server caps this at 100 rows per side). */
+  sample_rows?: number;
+  key_columns?: Record<string, string>;
+  timeout_sec?: number;
+};
+
+export async function fetchReconcileCapabilities(ref: string): Promise<ReconcileCapabilities> {
+  return api<ReconcileCapabilities>(`/api/v2/pipelines/${encodeURIComponent(ref)}/reconcile`);
+}
+
+export async function runReconcile(ref: string, options: ReconcileOptions = {}): Promise<ReconcileReport> {
+  const body: ReconcileOptions = {};
+  if (options.tables && options.tables.length > 0) body.tables = options.tables;
+  if (options.deep !== undefined) body.deep = options.deep;
+  if (options.buckets && options.buckets > 0) body.buckets = options.buckets;
+  if (options.sample_rows && options.sample_rows > 0) body.sample_rows = options.sample_rows;
+  if (options.key_columns && Object.keys(options.key_columns).length > 0) body.key_columns = options.key_columns;
+  if (options.timeout_sec && options.timeout_sec > 0) body.timeout_sec = options.timeout_sec;
+  return api<ReconcileReport>(`/api/v2/pipelines/${encodeURIComponent(ref)}/reconcile`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function resyncPipelineTables(ref: string, tables: string[]): Promise<ResyncResult> {
+  return api<ResyncResult>(`/api/v2/pipelines/${encodeURIComponent(ref)}/resync`, {
+    method: 'POST',
+    body: JSON.stringify({ tables }),
+  });
 }

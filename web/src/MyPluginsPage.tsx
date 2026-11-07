@@ -15,7 +15,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { EmptyState } from '@/components/shared/empty-state';
+import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { showToast as notifyToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -214,6 +215,11 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const [tab, setTab] = useState<Tab>('installed');
   const [plugins, setPlugins] = useState<InstalledPlugin[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingUninstall, setPendingUninstall] = useState<InstalledPlugin | null>(null);
+  const [uninstalling, setUninstalling] = useState('');
+  const [actionNotice, setActionNotice] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [loadError, setLoadError] = useState('');
   // Editor state
   const [editorKind, setEditorKind] = useState<PluginKind>('transform');
   const [editorName, setEditorName] = useState('my-transform');
@@ -240,8 +246,14 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const refresh = useCallback(() => {
     setLoading(true);
     api<{ installed?: InstalledPlugin[] }>('/api/v2/plugins')
-      .then((d) => setPlugins(d.installed || []))
-      .catch(() => setPlugins([]))
+      .then((d) => {
+        setPlugins(d.installed || []);
+        setLoadError('');
+      })
+      .catch((e) => {
+        // A failed read must not masquerade as an empty plugin list.
+        setLoadError(e instanceof Error ? e.message : String(e));
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -403,15 +415,30 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
 
   // ── Uninstall ──
 
-  const uninstall = useCallback(async (name: string) => {
+  const uninstall = useCallback(async (plugin: InstalledPlugin) => {
+    // A request guard is deliberately retained after the modal has closed so
+    // Enter/double-click cannot uninstall the same plugin twice.
+    if (uninstalling) return;
+    setPendingUninstall(null);
+    setUninstalling(plugin.name);
+    setActionNotice('');
+    setActionError('');
     try {
-      await api(`/api/v2/plugins/${name}`, { method: 'DELETE' });
-      showToast(`Plugin ${name} uninstalled`);
+      await api(`/api/v2/plugins/${encodeURIComponent(plugin.name)}`, { method: 'DELETE' });
+      setPlugins((current) => current.filter((entry) => entry.name !== plugin.name));
+      const message = t('myplugin.uninstalled').replace('{name}', plugin.name);
+      setActionNotice(message);
+      notifyToast('success', message);
       refresh();
     } catch (e) {
-      showToast(`Uninstall failed: ${e instanceof Error ? e.message : String(e)}`);
+      const detail = e instanceof Error ? e.message : String(e);
+      const message = `${t('myplugin.uninstallFailed').replace('{name}', plugin.name)}: ${detail}`;
+      setActionError(message);
+      notifyToast('error', message);
+    } finally {
+      setUninstalling('');
     }
-  }, [showToast, refresh]);
+  }, [refresh, t, uninstalling]);
 
   // ── Edit installed plugin (open in editor) ──
 
@@ -453,8 +480,42 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     kind === 'source' ? 'emerald' : kind === 'sink' ? 'emerald' : 'violet';
 
   return (
-    <div className="space-y-6">
-      <Tabs value={tab} onValueChange={(v) => (v === 'installed' ? switchToInstalled() : switchToEditor())}>
+    <>
+      <ConfirmDialog
+        open={pendingUninstall !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingUninstall(null);
+        }}
+        title={t('myplugin.confirmUninstallTitle').replace('{name}', pendingUninstall?.name || '')}
+        description={t('myplugin.confirmUninstall').replace('{name}', pendingUninstall?.name || '')}
+        confirmLabel={t('myplugin.uninstall')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={() => {
+          if (pendingUninstall) void uninstall(pendingUninstall);
+        }}
+      />
+      <div className="space-y-6">
+        {loadError && (
+          <div data-testid="plugin-load-error">
+            <ErrorBox message={loadError} />
+          </div>
+        )}
+        {actionNotice && (
+          <div
+            data-testid="plugin-action-notice"
+            role="status"
+            className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+          >
+            {actionNotice}
+          </div>
+        )}
+        {actionError && (
+          <div data-testid="plugin-action-error">
+            <ErrorBox message={actionError} />
+          </div>
+        )}
+        <Tabs value={tab} onValueChange={(v) => (v === 'installed' ? switchToInstalled() : switchToEditor())}>
         <TabsList>
           <TabsTrigger value="installed">{t('myplugin.tabInstalled')}</TabsTrigger>
           <TabsTrigger value="editor">{t('myplugin.tabEditor')}</TabsTrigger>
@@ -563,8 +624,14 @@ export function MyPluginsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                             <Button variant="secondary" size="sm" onClick={() => editPlugin(p)} title={t('pipe.edit')}>
                               ✏️
                             </Button>
-                            <Button variant="destructive" size="sm" onClick={() => uninstall(p.name)}>
-                              {t('common.uninstall')}
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              data-testid={`plugin-uninstall-${p.name}`}
+                              disabled={Boolean(uninstalling)}
+                              onClick={() => setPendingUninstall(p)}
+                            >
+                              {uninstalling === p.name ? t('myplugin.uninstalling') : t('myplugin.uninstall')}
                             </Button>
                           </div>
                         </TableCell>
@@ -739,7 +806,8 @@ export const transform = plugin;`}</pre>
             </div>
           </div>
         </TabsContent>
-      </Tabs>
-    </div>
+        </Tabs>
+      </div>
+    </>
   );
 }

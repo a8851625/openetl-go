@@ -408,6 +408,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [shardKey, setShardKey] = useState('');
   const [batchSize, setBatchSize] = useState(1000);
   const [flushIntervalMs, setFlushIntervalMs] = useState(1000);
+  // UI-G.3: DAG Designer exposes restart_policy with the same semantics as the
+  // linear wizard. '' = not configured (spec omits the key; server = never).
+  const [restartMode, setRestartMode] = useState<'never' | 'on-failure' | 'always'>('never');
+  const [restartMaxRestarts, setRestartMaxRestarts] = useState(3);
+  const [restartInitialDelay, setRestartInitialDelay] = useState(1000);
+  const [restartMaxDelay, setRestartMaxDelay] = useState(30000);
+  const [restartBackoff, setRestartBackoff] = useState(2);
   const [checkpointIntervalSec, setCheckpointIntervalSec] = useState(30);
   const [backpressureBuffer, setBackpressureBuffer] = useState(100);
   const [hooks, setHooks] = useState<Record<string, { type: string; code: string; name: string; enabled: boolean }>>({});
@@ -524,6 +531,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setFlushIntervalMs(Number.isFinite(nextFlush) && nextFlush > 0 ? nextFlush : 1000);
     setCheckpointIntervalSec(Number.isFinite(nextCheckpoint) && nextCheckpoint > 0 ? nextCheckpoint : 30);
     setBackpressureBuffer(Number.isFinite(nextBuffer) && nextBuffer > 0 ? nextBuffer : 100);
+    // UI-G.3: keep restart_policy when a spec is loaded into the canvas.
+    const rp = spec.restart_policy || {};
+    setRestartMode(rp.mode === 'on-failure' || rp.mode === 'always' ? rp.mode : 'never');
+    setRestartMaxRestarts(Number(rp.max_restarts) >= 0 ? Number(rp.max_restarts) : 3);
+    setRestartInitialDelay(Number(rp.initial_delay_ms) > 0 ? Number(rp.initial_delay_ms) : 1000);
+    setRestartMaxDelay(Number(rp.max_delay_ms) > 0 ? Number(rp.max_delay_ms) : 30000);
+    setRestartBackoff(Number(rp.backoff_multiplier) > 0 ? Number(rp.backoff_multiplier) : 2);
 
     if (spec.dag?.nodes) {
       setDagFormat(true);
@@ -739,10 +753,19 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
 
   // ── Export & Create ───────────────────────────────────────────────
 
-  const buildSpec = () => {
+  const buildSpec = (): any => {
     const sourceNode = nodes.find((n) => n.data.kind === 'source');
     const sinkNode = nodes.find((n) => n.data.kind === 'sink');
     const transforms = nodes.filter((n) => n.data.kind === 'transform');
+    // UI-G.3: same restart_policy contract in DAG and linear formats; omit
+    // the key entirely when not configured (equivalent to server `never`).
+    const restartPolicySpec = restartMode === 'never' ? undefined : {
+      mode: restartMode,
+      max_restarts: restartMaxRestarts,
+      initial_delay_ms: restartInitialDelay,
+      max_delay_ms: restartMaxDelay,
+      backoff_multiplier: restartBackoff,
+    };
     const tagList = tags.split(',').map((s) => s.trim()).filter(Boolean);
     const matchLabels: Record<string, string> = {};
     workerLabels.split(',').forEach((pair) => {
@@ -782,6 +805,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         },
         retry: { max_attempts: 3, initial_interval_ms: 1000, max_interval_ms: 30000 },
         hooks: buildHooksSpec(),
+        ...(restartPolicySpec ? { restart_policy: restartPolicySpec } : {}),
       };
     }
 
@@ -814,6 +838,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       checkpoint_interval_sec: checkpointIntervalSec,
       backpressure_buffer: backpressureBuffer,
       hooks: buildHooksSpec(),
+      ...(restartPolicySpec ? { restart_policy: restartPolicySpec } : {}),
     };
   };
 
@@ -1075,19 +1100,21 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       {/* ── Compact Toolbar ─────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3 shadow-sm">
         <div className="flex items-center gap-2">
-          <input data-field-path="name" className={cn(fieldClass, "w-48")} value={pipelineName} onChange={(e) => setPipelineName(e.target.value)} placeholder={t('design.name')} />
+          <input data-field-path="name" id="dag-pipeline-name" aria-label={t('design.name')} className={cn(fieldClass, "w-48")} value={pipelineName} onChange={(e) => setPipelineName(e.target.value)} placeholder={t('design.name')} />
           {editTarget && <ToneBadge tone="amber" className="text-xs">{t('dag.editing').replace('{name}', editTarget)}</ToneBadge>}
         </div>
         <div className="h-5 w-px bg-border" />
-        {/* Node palette — icon-only compact */}
-        <div className="flex items-center gap-0.5">
+        {/* Node palette — icon-only compact. On narrow screens the palette row
+            scrolls horizontally inside its own container instead of widening
+            the document (UI-D.3 containment contract). */}
+        <div className="flex max-w-full min-w-0 items-center gap-0.5 overflow-x-auto">
           {NODE_PALETTE(t).map((cat) => cat.nodes.map((nd) => {
             const st = KIND_STYLES[nd.kind] || KIND_STYLES.transform;
             const disabled = nd.kind === 'lookup' && !redisStateConfigured;
             return (
               <Button
                 key={nd.kind}
-                className={cn('flex items-center gap-1 px-2', disabled && 'cursor-not-allowed opacity-50')}
+                className={cn('flex shrink-0 items-center gap-1 px-2', disabled && 'cursor-not-allowed opacity-50')}
                 variant="secondary"
                 size="sm"
                 title={disabled ? `${cat.catLabel}: ${nd.label} requires Redis state/cache` : `${cat.catLabel}: ${nd.label}`}
@@ -1100,14 +1127,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
             );
           }))}
         </div>
-        {selectedNodeId ? <Button variant="destructive" size="sm" className="px-2" onClick={deleteSelected} title={t('dag.deleteNode')} aria-label={t('dag.deleteNode')}>{t('common.delete')}</Button> : null}
+        {selectedNodeId ? <Button variant="destructive" size="sm" className="shrink-0 px-2" onClick={deleteSelected} title={t('dag.deleteNode')} aria-label={t('dag.deleteNode')}>{t('common.delete')}</Button> : null}
         {/* Drawer tabs */}
-        <div className="flex items-center gap-0.5">
-          <Button size="sm" className="px-2" variant={drawerTab === 'schedule' ? 'default' : 'secondary'} onClick={() => toggleDrawer('schedule')} title={t('dag.toolbarSchedule')}><span className="hidden sm:inline">{t('dag.toolbarSchedule')}</span></Button>
-          <Button size="sm" className="px-2" variant={drawerTab === 'hooks' ? 'default' : 'secondary'} onClick={() => toggleDrawer('hooks')} title={t('dag.toolbarHooks')}><span className="hidden sm:inline">{t('dag.toolbarHooks')}</span></Button>
-          <Button size="sm" className="px-2" variant={drawerTab === 'advanced' ? 'default' : 'secondary'} onClick={() => toggleDrawer('advanced')} title={t('dag.toolbarAdvanced')}><span className="hidden sm:inline">{t('dag.toolbarAdvanced')}</span></Button>
-          <Button size="sm" className="px-2" variant={drawerTab === 'ai' ? 'default' : 'secondary'} onClick={() => toggleDrawer('ai')} title={t('dag.toolbarAI')}><span className="hidden sm:inline">{t('dag.toolbarAI')}</span></Button>
-          <Button variant="secondary" size="sm" className="px-2" onClick={() => { exportYaml(); setDrawerTab('yaml'); }} title={t('dag.exportYaml')}><span className="hidden sm:inline">{t('dag.toolbarYaml')}</span></Button>
+        <div className="flex max-w-full min-w-0 items-center gap-0.5 overflow-x-auto">
+          <Button size="sm" className="shrink-0 px-2" variant={drawerTab === 'schedule' ? 'default' : 'secondary'} onClick={() => toggleDrawer('schedule')} title={t('dag.toolbarSchedule')}><span className="hidden sm:inline">{t('dag.toolbarSchedule')}</span></Button>
+          <Button size="sm" className="shrink-0 px-2" variant={drawerTab === 'hooks' ? 'default' : 'secondary'} onClick={() => toggleDrawer('hooks')} title={t('dag.toolbarHooks')}><span className="hidden sm:inline">{t('dag.toolbarHooks')}</span></Button>
+          <Button size="sm" className="shrink-0 px-2" variant={drawerTab === 'advanced' ? 'default' : 'secondary'} onClick={() => toggleDrawer('advanced')} title={t('dag.toolbarAdvanced')}><span className="hidden sm:inline">{t('dag.toolbarAdvanced')}</span></Button>
+          <Button size="sm" className="shrink-0 px-2" variant={drawerTab === 'ai' ? 'default' : 'secondary'} onClick={() => toggleDrawer('ai')} title={t('dag.toolbarAI')}><span className="hidden sm:inline">{t('dag.toolbarAI')}</span></Button>
+          <Button variant="secondary" size="sm" className="shrink-0 px-2" onClick={() => { exportYaml(); setDrawerTab('yaml'); }} title={t('dag.exportYaml')}><span className="hidden sm:inline">{t('dag.toolbarYaml')}</span></Button>
           <Button variant="secondary" size="sm" className="px-2" onClick={() => validateCurrentSpec().catch(() => {})} title={t('dag.toolbarValidate')} data-testid="dag-validate-preflight"><span className="hidden sm:inline">{t('dag.toolbarValidate')}</span></Button>
           <Button variant="secondary" size="sm" className="px-2" onClick={testNodeConnection} title={t('dag.toolbarTest')} disabled={!selectedNode}><span className="hidden sm:inline">{t('dag.toolbarTest')}</span></Button>
         </div>
@@ -1635,6 +1662,45 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                           if (!Number.isNaN(n)) setBackpressureBuffer(Math.min(10000, Math.max(1, n)));
                         }}
                       />
+                    </div>
+                    {/* UI-G.3: restart policy parity with the linear wizard. */}
+                    <div className="sm:col-span-2" data-testid="dag-restart-policy-form">
+                      <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('wizard.restartPolicyMode')}</label>
+                      <select
+                        data-testid="dag-restart-mode"
+                        className={fieldClass}
+                        value={restartMode}
+                        onChange={(e) => setRestartMode(e.target.value as 'never' | 'on-failure' | 'always')}
+                      >
+                        <option value="never">{t('wizard.restartModeNever')}</option>
+                        <option value="on-failure">{t('wizard.restartModeOnFailure')}</option>
+                        <option value="always">{t('wizard.restartModeAlways')}</option>
+                      </select>
+                      {restartMode !== 'never' && (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="mb-1 block text-xs text-muted-foreground">{t('wizard.restartMaxRestarts')}</label>
+                            <input data-testid="dag-restart-max-restarts" type="number" min={0} className={fieldClass} value={restartMaxRestarts}
+                              onChange={(e) => { const n = parseInt(e.target.value, 10); if (!Number.isNaN(n)) setRestartMaxRestarts(Math.max(0, n)); }} />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-muted-foreground">{t('wizard.restartInitialDelay')}</label>
+                            <input data-testid="dag-restart-initial-delay" type="number" min={1} className={fieldClass} value={restartInitialDelay}
+                              onChange={(e) => { const n = parseInt(e.target.value, 10); if (!Number.isNaN(n) && n > 0) setRestartInitialDelay(n); }} />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-muted-foreground">{t('wizard.restartMaxDelay')}</label>
+                            <input data-testid="dag-restart-max-delay" type="number" min={1} className={fieldClass} value={restartMaxDelay}
+                              onChange={(e) => { const n = parseInt(e.target.value, 10); if (!Number.isNaN(n) && n > 0) setRestartMaxDelay(n); }} />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-muted-foreground">{t('wizard.restartBackoff')}</label>
+                            <input data-testid="dag-restart-backoff" type="number" min={1} step={0.5} className={fieldClass} value={restartBackoff}
+                              onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n) && n > 0) setRestartBackoff(n); }} />
+                          </div>
+                        </div>
+                      )}
+                      <p className="mt-1 text-[11px] text-muted-foreground" data-testid="dag-restart-help">{t('wizard.restartPolicyHint')}</p>
                     </div>
                   </div>
                   <hr className="border-border" />

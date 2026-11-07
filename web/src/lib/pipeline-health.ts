@@ -1,3 +1,4 @@
+import { pipelineDLQBacklog } from './dlq';
 import type { MetricsPipeline, Pipeline } from './types';
 
 /** Derived pipeline health used across overview / list / detail / issues. */
@@ -57,9 +58,12 @@ export function derivePipelineHealth(p: Pipeline, m?: MetricsPipeline): Pipeline
   if (s === 'starting') return 'starting';
   if (s === 'stopped') return 'stopped';
   if (s === 'running') {
-    if ((p.stats?.records_failed || 0) > 0) return 'degraded';
-    if ((p.stats?.records_dlq || 0) > 0) return 'degraded';
-    if (p.stats?.last_error) return 'degraded';
+    // Only CURRENT signals degrade a running pipeline. Cumulative counters
+    // (records_failed / records_dlq) and the sticky last_error string used to be
+    // included, which pinned a recovered pipeline to "degraded" forever and made
+    // a restarted pipeline with real DLQ rows look healthy. Backlog comes from
+    // the server's current row count.
+    if (pipelineDLQBacklog(p) > 0) return 'degraded';
     if (m && m.cdc_lag_ms > HIGH_CDC_LAG_MS) return 'degraded';
     if (m && m.checkpoint_age_seconds > STALE_CHECKPOINT_SEC) return 'degraded';
     return 'healthy';
@@ -161,7 +165,8 @@ export function deriveIssues(
         action: 'detail',
       });
     } else if (health === 'degraded') {
-      if ((p.stats?.records_dlq || 0) > 0) {
+      const backlog = pipelineDLQBacklog(p);
+      if (backlog > 0) {
         issues.push({
           id: `${key}:dlq`,
           severity: 'blocking',
@@ -169,14 +174,14 @@ export function deriveIssues(
           pipelineKey: key,
           pipelineName: p.name,
           title: `${p.name} · DLQ backlog`,
-          summary: `${p.stats.records_dlq.toLocaleString()} records in DLQ`,
+          summary: `${backlog.toLocaleString()} records in DLQ`,
           metricLabel: 'DLQ backlog',
-          metricValue: p.stats.records_dlq,
+          metricValue: backlog,
           action: 'dlq',
           node: 'sink',
         });
       }
-      if ((p.stats?.records_failed || 0) > 0 && (p.stats?.records_dlq || 0) === 0) {
+      if ((p.stats?.records_failed || 0) > 0 && backlog === 0) {
         issues.push({
           id: `${key}:rec-failed`,
           severity: 'warning',

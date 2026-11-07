@@ -11,6 +11,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
 import { getToken } from '@/lib/api';
@@ -40,6 +41,10 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [pendingDeregister, setPendingDeregister] = useState<WorkerInfo | null>(null);
+  const [deregistering, setDeregistering] = useState('');
+  const [actionNotice, setActionNotice] = useState('');
+  const [actionError, setActionError] = useState('');
 
   const refresh = () => {
     setLoading(true);
@@ -58,12 +63,28 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     return () => clearInterval(interval);
   }, []);
 
-  const deregister = (id: string) => {
-    api(`/api/v2/workers/${id}/deregister`, { method: 'DELETE' })
-      .then(() => {
-        refresh();
-      })
-      .catch((e) => setError(e.message));
+  const deregister = async (worker: WorkerInfo) => {
+    // The modal closes before this request begins. Keep a second guard here so
+    // keyboard double activation cannot send two deregistration requests.
+    if (deregistering) return;
+    setPendingDeregister(null);
+    setDeregistering(worker.id);
+    setActionNotice('');
+    setActionError('');
+    setError('');
+    try {
+      await api(`/api/v2/workers/${encodeURIComponent(worker.id)}/deregister`, {
+        method: 'DELETE',
+      });
+      setWorkers((current) => current.filter((entry) => entry.id !== worker.id));
+      setActionNotice(t('worker.deregistered').replace('{name}', worker.id));
+      refresh();
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      setActionError(`${t('worker.deregisterFailed').replace('{name}', worker.id)}: ${detail}`);
+    } finally {
+      setDeregistering('');
+    }
   };
 
   const totalSlots = workers.reduce((a, w) => a + w.slots, 0);
@@ -91,7 +112,22 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   ];
 
   return (
-    <div className="space-y-6">
+    <>
+      <ConfirmDialog
+        open={pendingDeregister !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeregister(null);
+        }}
+        title={t('worker.confirmDeregisterTitle').replace('{name}', pendingDeregister?.id || '')}
+        description={t('worker.confirmDeregister').replace('{name}', pendingDeregister?.id || '')}
+        confirmLabel={t('worker.deregister')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={() => {
+          if (pendingDeregister) void deregister(pendingDeregister);
+        }}
+      />
+      <div className="space-y-6">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {cards.map((c) => (
           <Card key={c.label} className="transition-shadow hover:shadow-md">
@@ -105,6 +141,21 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
           </Card>
         ))}
       </div>
+
+      {actionNotice && (
+        <div
+          data-testid="worker-action-notice"
+          role="status"
+          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+        >
+          {actionNotice}
+        </div>
+      )}
+      {actionError && (
+        <div data-testid="worker-action-error">
+          <ErrorBox message={actionError} />
+        </div>
+      )}
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
@@ -169,8 +220,14 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                       {fmtTime(w.last_heartbeat)}
                     </TableCell>
                     <TableCell>
-                      <Button variant="destructive" size="sm" onClick={() => deregister(w.id)}>
-                        {t('worker.deregister')}
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        data-testid={`worker-deregister-${w.id}`}
+                        disabled={Boolean(deregistering)}
+                        onClick={() => setPendingDeregister(w)}
+                      >
+                        {deregistering === w.id ? t('worker.deregistering') : t('worker.deregister')}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -181,15 +238,22 @@ export function WorkersPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-testid="worker-task-area">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm">{t('worker.runningTasks')}</CardTitle>
         </CardHeader>
         <CardContent>
-          <EmptyState text={t('worker.noWorkers')} />
+          {/* With registered workers present, never claim "no workers": the
+              honest statement is that task telemetry is unavailable. */}
+          {workers.length > 0 ? (
+            <EmptyState text={t('worker.tasksUnavailable')} />
+          ) : (
+            <EmptyState text={t('worker.noWorkers')} />
+          )}
         </CardContent>
       </Card>
-    </div>
+      </div>
+    </>
   );
 }
 

@@ -20,6 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
 import { getToken } from '@/lib/api';
@@ -89,6 +90,10 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const [jsonError, setJsonError] = useState('');
   const [openOnTest, setOpenOnTest] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<ConnectionEntry | null>(null);
+  const [deleting, setDeleting] = useState('');
+  const [actionNotice, setActionNotice] = useState('');
+  const [actionError, setActionError] = useState('');
 
   const refresh = () => {
     setLoading(true);
@@ -221,12 +226,24 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   };
 
   const deleteConnection = async (conn: ConnectionEntry) => {
+    // Closing the confirm dialog is not enough protection on its own: retain a
+    // request guard so a fast double activation cannot delete twice.
+    if (deleting) return;
+    setPendingDelete(null);
+    setDeleting(conn.name);
     setError('');
+    setActionNotice('');
+    setActionError('');
     try {
       await api(`/api/v2/connections/${encodeURIComponent(conn.name)}`, { method: 'DELETE' });
+      setConnections((current) => current.filter((entry) => entry.name !== conn.name));
+      setActionNotice(t('conn.deleted').replace('{name}', conn.name));
       refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const detail = e instanceof Error ? e.message : String(e);
+      setActionError(`${t('conn.deleteFailed').replace('{name}', conn.name)}: ${detail}`);
+    } finally {
+      setDeleting('');
     }
   };
 
@@ -245,7 +262,22 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   };
 
   return (
-    <div className="space-y-6">
+    <>
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+        title={t('conn.confirmDeleteTitle').replace('{name}', pendingDelete?.name || '')}
+        description={t('conn.confirmDelete').replace('{name}', pendingDelete?.name || '')}
+        confirmLabel={t('common.delete')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={() => {
+          if (pendingDelete) void deleteConnection(pendingDelete);
+        }}
+      />
+      <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="text-xs font-bold uppercase tracking-[0.08em] text-primary">{t('conn.resources')}</div>
@@ -272,13 +304,30 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
         </div>
       </div>
 
+      {actionNotice && (
+        <div
+          data-testid="connection-action-notice"
+          role="status"
+          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+        >
+          {actionNotice}
+        </div>
+      )}
+      {actionError && (
+        <div data-testid="connection-action-error">
+          <ErrorBox message={actionError} />
+        </div>
+      )}
       {error && <ErrorBox message={error} />}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+      {/* UI-D.3: the table has an intentional local horizontal scroller on
+          narrow screens; keep its grid item shrinkable so it never expands
+          the document itself. */}
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+        <Card className="min-w-0">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
             <CardTitle className="text-sm">{t('nav.connections')}</CardTitle>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
@@ -349,9 +398,11 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                           <Button
                             variant="destructive"
                             size="sm"
-                            onClick={() => deleteConnection(conn)}
+                            data-testid={`connection-delete-${conn.name}`}
+                            disabled={Boolean(deleting)}
+                            onClick={() => setPendingDelete(conn)}
                           >
-                            {t('pipe.delete')}
+                            {deleting === conn.name ? t('conn.deleting') : t('common.delete')}
                           </Button>
                         </div>
                       </TableCell>
@@ -521,7 +572,8 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
         </Card>
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 

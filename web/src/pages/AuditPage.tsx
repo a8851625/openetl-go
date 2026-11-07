@@ -7,7 +7,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { EmptyState } from '@/components/shared/empty-state';
+import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { fmtTime } from '@/lib/format';
 import type { ApiState, AuditEvent, TFunc } from '@/lib/types';
@@ -28,6 +28,12 @@ export function AuditPage({ t, audit }: Props) {
         <CardTitle className="text-sm">{t('audit.trail')}</CardTitle>
       </CardHeader>
       <CardContent className="p-0">
+        {audit.error ? (
+          <div className="p-4" data-testid="audit-load-error">
+            <ErrorBox message={audit.error} />
+          </div>
+        ) : (
+          <>
         <Table>
           <TableHeader>
             <TableRow>
@@ -54,10 +60,12 @@ export function AuditPage({ t, audit }: Props) {
             ))}
           </TableBody>
         </Table>
-        {!events.length && (
-          <div className="p-8">
+        {!events.length && !audit.loading && (
+          <div className="p-8" data-testid="audit-empty">
             <EmptyState text={t('audit.noEvents')} hint={t('audit.emptyHint')} />
           </div>
+        )}
+          </>
         )}
       </CardContent>
     </Card>

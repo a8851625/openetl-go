@@ -16,6 +16,7 @@ import {
   getToken,
   normalizePipelines,
   pipelineKey,
+  resolvePipelineRoute,
   setToken as setApiToken,
   restorePersistedToken,
   memorySeedToken,
@@ -23,6 +24,7 @@ import {
   toApiErrorDetails,
   useApi,
 } from '@/lib/api';
+import { pipelineDLQBacklog } from '@/lib/dlq';
 import { showToast, type ToastFn } from '@/lib/toast';
 import {
   navigate,
@@ -64,7 +66,8 @@ function App() {
     if (persisted) memorySeedToken(persisted);
     return persisted || getToken();
   });
-  const [showSettings, setShowSettings] = useState(false);
+  // Settings is route-owned. Keeping a separate open state made a stale
+  // dialog survive hash navigation and intercept the next page's controls.
   const [llmConfig, setLLMConfig] = useState({ base_url: '', model: '', api_key: '' });
   const [distributedHint, setDistributedHint] = useState(false);
   // UI-B.3: user-controllable auto-refresh with last-success/failure feedback.
@@ -82,15 +85,18 @@ function App() {
   const checkpoints = useApi<{ checkpoints: Checkpoint[] }>('/api/v2/checkpoints', refreshKey);
   const audit = useApi<{ events: AuditEvent[] }>('/api/v2/audit?limit=50', refreshKey);
 
-  // UI-B.3: surface refresh recency/failure (drives the topbar indicator).
+  // UI-D.5: refresh status must reflect a completed request, not merely a
+  // refresh-key bump. `useApi.refreshing` remains true during background and
+  // manual fetches while old data stays rendered.
   useEffect(() => {
-    if (pipelines.loading) return;
-    if (pipelines.error) setLastRefreshFailed(true);
-    else {
-      setLastRefreshFailed(false);
-      setLastRefreshAt(new Date().toLocaleTimeString());
+    if (pipelines.refreshing) return;
+    if (pipelines.error) {
+      setLastRefreshFailed(true);
+      return;
     }
-  }, [pipelines.loading, pipelines.error, refreshKey]);
+    setLastRefreshFailed(false);
+    setLastRefreshAt(new Date().toLocaleTimeString());
+  }, [pipelines.refreshing, pipelines.error]);
 
   const pipelinesList = normalizePipelines(pipelines.data);
   const metricsList = metrics.data?.pipelines || [];
@@ -101,6 +107,22 @@ function App() {
   const selectedMetric = metricsList.find(
     (p) => (p.id && p.id === selected?.id) || p.name === selected?.name,
   );
+
+  // Detail routes have a separate, fail-closed identity resolution path.
+  // `selected` remains list/dashboard state only and must never become a
+  // fallback action target for an unmatched hash URL.
+  const detailPipeline =
+    route.page === 'pipeline-detail' ? resolvePipelineRoute(pipelinesList, route.id) : undefined;
+  const detailMetric = detailPipeline
+    ? metricsList.find(
+        (metric) =>
+          (Boolean(detailPipeline.id) && metric.id === detailPipeline.id) ||
+          metric.name === detailPipeline.name,
+      )
+    : undefined;
+  const detailLoading = route.page === 'pipeline-detail' && pipelines.loading && !pipelines.data;
+  const detailLoadError =
+    route.page === 'pipeline-detail' && !pipelines.data ? pipelines.error : undefined;
 
   const issueCount = useMemo(
     () => deriveIssues(pipelinesList, metricsList).length,
@@ -114,7 +136,7 @@ function App() {
         read: a.read + p.stats.records_read,
         written: a.written + p.stats.records_written,
         failed: a.failed + p.stats.records_failed,
-        dlq: a.dlq + p.stats.records_dlq,
+        dlq: a.dlq + pipelineDLQBacklog(p),
         running: a.running + (p.status === 'running' ? 1 : 0),
       }),
       { read: 0, written: 0, failed: 0, dlq: 0, running: 0 },
@@ -133,7 +155,6 @@ function App() {
         setEditTarget(next.editTarget);
       }
       if (next.page === 'settings') {
-        setShowSettings(true);
         loadLLMConfig();
       }
     };
@@ -214,7 +235,6 @@ function App() {
 
   const go = useCallback((page: AppPage) => {
     if (page === 'settings') {
-      setShowSettings(true);
       loadLLMConfig();
       navigate({ page: 'settings' });
       return;
@@ -308,7 +328,10 @@ function App() {
   }, [issueCount, distributedHint]);
 
   const pageTitle = (() => {
-    if (route.page === 'pipeline-detail') return selected?.name || t('nav.pipelines');
+    if (route.page === 'pipeline-detail') {
+      if (detailLoading) return t('common.loading');
+      return detailPipeline?.name || t('pipe.notFound');
+    }
     if (route.page === 'pipeline-new') return t('nav.createPipeline');
     if (route.page === 'not-found') return t('nav.notFound');
     if (route.page === 'dlq') return t('top.dlqWorkbench');
@@ -318,7 +341,7 @@ function App() {
 
   const crumb =
     route.page === 'pipeline-detail'
-      ? `pipelines / ${selected?.name || route.id}`
+      ? `pipelines / ${detailPipeline?.name || route.id}`
       : route.page === 'pipeline-new'
         ? 'pipelines / new'
         : route.page === 'designer'
@@ -337,10 +360,7 @@ function App() {
         t={t}
         onNavigate={go}
         onCreatePipeline={openWizard}
-        onOpenSettings={() => {
-          setShowSettings(true);
-          loadLLMConfig();
-        }}
+        onOpenSettings={() => go('settings')}
         onToggleLang={() => switchLang(lang === 'en' ? 'zh' : 'en')}
         langLabel={lang === 'en' ? '中文' : 'EN'}
         onReloadSpecs={() =>
@@ -348,14 +368,19 @@ function App() {
         }
         reloadLabel={t('top.reloadSpecs')}
         autoRefreshLabel={t('top.autorefresh')}
+        autoRefreshTitle={t('top.autorefreshTitle')}
         autoRefreshPausedLabel={t('top.autorefreshPaused')}
         autoRefreshPausedTitle={t('top.autorefreshPausedTitle')}
         autoRefreshFailedLabel={t('top.autorefreshFailed')}
+        lastRefreshLabel={t('top.lastRefresh')}
+        manualRefreshLabel={t('top.manualRefresh')}
+        manualRefreshBusyLabel={t('top.manualRefreshBusy')}
+        manualRefreshBusy={Boolean(pipelines.refreshing)}
+        onManualRefresh={() => setRefreshKey((n) => n + 1)}
         autoPaused={autoPaused}
         onToggleAutoRefresh={() => setAutoPaused((v) => !v)}
         lastRefreshAt={lastRefreshAt}
         lastRefreshFailed={lastRefreshFailed}
-        hasRunning={pipelinesList.some((p) => p.status === 'running')}
         issueCount={issueCount}
       >
         {route.page === 'not-found' && (
@@ -432,18 +457,11 @@ function App() {
           <PipelineDetailPage
             t={t}
             lang={lang}
-            pipeline={
-              pipelinesList.find((p) => pipelineKey(p) === route.id || p.name === route.id) ||
-              selected
-            }
-            metric={
-              metricsList.find(
-                (m) =>
-                  m.name === route.id ||
-                  m.id === route.id ||
-                  (selected && ((m.id && m.id === selected.id) || m.name === selected.name)),
-              ) || selectedMetric
-            }
+            pipeline={detailPipeline}
+            metric={detailMetric}
+            loading={detailLoading}
+            loadError={detailLoadError}
+            routeID={route.id}
             checkpoints={checkpoints.data?.checkpoints || []}
             tab={route.tab}
             onTabChange={(tab) => openPipelineDetail(route.id, tab)}
@@ -475,7 +493,7 @@ function App() {
 
         {route.page === 'connections' && <ConnectionsPage t={t} lang={lang} />}
         {route.page === 'connectors' && (
-          <ConnectorsPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} />
+          <ConnectorsPage t={t} lang={lang} plugins={plugins} schema={pluginSchema} onRetry={() => setRefreshKey((n) => n + 1)} />
         )}
         {route.page === 'designer' && (
           <DagEditorPage
@@ -505,6 +523,7 @@ function App() {
             plugins={plugins}
             schema={pluginSchema}
             initialView="matrix"
+            onRetry={() => setRefreshKey((n) => n + 1)}
           />
         )}
         {route.page === 'myPlugins' && <MyPluginsPage t={t} lang={lang} />}
@@ -523,9 +542,10 @@ function App() {
         switchLang={switchLang}
         llmConfig={llmConfig}
         setLLMConfig={setLLMConfig}
-        open={showSettings}
+        open={route.page === 'settings'}
         onClose={() => {
-          setShowSettings(false);
+          // Dialog close/Esc/overlay returns to the preceding normal UI route
+          // without toggling a second local state or creating a history loop.
           if (route.page === 'settings') navigate({ page: 'dashboard' });
         }}
         onSaveToken={(persist) => {

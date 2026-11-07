@@ -10,6 +10,7 @@ import { PipelinePath } from '@/components/shared/pipeline-path';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { TextDiffView } from '@/components/shared/text-diff-view';
 import { api, getToken, pipelineKey, pipelineRef } from '@/lib/api';
+import { pipelineDLQBacklog, pipelineDLQBacklogUnknown } from '@/lib/dlq';
 import { fmtTime, ratio } from '@/lib/format';
 import {
   deriveModeLabel,
@@ -22,6 +23,7 @@ import type { Lang } from '@/i18n';
 import { ArrowLeft, CalendarClock, Play, RotateCcw, ScrollText, Square } from 'lucide-react';
 import { PipelineRowMeta } from '@/lib/uptime';
 import { cn } from '@/lib/utils';
+import { PipelineIntegrityPanel } from './pipeline-integrity';
 import { PipelineLogDrawer } from './pipeline-logs';
 import { PipelineDagReadonly } from './pipeline-dag-readonly';
 import {
@@ -35,6 +37,12 @@ type Props = {
   lang: Lang;
   pipeline?: Pipeline;
   metric?: MetricsPipeline;
+  /** First list load is pending; do not classify an unresolved route as missing. */
+  loading?: boolean;
+  /** List load failed before a route object could be resolved. */
+  loadError?: string;
+  /** Raw route segment, exposed only in the safe missing-detail state. */
+  routeID?: string;
   checkpoints: Checkpoint[];
   tab: DetailTab;
   onTabChange: (tab: DetailTab) => void;
@@ -51,6 +59,9 @@ export function PipelineDetailPage({
   lang,
   pipeline,
   metric,
+  loading = false,
+  loadError,
+  routeID,
   checkpoints,
   tab,
   onTabChange,
@@ -68,6 +79,12 @@ export function PipelineDetailPage({
   const [versions, setVersions] = useState<{ version: number; created_at: string }[]>([]);
   const [specYaml, setSpecYaml] = useState('');
   const [specError, setSpecError] = useState('');
+  // UI-G.4: display the configured restart policy honestly — either the exact
+  // policy from the stored spec, or an explicit "not configured" state. Never
+  // a UI-side guess about runtime restart behavior.
+  const [restartPolicy, setRestartPolicy] = useState<
+    { mode: string; max_restarts?: number; initial_delay_ms?: number; max_delay_ms?: number; backoff_multiplier?: number } | null | undefined
+  >(undefined);
   const [diffVersion, setDiffVersion] = useState<number | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState('');
@@ -91,6 +108,25 @@ export function PipelineDetailPage({
       cancelled = true;
     };
   }, [pipeline?.id, pipeline?.name, scheduleTick]);
+
+  useEffect(() => {
+    if (!pipeline) return;
+    const ref = pipelineRef(pipeline);
+    // UI-G.4: fetch the stored spec's restart_policy for the overview badge.
+    let cancelled = false;
+    api<{ spec?: { restart_policy?: { mode?: string; max_restarts?: number; initial_delay_ms?: number; max_delay_ms?: number; backoff_multiplier?: number } } }>(`/api/v2/pipelines/${ref}/spec`)
+      .then((d) => {
+        if (cancelled) return;
+        const rp = d.spec?.restart_policy;
+        setRestartPolicy(rp && rp.mode ? { ...rp, mode: rp.mode } : null);
+      })
+      .catch(() => {
+        if (!cancelled) setRestartPolicy(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pipeline?.id, pipeline?.name]);
 
   useEffect(() => {
     if (!pipeline) return;
@@ -122,9 +158,35 @@ export function PipelineDetailPage({
     }
   }, [pipeline?.id, pipeline?.name, tab]);
 
+  // An unresolved hash is deliberately terminal for this page. In
+  // particular, never render a list-selected pipeline here: its lifecycle,
+  // checkpoint and DLQ actions would otherwise target the wrong object.
+  if (loading) {
+    return (
+      <div className="space-y-4" data-testid="pipeline-detail-loading">
+        <EmptyState text={t('common.loading')} />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="space-y-4" data-testid="pipeline-detail-load-error">
+        <Button variant="ghost" size="sm" onClick={onBack}>
+          <ArrowLeft className="h-4 w-4" /> {t('pipe.backToList')}
+        </Button>
+        <ErrorBox message={loadError} />
+      </div>
+    );
+  }
+
   if (!pipeline) {
     return (
-      <div className="space-y-4">
+      <div
+        className="space-y-4"
+        data-testid="pipeline-detail-not-found"
+        data-route-id={routeID || ''}
+      >
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" /> {t('pipe.backToList')}
         </Button>
@@ -157,7 +219,12 @@ export function PipelineDetailPage({
   });
 
   return (
-    <div className="space-y-4">
+    <div
+      className="space-y-4"
+      data-testid="pipeline-detail-page"
+      data-pipeline-key={key}
+      data-pipeline-name={pipeline.name}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" /> {t('pipe.backToList')}
@@ -231,15 +298,30 @@ export function PipelineDetailPage({
             onValueChange={(v) => onTabChange(v as DetailTab)}
           >
             <TabsList className="h-auto flex-wrap justify-start">
-              <TabsTrigger value="overview">{t('pipe.tabOverview')}</TabsTrigger>
-              <TabsTrigger value="runs">{t('pipe.tabRuns')}</TabsTrigger>
-              <TabsTrigger value="issues">{t('pipe.tabIssues')}</TabsTrigger>
-              <TabsTrigger value="checkpoints">{t('pipe.tabCheckpoints')}</TabsTrigger>
-              <TabsTrigger value="logs" data-testid="detail-tab-logs">{t('pipe.logs')}</TabsTrigger>
+              <TabsTrigger value="overview" data-testid="detail-tab-overview">
+                {t('pipe.tabOverview')}
+              </TabsTrigger>
+              <TabsTrigger value="runs" data-testid="detail-tab-runs">
+                {t('pipe.tabRuns')}
+              </TabsTrigger>
+              <TabsTrigger value="issues" data-testid="detail-tab-issues">
+                {t('pipe.tabIssues')}
+              </TabsTrigger>
+              <TabsTrigger value="checkpoints" data-testid="detail-tab-checkpoints">
+                {t('pipe.tabCheckpoints')}
+              </TabsTrigger>
+              <TabsTrigger value="logs" data-testid="detail-tab-logs">
+                {t('pipe.logs')}
+              </TabsTrigger>
+              <TabsTrigger value="integrity" data-testid="detail-tab-integrity">
+                {t('pipe.tabIntegrity')}
+              </TabsTrigger>
               <TabsTrigger value="topology" data-testid="detail-tab-topology">
                 {t('pipe.tabTopology')}
               </TabsTrigger>
-              <TabsTrigger value="spec">{t('pipe.tabSpec')}</TabsTrigger>
+              <TabsTrigger value="spec" data-testid="detail-tab-spec">
+                {t('pipe.tabSpec')}
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview" className="mt-4 space-y-4">
@@ -255,6 +337,14 @@ export function PipelineDetailPage({
                 />
                 <MiniStat
                   label={t('dash.dlqBacklog')}
+                  value={
+                    pipelineDLQBacklogUnknown(pipeline)
+                      ? '—'
+                      : pipelineDLQBacklog(pipeline).toLocaleString()
+                  }
+                />
+                <MiniStat
+                  label={t('dash.dlqCapturedTotal')}
                   value={(pipeline.stats.records_dlq || 0).toLocaleString()}
                 />
                 <MiniStat
@@ -299,6 +389,17 @@ export function PipelineDetailPage({
                     <div className="flex justify-between gap-2">
                       <span className="text-muted-foreground">{t('detail.uptime')}</span>
                       <span className="tabular text-xs">{pipeline.stats.uptime || '—'}</span>
+                    </div>
+                    {/* UI-G.4: honest restart-policy state from the stored spec. */}
+                    <div className="flex items-center justify-between gap-2" data-testid="detail-restart-policy">
+                      <span className="text-muted-foreground">{t('wizard.restartPolicyMode')}</span>
+                      <span className="font-mono text-xs" data-testid="detail-restart-policy-value">
+                        {restartPolicy === undefined
+                          ? '…'
+                          : restartPolicy
+                            ? `${restartPolicy.mode} / ${restartPolicy.max_restarts ?? 0}× / ${restartPolicy.initial_delay_ms ?? 0}-${restartPolicy.max_delay_ms ?? 0}ms / ×${restartPolicy.backoff_multiplier ?? 1}`
+                            : t('wizard.restartNotConfigured')}
+                      </span>
                     </div>
                     <div className="flex justify-between gap-2">
                       <span className="text-muted-foreground">{t('nav.schedules')}</span>
@@ -417,9 +518,9 @@ export function PipelineDetailPage({
                           <div className="text-sm font-semibold">{t('pipe.startupFailureTitle')}</div>
                           <div className="mt-1 text-xs">{t('pipe.startupFailureHint')}</div>
                         </div>
-                      ) : (pipeline.stats.records_dlq || 0) > 0 ? (
+                      ) : pipelineDLQBacklog(pipeline) > 0 ? (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-                          DLQ backlog {pipeline.stats.records_dlq.toLocaleString()}
+                          DLQ backlog {pipelineDLQBacklog(pipeline).toLocaleString()}
                         </div>
                       ) : (
                         <EmptyState text={t('issues.empty')} />
@@ -466,7 +567,9 @@ export function PipelineDetailPage({
                           {(pipeline.stats.records_failed || 0).toLocaleString()}
                         </td>
                         <td className="tabular px-3 py-2">
-                          {(pipeline.stats.records_dlq || 0).toLocaleString()}
+                          {pipelineDLQBacklogUnknown(pipeline)
+                            ? '—'
+                            : pipelineDLQBacklog(pipeline).toLocaleString()}
                         </td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">
                           {metric ? `${metric.checkpoint_age_seconds}s age` : cps[0] ? fmtTime(cps[0].timestamp) : '—'}
@@ -482,12 +585,12 @@ export function PipelineDetailPage({
                   </tbody>
                 </table>
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">{t('pipe.runsNote')}</p>
+              <p className="mt-2 text-xs text-muted-foreground" data-testid="detail-runs-note">{t('pipe.runsNote')}</p>
             </TabsContent>
 
             <TabsContent value="issues" className="mt-4 space-y-3">
               {(pipeline.stats.records_failed || 0) > 0 ||
-              (pipeline.stats.records_dlq || 0) > 0 ||
+              pipelineDLQBacklog(pipeline) > 0 ||
               pipeline.stats.last_error ||
               pipeline.status === 'failed' ? (
                 <>
@@ -540,11 +643,11 @@ export function PipelineDetailPage({
                       </Button>
                     </div>
                   )}
-                  {(pipeline.stats.records_dlq || 0) > 0 && (
+                  {pipelineDLQBacklog(pipeline) > 0 && (
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/40">
                       <div>
                         <div className="text-sm font-semibold">
-                          DLQ backlog {(pipeline.stats.records_dlq || 0).toLocaleString()}
+                          DLQ backlog {pipelineDLQBacklog(pipeline).toLocaleString()}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
                           {t('pipe.dlqHint')}
@@ -616,6 +719,14 @@ export function PipelineDetailPage({
                 </div>
               </div>
               <PipelineLogDrawer t={t} name={ref} heightClass="h-[min(62vh,560px)] min-h-[320px]" />
+            </TabsContent>
+
+            <TabsContent value="integrity" className="mt-4" data-testid="detail-integrity-panel">
+              <PipelineIntegrityPanel
+                t={t}
+                pipelineId={pipeline.id || pipeline.name}
+                status={pipeline.status}
+              />
             </TabsContent>
 
             <TabsContent value="topology" className="mt-4" data-testid="detail-topology-panel">

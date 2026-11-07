@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/shared/empty-state';
 import { PipelineHealthBadge, HealthDot } from '@/components/shared/pipeline-health-badge';
 import { PipelinePath } from '@/components/shared/pipeline-path';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { pipelineDLQBacklog } from '@/lib/dlq';
 import {
   api,
   getToken,
@@ -213,10 +214,10 @@ const PipelineRow = React.memo(
           </span>
         </div>
         <div className="hidden min-w-[88px] flex-col items-start sm:flex">
-          {p.stats.records_dlq > 0 ? (
+          {pipelineDLQBacklog(p) > 0 ? (
             <>
               <span className="tabular text-xs font-semibold text-rose-600">
-                {p.stats.records_dlq.toLocaleString()}
+                {pipelineDLQBacklog(p).toLocaleString()}
               </span>
               <span className="text-[10px] text-muted-foreground">DLQ</span>
             </>
@@ -291,6 +292,7 @@ const PipelineRow = React.memo(
       p1.stats.records_written !== p2.stats.records_written ||
       p1.stats.records_failed !== p2.stats.records_failed ||
       p1.stats.records_dlq !== p2.stats.records_dlq ||
+      pipelineDLQBacklog(p1) !== pipelineDLQBacklog(p2) ||
       p1.stats.started_at !== p2.stats.started_at ||
       p1.parallelism !== p2.parallelism ||
       prev.selected !== next.selected ||
@@ -494,6 +496,12 @@ export function PipelinesPage({
 
   const selectedKeys = Object.keys(checked).filter((k) => checked[k]);
   const selectedPipes = filteredPipelines.filter((p) => selectedKeys.includes(pipelineKey(p)));
+  // UI-D.2: batch affordance must match executable targets. Start applies
+  // only to genuinely stopped pipelines; stop only to running ones (same
+  // rule as Start-all/Stop-all). Buttons are disabled with a readable
+  // reason instead of silently no-op'ing on an empty target set.
+  const selectedStartTargets = selectedPipes.filter((p) => p.status === 'stopped');
+  const selectedStopTargets = selectedPipes.filter((p) => p.status === 'running');
 
   const batchAction = (action: 'start' | 'stop', targets: Pipeline[]) => {
     if (!targets.length) return;
@@ -527,7 +535,7 @@ export function PipelinesPage({
     setBatchResult({ action, ok, failed });
     onShowToast?.(
       failed.length ? 'error' : 'success',
-      `${action}: ${ok.length} ok, ${failed.length} failed`,
+      `${action === 'stop' ? t('pipe.stopAll') : t('pipe.startAll')}: ${ok.length} ${t('ui.ok')}, ${failed.length} ${t('ui.failed')}`,
     );
   };
 
@@ -565,9 +573,11 @@ export function PipelinesPage({
         onOpenChange={(open) => { if (!open) setBatchConfirm(null); }}
         title={t('pipe.batchConfirmTitle').replace('{action}', batchConfirm?.action === 'stop' ? t('pipe.stop') : t('pipe.start'))}
         description={t('pipe.batchConfirmDesc')
+          .replace('{action}', batchConfirm?.action === 'stop' ? t('pipe.stop') : t('pipe.start'))
           .replace('{count}', String(batchConfirm?.targets.length || 0))
           .replace('{names}', (batchConfirm?.targets || []).slice(0, 5).map((p) => p.name).join(', ') + ((batchConfirm?.targets.length || 0) > 5 ? '…' : ''))}
         confirmLabel={batchConfirm?.action === 'stop' ? t('pipe.stopAll') : t('pipe.startAll')}
+        cancelLabel={t('ui.cancel')}
         destructive={batchConfirm?.action === 'stop'}
         onConfirm={() => { runBatch(); }}
       />
@@ -577,7 +587,13 @@ export function PipelinesPage({
             <span className="font-semibold">
               {batchResult.action === 'stop' ? t('pipe.stopAll') : t('pipe.startAll')}: {batchResult.ok.length} {t('ui.ok')}, {batchResult.failed.length} {t('ui.failed')}
             </span>
-            <Button variant="ghost" size="sm" onClick={() => setBatchResult(null)}>✕</Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={t('ui.close')}
+              title={t('ui.close')}
+              onClick={() => setBatchResult(null)}
+            >✕</Button>
           </div>
           {batchResult.failed.length > 0 && (
             <div className="space-y-1">
@@ -737,34 +753,42 @@ export function PipelinesPage({
                     .replace('{stopped}', String(selectedPipes.filter((p) => p.status !== 'running').length))}
                 </span>
                 <div className="flex-1" />
+                {selectedStartTargets.length === 0 && selectedStopTargets.length === 0 && (
+                  <span className="text-xs text-muted-foreground" data-testid="batch-no-targets-reason">
+                    {t('pipe.noExecutableTargets')}
+                  </span>
+                )}
+                {selectedStartTargets.length === 0 && selectedStopTargets.length > 0 && (
+                  <span className="text-xs text-muted-foreground" data-testid="batch-no-start-reason">
+                    {t('pipe.noStoppedTargets')}
+                  </span>
+                )}
+                {selectedStopTargets.length === 0 && selectedStartTargets.length > 0 && (
+                  <span className="text-xs text-muted-foreground" data-testid="batch-no-stop-reason">
+                    {t('pipe.noRunningTargets')}
+                  </span>
+                )}
                 <Button
                   variant="secondary"
                   size="sm"
                   className="text-xs"
-                  onClick={() =>
-                    batchAction(
-                      'start',
-                      // UI-A.4: align selection Start with Start-all — only
-                      // genuinely stopped pipelines; completed/failed are not
-                      // silent start targets.
-                      selectedPipes.filter((p) => p.status === 'stopped'),
-                    )
-                  }
+                  disabled={selectedStartTargets.length === 0}
+                  title={selectedStartTargets.length === 0 ? t('pipe.noStoppedTargets') : undefined}
+                  aria-disabled={selectedStartTargets.length === 0 ? true : undefined}
+                  onClick={() => batchAction('start', selectedStartTargets)}
                 >
-                  <Play className="h-3.5 w-3.5" /> {t('pipe.start')}
+                  <Play className="h-3.5 w-3.5" /> {t('pipe.start')} {selectedStartTargets.length > 0 && `(${selectedStartTargets.length})`}
                 </Button>
                 <Button
                   variant="secondary"
                   size="sm"
                   className="text-xs"
-                  onClick={() =>
-                    batchAction(
-                      'stop',
-                      selectedPipes.filter((p) => p.status === 'running'),
-                    )
-                  }
+                  disabled={selectedStopTargets.length === 0}
+                  title={selectedStopTargets.length === 0 ? t('pipe.noRunningTargets') : undefined}
+                  aria-disabled={selectedStopTargets.length === 0 ? true : undefined}
+                  onClick={() => batchAction('stop', selectedStopTargets)}
                 >
-                  <Square className="h-3.5 w-3.5" /> {t('pipe.stop')}
+                  <Square className="h-3.5 w-3.5" /> {t('pipe.stop')} {selectedStopTargets.length > 0 && `(${selectedStopTargets.length})`}
                 </Button>
                 <Button
                   variant="ghost"

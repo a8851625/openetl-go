@@ -143,8 +143,9 @@ export function SettingsModal({
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>{t('settings.apiToken')}</Label>
+                <Label htmlFor="settings-api-token">{t('settings.apiToken')}</Label>
                 <Input
+                  id="settings-api-token"
                   data-testid="settings-token-input"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}

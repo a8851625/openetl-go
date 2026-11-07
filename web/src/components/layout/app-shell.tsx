@@ -101,14 +101,19 @@ type AppShellProps = {
   onReloadSpecs: () => void;
   reloadLabel: string;
   autoRefreshLabel: string;
+  autoRefreshTitle: string;
   autoRefreshPausedLabel: string;
   autoRefreshPausedTitle: string;
   autoRefreshFailedLabel: string;
+  lastRefreshLabel: string;
+  manualRefreshLabel: string;
+  manualRefreshBusyLabel: string;
+  manualRefreshBusy?: boolean;
+  onManualRefresh?: () => void;
   autoPaused?: boolean;
   onToggleAutoRefresh?: () => void;
   lastRefreshAt?: string | null;
   lastRefreshFailed?: boolean;
-  hasRunning?: boolean;
   issueCount?: number;
   crumb?: string;
   topbarExtra?: React.ReactNode;
@@ -164,7 +169,7 @@ function NavList({
         )}
       </div>
       <ScrollArea className="flex-1 px-3 py-1">
-        <nav className="space-y-0.5" aria-label="Main">
+        <nav className="space-y-0.5" aria-label={t('nav.mainNavigation')}>
           {groups.map((group) => (
             <div key={group.id}>
               {(group.labelKey || group.label) && (
@@ -269,14 +274,19 @@ export function AppShell({
   onReloadSpecs,
   reloadLabel,
   autoRefreshLabel,
+  autoRefreshTitle,
   autoRefreshPausedLabel,
   autoRefreshPausedTitle,
   autoRefreshFailedLabel,
+  lastRefreshLabel,
+  manualRefreshLabel,
+  manualRefreshBusyLabel,
+  manualRefreshBusy = false,
+  onManualRefresh,
   autoPaused = false,
   onToggleAutoRefresh,
   lastRefreshAt = null,
   lastRefreshFailed = false,
-  hasRunning = false,
   issueCount = 0,
   crumb,
   topbarExtra,
@@ -287,6 +297,18 @@ export function AppShell({
   const items = flattenItems(navGroups, navItems);
 
   const mobilePrimary: AppPage[] = ['dashboard', 'pipelines', 'issues', 'settings']; // more via settings entry
+  // UI-D.5: keep state, secondary recency, and the action to refresh distinct.
+  // A successful refresh time must never masquerade as the control's primary
+  // state label.
+  const refreshStatusLabel = autoPaused
+    ? autoRefreshPausedLabel
+    : lastRefreshFailed
+      ? autoRefreshFailedLabel
+      : autoRefreshLabel;
+  const refreshToggleTitle = autoPaused ? autoRefreshPausedTitle : autoRefreshTitle;
+  const lastRefreshText = lastRefreshAt
+    ? lastRefreshLabel.replace('{time}', lastRefreshAt)
+    : '';
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -326,15 +348,18 @@ export function AppShell({
         </Sheet>
 
         {/* Main */}
-        <div className="flex min-h-[100dvh] flex-1 flex-col md:ml-[248px]">
-          <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-border bg-background/85 px-4 backdrop-blur md:px-8">
+        <div className="flex min-h-[100dvh] min-w-0 flex-1 flex-col md:ml-[248px]">
+          {/* UI-D.3: header must wrap instead of forcing the page wide on
+              small screens (390px) — the action group loses shrink-0 and the
+              auto-refresh label truncates rather than expanding the document. */}
+          <header className="sticky top-0 z-20 flex min-h-16 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border bg-background/85 px-4 py-2 backdrop-blur md:h-16 md:flex-nowrap md:px-8 md:py-0">
             <div className="flex min-w-0 items-center gap-2">
               <Button
                 variant="ghost"
                 size="icon"
                 className="md:hidden"
                 onClick={() => setMobileOpen(true)}
-                aria-label="Open navigation"
+                aria-label={t('top.openNavigation')}
               >
                 <Menu className="h-5 w-5" />
               </Button>
@@ -348,7 +373,7 @@ export function AppShell({
               </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
               {/* UI small-pool: global search has a visible affordance — Enter
               filters the pipelines list; Escape clears. */}
               <div className="relative hidden md:block">
@@ -384,37 +409,60 @@ export function AppShell({
 
               {/* UI-A.4 (P2-1): dead notifications button removed until a real notification center exists. */}
 
-              {/* UI-B.3: auto-refresh is user-controllable with recency/failure feedback. */}
+              {/* UI-D.5: state toggle, last successful refresh, and manual
+                  refresh are separate controls. The primary text is always a
+                  state; recency is supporting information only. */}
               <button
                 type="button"
                 data-testid="auto-refresh-toggle"
                 aria-pressed={autoPaused}
-                title={autoPaused ? autoRefreshPausedTitle : autoRefreshLabel}
+                aria-label={refreshToggleTitle}
+                title={refreshToggleTitle}
                 onClick={() => onToggleAutoRefresh?.()}
                 className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted"
               >
                 <span
                   className={cn(
                     'status-dot',
-                    lastRefreshFailed ? 'status-stopped' : hasRunning ? 'status-running' : 'status-stopped',
+                    lastRefreshFailed ? 'status-error' : autoPaused ? 'status-paused' : 'status-running',
                   )}
                   aria-hidden
                 />
-                <span data-testid="auto-refresh-label">
-                  {autoPaused
-                    ? autoRefreshPausedLabel
-                    : lastRefreshFailed
-                      ? autoRefreshFailedLabel
-                      : lastRefreshAt || autoRefreshLabel}
+                <span data-testid="auto-refresh-label" className="max-w-[16vw] truncate sm:max-w-none">
+                  {refreshStatusLabel}
                 </span>
               </button>
+              {lastRefreshText && (
+                <span
+                  data-testid="last-refresh-at"
+                  className="hidden max-w-40 truncate text-[11px] text-muted-foreground lg:inline"
+                  aria-live="polite"
+                >
+                  {lastRefreshText}
+                </span>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                data-testid="manual-refresh"
+                aria-label={manualRefreshBusy ? manualRefreshBusyLabel : manualRefreshLabel}
+                title={manualRefreshBusy ? manualRefreshBusyLabel : manualRefreshLabel}
+                aria-busy={manualRefreshBusy}
+                disabled={manualRefreshBusy}
+                onClick={() => onManualRefresh?.()}
+              >
+                <RefreshCw className={cn('h-3.5 w-3.5', manualRefreshBusy && 'animate-spin')} />
+              </Button>
 
-              {/* Compact lang toggle kept for e2e title=Switch language + user discoverability */}
+              {/* Compact language toggle has a current-language accessible name. */}
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={onToggleLang}
-                title="Switch language"
+                title={t('top.switchLanguage')}
+                aria-label={t('top.switchLanguage')}
                 data-testid="toggle-lang"
               >
                 {langLabel}
@@ -474,7 +522,7 @@ export function AppShell({
           {/* Mobile bottom nav */}
           <nav
             className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-border bg-card md:hidden"
-            aria-label="Mobile"
+            aria-label={t('nav.mobileNavigation')}
           >
             {mobilePrimary.map((id) => {
               const item = items.find((i) => i.id === id) || {

@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/shared/empty-state';
 import { normalizePipelines } from '@/lib/api';
+import { pipelineDLQBacklog } from '@/lib/dlq';
 import { deriveIssues, type DerivedIssue , issueTitle } from '@/lib/pipeline-health';
 import type { ApiState, MetricsPipeline, Pipeline, TFunc } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -31,7 +32,7 @@ export function IssuesPage({
   const issues = deriveIssues(pList, mList);
   const blocking = issues.filter((i) => i.severity === 'blocking').length;
   const warning = issues.filter((i) => i.severity === 'warning').length;
-  const dlqTotal = pList.reduce((a, p) => a + (p.stats?.records_dlq || 0), 0);
+  const dlqTotal = pList.reduce((a, p) => a + pipelineDLQBacklog(p), 0);
 
   const act = (issue: DerivedIssue) => {
     onSelect(issue.pipelineKey);

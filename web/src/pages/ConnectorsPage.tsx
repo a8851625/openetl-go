@@ -8,7 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { EmptyState } from '@/components/shared/empty-state';
+import { EmptyState, ErrorBox } from '@/components/shared/empty-state';
 import { ToneBadge } from '@/components/shared/status-badge';
 import type { ApiState, PluginInfo, PluginResponse, TFunc } from '@/lib/types';
 import type { Lang } from '@/i18n';
@@ -21,6 +21,8 @@ type Props = {
   schema: ApiState<any>;
   /** Prefer matrix when opened from legacy Built-in deep link / e2e. */
   initialView?: 'cards' | 'matrix';
+  /** Retries the catalog read after a failure (wired to the shared refresh). */
+  onRetry?: () => void;
 };
 
 type CatalogItem = {
@@ -43,7 +45,7 @@ function maturityTone(m?: string): 'emerald' | 'blue' | 'amber' | 'slate' {
   return 'slate';
 }
 
-export function ConnectorsPage({ t, plugins, initialView = 'cards' }: Props) {
+export function ConnectorsPage({ t, plugins, initialView = 'cards', onRetry }: Props) {
   const [q, setQ] = useState('');
   const [view, setView] = useState<'cards' | 'matrix'>(initialView);
 
@@ -143,6 +145,21 @@ export function ConnectorsPage({ t, plugins, initialView = 'cards' }: Props) {
 
   return (
     <div className="space-y-6" data-testid="connectors-catalog">
+      {plugins.error ? (
+        <div className="space-y-3" data-testid="connectors-load-error">
+          <ErrorBox message={plugins.error} />
+          {onRetry && (
+            <button
+              type="button"
+              data-testid="connectors-load-retry"
+              className="rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+              onClick={onRetry}
+            >
+              {t('common.retry')}
+            </button>
+          )}
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="text-xs font-bold uppercase tracking-[0.08em] text-primary">
@@ -183,9 +200,11 @@ export function ConnectorsPage({ t, plugins, initialView = 'cards' }: Props) {
         </div>
       </div>
 
-      {view === 'cards' ? (
+      {plugins.error ? null : view === 'cards' ? (
         !filtered.length ? (
-          <EmptyState text={plugins.loading ? '…' : t('connectors.empty')} />
+          <div data-testid="connectors-empty">
+            <EmptyState text={plugins.loading ? t('common.loading') : t('connectors.empty')} />
+          </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {filtered.map((item) => (
@@ -237,7 +256,7 @@ export function ConnectorsPage({ t, plugins, initialView = 'cards' }: Props) {
           </CardHeader>
           <CardContent className="p-0">
             {!filteredMatrix.length ? (
-              <div className="p-6">
+              <div className="p-6" data-testid="connectors-empty">
                 <EmptyState text={plugins.loading ? t('plugin.loading') : t('connectors.empty')} />
               </div>
             ) : (

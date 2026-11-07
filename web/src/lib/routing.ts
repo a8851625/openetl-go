@@ -25,6 +25,7 @@ export type DetailTab =
   | 'checkpoints'
   | 'logs'
   | 'topology'
+  | 'integrity'
   | 'spec';
 
 export type NavPage =
@@ -49,6 +50,7 @@ const DETAIL_TABS: DetailTab[] = [
   'checkpoints',
   'logs',
   'topology',
+  'integrity',
   'spec',
 ];
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import YAML from 'yaml';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -329,6 +329,23 @@ export function FirstTaskWizard({
   const [step, setStep] = useState<WizardStepId>(
     () => (initialStep as WizardStepId) || readStepFromHash(),
   );
+  // UI-D.4: mobile has a horizontally scrollable step rail. Keep explicit
+  // refs so a route/deep-link, Next/Previous, touch click, or keyboard focus
+  // always makes the current step visible without scrolling the whole page.
+  const stepRailRef = useRef<HTMLDivElement | null>(null);
+  const stepButtonRefs = useRef<Partial<Record<WizardStepId, HTMLButtonElement>>>({});
+  const scrollStepIntoView = useCallback((targetStep: WizardStepId) => {
+    if (typeof window === 'undefined' || window.matchMedia('(min-width: 1280px)').matches) return;
+    const rail = stepRailRef.current;
+    const target = stepButtonRefs.current[targetStep];
+    if (!rail || !target) return;
+
+    const railRect = rail.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const maxScroll = Math.max(0, rail.scrollWidth - rail.clientWidth);
+    const centeredLeft = rail.scrollLeft + (targetRect.left - railRect.left) - (rail.clientWidth - targetRect.width) / 2;
+    rail.scrollTo({ left: Math.max(0, Math.min(maxScroll, centeredLeft)), behavior: 'auto' });
+  }, []);
   const [templateId, setTemplateId] = useState(restored?.templateId || 'multi-table-sync');
   const template = WIZARD_TEMPLATES.find((tpl) => tpl.id === templateId) || WIZARD_TEMPLATES[0];
   const [name, setName] = useState(restored?.name || 'ui-wizard-multi-table');
@@ -390,6 +407,37 @@ export function FirstTaskWizard({
   const [retryInitialMs, setRetryInitialMs] = useState(restored?.retryInitialMs ?? 100);
   const [retryMaxMs, setRetryMaxMs] = useState(restored?.retryMaxMs ?? 1000);
   const [backpressureBuffer, setBackpressureBuffer] = useState(restored?.backpressureBuffer ?? 100);
+  // UI-G.2: restart_policy roundtrip. Kept as JSON text exactly like other
+  // config fields; empty = not configured (spec omits the key entirely, which
+  // is equivalent to `never` on the server and changes no existing behavior).
+  const [restartPolicyText, setRestartPolicyText] = useState(
+    restored?.restartPolicyText || '',
+  );
+  // UI-G.1: structured form view over restartPolicyText (single source of
+  // truth). Values are derived on render; edits re-serialize to the text.
+  const restartPolicy = useMemo(() => {
+    const parsed = parseJSONText(restartPolicyText, null) as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed;
+  }, [restartPolicyText]);
+  const restartMode = typeof restartPolicy?.mode === 'string' && restartPolicy.mode ? restartPolicy.mode : 'never';
+  const setRestartField = (patch: Record<string, unknown>) => {
+    const next: Record<string, unknown> = { ...(restartPolicy || {}), ...patch };
+    setRestartPolicyText(Object.keys(next).length ? prettyJSON(next) : '');
+  };
+  const onRestartModeChange = (mode: string) => {
+    if (mode === 'never') {
+      setRestartPolicyText('');
+      return;
+    }
+    setRestartField({
+      mode,
+      max_restarts: Number(restartPolicy?.max_restarts ?? 3),
+      initial_delay_ms: Number(restartPolicy?.initial_delay_ms ?? 1000),
+      max_delay_ms: Number(restartPolicy?.max_delay_ms ?? 30000),
+      backoff_multiplier: Number(restartPolicy?.backoff_multiplier ?? 2),
+    });
+  };
   const [runtimeMoreOpen, setRuntimeMoreOpen] = useState(false);
   const [dlqEnabled, setDlqEnabled] = useState(restored?.dlqEnabled ?? true);
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
@@ -614,8 +662,14 @@ export function FirstTaskWizard({
     if (tm && typeof tm === 'object' && !Array.isArray(tm) && Object.keys(tm).length > 0) {
       spec.table_mapping = tm;
     }
+    // UI-G.2: only emit restart_policy when the wizard actually holds one,
+    // so the default path stays byte-compatible with pre-UI-G specs.
+    const rp = parseJSONText(restartPolicyText, null);
+    if (rp && typeof rp === 'object' && !Array.isArray(rp) && Object.keys(rp).length > 0) {
+      spec.restart_policy = rp;
+    }
     return spec;
-  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, batchSize, checkpointIntervalSec, backpressureBuffer, retryMaxAttempts, retryInitialMs, retryMaxMs, dlqEnabled, template.id, template.sample, template.hideSinkTable, tableMappingText]);
+  }, [name, sourceType, sourceConfigText, sampleText, transformsText, sinkType, sinkConfigText, sourceConnection, sinkConnection, batchSize, checkpointIntervalSec, backpressureBuffer, retryMaxAttempts, retryInitialMs, retryMaxMs, dlqEnabled, template.id, template.sample, template.hideSinkTable, tableMappingText, restartPolicyText]);
 
   useEffect(() => {
     refreshConnections();
@@ -626,6 +680,11 @@ export function FirstTaskWizard({
   useEffect(() => {
     writeStepToHash(step);
   }, [step]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => scrollStepIntoView(step));
+    return () => window.cancelAnimationFrame(frame);
+  }, [step, scrollStepIntoView]);
 
   useEffect(() => {
     if (initialStep && WIZARD_STEPS.some((s) => s.id === initialStep)) {
@@ -722,6 +781,8 @@ export function FirstTaskWizard({
       retryInitialMs,
       retryMaxMs,
       backpressureBuffer,
+      // UI-G.2: plain JSON text, no secrets — safe to persist in the draft.
+      restartPolicyText,
       dlqEnabled,
       step,
     };
@@ -750,6 +811,7 @@ export function FirstTaskWizard({
     retryInitialMs,
     retryMaxMs,
     backpressureBuffer,
+    restartPolicyText,
     dlqEnabled,
     step,
     scrubSecrets,
@@ -823,6 +885,10 @@ export function FirstTaskWizard({
   };
 
   const stepIndex = WIZARD_STEPS.findIndex((s) => s.id === step);
+  const stepProgress = t('wizard.progressCurrent')
+    .replace('{current}', String(stepIndex + 1))
+    .replace('{total}', String(WIZARD_STEPS.length))
+    .replace('{step}', t(WIZARD_STEPS[stepIndex].labelKey));
   const goNext = () => {
     if (configBlocked) return; // invalid JSON blocks progression (UI-A.1)
     if (stepIndex < WIZARD_STEPS.length - 1) setStep(WIZARD_STEPS[stepIndex + 1].id);
@@ -1017,6 +1083,14 @@ export function FirstTaskWizard({
       }
       if (typeof spec.batch_size === 'number') setBatchSize(spec.batch_size);
       if (typeof spec.checkpoint_interval_sec === 'number') setCheckpointIntervalSec(spec.checkpoint_interval_sec);
+      // UI-G.2: preserve restart_policy across the YAML→form→submit path.
+      // An absent or null field clears the local draft (matching the YAML),
+      // while any object is kept verbatim so values survive byte-for-byte.
+      if (spec.restart_policy && typeof spec.restart_policy === 'object') {
+        setRestartPolicyText(prettyJSON(spec.restart_policy));
+      } else {
+        setRestartPolicyText('');
+      }
       if (typeof spec.dlq?.enable === 'boolean') setDlqEnabled(spec.dlq.enable);
       setTransformsText(prettyJSON(spec.transforms || []));
       setYamlDirty(false); // form is canonical again after applying YAML
@@ -1512,6 +1586,13 @@ export function FirstTaskWizard({
     const b = Number(submissionSpec?.backpressure_buffer ?? backpressureBuffer);
     return `${r?.max_attempts ?? retryMaxAttempts}× / ${r?.initial_interval_ms ?? retryInitialMs}-${r?.max_interval_ms ?? retryMaxMs}ms / buf ${b}`;
   })();
+  // UI-G.1: the confirm summary must state the restart policy that will be
+  // submitted, or honestly say it is not configured.
+  const submittedRestartSummary = (() => {
+    const rp = submissionSpec?.restart_policy as { mode?: string; max_restarts?: number } | undefined;
+    if (!rp || !rp.mode) return t('wizard.restartNotConfigured');
+    return `${rp.mode} / ${rp.max_restarts ?? 0}×`;
+  })();
   const submittedSchedule = (() => {
     const sc = submissionSpec?.schedule as { type?: string; cron?: string; interval_sec?: number } | undefined;
     if (!sc) return '';
@@ -1598,31 +1679,51 @@ export function FirstTaskWizard({
               mobile — as a grid item its default min-width:auto kept the
               nowrap buttons at ~695px and blew the 390px viewport. */}
           <aside className="min-w-0 border-b border-border p-4 xl:border-b-0 xl:border-r" data-testid="wizard-steps">
-            <div className="mb-3 text-xs font-semibold text-muted-foreground">{t('wizard.progress')}</div>
-            <div className="flex max-w-full gap-2 overflow-x-auto pb-1 xl:flex-col xl:overflow-visible">
-              {WIZARD_STEPS.map((s, i) => {
-                const active = s.id === step;
-                const done = i < stepIndex;
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    data-testid={`wizard-step-${s.id}`}
-                    className={cn(
-                      'rounded-lg px-3 py-2.5 text-left text-sm transition whitespace-nowrap',
-                      active && 'bg-accent font-semibold text-primary',
-                      done && !active && 'text-foreground',
-                      !active && !done && 'text-muted-foreground',
-                    )}
-                    onClick={() => setStep(s.id)}
-                  >
-                    <span className="mr-2 tabular text-xs opacity-70">{i + 1}</span>
-                    {t(s.labelKey)}
-                    {done && <Check className="ml-1 inline h-3 w-3 text-primary" />}
-                  </button>
-                );
-              })}
+            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+              <div className="text-xs font-semibold text-muted-foreground">{t('wizard.progress')}</div>
+              <div data-testid="wizard-step-progress" aria-live="polite" className="text-xs font-medium text-primary">
+                {stepProgress}
+              </div>
             </div>
+            <p data-testid="wizard-step-scroll-hint" className="mb-3 text-[11px] leading-relaxed text-muted-foreground xl:hidden">
+              {t('wizard.stepScrollHint')}
+            </p>
+            <nav aria-label={t('wizard.progress')}>
+              <div
+                ref={stepRailRef}
+                data-testid="wizard-step-rail"
+                className="flex max-w-full gap-2 overflow-x-auto pb-1 xl:flex-col xl:overflow-visible"
+              >
+                {WIZARD_STEPS.map((s, i) => {
+                  const active = s.id === step;
+                  const done = i < stepIndex;
+                  return (
+                    <button
+                      key={s.id}
+                      ref={(element) => {
+                        if (element) stepButtonRefs.current[s.id] = element;
+                        else delete stepButtonRefs.current[s.id];
+                      }}
+                      type="button"
+                      data-testid={`wizard-step-${s.id}`}
+                      aria-current={active ? 'step' : undefined}
+                      className={cn(
+                        'rounded-lg px-3 py-2.5 text-left text-sm transition whitespace-nowrap',
+                        active && 'bg-accent font-semibold text-primary',
+                        done && !active && 'text-foreground',
+                        !active && !done && 'text-muted-foreground',
+                      )}
+                      onFocus={() => scrollStepIntoView(s.id)}
+                      onClick={() => setStep(s.id)}
+                    >
+                      <span className="mr-2 tabular text-xs opacity-70">{i + 1}</span>
+                      {t(s.labelKey)}
+                      {done && <Check className="ml-1 inline h-3 w-3 text-primary" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </nav>
           </aside>
 
           {/* Center form: only the active step is rendered to reduce visual clutter.
@@ -2276,6 +2377,54 @@ export function FirstTaskWizard({
                     <p className="col-span-full text-[11px] leading-relaxed text-muted-foreground">
                       Defaults follow the spec (retry 3 / 100ms–1000ms, buffer 100). Raise retry limits only when transient sink outages are expected; each retry may re-deliver records (at-least-once).
                     </p>
+                    {/* UI-G.1: restart policy as a real form (JSON kept in sync
+                        as the single source of truth for roundtrips). */}
+                    <div className="col-span-full mt-1 space-y-2 rounded border border-border p-2" data-testid="wizard-restart-policy-form">
+                      <label className="block text-xs text-muted-foreground">
+                        <span className="mb-1 block font-medium">{t('wizard.restartPolicyMode')}</span>
+                        <select
+                          data-testid="wizard-restart-mode"
+                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm"
+                          value={restartMode}
+                          onChange={(e) => { setWizardTouched(true); onRestartModeChange(e.target.value); }}
+                        >
+                          <option value="never">{t('wizard.restartModeNever')}</option>
+                          <option value="on-failure">{t('wizard.restartModeOnFailure')}</option>
+                          <option value="always">{t('wizard.restartModeAlways')}</option>
+                        </select>
+                      </label>
+                      {restartMode !== 'never' && (
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                          <label className="block text-xs text-muted-foreground">
+                            <span className="mb-1 block font-medium">{t('wizard.restartMaxRestarts')}</span>
+                            <Input data-testid="wizard-restart-max-restarts" type="number" min={0}
+                              value={Number(restartPolicy?.max_restarts ?? 3)}
+                              onChange={(e) => setRestartField({ max_restarts: positiveIntValue(e.target.value, Number(restartPolicy?.max_restarts ?? 3)) })} />
+                          </label>
+                          <label className="block text-xs text-muted-foreground">
+                            <span className="mb-1 block font-medium">{t('wizard.restartInitialDelay')}</span>
+                            <Input data-testid="wizard-restart-initial-delay" type="number" min={1}
+                              value={Number(restartPolicy?.initial_delay_ms ?? 1000)}
+                              onChange={(e) => setRestartField({ initial_delay_ms: positiveIntValue(e.target.value, Number(restartPolicy?.initial_delay_ms ?? 1000)) })} />
+                          </label>
+                          <label className="block text-xs text-muted-foreground">
+                            <span className="mb-1 block font-medium">{t('wizard.restartMaxDelay')}</span>
+                            <Input data-testid="wizard-restart-max-delay" type="number" min={1}
+                              value={Number(restartPolicy?.max_delay_ms ?? 30000)}
+                              onChange={(e) => setRestartField({ max_delay_ms: positiveIntValue(e.target.value, Number(restartPolicy?.max_delay_ms ?? 30000)) })} />
+                          </label>
+                          <label className="block text-xs text-muted-foreground">
+                            <span className="mb-1 block font-medium">{t('wizard.restartBackoff')}</span>
+                            <Input data-testid="wizard-restart-backoff" type="number" min={1} step={0.5}
+                              value={Number(restartPolicy?.backoff_multiplier ?? 2)}
+                              onChange={(e) => setRestartField({ backoff_multiplier: Number(e.target.value) || 2 })} />
+                          </label>
+                        </div>
+                      )}
+                      <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="wizard-restart-help">
+                        {t('wizard.restartPolicyHint')}
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
@@ -2387,6 +2536,15 @@ export function FirstTaskWizard({
                       YAML parse error: {yamlParse.error}
                     </div>
                   )}
+                  {/* UI-G.2: read-only mirror of the wizard-held restart_policy
+                      (the structured form is the editing surface). Kept so the
+                      YAML roundtrip state is visible next to the YAML editor. */}
+                  <div className="rounded border border-border bg-card/70 p-2 text-xs">
+                    <div className="mb-1 font-medium text-muted-foreground">{t('wizard.restartPolicyField')}</div>
+                    <div data-testid="wizard-restart-policy" className="font-mono text-[11px] text-muted-foreground">
+                      {restartPolicyText.trim() ? restartPolicyText.trim() : t('wizard.restartPolicyNotConfigured')}
+                    </div>
+                  </div>
                   <Textarea
                     data-testid="wizard-yaml"
                     className={cn('min-h-40 w-full font-mono text-xs', yamlDirty && !yamlParse.ok && 'border-rose-400 ring-1 ring-rose-200')}
@@ -2445,6 +2603,10 @@ export function FirstTaskWizard({
                 <div className="flex justify-between gap-3">
                   <span className="text-muted-foreground">{t('wizard.fieldRetryBuffer')}</span>
                   <span className="font-mono text-xs" data-testid="wizard-confirm-retry">{submittedRetrySummary}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">{t('wizard.fieldRestartPolicy')}</span>
+                  <span className="font-mono text-xs" data-testid="wizard-confirm-restart">{submittedRestartSummary}</span>
                 </div>
                 {submittedSchedule && (
                   <div className="flex justify-between gap-3">

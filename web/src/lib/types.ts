@@ -52,6 +52,14 @@ export type Pipeline = {
   name: string;
   status: string;
   stats: PipelineStats;
+  /**
+   * dlq_backlog is the CURRENT dead-letter backlog reported by the server.
+   * stats.records_dlq is a cumulative per-process counter (it resets on restart
+   * and never decreases after replay), so it must never be rendered as backlog.
+   * dlq_backlog_known=false means the count could not be read (unknown, not 0).
+   */
+  dlq_backlog?: number;
+  dlq_backlog_known?: boolean;
   dag?: boolean;
   parallelism?: number;
   shard_strategy?: string;
@@ -90,6 +98,16 @@ export type Checkpoint = {
   timestamp: string;
 };
 
+export type DLQIdentityContext = {
+  replay_provenance?: string;
+  replay_state?: string;
+  replay_attempt?: number;
+  replay_error?: string;
+  failure_reason?: string;
+  missing_columns?: string[] | null;
+  sink_acknowledged_at?: string;
+};
+
 export type DLQItem = {
   id?: number;
   job_name: string;
@@ -100,6 +118,8 @@ export type DLQItem = {
   record_hash?: string;
   pipeline_version?: number;
   dag_node?: string;
+  attempt?: number;
+  identity_context?: DLQIdentityContext;
 };
 
 export type AuditEvent = {
@@ -205,10 +225,108 @@ export type ConnectionRecommendation = {
   reason: string;
 };
 
+// Data reconciliation (POST /api/v2/pipelines/{id}/reconcile). The report is a
+// point-in-time comparison, not an exactly-once proof: read `limits` before
+// acting on a verdict.
+export type ReconcileBucketMismatch = {
+  bucket: number;
+  source_rows: number;
+  target_rows: number;
+  source_digest?: string;
+  target_digest?: string;
+};
+
+export type ReconcileRowDiffKind = 'missing_in_target' | 'extra_in_target' | 'value_mismatch';
+
+export type ReconcileRowDiff = {
+  key: string;
+  kind: ReconcileRowDiffKind;
+  source_row?: string;
+  target_row?: string;
+};
+
+export type ReconcileTableReport = {
+  source_table: string;
+  target_table: string;
+  verdict: string;
+  source_rows: number;
+  target_rows: number;
+  row_delta: number;
+  source_digest?: string;
+  target_digest?: string;
+  compared_columns?: string[];
+  target_columns_used?: string[];
+  missing_target_columns?: string[];
+  extra_target_columns?: string[];
+  bucket_key?: string;
+  buckets?: number;
+  bucket_mismatches?: ReconcileBucketMismatch[];
+  bucket_scan_truncated?: boolean;
+  row_diff_scope?: string;
+  row_diffs?: ReconcileRowDiff[];
+  row_diff_truncated?: boolean;
+  detail?: string;
+  duration_ms?: number;
+};
+
+export type ReconcileSideInfo = {
+  role: string;
+  type: string;
+  dialect: string;
+  database: string;
+  endpoint?: string;
+};
+
+export type ReconcileReport = {
+  pipeline_id: string;
+  pipeline_name?: string;
+  pipeline_status?: string;
+  source: ReconcileSideInfo;
+  target: ReconcileSideInfo;
+  deep: boolean;
+  buckets: number;
+  tables: ReconcileTableReport[];
+  summary: {
+    tables: number;
+    matched: number;
+    count_mismatch: number;
+    content_mismatch: number;
+    schema_mismatch: number;
+    errors: number;
+    unsupported: number;
+  };
+  verdict: string;
+  limits?: string[];
+  started_at?: string;
+  finished_at?: string;
+  duration_ms?: number;
+};
+
+export type ReconcileCapabilities = {
+  supported?: boolean;
+  source_types?: string[];
+  sink_types?: string[];
+  verdicts?: string[];
+  limits?: string[];
+  [key: string]: unknown;
+};
+
+// Single-table re-snapshot (POST /api/v2/pipelines/{id}/resync).
+export type ResyncResult = {
+  status?: string;
+  generation?: number;
+  tables?: string[];
+  details?: (string | Record<string, unknown>)[];
+  semantics?: Record<string, unknown>;
+};
+
 export type TFunc = (key: string) => string;
 
 export type ApiState<T> = {
   data?: T;
   error?: string;
+  /** True for the first request, when a page has no data to render yet. */
   loading: boolean;
+  /** True for every in-flight request, including background/manual refreshes. */
+  refreshing?: boolean;
 };
