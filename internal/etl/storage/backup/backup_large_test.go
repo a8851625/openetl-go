@@ -32,7 +32,9 @@ func TestBackupPagingBoundaryPagesExactly(t *testing.T) {
 		snap.AuditLogs = append(snap.AuditLogs, &storage.AuditEntry{ID: id, Action: fmt.Sprint(i), CreatedAt: fixed})
 		snap.RunHistory = append(snap.RunHistory, &storage.RunRecord{ID: id, JobName: "deleted-pipeline", Status: "failed", StartedAt: fixed, RecordsRead: int64(i)})
 		snap.Tasks = append(snap.Tasks, &storage.TaskAssignment{ID: id, TaskID: fmt.Sprint(i), Pipeline: "deleted-pipeline", Status: "completed", ShardTotal: 1, FinishedAt: &fixed})
-		snap.DeadLetters = append(snap.DeadLetters, &storage.DLQRecord{ID: id, JobName: "deleted-pipeline", CreatedAt: fixed, Record: core.Record{Data: map[string]any{"id": json.Number("9007199254740993"), "sequence": i, "literal": "中'\\<>&"}}})
+		// record_hash is part of the persisted row since PR-DLQ-2 (unique
+		// (job_name, record_hash) key), so a faithful snapshot must carry it.
+		snap.DeadLetters = append(snap.DeadLetters, &storage.DLQRecord{ID: id, JobName: "deleted-pipeline", CreatedAt: fixed, RecordHash: fmt.Sprintf("hash-%d", i), Record: core.Record{Data: map[string]any{"id": json.Number("9007199254740993"), "sequence": i, "literal": "中'\\<>&"}}})
 	}
 	if err := backup.Restore(ctx, s, snap, backup.Options{ClearBeforeRestore: true}); err != nil {
 		t.Fatal(err)

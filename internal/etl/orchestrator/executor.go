@@ -1235,6 +1235,9 @@ func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err err
 		Error:      err.Error(),
 		ErrorClass: string(core.ClassifyError(err)),
 		DAGNode:    dagNodeID,
+		// First capture; the storage upsert increments attempt when the same
+		// record is captured again. Never zero.
+		Attempt: 1,
 	}
 	if dlqErr := e.dlqWriter.WriteDLQ(ctx, entry); dlqErr != nil {
 		// DLQ write itself failed — this is a potential data-loss event.

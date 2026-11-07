@@ -2,6 +2,7 @@ package sink
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"net"
@@ -743,4 +744,456 @@ func TestDorisImplementsSchemaValidator(t *testing.T) {
 		"table":    "t",
 	})
 	var _ core.SchemaValidator = s
+}
+
+// ── IT-7 / T7.2: source_order config surface + table contract ───────────────
+
+func TestDorisSourceOrderConfigValidation(t *testing.T) {
+	base := func(extra map[string]any) map[string]any {
+		cfg := map[string]any{
+			"host":         "doris-fe",
+			"database":     "ods",
+			"table":        "orders",
+			"batch_mode":   "upsert",
+			"pk_columns":   []string{"order_id"},
+			"version_mode": "source_order",
+		}
+		for k, v := range extra {
+			cfg[k] = v
+		}
+		return cfg
+	}
+
+	t.Run("valid", func(t *testing.T) {
+		s, err := NewDorisSink(base(nil))
+		if err != nil {
+			t.Fatalf("NewDorisSink: %v", err)
+		}
+		if !s.sourceOrderEnabled() {
+			t.Fatal("sourceOrderEnabled = false, want true")
+		}
+		if got := s.effectiveSequenceColumn(); got != "_version" {
+			t.Fatalf("sequence column = %q, want _version", got)
+		}
+		if got := s.effectiveSequenceType(); got != dorisSequenceTypeLargeInt {
+			t.Fatalf("sequence type = %q, want largeint", got)
+		}
+		if got := s.dorisSequenceColumnDDLType(); got != "LARGEINT" {
+			t.Fatalf("ddl type = %q, want LARGEINT", got)
+		}
+	})
+
+	t.Run("off is default and lenient", func(t *testing.T) {
+		s, err := NewDorisSink(map[string]any{"host": "h", "database": "d", "table": "t", "write_mode": "insert"})
+		if err != nil {
+			t.Fatalf("NewDorisSink: %v", err)
+		}
+		if s.sourceOrderEnabled() {
+			t.Fatal("sourceOrderEnabled = true for default config, want false")
+		}
+	})
+
+	t.Run("unknown version_mode", func(t *testing.T) {
+		_, err := NewDorisSink(base(map[string]any{"version_mode": "ordered"}))
+		if err == nil || !strings.Contains(err.Error(), "version_mode") {
+			t.Fatalf("err = %v, want version_mode rejection", err)
+		}
+	})
+
+	t.Run("write_mode insert rejected", func(t *testing.T) {
+		_, err := NewDorisSink(base(map[string]any{"write_mode": "insert"}))
+		if err == nil || !strings.Contains(err.Error(), "write_mode=stream_load") {
+			t.Fatalf("err = %v, want write_mode rejection", err)
+		}
+	})
+
+	t.Run("batch_mode insert rejected", func(t *testing.T) {
+		_, err := NewDorisSink(base(map[string]any{"batch_mode": "insert"}))
+		if err == nil || !strings.Contains(err.Error(), "batch_mode=upsert") {
+			t.Fatalf("err = %v, want batch_mode rejection", err)
+		}
+	})
+
+	t.Run("blank sequence_column rejected", func(t *testing.T) {
+		_, err := NewDorisSink(base(map[string]any{"sequence_column": "   "}))
+		if err == nil || !strings.Contains(err.Error(), "sequence_column must not be blank") {
+			t.Fatalf("err = %v, want blank sequence_column rejection", err)
+		}
+	})
+
+	t.Run("sequence_column colliding with pk rejected", func(t *testing.T) {
+		_, err := NewDorisSink(base(map[string]any{"sequence_column": "ORDER_ID"}))
+		if err == nil || !strings.Contains(err.Error(), "collides with pk_columns") {
+			t.Fatalf("err = %v, want pk collision rejection", err)
+		}
+	})
+
+	t.Run("reserved delete sign column rejected", func(t *testing.T) {
+		_, err := NewDorisSink(base(map[string]any{"sequence_column": dorisDeleteSignColumn}))
+		if err == nil || !strings.Contains(err.Error(), "reserved by Doris") {
+			t.Fatalf("err = %v, want reserved column rejection", err)
+		}
+	})
+
+	t.Run("unknown sequence_type", func(t *testing.T) {
+		_, err := NewDorisSink(base(map[string]any{"sequence_type": "decimal"}))
+		if err == nil || !strings.Contains(err.Error(), "sequence_type") {
+			t.Fatalf("err = %v, want sequence_type rejection", err)
+		}
+	})
+}
+
+func TestDorisCreateTableDDLSourceOrder(t *testing.T) {
+	values := map[string]any{"order_id": int64(1), "amount": 12.5}
+
+	offSink := &DorisSink{table: "orders", pkColumns: []string{"order_id"}, database: "test", versionMode: dorisVersionModeOff}
+	offDDL, err := offSink.buildCreateTableDDLWithPK("orders", []string{"order_id", "amount"}, values, []string{"order_id"})
+	if err != nil {
+		t.Fatalf("off DDL: %v", err)
+	}
+	for _, unwanted := range []string{"LARGEINT", "function_column.sequence_col", "enable_unique_key_merge_on_write"} {
+		if strings.Contains(offDDL, unwanted) {
+			t.Fatalf("version_mode=off DDL must stay unchanged, found %q:\n%s", unwanted, offDDL)
+		}
+	}
+	// Byte-identical guarantee for the legacy path: the source_order work must
+	// not perturb the DDL that existing pipelines already produce.
+	wantOff := "CREATE TABLE IF NOT EXISTS `orders` (\n" +
+		"  `order_id` BIGINT NOT NULL,\n" +
+		"  `amount` DECIMAL(18,2)\n" +
+		") ENGINE=OLAP\n" +
+		"UNIQUE KEY(`order_id`)\n" +
+		"DISTRIBUTED BY HASH(`order_id`) BUCKETS 10\n" +
+		"PROPERTIES (\n" +
+		"  \"replication_allocation\" = \"tag.location.default: 1\",\n" +
+		"  \"light_schema_change\" = \"true\"\n" +
+		")"
+	if offDDL != wantOff {
+		t.Fatalf("version_mode=off DDL changed:\ngot:  %q\nwant: %q", offDDL, wantOff)
+	}
+
+	onSink := &DorisSink{
+		table:        "orders",
+		pkColumns:    []string{"order_id"},
+		database:     "test",
+		versionMode:  dorisVersionModeSourceOrder,
+		sequenceType: dorisSequenceTypeLargeInt,
+	}
+	onDDL, err := onSink.buildCreateTableDDLWithPK("orders", []string{"order_id", "amount"}, values, []string{"order_id"})
+	if err != nil {
+		t.Fatalf("source_order DDL: %v", err)
+	}
+	for _, want := range []string{
+		"`_version` LARGEINT NOT NULL",
+		`"enable_unique_key_merge_on_write" = "true"`,
+		`"function_column.sequence_col" = "_version"`,
+		"UNIQUE KEY(`order_id`)",
+	} {
+		if !strings.Contains(onDDL, want) {
+			t.Fatalf("source_order DDL missing %q:\n%s", want, onDDL)
+		}
+	}
+	// The sequence column must not become part of the key, and the key must
+	// still be the schema prefix.
+	if strings.Contains(onDDL, "UNIQUE KEY(`order_id`, `_version`)") {
+		t.Fatalf("sequence column leaked into the UNIQUE KEY:\n%s", onDDL)
+	}
+
+	// sequence_type=bigint must emit BIGINT rather than LARGEINT.
+	bigSink := &DorisSink{database: "test", versionMode: dorisVersionModeSourceOrder, sequenceType: dorisSequenceTypeBigInt}
+	bigDDL, err := bigSink.buildCreateTableDDLWithPK("orders", []string{"order_id", "amount"}, values, []string{"order_id"})
+	if err != nil {
+		t.Fatalf("bigint DDL: %v", err)
+	}
+	if !strings.Contains(bigDDL, "`_version` BIGINT NOT NULL") {
+		t.Fatalf("bigint DDL missing BIGINT sequence column:\n%s", bigDDL)
+	}
+
+	// A custom sequence column name and an explicit column in the record must
+	// not be duplicated.
+	custom := &DorisSink{database: "test", versionMode: dorisVersionModeSourceOrder, sequenceColumn: "src_version"}
+	customDDL, err := custom.buildCreateTableDDLWithPK("orders", []string{"order_id", "amount", "src_version"}, values, []string{"order_id"})
+	if err != nil {
+		t.Fatalf("custom sequence DDL: %v", err)
+	}
+	if strings.Count(customDDL, "`src_version`") != 1 {
+		t.Fatalf("custom sequence column emitted %d times, want 1:\n%s", strings.Count(customDDL, "`src_version`"), customDDL)
+	}
+	if !strings.Contains(customDDL, `"function_column.sequence_col" = "src_version"`) {
+		t.Fatalf("custom sequence property missing:\n%s", customDDL)
+	}
+}
+
+const dorisSourceOrderTableStmt = "CREATE TABLE `orders` (\n  `order_id` bigint NOT NULL,\n  `amount` decimal(18,2) NULL,\n  `_version` LARGEINT NOT NULL\n) ENGINE=OLAP\nUNIQUE KEY(`order_id`)\nDISTRIBUTED BY HASH(`order_id`) BUCKETS 10\nPROPERTIES (\n\"replication_allocation\" = \"tag.location.default: 1\",\n\"enable_unique_key_merge_on_write\" = \"true\",\n\"function_column.sequence_col\" = \"_version\"\n)"
+
+func sourceOrderSink() *DorisSink {
+	return &DorisSink{
+		name:         "doris",
+		database:     "ods",
+		table:        "orders",
+		batchMode:    "upsert",
+		writeMode:    "stream_load",
+		pkColumns:    []string{"order_id"},
+		versionMode:  dorisVersionModeSourceOrder,
+		sequenceType: dorisSequenceTypeLargeInt,
+	}
+}
+
+func TestDorisValidateSourceOrderStatement(t *testing.T) {
+	t.Run("satisfied", func(t *testing.T) {
+		if err := sourceOrderSink().validateSourceOrderStatement(dorisSourceOrderTableStmt, "orders"); err != nil {
+			t.Fatalf("validateSourceOrderStatement: %v", err)
+		}
+	})
+
+	t.Run("missing merge-on-write", func(t *testing.T) {
+		stmt := strings.Replace(dorisSourceOrderTableStmt, "\"enable_unique_key_merge_on_write\" = \"true\",\n", "\"enable_unique_key_merge_on_write\" = \"false\",\n", 1)
+		err := sourceOrderSink().validateSourceOrderStatement(stmt, "orders")
+		if err == nil || !strings.Contains(err.Error(), "enable_unique_key_merge_on_write") {
+			t.Fatalf("err = %v, want merge-on-write rejection", err)
+		}
+		if !strings.Contains(err.Error(), "ALTER TABLE ... SET") {
+			t.Fatalf("migration remedy should explain why ALTER does not work: %v", err)
+		}
+	})
+
+	t.Run("missing sequence property", func(t *testing.T) {
+		stmt := strings.Replace(dorisSourceOrderTableStmt, "\"function_column.sequence_col\" = \"_version\"", "\"light_schema_change\" = \"true\"", 1)
+		err := sourceOrderSink().validateSourceOrderStatement(stmt, "orders")
+		if err == nil || !strings.Contains(err.Error(), "function_column.sequence_col") {
+			t.Fatalf("err = %v, want missing property rejection", err)
+		}
+	})
+
+	t.Run("property points at another column", func(t *testing.T) {
+		s := sourceOrderSink()
+		s.sequenceColumn = "src_version"
+		stmt := strings.Replace(dorisSourceOrderTableStmt, "`_version` LARGEINT NOT NULL", "`src_version` LARGEINT NOT NULL", 1)
+		err := s.validateSourceOrderStatement(stmt, "orders")
+		if err == nil || !strings.Contains(err.Error(), "function_column.sequence_col") {
+			t.Fatalf("err = %v, want property mismatch rejection", err)
+		}
+	})
+
+	t.Run("sequence column missing from schema", func(t *testing.T) {
+		stmt := strings.Replace(dorisSourceOrderTableStmt, ",\n  `_version` LARGEINT NOT NULL", "", 1)
+		err := sourceOrderSink().validateSourceOrderStatement(stmt, "orders")
+		if err == nil || !strings.Contains(err.Error(), "not declared in the table schema") {
+			t.Fatalf("err = %v, want missing column rejection", err)
+		}
+	})
+
+	t.Run("sequence column inside the unique key", func(t *testing.T) {
+		stmt := strings.Replace(dorisSourceOrderTableStmt, "UNIQUE KEY(`order_id`)", "UNIQUE KEY(`order_id`, `_version`)", 1)
+		err := sourceOrderSink().validateSourceOrderStatement(stmt, "orders")
+		if err == nil || !strings.Contains(err.Error(), "part of the UNIQUE KEY") {
+			t.Fatalf("err = %v, want key collision rejection", err)
+		}
+	})
+
+	t.Run("sequence column declared as bigint", func(t *testing.T) {
+		stmt := strings.Replace(dorisSourceOrderTableStmt, "`_version` LARGEINT NOT NULL", "`_version` BIGINT NOT NULL", 1)
+		err := sourceOrderSink().validateSourceOrderStatement(stmt, "orders")
+		if err == nil || !strings.Contains(err.Error(), "silently wraps BIGINT") {
+			t.Fatalf("err = %v, want BIGINT rejection for sequence_type=largeint", err)
+		}
+		// The same table is acceptable when bigint is explicitly requested.
+		bigSink := sourceOrderSink()
+		bigSink.sequenceType = dorisSequenceTypeBigInt
+		if err := bigSink.validateSourceOrderStatement(stmt, "orders"); err != nil {
+			t.Fatalf("bigint opt-in should accept a BIGINT sequence column: %v", err)
+		}
+	})
+
+	t.Run("not a unique key table", func(t *testing.T) {
+		stmt := strings.Replace(dorisSourceOrderTableStmt, "UNIQUE KEY(`order_id`)", "", 1)
+		err := sourceOrderSink().validateSourceOrderStatement(stmt, "orders")
+		if err == nil || !strings.Contains(err.Error(), "UNIQUE KEY table") {
+			t.Fatalf("err = %v, want unique key rejection", err)
+		}
+	})
+
+	t.Run("off mode skips the contract", func(t *testing.T) {
+		s := sourceOrderSink()
+		s.versionMode = dorisVersionModeOff
+		if err := s.validateSourceOrderStatement("CREATE TABLE `x` (`id` int)", "x"); err != nil {
+			t.Fatalf("off mode must not validate the source_order contract: %v", err)
+		}
+	})
+}
+
+func TestDorisValidateSchemaEnforcesSourceOrderContract(t *testing.T) {
+	newSink := func(t *testing.T, db *sql.DB) *DorisSink {
+		t.Helper()
+		s := sourceOrderSink()
+		s.db = db
+		s.schemaCache = core.NewSchemaCache()
+		s.tableMetrics = newTableMetricsSet()
+		return s
+	}
+	schema := core.SchemaInfo{Columns: []core.ColumnInfo{
+		{Name: "order_id", DataType: "BIGINT"},
+		{Name: "amount", DataType: "DECIMAL"},
+	}}
+
+	t.Run("satisfied table passes", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer db.Close()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?")).
+			WithArgs("ods", "orders").WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(1))
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT column_name, column_type, is_nullable FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position")).
+			WithArgs("ods", "orders").
+			WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable"}).
+				AddRow("order_id", "bigint", "NO").
+				AddRow("amount", "decimal(18,2)", "YES").
+				AddRow("_version", "largeint", "NO"))
+		mock.ExpectQuery(regexp.QuoteMeta("SHOW CREATE TABLE `orders`")).
+			WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).AddRow("orders", dorisSourceOrderTableStmt))
+
+		if err := newSink(t, db).ValidateSchema(context.Background(), schema); err != nil {
+			t.Fatalf("ValidateSchema: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("expectations: %v", err)
+		}
+	})
+
+	t.Run("legacy table without sequence contract fails closed", func(t *testing.T) {
+		legacy := "CREATE TABLE `orders` (\n  `order_id` bigint NOT NULL,\n  `amount` decimal(18,2) NULL\n) ENGINE=OLAP\nUNIQUE KEY(`order_id`)\nDISTRIBUTED BY HASH(`order_id`) BUCKETS 10\nPROPERTIES (\n\"replication_allocation\" = \"tag.location.default: 1\",\n\"enable_unique_key_merge_on_write\" = \"true\"\n)"
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer db.Close()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?")).
+			WithArgs("ods", "orders").WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(1))
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT column_name, column_type, is_nullable FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position")).
+			WithArgs("ods", "orders").
+			WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable"}).
+				AddRow("order_id", "bigint", "NO").
+				AddRow("amount", "decimal(18,2)", "YES"))
+		mock.ExpectQuery(regexp.QuoteMeta("SHOW CREATE TABLE `orders`")).
+			WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).AddRow("orders", legacy))
+
+		err = newSink(t, db).ValidateSchema(context.Background(), schema)
+		if err == nil || !strings.Contains(err.Error(), "function_column.sequence_col") {
+			t.Fatalf("err = %v, want legacy table rejection", err)
+		}
+		if !strings.Contains(err.Error(), "Migrate by") {
+			t.Fatalf("err = %v, want migration guidance", err)
+		}
+	})
+}
+
+func TestDorisParseTablePropertiesAndColumnType(t *testing.T) {
+	props := parseDorisTableProperties(dorisSourceOrderTableStmt)
+	if props["function_column.sequence_col"] != "_version" {
+		t.Fatalf("sequence property = %q", props["function_column.sequence_col"])
+	}
+	if !strings.EqualFold(props["enable_unique_key_merge_on_write"], "true") {
+		t.Fatalf("mow property = %q", props["enable_unique_key_merge_on_write"])
+	}
+	if got, ok := parseDorisColumnType(dorisSourceOrderTableStmt, "_version"); !ok || got != "LARGEINT" {
+		t.Fatalf("parseDorisColumnType(_version) = (%q,%v), want LARGEINT", got, ok)
+	}
+	if got, ok := parseDorisColumnType(dorisSourceOrderTableStmt, "amount"); !ok || got != "DECIMAL(18,2)" {
+		t.Fatalf("parseDorisColumnType(amount) = (%q,%v), want DECIMAL(18,2)", got, ok)
+	}
+	if _, ok := parseDorisColumnType(dorisSourceOrderTableStmt, "missing"); ok {
+		t.Fatal("parseDorisColumnType(missing) reported a type")
+	}
+}
+
+func TestDorisWriteEnforcesSourceOrderTableContract(t *testing.T) {
+	legacyStmt := "CREATE TABLE `ods_orders` (\n  `id` bigint NOT NULL,\n  `value` varchar(64) NULL\n) ENGINE=OLAP\nUNIQUE KEY(`id`)\nDISTRIBUTED BY HASH(`id`) BUCKETS 10\nPROPERTIES (\n\"replication_allocation\" = \"tag.location.default: 1\",\n\"enable_unique_key_merge_on_write\" = \"true\"\n)"
+
+	var streamLoads int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		streamLoads++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Status":"Success","StatusCode":200,"NumberTotalRows":1,"NumberLoadedRows":1}`))
+	}))
+	defer ts.Close()
+	host, portText, err := net.SplitHostPort(strings.TrimPrefix(ts.URL, "http://"))
+	if err != nil {
+		t.Fatalf("parse test server URL: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse test server port: %v", err)
+	}
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(regexp.QuoteMeta("SHOW CREATE TABLE `ods_orders`")).
+		WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).AddRow("ods_orders", legacyStmt))
+
+	s := &DorisSink{
+		host:              host,
+		httpPort:          port,
+		database:          "ods",
+		tableTemplate:     "ods_{table}",
+		pkColumns:         []string{"id"},
+		versionMode:       dorisVersionModeSourceOrder,
+		sequenceType:      dorisSequenceTypeLargeInt,
+		streamLoadScheme:  "http",
+		streamLoadFormat:  "json",
+		httpClient:        ts.Client(),
+		insertChunkSize:   500,
+		streamLoadTimeout: time.Second,
+		schemaCache:       core.NewSchemaCache(),
+		tableMetrics:      newTableMetricsSet(),
+		db:                db,
+	}
+	err = s.Write(context.Background(), []core.Record{{
+		Operation: core.OpUpdate,
+		Data:      map[string]any{"id": 1, "value": "v"},
+		Metadata:  core.Metadata{Table: "orders"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "function_column.sequence_col") {
+		t.Fatalf("Write err = %v, want source_order contract rejection", err)
+	}
+	if streamLoads != 0 {
+		t.Fatalf("stream load requests = %d, want 0 (must fail before writing)", streamLoads)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestDorisEnsureSourceOrderTablesCachesSuccess(t *testing.T) {
+	stmt := strings.Replace(dorisSourceOrderTableStmt, "`orders`", "`ods_orders`", -1)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	// Exactly one SHOW CREATE TABLE for two batches: the success is cached.
+	mock.ExpectQuery(regexp.QuoteMeta("SHOW CREATE TABLE `ods_orders`")).
+		WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).AddRow("ods_orders", stmt))
+
+	s := sourceOrderSink()
+	s.db = db
+	s.tableTemplate = "ods_{table}"
+	s.table = ""
+	s.tableMetrics = newTableMetricsSet()
+	records := []core.Record{{Operation: core.OpUpdate, Data: map[string]any{"order_id": 1}, Metadata: core.Metadata{Table: "orders"}}}
+	for i := 0; i < 2; i++ {
+		if err := s.ensureSourceOrderTables(context.Background(), records); err != nil {
+			t.Fatalf("ensureSourceOrderTables pass %d: %v", i, err)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+	s.versionMode = dorisVersionModeOff
+	if err := s.ensureSourceOrderTables(context.Background(), records); err != nil {
+		t.Fatalf("off mode must not query: %v", err)
+	}
 }

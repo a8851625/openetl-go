@@ -46,15 +46,29 @@ type FileSinkConfig struct {
 	MaxRetries int
 	// RetryBaseMs is the base delay for exponential backoff (default 500ms).
 	RetryBaseMs int
+	// Manifest enables the two-step commit (data object + manifest marker) so
+	// readers can distinguish committed data from crash-window leftovers.
+	Manifest bool
+	// ManifestPrefix is where manifests are written inside the output prefix.
+	ManifestPrefix string
 }
 
 type FileSink struct {
-	name         string
-	config       FileSinkConfig
-	file         *os.File
-	buf          *bytes.Buffer
-	mu           sync.Mutex
-	client       *minio.Client
+	name   string
+	config FileSinkConfig
+	file   *os.File
+	buf    *bytes.Buffer
+	mu     sync.Mutex
+	client *minio.Client
+	// batchSeq / lastCommit / manifestCount back the manifest commit contract.
+	batchSeq      int64
+	lastCommit    map[string]any
+	manifestCount int64
+	// committedIDs caches the batch ids already committed in this output
+	// location so a cross-day replay does not create a second commit entry.
+	committedIDs map[string]string
+	// replaySkips counts batches whose content was already committed.
+	replaySkips  int64
 	sinkCounters // P4-20: per-sink write metrics (SK-4)
 }
 
@@ -121,6 +135,7 @@ func NewS3Sink(config map[string]any) (*FileSink, error) {
 			cfg.RetryBaseMs = int(rb)
 		}
 	}
+	cfg.Manifest, cfg.ManifestPrefix = parseManifestConfig(config)
 	if err := validateFileSinkConfig("s3", &cfg); err != nil {
 		return nil, err
 	}
@@ -171,6 +186,7 @@ func NewFileSink(config map[string]any) (*FileSink, error) {
 			cfg.RetryBaseMs = int(rb)
 		}
 	}
+	cfg.Manifest, cfg.ManifestPrefix = parseManifestConfig(config)
 	if err := validateFileSinkConfig("file_sink", &cfg); err != nil {
 		return nil, err
 	}
@@ -179,6 +195,27 @@ func NewFileSink(config map[string]any) (*FileSink, error) {
 }
 
 func (s *FileSink) Name() string { return s.name }
+
+// parseManifestConfig reads the manifest commit settings shared by s3 and
+// file_sink.
+func parseManifestConfig(config map[string]any) (bool, string) {
+	enabled := false
+	if v, ok := config["manifest"]; ok {
+		switch b := v.(type) {
+		case bool:
+			enabled = b
+		case string:
+			enabled = strings.EqualFold(strings.TrimSpace(b), "true")
+		}
+	}
+	prefix := defaultManifestPrefix
+	if v, ok := config["manifest_prefix"]; ok {
+		if vs, ok := v.(string); ok && strings.TrimSpace(vs) != "" {
+			prefix = strings.TrimSpace(vs)
+		}
+	}
+	return enabled, prefix
+}
 
 func validateFileSinkConfig(name string, cfg *FileSinkConfig) error {
 	cfg.Format = strings.ToLower(strings.TrimSpace(cfg.Format))
@@ -266,6 +303,9 @@ func (s *FileSink) Write(ctx context.Context, records []core.Record) (err error)
 		if err := s.uploadWithRetry(ctx, objectName, payload); err != nil {
 			return err
 		}
+		if err := s.commitBatchManifest(ctx, objectName, payload, len(writable)); err != nil {
+			return err
+		}
 		s.recordMetrics(len(writable), time.Since(start))
 		return nil
 	}
@@ -283,8 +323,29 @@ func (s *FileSink) Write(ctx context.Context, records []core.Record) (err error)
 	if err := os.Rename(tmpFilename, filename); err != nil {
 		return err
 	}
+	if err := s.commitBatchManifest(ctx, objectName, payload, len(writable)); err != nil {
+		return err
+	}
 	s.recordMetrics(len(writable), time.Since(start))
 	return nil
+}
+
+// commitBatchManifest publishes the commit marker for the data object that was
+// just written. It is a no-op unless manifest mode is enabled. The data object
+// is always written first: a crash in between leaves an object no manifest
+// references, which readers must ignore (and may delete).
+func (s *FileSink) commitBatchManifest(ctx context.Context, objectKey string, payload []byte, rows int) error {
+	if !s.config.Manifest {
+		return nil
+	}
+	sum := sha256.Sum256(payload)
+	return s.commitManifest(ctx, []manifestObject{{
+		Key:    objectKey,
+		SHA256: hex.EncodeToString(sum[:]),
+		Bytes:  len(payload),
+		Rows:   rows,
+		Format: s.config.Format,
+	}})
 }
 
 func (s *FileSink) uploadWithRetry(ctx context.Context, objectName string, payload []byte) error {

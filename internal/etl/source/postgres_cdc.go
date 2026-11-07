@@ -288,6 +288,10 @@ func pgTypeName(oid uint32) string {
 type pgColumnInfo struct {
 	Name    string
 	TypeOID uint32
+	// Key marks a column that is part of the replica identity, as published in
+	// the pgoutput Relation message flags. An UPDATE old tuple with 'K' carries
+	// exactly these columns, so they are needed to name its values correctly.
+	Key bool
 }
 
 func newPGCatalog() *pgCatalog {
@@ -321,6 +325,21 @@ func (c *pgCatalog) primaryKeys(table string) []string {
 
 // columnTypes returns column->type-name mapping for a relation (GAP-1:
 // Metadata.ColumnTypes contract matching mysql_batch/mysql_cdc).
+// keyColumns returns the replica-identity columns of a relation, in the order
+// pgoutput publishes them in a 'K' (key-only) old tuple.
+func (c *pgCatalog) keyColumns(relID uint32) []pgColumnInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	cols := c.rel2cols[relID]
+	out := make([]pgColumnInfo, 0, len(cols))
+	for _, col := range cols {
+		if col.Key {
+			out = append(out, col)
+		}
+	}
+	return out
+}
+
 func (c *pgCatalog) columnTypes(relID uint32) map[string]string {
 	c.mu.RLock()
 	cols := c.rel2cols[relID]
@@ -542,20 +561,56 @@ func (r *pgCDCReader) closeDone() {
 // caches them for record key derivation. Best-effort: failures log and leave
 // the cache empty.
 func (r *pgCDCReader) loadTablePKs(ctx context.Context, conn *pgconn.PgConn) {
-	query := `SELECT rc.relname AS table_name,
-		i.relname AS index_name,
-		a.attname AS column_name
+	// NOTE: this query previously selected `rc.relname` (an alias that does not
+	// exist in the FROM clause) and ignored the resulting error, so primary-key
+	// discovery silently produced no columns. postgres_cdc records then carried
+	// an empty Metadata.PrimaryKeyColumns/Key, which a metadata-PK sink rejects
+	// as an incomplete identity. Table names are returned as
+	// `schema.table` to match configuration input.
+	query, args := r.tablePKQuery()
+	paramBytes := make([][]byte, 0, len(args))
+	for _, a := range args {
+		paramBytes = append(paramBytes, []byte(fmt.Sprintf("%v", a)))
+	}
+	result := conn.ExecParams(ctx, query, paramBytes, nil, nil, nil)
+	pending := map[string][]string{}
+	for result.NextRow() {
+		values := result.Values()
+		if len(values) < 2 {
+			continue
+		}
+		qualified := string(values[0])
+		colName := string(values[1])
+		parts := strings.SplitN(qualified, ".", 2)
+		table := qualified
+		if len(parts) == 2 {
+			table = parts[1]
+		}
+		pending[table] = append(pending[table], colName)
+	}
+	if _, err := result.Close(); err != nil {
+		// Best-effort by contract (CDC must still stream), but never silent:
+		// an empty PK list degrades metadata identity for metadata-PK sinks.
+		g.Log().Warningf(ctx, "postgres_cdc: load primary keys: %v", err)
+	}
+	for tbl, pks := range pending {
+		r.catalog.setTablePKs(tbl, pks)
+	}
+}
+
+// tablePKQuery builds the primary-key discovery statement plus its arguments.
+func (r *pgCDCReader) tablePKQuery() (string, []any) {
+	query := `SELECT n.nspname || '.' || c.relname AS qualified_name, a.attname AS column_name
 	FROM pg_index x
 	JOIN pg_class c ON c.oid = x.indrelid
 	JOIN pg_namespace n ON n.oid = c.relnamespace
-	JOIN pg_class i ON i.oid = x.indexrelid
 	JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(x.indkey)
 	WHERE x.indisprimary`
 	var args []any
 	if len(r.source.tables) > 0 {
 		placeholders := make([]string, 0, len(r.source.tables))
 		for _, t := range r.source.tables {
-			// Allow schema-qualified input; default schema public.
+			// Allow unqualified input; default schema public.
 			parts := strings.SplitN(t, ".", 2)
 			schema, table := "public", parts[0]
 			if len(parts) == 2 {
@@ -564,24 +619,16 @@ func (r *pgCDCReader) loadTablePKs(ctx context.Context, conn *pgconn.PgConn) {
 			placeholders = append(placeholders, fmt.Sprintf("($%d::text, $%d::text)", len(args)+1, len(args)+2))
 			args = append(args, schema, table)
 		}
-		query += " AND n.nspname || '.' || c.relname IN (" + strings.Join(placeholders, ", ") + ")"
+		query += " AND (n.nspname, c.relname) IN (" + strings.Join(placeholders, ", ") + ")"
 	}
-	query += " ORDER BY c.relname, array_position(x.indkey, a.attnum)"
-	paramBytes := make([][]byte, 0, len(args))
-	for _, a := range args {
-		paramBytes = append(paramBytes, []byte(fmt.Sprintf("%v", a)))
-	}
-	result := conn.ExecParams(ctx, query, paramBytes, nil, nil, nil)
-	defer result.Close()
-	pending := map[string][]string{}
-	for result.NextRow() {
-		tableName := string(result.Values()[0])
-		colName := string(result.Values()[2])
-		pending[tableName] = append(pending[tableName], colName)
-	}
-	for tbl, pks := range pending {
-		r.catalog.setTablePKs(tbl, pks)
-	}
+	query += " ORDER BY 1, array_position(x.indkey::int2[], a.attnum::int2)"
+	return query, args
+}
+
+// tablePKQueryForTest exposes the primary-key discovery query so tests can pin
+// its shape without a live PostgreSQL connection.
+func (r *pgCDCReader) tablePKQueryForTest() (string, []any) {
+	return r.tablePKQuery()
 }
 
 func (r *pgCDCReader) setupPublication(ctx context.Context, conn *pgconn.PgConn) error {
@@ -769,12 +816,22 @@ func (r *pgCDCReader) skipLogicalMessageMsg(data []byte) []byte {
 // Default on_truncate=error aborts the reader so operators must either implement
 // target truncate/delete or explicitly accept skip + allow_unsafe.
 func (r *pgCDCReader) handleTruncateMsg(data []byte) []byte {
+	// pgoutput Truncate body: Int32 number_of_relations, Int8 option flags,
+	// then one Int32 relation ID per relation. Reading the count at data[1:5]
+	// (previously) shifted it by one byte, so every real TRUNCATE looked longer
+	// than the frame and was silently ignored — leaving stale sink rows while
+	// reporting a production-safe fail-closed policy.
 	if len(data) < 5 {
 		return data[:0]
 	}
-	nRels := binary.BigEndian.Uint32(data[1:5])
-	skip := 5 + int(nRels)*5
+	nRels := int(binary.BigEndian.Uint32(data[0:4]))
+	if nRels < 0 || nRels > 1<<20 {
+		g.Log().Errorf(r.ctx, "postgres_cdc: TRUNCATE relation count %d is out of range — aborting frame parse", nRels)
+		return data[:0]
+	}
+	skip := 5 + nRels*4
 	if len(data) < skip {
+		g.Log().Errorf(r.ctx, "postgres_cdc: TRUNCATE message truncated (%d relations, %d bytes) — aborting frame parse", nRels, len(data))
 		return data[:0]
 	}
 	policy := "error"
@@ -821,6 +878,7 @@ func (r *pgCDCReader) parseRelationMsg(data []byte) []byte {
 		if pos+1 >= len(data) {
 			break
 		}
+		flags := data[pos]
 		pos++
 		colName, nextPos := readNullString(data, pos)
 		pos = nextPos
@@ -830,7 +888,7 @@ func (r *pgCDCReader) parseRelationMsg(data []byte) []byte {
 		typeOID := binary.BigEndian.Uint32(data[pos:])
 		pos += 4
 		pos += 4
-		cols = append(cols, pgColumnInfo{Name: colName, TypeOID: typeOID})
+		cols = append(cols, pgColumnInfo{Name: colName, TypeOID: typeOID, Key: flags&1 == 1})
 	}
 
 	r.catalog.setRelation(relID, tableName, cols)
@@ -944,6 +1002,16 @@ func (r *pgCDCReader) parseUpdateMsg(data []byte, lsn string) []byte {
 			if !ok {
 				return data[:0]
 			}
+		} else if tupleType == 'K' {
+			// A key-only old tuple: the values are the replica-identity columns
+			// (not the first N relation columns), so name them from that list.
+			// Without this the UPDATE reached a metadata-PK sink with no before
+			// image and was rejected as an incomplete identity.
+			var ok bool
+			beforeMap, pos, ok = readPGTupleValues(data, pos, numCols, r.catalog.keyColumns(relID), true)
+			if !ok {
+				return data[:0]
+			}
 		} else {
 			var ok bool
 			_, pos, ok = readPGTupleValues(data, pos, numCols, cols, false)
@@ -972,6 +1040,21 @@ func (r *pgCDCReader) parseUpdateMsg(data []byte, lsn string) []byte {
 		return data[:0]
 	}
 
+	// With the default replica identity ('d') PostgreSQL omits the old tuple
+	// entirely when the replica-identity columns did not change, so an UPDATE
+	// arrives with no before image at all. A metadata-PK sink rejects that as an
+	// incomplete identity (reason update_before_image_missing), which used to
+	// route every postgres_cdc UPDATE to the DLQ. Because pgoutput only omits
+	// the old tuple when the key is unchanged, the key-only before image can be
+	// reconstructed from the after image without guessing; any key change is
+	// still published as a 'K' tuple above.
+	if beforeMap == nil {
+		beforeMap = pgKeyOnlyBeforeImage(dataMap, r.catalog.keyColumns(relID), r.catalog.primaryKeys(tableName))
+		if len(beforeMap) > 0 {
+			tupleType = 'K'
+		}
+	}
+
 	rec := core.Record{
 		Operation: core.OpUpdate,
 		Data:      dataMap,
@@ -987,10 +1070,60 @@ func (r *pgCDCReader) parseUpdateMsg(data []byte, lsn string) []byte {
 			Key:               r.recordKey(tableName, dataMap, beforeMap),
 			PrimaryKeyColumns: append([]string(nil), r.catalog.primaryKeys(tableName)...),
 			ColumnTypes:       r.catalog.columnTypes(relID),
+			BeforeImageState:  pgBeforeImageState(beforeMap, tupleType),
 		},
 	}
 	r.sendRecord(rec)
 	return data[pos:]
+}
+
+// pgKeyOnlyBeforeImage reconstructs the key-only before image of an UPDATE whose
+// old tuple pgoutput suppressed. Only replica-identity (or primary-key) columns
+// are filled, because only they are provably unchanged in that case.
+func pgKeyOnlyBeforeImage(data map[string]any, keyCols []pgColumnInfo, pkCols []string) map[string]any {
+	columns := make([]string, 0, len(keyCols)+len(pkCols))
+	for _, col := range keyCols {
+		columns = append(columns, col.Name)
+	}
+	if len(columns) == 0 {
+		columns = append(columns, pkCols...)
+	}
+	if len(columns) == 0 {
+		return nil
+	}
+	before := make(map[string]any, len(columns))
+	for _, name := range columns {
+		value, ok := data[name]
+		if !ok {
+			continue
+		}
+		before[name] = value
+	}
+	if len(before) == 0 {
+		return nil
+	}
+	return before
+}
+
+// pgBeforeImageState describes what pgoutput actually delivered for the old
+// tuple of an UPDATE. 'K' carries only the key columns, 'O' carries every
+// column, and 'N' means no old tuple was published at all (REPLICA IDENTITY
+// DEFAULT with an unchanged key). Identity consumers use this to distinguish a
+// partial before image from a missing one.
+func pgBeforeImageState(before map[string]any, tupleType byte) core.BeforeImageState {
+	switch tupleType {
+	case 'O':
+		if len(before) == 0 {
+			return core.BeforeImageStatePresentEmpty
+		}
+		return core.BeforeImageStateFull
+	case 'K':
+		return core.BeforeImageStatePartial
+	case 'N':
+		return core.BeforeImageStateAbsent
+	default:
+		return core.BeforeImageStateInvalid
+	}
 }
 
 func (r *pgCDCReader) parseDeleteMsg(data []byte, lsn string) []byte {

@@ -59,9 +59,15 @@ func DefaultHealthThresholds() HealthThresholds {
 
 // PipelineHealthInput is the minimal signal set used to derive pipeline health.
 type PipelineHealthInput struct {
-	Status               string
-	RecordsFailed        int64
-	RecordsDLQ           int64
+	Status        string
+	RecordsFailed int64
+	// RecordsDLQ is a cumulative per-runner counter (records ever captured by
+	// the DLQ in this process). It is diagnostic only and must NOT drive
+	// health: it resets on restart and never decreases after replay/delete.
+	RecordsDLQ int64
+	// DLQFileCount is the current dead-letter backlog (rows in the DLQ right
+	// now). -1 means the count could not be read; it is treated as unknown
+	// rather than as an empty backlog.
 	DLQFileCount         int
 	LastError            string
 	CheckpointAgeSeconds int64
@@ -74,7 +80,12 @@ type PipelineHealthInput struct {
 // DerivePipelineHealth mirrors the UI derivation rules so API/UI/metrics agree.
 //
 // failed/paused/scheduled/completed/stopped/starting are terminal display states.
-// running pipelines become degraded when DLQ/fail/error/lag/checkpoint/CB signals fire.
+// A running pipeline is degraded only on CURRENT signals: an unreplayed DLQ
+// backlog, high CDC lag, a stale checkpoint, or an open circuit breaker.
+// Cumulative counters (RecordsFailed/RecordsDLQ) and the last error string are
+// deliberately excluded: a pipeline that failed once and recovered must not stay
+// degraded forever, and a restarted pipeline with real DLQ rows must not look
+// healthy just because this process has not failed yet.
 func DerivePipelineHealth(in PipelineHealthInput, th HealthThresholds) PipelineHealth {
 	if th.StaleCheckpointSec <= 0 {
 		th.StaleCheckpointSec = DefaultStaleCheckpointSec
@@ -100,10 +111,7 @@ func DerivePipelineHealth(in PipelineHealthInput, th HealthThresholds) PipelineH
 	case "restore_failed":
 		return PipelineRestoreFailed
 	case "running":
-		if in.RecordsFailed > 0 ||
-			in.RecordsDLQ > 0 ||
-			in.DLQFileCount > 0 ||
-			strings.TrimSpace(in.LastError) != "" ||
+		if in.DLQFileCount > 0 ||
 			(in.CDCLagMs > 0 && in.CDCLagMs > th.HighCDCLagMs) ||
 			(in.CheckpointAgeSeconds > th.StaleCheckpointSec) ||
 			in.CircuitBreakerState == 1 { // open

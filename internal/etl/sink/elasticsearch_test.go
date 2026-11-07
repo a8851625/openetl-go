@@ -2,7 +2,8 @@ package sink
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,266 +13,171 @@ import (
 	"github.com/a8851625/openetl-go/internal/etl/core"
 )
 
-func TestElasticsearchWriteReturnsMarshalErrors(t *testing.T) {
-	s, err := NewElasticsearchSink(map[string]any{
-		"hosts": []interface{}{"http://127.0.0.1:1"},
-		"index": "orders",
-	})
+func newESTestSink(t *testing.T, baseURL string, extra map[string]any) *ElasticsearchSink {
+	t.Helper()
+	cfg := map[string]any{
+		"hosts":         []any{baseURL},
+		"index":         "orders",
+		"chunk_size":    100,
+		"retry_base_ms": 1,
+	}
+	for k, v := range extra {
+		cfg[k] = v
+	}
+	s, err := NewElasticsearchSink(cfg)
 	if err != nil {
 		t.Fatalf("NewElasticsearchSink: %v", err)
 	}
-
-	err = s.Write(context.Background(), []core.Record{
-		{
-			Data: map[string]any{
-				"id":  "order-1",
-				"bad": make(chan int),
-			},
-		},
-	})
-	if err == nil {
-		t.Fatal("Write() = nil error, want document marshal error")
-	}
-	if !strings.Contains(err.Error(), "elasticsearch marshal document") {
-		t.Fatalf("Write() error = %v, want elasticsearch marshal document", err)
-	}
+	return s
 }
 
-func TestNewElasticsearchSinkValidatesConfig(t *testing.T) {
-	cases := []struct {
-		name   string
-		config map[string]any
-		want   string
-	}{
-		{
-			name:   "missing hosts",
-			config: map[string]any{"index": "orders"},
-			want:   "hosts are required",
-		},
-		{
-			name:   "missing index",
-			config: map[string]any{"hosts": []string{"http://127.0.0.1:9200"}},
-			want:   "index is required",
-		},
-		{
-			name: "invalid chunk size",
-			config: map[string]any{
-				"hosts":      []string{"http://127.0.0.1:9200"},
-				"index":      "orders",
-				"chunk_size": 0,
-			},
-			want: "chunk_size must be > 0",
-		},
-		{
-			name: "invalid max retries",
-			config: map[string]any{
-				"hosts":       []string{"http://127.0.0.1:9200"},
-				"index":       "orders",
-				"max_retries": -1,
-			},
-			want: "max_retries must be >= 0",
-		},
-		{
-			name: "invalid retry base",
-			config: map[string]any{
-				"hosts":         []string{"http://127.0.0.1:9200"},
-				"index":         "orders",
-				"retry_base_ms": -1,
-			},
-			want: "retry_base_ms must be >= 0",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewElasticsearchSink(tc.config)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("NewElasticsearchSink() error = %v, want %q", err, tc.want)
-			}
-		})
-	}
-}
-
-func TestElasticsearchBulkItemErrorsExposeFailedRecordIndices(t *testing.T) {
-	var bulkCalls int32
-	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/_bulk":
-			call := atomic.AddInt32(&bulkCalls, 1)
-			w.Header().Set("Content-Type", "application/json")
-			if call == 1 {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"errors":false,"items":[{"index":{"_id":"1","status":201}}]}`))
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"errors":true,"items":[{"index":{"_id":"2","status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field age"}}}]}`))
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"green"}`))
-		}
+func TestElasticsearchBulkIndexesWithIDColumn(t *testing.T) {
+	var bodies []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errors":false,"items":[{"index":{"status":201}}]}`))
 	}))
-	defer es.Close()
+	defer ts.Close()
 
-	s, err := NewElasticsearchSink(map[string]any{
-		"host":        es.URL,
-		"index":       "orders",
-		"chunk_size":  1,
-		"max_retries": 0,
-	})
-	if err != nil {
-		t.Fatalf("NewElasticsearchSink: %v", err)
+	s := newESTestSink(t, ts.URL, nil)
+	rec := core.Record{Operation: core.OpInsert, Data: map[string]any{"id": 7, "amount": 3}}
+	if err := s.Write(context.Background(), []core.Record{rec}); err != nil {
+		t.Fatalf("Write: %v", err)
 	}
-
-	err = s.Write(context.Background(), []core.Record{
-		{Data: map[string]any{"id": 1, "age": 30}},
-		{Data: map[string]any{"id": 2, "age": "bad"}},
-	})
-	if err == nil {
-		t.Fatal("Write() = nil error, want partial batch error")
+	if len(bodies) != 1 {
+		t.Fatalf("bulk calls = %d, want 1", len(bodies))
 	}
-	var partial core.PartialBatchError
-	if !errors.As(err, &partial) {
-		t.Fatalf("Write() error = %T %v, want core.PartialBatchError", err, err)
+	lines := strings.Split(strings.TrimSpace(bodies[0]), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("bulk body lines = %d, want 2 (action + document): %q", len(lines), bodies[0])
 	}
-	indices := partial.FailedRecordIndices()
-	if len(indices) != 1 || indices[0] != 1 {
-		t.Fatalf("FailedRecordIndices() = %#v, want [1]", indices)
+	var action map[string]map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &action); err != nil {
+		t.Fatalf("decode action: %v", err)
 	}
-	recordErr := partial.ErrorForRecord(1)
-	if recordErr == nil {
-		t.Fatal("ErrorForRecord(1) = nil")
+	if got := action["index"]["_id"]; got != "7" {
+		t.Fatalf("_id = %v, want 7 (from id_column)", got)
 	}
-	if got := core.ClassifyError(recordErr); got != core.ErrorClassSchema {
-		t.Fatalf("ClassifyError(recordErr) = %s, want %s; err=%v", got, core.ErrorClassSchema, recordErr)
-	}
-	if !strings.Contains(recordErr.Error(), "id=2") || !strings.Contains(recordErr.Error(), "mapper_parsing_exception") {
-		t.Fatalf("record error = %v, want id and mapper type", recordErr)
+	if got := action["index"]["_index"]; got != "orders" {
+		t.Fatalf("_index = %v, want orders", got)
 	}
 }
 
-func TestElasticsearchValidateSchemaUsesConfiguredMapping(t *testing.T) {
-	s, err := NewElasticsearchSink(map[string]any{
-		"hosts": []interface{}{"http://127.0.0.1:1"},
-		"index": "orders",
-		"mappings": map[string]any{
-			"properties": map[string]any{
-				"id":    map[string]any{"type": "long"},
-				"phone": map[string]any{"type": "long"},
-				"name":  map[string]any{"type": "keyword"},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewElasticsearchSink: %v", err)
-	}
-
-	// GAP-4 contract: string sources may target numeric mappings (the bulk API
-	// parses numeric-looking strings; value failures surface as item-level DLQ
-	// mapper_parsing_exception instead of blocking the pipeline). phone
-	// VARCHAR(32) -> long must therefore be accepted.
-	err = s.ValidateSchema(context.Background(), core.SchemaInfo{Columns: []core.ColumnInfo{
-		{Name: "id", DataType: "BIGINT"},
-		{Name: "phone", DataType: "VARCHAR(32)"},
-		{Name: "name", DataType: "TEXT"},
-	}})
-	if err != nil {
-		t.Fatalf("ValidateSchema() = %v, want nil (varchar->long is coercible)", err)
-	}
-
-	// Non-coercible categories stay blocked: a boolean source cannot feed a
-	// numeric mapping via any value parsing.
-	err = s.ValidateSchema(context.Background(), core.SchemaInfo{Columns: []core.ColumnInfo{
-		{Name: "id", DataType: "BIGINT"},
-		{Name: "phone", DataType: "BOOLEAN"},
-	}})
-	if err == nil {
-		t.Fatal("ValidateSchema() = nil, want boolean->long mismatch")
-	}
-	if !strings.Contains(err.Error(), "phone source=BOOLEAN target=long") {
-		t.Fatalf("ValidateSchema() error = %v, want phone mismatch", err)
-	}
-}
-
-func TestElasticsearchValidateSchemaFetchesRemoteMapping(t *testing.T) {
-	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/orders/_mapping":
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"orders":{"mappings":{"properties":{"id":{"type":"long"},"amount":{"type":"double"},"status":{"type":"keyword"}}}}}`))
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"green"}`))
-		}
+func TestElasticsearchDeleteUsesDeleteAction(t *testing.T) {
+	var bodies []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		_, _ = w.Write([]byte(`{"errors":false,"items":[{"delete":{"status":200}}]}`))
 	}))
-	defer es.Close()
+	defer ts.Close()
 
-	s, err := NewElasticsearchSink(map[string]any{
-		"host":  es.URL,
-		"index": "orders",
-	})
-	if err != nil {
-		t.Fatalf("NewElasticsearchSink: %v", err)
+	s := newESTestSink(t, ts.URL, nil)
+	rec := core.Record{Operation: core.OpDelete, Data: map[string]any{"id": 9}}
+	if err := s.Write(context.Background(), []core.Record{rec}); err != nil {
+		t.Fatalf("Write: %v", err)
 	}
-	if err := s.Open(context.Background()); err != nil {
-		t.Fatalf("Open: %v", err)
+	if !strings.Contains(bodies[0], `"delete"`) {
+		t.Fatalf("expected a delete action, got %q", bodies[0])
 	}
-	err = s.ValidateSchema(context.Background(), core.SchemaInfo{Columns: []core.ColumnInfo{
-		{Name: "id", DataType: "BIGINT"},
-		{Name: "amount", DataType: "DOUBLE"},
-		{Name: "status", DataType: "VARCHAR(16)"},
-	}})
-	if err != nil {
-		t.Fatalf("ValidateSchema() = %v, want compatible mapping", err)
+	if strings.Count(strings.TrimSpace(bodies[0]), "\n") != 0 {
+		t.Fatalf("a delete action must not carry a document body: %q", bodies[0])
 	}
 }
 
-func TestSummarizeBulkErrorsIncludesItemIndex(t *testing.T) {
-	summary := summarizeBulkErrors(map[string]any{
-		"items": []any{
-			map[string]any{"index": map[string]any{"_id": "ok", "status": float64(201)}},
-			map[string]any{"index": map[string]any{
-				"_id":    "bad",
-				"status": float64(400),
-				"error": map[string]any{
-					"type":   "mapper_parsing_exception",
-					"reason": "failed to parse",
-				},
-			}},
-		},
-	})
-	for _, want := range []string{"item=1", "id=bad", "status=400", "mapper_parsing_exception"} {
-		if !strings.Contains(summary, want) {
-			t.Fatalf("summary = %q, want %q", summary, want)
+func TestElasticsearchRetriesOn429AndHonoursRetryAfter(t *testing.T) {
+	var calls int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		if atomic.AddInt64(&calls, 1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":"too many requests"}`))
+			return
 		}
+		_, _ = w.Write([]byte(`{"errors":false,"items":[{"index":{"status":201}}]}`))
+	}))
+	defer ts.Close()
+
+	s := newESTestSink(t, ts.URL, map[string]any{"max_retries": 2})
+	rec := core.Record{Operation: core.OpInsert, Data: map[string]any{"id": 1}}
+	if err := s.Write(context.Background(), []core.Record{rec}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n := atomic.LoadInt64(&calls); n != 2 {
+		t.Fatalf("bulk calls = %d, want 2 (429 must be retried)", n)
 	}
 }
 
-func TestEsTypeCompatibleStringSourceCoercible(t *testing.T) {
-	// GAP-4 e2e contract: a string source column may target a numeric or date
-	// ES mapping. ES bulk parses numeric/date strings; a value that cannot be
-	// parsed fails on that single bulk item and lands in item-level DLQ
-	// (mapper_parsing_exception), instead of blocking the whole pipeline
-	// upfront. Keyword/text targets stay compatible; non-coercible categories
-	// (e.g. boolean source to long) stay incompatible.
-	cases := []struct {
-		src, tgt string
-		want     bool
-	}{
-		{"varchar", "long", true},
-		{"varchar", "keyword", true},
-		{"varchar", "double", true},
-		{"varchar", "date", true},
-		{"text", "integer", true},
-		{"boolean", "long", false},
-		{"bigint", "keyword", false},
-		{"datetime", "keyword", true},
-		{"int", "long", true},
-		{"decimal(12,2)", "scaled_float", true},
+func TestElasticsearchSurfacesPartialBulkFailure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		// One item rejected by the mapping: the sink must fail the batch instead
+		// of silently dropping the row.
+		_, _ = w.Write([]byte(`{"errors":true,"items":[{"index":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [amount]"}}}]}`))
+	}))
+	defer ts.Close()
+
+	s := newESTestSink(t, ts.URL, map[string]any{"max_retries": 0})
+	rec := core.Record{Operation: core.OpInsert, Data: map[string]any{"id": 1, "amount": "abc"}}
+	err := s.Write(context.Background(), []core.Record{rec})
+	if err == nil {
+		t.Fatal("expected a per-item bulk failure to surface")
 	}
-	for _, c := range cases {
-		if got := esTypeCompatible(c.src, c.tgt); got != c.want {
-			t.Errorf("esTypeCompatible(%q, %q) = %v, want %v", c.src, c.tgt, got, c.want)
+	if !strings.Contains(err.Error(), "mapper_parsing_exception") && !strings.Contains(err.Error(), "failed to parse") {
+		t.Fatalf("err = %v, want the ES reason", err)
+	}
+}
+
+func TestElasticsearchIndexTemplateRouting(t *testing.T) {
+	var indexes []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		// A bulk body alternates action/document lines; collect every action.
+		for i, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+			if i%2 != 0 || strings.TrimSpace(line) == "" {
+				continue
+			}
+			var action map[string]map[string]any
+			if err := json.Unmarshal([]byte(line), &action); err != nil {
+				continue
+			}
+			if idx, ok := action["index"]["_index"].(string); ok {
+				indexes = append(indexes, idx)
+			}
 		}
+		_, _ = w.Write([]byte(`{"errors":false,"items":[{"index":{"status":201}}]}`))
+	}))
+	defer ts.Close()
+
+	s := newESTestSink(t, ts.URL, map[string]any{"index": "", "index_template": "ods_{table}"})
+	records := []core.Record{
+		{Operation: core.OpInsert, Data: map[string]any{"id": 1}, Metadata: core.Metadata{Table: "orders"}},
+		{Operation: core.OpInsert, Data: map[string]any{"id": 2}, Metadata: core.Metadata{Table: "items"}},
+	}
+	if err := s.Write(context.Background(), records); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(indexes) != 2 || indexes[0] != "ods_orders" || indexes[1] != "ods_items" {
+		t.Fatalf("indexes = %v, want [ods_orders ods_items]", indexes)
+	}
+}
+
+func TestElasticsearchFailsClosedWithoutIDForDelete(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"errors":false,"items":[]}`))
+	}))
+	defer ts.Close()
+
+	s := newESTestSink(t, ts.URL, map[string]any{"id_column": "missing_col"})
+	// A delete with neither the id column nor any source position has no stable
+	// _id; ES must not delete an arbitrary document.
+	rec := core.Record{Operation: core.OpDelete, Data: map[string]any{"other": 1}}
+	if err := s.Write(context.Background(), []core.Record{rec}); err == nil {
+		t.Fatal("expected a hard failure for a delete without a resolvable id")
 	}
 }

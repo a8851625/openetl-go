@@ -30,6 +30,13 @@ type Dialect interface {
 	// SchemaContractUpsert (CH-C2) upserts one (pipeline, version)
 	// contract row; dialects differ only in upsert syntax.
 	SchemaContractUpsert() string
+	// InsertIgnore renders a conflict-tolerant INSERT used by restore.
+	InsertIgnore(table, columns, placeholders string) string
+	// DeadLetterUpsert inserts a dead-letter row and, when the same
+	// (job_name, record_hash) already exists, refreshes it and increments
+	// attempt instead of appending a duplicate. Requires the unique index
+	// created by ensureDeadLetterHashUniqueness.
+	DeadLetterUpsert() string
 	BoolValue(v bool) any
 	RunHistoryInsertReturningID() bool
 	// SupportsDeleteLimit reports whether DELETE ... LIMIT N is legal.
@@ -397,6 +404,12 @@ func (s *Store) runVersionedMigrations() error {
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (pipeline, version)
 		)`},
+		// PR-DLQ-2: the (job_name, record_hash) unique key that makes DLQ
+		// writes idempotent. The DDL is performed by
+		// EnsureDeadLetterHashUniqueness because it must backfill hashes and
+		// remove pre-existing duplicates first; this entry only records that
+		// the migration ran.
+		{24, "deduplicate dead_letters by record hash", "SELECT 1"},
 	}
 
 	for _, m := range migrations {
@@ -426,9 +439,20 @@ func (s *Store) runVersionedMigrations() error {
 				return fmt.Errorf("create pipeline name index: %w", err)
 			}
 		}
+		if m.version == 24 {
+			if err := s.EnsureDeadLetterHashUniqueness(context.Background()); err != nil {
+				return err
+			}
+		}
 		if _, err := s.db.Exec("INSERT INTO _schema_version (version, description) VALUES (?, ?)", m.version, m.description); err != nil {
 			return fmt.Errorf("record schema version %d: %w", m.version, err)
 		}
+	}
+	// Idempotent safety net for databases whose version row was already
+	// recorded but whose unique index was never created (for example a restore
+	// that copied _schema_version without the index).
+	if err := s.EnsureDeadLetterHashUniqueness(context.Background()); err != nil {
+		return err
 	}
 	if err := s.backfillPipelineIDs(); err != nil {
 		return err
@@ -732,9 +756,15 @@ func (s *Store) DeletePipeline(ctx context.Context, ref string) error {
 }
 
 // DeletePipelineWithCheckpoint removes a pipeline, its historical versions,
-// and its checkpoint in one transaction. It is the lifecycle counterpart to
-// SavePipelineWithVersion and prevents a successful API delete from leaving
-// orphaned versions or a checkpoint that can resurrect stale state.
+// its checkpoint, and its dead-letter rows in one transaction. It is the
+// lifecycle counterpart to SavePipelineWithVersion and prevents a successful
+// API delete from leaving orphaned versions or a checkpoint that can resurrect
+// stale state.
+//
+// DLQ rows are removed with the pipeline because replay requires the pipeline
+// spec to exist: once the pipeline is gone the rows are unreplayable, yet they
+// would still consume the global ETL_DLQ_MAX_COUNT budget and stay invisible in
+// the UI (which lists DLQ per existing pipeline).
 func (s *Store) DeletePipelineWithCheckpoint(ctx context.Context, ref string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -763,6 +793,9 @@ func (s *Store) DeletePipelineWithCheckpoint(ctx context.Context, ref string) er
 	}
 	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM checkpoints WHERE job_name=? OR job_name=?`), id, name); err != nil {
 		return fmt.Errorf("delete pipeline checkpoint: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM dead_letters WHERE job_name=? OR job_name=?`), id, name); err != nil {
+		return fmt.Errorf("delete pipeline dead letters: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM pipelines WHERE id=? OR name=?`), ref, ref); err != nil {
 		return fmt.Errorf("delete pipeline row: %w", err)
@@ -1133,9 +1166,18 @@ func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) err
 	if rec.RecordHash == "" {
 		rec.RecordHash = storage.RecordHashJSON(recJSON)
 	}
+	if rec.Attempt <= 0 {
+		rec.Attempt = 1
+	}
+	// The unique (job_name, record_hash) index makes the DLQ idempotent: the
+	// same failed record captured again (source replay, restart, rebalance)
+	// refreshes the existing row instead of appending a duplicate. attempt is
+	// incremented so operators can see how often the record keeps failing.
+	//
+	// created_at is refreshed so repeated failures keep the row at the top of
+	// the (newest-first) listing and out of the oldest-first retention purge.
 	_, err = s.exec(ctx,
-		`INSERT INTO dead_letters (job_name, record_json, error, error_class, identity_context_json, attempt, record_hash, pipeline_version, dag_node, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.dialect.DeadLetterUpsert(),
 		rec.JobName, string(recJSON), rec.Error, rec.ErrorClass, string(identityJSON), rec.Attempt, rec.RecordHash, rec.PipelineVersion, rec.DAGNode, time.Now(),
 	)
 	return err
@@ -1277,11 +1319,13 @@ func rewriteLimitedDelete(query string, limit int, supportsBareLimit bool) strin
 	)
 }
 
-func (s *Store) DeleteDeadLetterByID(ctx context.Context, id int64) error {
+func (s *Store) DeleteDeadLetterByID(ctx context.Context, jobName string, id int64) error {
 	if err := s.injectFailure("dlq.delete"); err != nil {
 		return err
 	}
-	_, err := s.exec(ctx, `DELETE FROM dead_letters WHERE id=?`, id)
+	// Scoped by job_name so a direct storage caller cannot delete another
+	// pipeline's row by guessing an id.
+	_, err := s.exec(ctx, `DELETE FROM dead_letters WHERE job_name=? AND id=?`, jobName, id)
 	return err
 }
 
@@ -1299,6 +1343,84 @@ func (s *Store) CountDeadLetters(ctx context.Context, jobName string) (int64, er
 		return 0, err
 	}
 	return n, nil
+}
+
+// EnsureDeadLetterHashUniqueness is the portable post-migration step that makes
+// DLQ writes idempotent. It (1) backfills record_hash for legacy rows, (2)
+// removes duplicate (job_name, record_hash) rows keeping the oldest, and (3)
+// creates the unique index the upsert relies on. It is idempotent and safe to
+// run on every startup; migrations run under the migration lock.
+func (s *Store) EnsureDeadLetterHashUniqueness(ctx context.Context) error {
+	if err := s.backfillDeadLetterHashes(ctx); err != nil {
+		return err
+	}
+	// Keep the oldest row per (job_name, record_hash). The derived table keeps
+	// the statement portable: MySQL rejects a subquery that selects from the
+	// table being deleted without materialising it.
+	if _, err := s.exec(ctx, `DELETE FROM dead_letters WHERE id NOT IN (
+		SELECT id FROM (SELECT MIN(id) AS id FROM dead_letters GROUP BY job_name, record_hash) AS keep_rows
+	)`); err != nil {
+		return fmt.Errorf("deduplicate dead_letters: %w", err)
+	}
+	if _, err := s.exec(ctx, `CREATE UNIQUE INDEX idx_dlq_job_hash ON dead_letters(job_name, record_hash)`); err != nil && !isIndexAlreadyExists(err) {
+		return fmt.Errorf("create dead_letters unique index: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) backfillDeadLetterHashes(ctx context.Context) error {
+	rows, err := s.query(ctx, `SELECT id, record_json FROM dead_letters WHERE record_hash IS NULL OR record_hash = ''`)
+	if err != nil {
+		return fmt.Errorf("list dead_letters missing record_hash: %w", err)
+	}
+	type pending struct {
+		id   int64
+		hash string
+	}
+	var updates []pending
+	for rows.Next() {
+		var id int64
+		var recJSON string
+		if err := rows.Scan(&id, &recJSON); err != nil {
+			rows.Close()
+			return err
+		}
+		updates = append(updates, pending{id: id, hash: storage.RecordHashJSON([]byte(recJSON))})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, u := range updates {
+		if _, err := s.exec(ctx, `UPDATE dead_letters SET record_hash=? WHERE id=?`, u.hash, u.id); err != nil {
+			return fmt.Errorf("backfill dead_letters record_hash for id %d: %w", u.id, err)
+		}
+	}
+	return nil
+}
+
+func isIndexAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already exists") || strings.Contains(msg, "duplicate key name")
+}
+
+// PurgeOldestDeadLetters deletes the oldest DLQ rows across all pipelines. It
+// exists so ETL_DLQ_MAX_COUNT evicts deterministically oldest-first instead of
+// relying on a LIMIT without ORDER BY.
+func (s *Store) PurgeOldestDeadLetters(ctx context.Context, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	res, err := s.exec(ctx, fmt.Sprintf(
+		`DELETE FROM dead_letters WHERE id IN (SELECT id FROM (SELECT id FROM dead_letters ORDER BY created_at ASC, id ASC LIMIT %d) AS purge_rows)`, limit))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ── DLQ query builders ───────────────────────────────────────────────
@@ -1324,24 +1446,40 @@ func newDLQQueryBuilder(f storage.DLQFilter) *dlqQueryBuilder {
 		args = append(args, f.ErrorClass)
 	}
 	if f.ErrorContains != "" {
-		where = append(where, "error LIKE ?")
-		args = append(args, "%"+f.ErrorContains+"%")
+		where = append(where, `error LIKE ? ESCAPE '!'`)
+		args = append(args, "%"+escapeLikePattern(f.ErrorContains)+"%")
 	}
 	if f.Contains != "" {
-		where = append(where, "record_json LIKE ?")
-		args = append(args, "%"+f.Contains+"%")
+		where = append(where, `record_json LIKE ? ESCAPE '!'`)
+		args = append(args, "%"+escapeLikePattern(f.Contains)+"%")
 	}
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 100
 	}
+	order := "DESC"
+	if f.Ascending {
+		order = "ASC"
+	}
 	q := fmt.Sprintf(
 		`SELECT id, job_name, record_json, error, error_class, COALESCE(identity_context_json, '{}'), attempt,
 		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
-		 FROM dead_letters WHERE %s ORDER BY created_at DESC LIMIT %d OFFSET %d`,
-		strings.Join(where, " AND "), limit, f.Offset,
+		 FROM dead_letters WHERE %s ORDER BY created_at %s, id %s LIMIT %d OFFSET %d`,
+		strings.Join(where, " AND "), order, order, limit, f.Offset,
 	)
 	return &dlqQueryBuilder{query: q, args: args}
+}
+
+// escapeLikePattern neutralises LIKE wildcards in operator-supplied search
+// text so a literal '%' or '_' matches itself instead of scanning every row.
+// The escape character is '!' rather than a backslash: MySQL treats a
+// backslash inside a string literal as an escape, so a backslash ESCAPE clause
+// is not portable across SQLite/MySQL/PostgreSQL.
+func escapeLikePattern(value string) string {
+	value = strings.ReplaceAll(value, "!", "!!")
+	value = strings.ReplaceAll(value, "%", "!%")
+	value = strings.ReplaceAll(value, "_", "!_")
+	return value
 }
 
 type dlqDeleteBuilder struct {
@@ -1370,12 +1508,12 @@ func newDLQDeleteBuilder(f storage.DLQFilter) *dlqDeleteBuilder {
 		args = append(args, f.ErrorClass)
 	}
 	if f.ErrorContains != "" {
-		where = append(where, "error LIKE ?")
-		args = append(args, "%"+f.ErrorContains+"%")
+		where = append(where, `error LIKE ? ESCAPE '!'`)
+		args = append(args, "%"+escapeLikePattern(f.ErrorContains)+"%")
 	}
 	if f.Contains != "" {
-		where = append(where, "record_json LIKE ?")
-		args = append(args, "%"+f.Contains+"%")
+		where = append(where, `record_json LIKE ? ESCAPE '!'`)
+		args = append(args, "%"+escapeLikePattern(f.Contains)+"%")
 	}
 	if len(where) == 0 {
 		// Refuse unscoped DELETE FROM dead_letters; callers must set a filter.

@@ -48,6 +48,10 @@ type DLQFilter struct {
 	Contains      string
 	ErrorContains string
 	ErrorClass    string
+	// Ascending orders by created_at ASC instead of the default DESC. Replay
+	// uses it so a backlog is drained oldest-first; listings keep DESC so the
+	// newest failures are visible first.
+	Ascending bool
 }
 
 // AuditEntry is the storage-layer representation of an audit log entry.
@@ -279,7 +283,7 @@ type Storage interface {
 	UpdateDeadLetter(ctx context.Context, rec *DLQRecord) error
 	CountDeadLetters(ctx context.Context, jobName string) (int64, error)
 	DeleteDeadLettersByFilter(ctx context.Context, filter DLQFilter) (int64, error)
-	DeleteDeadLetterByID(ctx context.Context, id int64) error
+	DeleteDeadLetterByID(ctx context.Context, jobName string, id int64) error
 	DeleteAllDeadLetters(ctx context.Context, jobName string) error
 
 	// ── Audit ─────────────────────────────────────────────────────────
@@ -398,6 +402,13 @@ type RetentionPurger interface {
 	CountObjects(ctx context.Context) (ObjectCounts, error)
 	// SchemaVersions returns applied _schema_version rows (version, description).
 	SchemaVersions(ctx context.Context) ([]SchemaVersionRow, error)
+}
+
+// DLQOldestPurger is an optional storage capability used by the DLQ max-count
+// retention path. It deletes the oldest DLQ rows deterministically, so
+// ETL_DLQ_MAX_COUNT can never evict recent failures by accident.
+type DLQOldestPurger interface {
+	PurgeOldestDeadLetters(ctx context.Context, limit int) (int64, error)
 }
 
 // SchemaVersionRow is one applied schema migration record.

@@ -31,10 +31,26 @@ type DLQEntry struct {
 	Error           string
 	ErrorClass      string
 	IdentityContext core.DLQIdentityContext
-	Attempt         int
+	// Attempt is the number of times this record has been captured by the DLQ
+	// (1 on first failure, incremented by the storage upsert when the same
+	// record is captured again). It is never left at the zero value.
+	Attempt int
+	// PipelineVersion is reserved: the running runner has no durable source for
+	// the spec version today, so it is persisted as 0 and must not be relied on
+	// for replay decisions. Frozen identity context (format contract, primary
+	// key columns, before-image state) is the drift signal instead.
 	PipelineVersion int
 	DAGNode         string
 }
+
+// maxPendingDLQ bounds the in-memory retry queue for DLQ entries whose initial
+// write failed. Overflow is not data loss: the checkpoint stays blocked, so the
+// source range replays on restart. The cap only bounds memory.
+const maxPendingDLQ = 1000
+
+// dlqFlushTimeout bounds one flushPendingDLQ pass. A permanently unavailable
+// DLQ backend must not add an unbounded stall to every batch.
+const dlqFlushTimeout = 5 * time.Second
 
 type Status string
 
@@ -137,10 +153,24 @@ type Runner struct {
 	pendingCheckpointCommitted []core.Record
 	// checkpointBlocked prevents a later successful batch from advancing past
 	// a record that could reach neither the sink nor durable DLQ storage. It is
+	// cleared automatically once every queued DLQ entry is durable again, and
 	// reset on the next Start, when the source reopens from the last durable
 	// checkpoint and replays the unsafe range.
 	checkpointBlocked     bool
 	checkpointBlockReason string
+	// dlqBlockReason is the reason recorded by the DLQ persistence path. The
+	// automatic unblock only clears checkpointBlocked when this is the sole
+	// reason, so a concurrent checkpoint-save failure is never cleared by a
+	// successful DLQ flush.
+	dlqBlockReason string
+	// pendingDLQ holds failed records whose DLQ write did not succeed. While it
+	// is non-empty the checkpoint stays blocked, so the affected source range
+	// replays on restart unless flushPendingDLQ persists the entries first.
+	// Bounded by maxPendingDLQ so a permanently unavailable DLQ backend cannot
+	// grow runner memory without limit.
+	pendingDLQ           []DLQEntry
+	pendingDLQDropped    int64
+	pendingDLQOverflowed bool
 
 	// circuitBreaker pauses the source when sink failures exceed threshold.
 	circuitBreaker *CircuitBreaker
@@ -576,6 +606,10 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.pendingCheckpointCommitted = nil
 	r.checkpointBlocked = false
 	r.checkpointBlockReason = ""
+	r.dlqBlockReason = ""
+	r.pendingDLQ = nil
+	r.pendingDLQDropped = 0
+	r.pendingDLQOverflowed = false
 	r.done = make(chan struct{})
 	r.runActive = true
 	done := r.done
@@ -1103,6 +1137,7 @@ func (r *Runner) writeLoop(ctx context.Context, records <-chan core.Record) {
 			batch = batch[:0]
 		}
 		flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		r.flushPendingDLQ()
 		r.flushPendingCheckpoint(flushCtx, true)
 		cancel()
 	}
@@ -1131,6 +1166,9 @@ func (r *Runner) writeLoop(ctx context.Context, records <-chan core.Record) {
 			}
 		case <-ticker.C:
 			flush()
+			// Retry queued DLQ writes even when no new records arrive, so an idle
+			// CDC stream recovers its checkpoint block as soon as the DLQ does.
+			r.flushPendingDLQ()
 			r.flushPendingCheckpoint(ctx, false)
 		case <-ctx.Done():
 			// On context cancellation (stop/pause/config-change), flush the
@@ -1144,6 +1182,7 @@ func (r *Runner) writeLoop(ctx context.Context, records <-chan core.Record) {
 				r.mu.Unlock()
 				r.writeBatch(flushCtx, batch)
 			}
+			r.flushPendingDLQ()
 			r.flushPendingCheckpoint(flushCtx, true)
 			flushCancel()
 			batch = batch[:0]
@@ -1359,7 +1398,9 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 		}
 
 		for _, f := range failures {
-			r.handleFailedRecord(ctx, transformed[f.idx], f.err)
+			if !r.handleFailedRecord(ctx, transformed[f.idx], f.err) {
+				checkpointBoundarySafe = false
+			}
 		}
 		dlqCount := len(failures)
 
@@ -1369,6 +1410,50 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			Message: fmt.Sprintf("Batch write failed (%d records, %d recovered individually, %d to DLQ): %v", len(transformed), goodCount, dlqCount, err),
 			JobName: r.spec.Name,
 		})
+
+		// Retry queued DLQ entries before deciding the boundary. If the DLQ has
+		// recovered, this clears the checkpoint block and lets this batch's
+		// boundary persist in the same pass.
+		drained, persisted := r.flushPendingDLQ()
+		if !checkpointBoundarySafe && drained && persisted > 0 {
+			// Every queued failure (including this batch's) was persisted by the
+			// flush, so the boundary is durable after all.
+			checkpointBoundarySafe = true
+		}
+
+		// Once every failed record of this batch is durably in the DLQ, its
+		// source position may advance. This is the same invariant the
+		// source/transform/identity paths already use: the record reached a
+		// durable destination (the DLQ) that replay can read, so re-reading it
+		// from the source on every restart is not required for correctness.
+		//
+		// Previously this path returned without checkpointing, which made a
+		// single poison record hold the checkpoint at the last fully-successful
+		// batch forever: each restart/rebalance re-delivered the whole range,
+		// re-wrote the good rows to the sink and re-inserted the same failures
+		// into the DLQ (an unbounded replay window plus duplicate DLQ rows).
+		// If any DLQ write failed, checkpointBoundarySafe is false and the range
+		// replays exactly as before.
+		if !checkpointBoundarySafe {
+			r.handleCheckpointBoundaryError(ctx, "DLQ persistence failed; checkpoint not advanced so the source range will replay")
+			return
+		}
+		committed := make([]core.Record, 0, len(transformed)-len(failures))
+		if len(failures) == 0 {
+			committed = append(committed, transformed...)
+		} else {
+			failedIdx := make(map[int]struct{}, len(failures))
+			for _, f := range failures {
+				failedIdx[f.idx] = struct{}{}
+			}
+			for i, rec := range transformed {
+				if _, failed := failedIdx[i]; failed {
+					continue
+				}
+				committed = append(committed, rec)
+			}
+		}
+		r.recordCheckpointBoundary(ctx, processed, committed)
 		return
 	}
 
@@ -1386,22 +1471,32 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 		Config:       r.spec.Hooks.getConfig(core.HookOnPostBatch),
 	})
 
+	// Retry queued DLQ entries. A recovered DLQ can make this batch's boundary
+	// durable even though a per-record write failed earlier, and it also clears a
+	// DLQ-caused checkpoint block without requiring a restart.
+	drained, persisted := r.flushPendingDLQ()
+	if !checkpointBoundarySafe && drained && persisted > 0 {
+		checkpointBoundarySafe = true
+	}
 	if !checkpointBoundarySafe {
 		r.handleCheckpointBoundaryError(ctx, "DLQ persistence failed; checkpoint not advanced so the source range will replay")
 		return
 	}
 
-	// Throttle checkpoint saves while retaining the latest acknowledged
-	// boundary. The write-loop timer persists this pending boundary even if the
-	// stream becomes idle, so checkpoint_interval_sec cannot strand a final
-	// successful batch indefinitely.
-	r.mu.Lock()
-	r.uncheckpointedBatches++
 	// Retain every successful source record since the last durable save. A
 	// snapshot batch may span tables; keeping only the newest batch would omit
 	// an earlier table's cursor when checkpoint throttling is enabled.
+	r.recordCheckpointBoundary(ctx, processed, transformed)
+}
+
+// recordCheckpointBoundary accumulates a source boundary that is safe to
+// checkpoint (its records either reached the sink or are durably in the DLQ)
+// and persists it when the throttle allows.
+func (r *Runner) recordCheckpointBoundary(ctx context.Context, processed, committed []core.Record) {
+	r.mu.Lock()
+	r.uncheckpointedBatches++
 	r.pendingCheckpointProcessed = append(r.pendingCheckpointProcessed, processed...)
-	r.pendingCheckpointCommitted = append(r.pendingCheckpointCommitted, transformed...)
+	r.pendingCheckpointCommitted = append(r.pendingCheckpointCommitted, committed...)
 	shouldSave := time.Since(r.lastCheckpointSave) >= r.checkpointInterval || r.uncheckpointedBatches >= 10
 	r.mu.Unlock()
 	if shouldSave {
@@ -1641,30 +1736,43 @@ func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err er
 			Error:           err.Error(),
 			ErrorClass:      string(core.ClassifyError(err)),
 			IdentityContext: dlqIdentityContext(r.spec, rec, err),
+			Attempt:         1,
+		}
+		// A DLQ backend that already failed for this batch is known-bad: queue
+		// the entry instead of paying another per-record timeout. This keeps a
+		// mass failure (e.g. a topic of malformed records while the metadata DB
+		// is down) from turning into N sequential 10s stalls inside one batch.
+		// The queue is retried once per batch/tick by flushPendingDLQ.
+		if r.hasPendingDLQ() {
+			r.enqueuePendingDLQ(entry)
+			return false
 		}
 		dlqCtx, dlqCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer dlqCancel()
 		if dlqErr := r.dlqWriter.WriteDLQ(dlqCtx, entry); dlqErr != nil {
-			// DLQ write failed — this is a data-loss risk. Log loudly, alert,
-			// and trip the circuit breaker so a persistently-down DLQ backend
-			// triggers cooldown rather than losing every record at full tilt.
-			if r.circuitBreaker != nil {
-				r.circuitBreaker.RecordFailure(ctx, dlqErr)
-			}
+			// DLQ write failed — this is a data-loss risk unless the record is
+			// eventually persisted. Queue it for retry and block the checkpoint
+			// so the source range replays if the queue can never be drained.
+			//
+			// Deliberately does NOT trip the sink circuit breaker: the DLQ is a
+			// different dependency, and pausing a healthy sink because the
+			// metadata store is down would turn a control-plane outage into a
+			// data-plane outage. The blocked checkpoint plus the alert below is
+			// the stop-the-line signal.
+			r.enqueuePendingDLQ(entry)
 			r.logError(fmt.Sprintf("DLQ write FAILED for record (table=%s): %v | original error: %v",
 				rec.Metadata.Table, dlqErr, err))
 			r.alertManager.Send(ctx, alert.Event{
 				Level:   alert.LevelError,
-				Title:   "DLQ write failure — potential data loss",
-				Message: fmt.Sprintf("Pipeline %s: DLQ write failed: %v. Original record error: %v", r.spec.Name, dlqErr, err),
+				Title:   "DLQ write failure — record queued for retry",
+				Message: fmt.Sprintf("Pipeline %s: DLQ write failed: %v. Original record error: %v. The checkpoint is blocked until the queued records are persisted, so the source range replays on restart if the DLQ stays unavailable.", r.spec.Name, dlqErr, err),
 				JobName: r.spec.Name,
 			})
-			r.blockCheckpoint("DLQ persistence failed: " + dlqErr.Error())
+			r.blockCheckpointForDLQ("DLQ persistence failed: " + dlqErr.Error())
 			return false
-		} else {
-			r.addRecordsDLQ(1)
-			return true
 		}
+		r.addRecordsDLQ(1)
+		return true
 	} else {
 		// No DLQ writer configured — the record can neither reach the sink nor
 		// the DLQ. Surface it loudly (never silent) per the zero-loss rule
@@ -1689,6 +1797,122 @@ func (r *Runner) blockCheckpoint(reason string) {
 		r.checkpointBlockReason = reason
 	}
 	r.mu.Unlock()
+}
+
+// blockCheckpointForDLQ records a DLQ-persistence block that flushPendingDLQ is
+// allowed to clear once every queued entry is durable. It never overwrites the
+// reason of an earlier, unrelated block (checkpoint save failure, external
+// acknowledgement failure), so recovery of the DLQ cannot mask those.
+func (r *Runner) blockCheckpointForDLQ(reason string) {
+	r.mu.Lock()
+	r.dlqBlockReason = reason
+	r.checkpointBlocked = true
+	if r.checkpointBlockReason == "" {
+		r.checkpointBlockReason = reason
+	}
+	r.mu.Unlock()
+}
+
+func (r *Runner) hasPendingDLQ() bool {
+	r.mu.RLock()
+	pending := len(r.pendingDLQ) > 0
+	r.mu.RUnlock()
+	return pending
+}
+
+// enqueuePendingDLQ queues a failed DLQ write for retry. Overflow is logged and
+// alerted once; the record is still recoverable because the checkpoint remains
+// blocked and the source range replays on restart.
+func (r *Runner) enqueuePendingDLQ(entry DLQEntry) {
+	r.mu.Lock()
+	if len(r.pendingDLQ) >= maxPendingDLQ {
+		r.pendingDLQDropped++
+		overflowed := !r.pendingDLQOverflowed
+		r.pendingDLQOverflowed = true
+		r.mu.Unlock()
+		if overflowed {
+			r.logError(fmt.Sprintf("DLQ retry queue is full (%d entries); further failed records are only recoverable by source replay", maxPendingDLQ))
+			r.alertManager.Send(context.Background(), alert.Event{
+				Level:   alert.LevelError,
+				Title:   "DLQ retry queue overflow",
+				Message: fmt.Sprintf("Pipeline %s: more than %d failed records could not be persisted to the DLQ. The checkpoint remains blocked, so the source range replays on restart; no record was silently acknowledged.", r.spec.Name, maxPendingDLQ),
+				JobName: r.spec.Name,
+			})
+		}
+		return
+	}
+	r.pendingDLQ = append(r.pendingDLQ, entry)
+	r.mu.Unlock()
+}
+
+// flushPendingDLQ retries queued DLQ entries. It returns whether the queue is
+// empty afterwards and how many entries this pass persisted. The queue being
+// drained is the only condition under which a DLQ-caused checkpoint block is
+// cleared; persisted>0 proves the failures were actually written (an empty queue
+// with persisted==0 means the no-DLQ-writer path blocked the checkpoint, which
+// must stay blocked). The pass is bounded by dlqFlushTimeout so an unavailable
+// DLQ backend cannot stall every batch indefinitely.
+func (r *Runner) flushPendingDLQ() (drained bool, persisted int) {
+	if r.dlqWriter == nil {
+		return true, 0
+	}
+	r.mu.Lock()
+	pending := r.pendingDLQ
+	r.pendingDLQ = nil
+	r.mu.Unlock()
+	if len(pending) == 0 {
+		return true, 0
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dlqFlushTimeout)
+	defer cancel()
+	remaining := make([]DLQEntry, 0, len(pending))
+	succeeded := 0
+	for i, entry := range pending {
+		if ctx.Err() != nil {
+			remaining = append(remaining, pending[i:]...)
+			break
+		}
+		if err := r.dlqWriter.WriteDLQ(ctx, entry); err != nil {
+			remaining = append(remaining, entry)
+			continue
+		}
+		succeeded++
+		r.addRecordsDLQ(1)
+	}
+
+	r.mu.Lock()
+	// Entries queued while this pass was running must be preserved.
+	r.pendingDLQ = append(remaining, r.pendingDLQ...)
+	drained = len(r.pendingDLQ) == 0
+	recovered := false
+	if drained && r.checkpointBlocked && r.dlqBlockReason != "" && r.checkpointBlockReason == r.dlqBlockReason {
+		r.checkpointBlocked = false
+		r.checkpointBlockReason = ""
+		r.dlqBlockReason = ""
+		recovered = true
+	}
+	dropped := r.pendingDLQDropped
+	r.pendingDLQOverflowed = false
+	r.pendingDLQDropped = 0
+	r.mu.Unlock()
+
+	if succeeded > 0 {
+		r.logInfo(fmt.Sprintf("DLQ retry recovered %d queued record(s)", succeeded))
+	}
+	if recovered {
+		r.logInfo("DLQ persistence recovered; checkpoint block cleared")
+		r.alertManager.Send(context.Background(), alert.Event{
+			Level:   alert.LevelInfo,
+			Title:   "DLQ persistence recovered",
+			Message: fmt.Sprintf("Pipeline %s: all queued dead-letter records are durable again; checkpointing resumed.", r.spec.Name),
+			JobName: r.spec.Name,
+		})
+	}
+	if dropped > 0 {
+		r.logWarn(fmt.Sprintf("DLQ retry queue dropped %d record(s) at capacity; they remain recoverable by source replay", dropped))
+	}
+	return drained, succeeded
 }
 
 func (r *Runner) saveCommittedCheckpoint(ctx context.Context, processed, committed []core.Record) bool {

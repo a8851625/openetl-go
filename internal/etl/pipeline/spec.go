@@ -562,16 +562,26 @@ func ValidateSpec(spec *Spec) error {
 		return fmt.Errorf("invalid pipeline %q: %s", spec.Name, strings.Join(problems, "; "))
 	}
 
+	// no_pk_snapshot=hash delivers a synthetic primary key through record
+	// metadata. A sink that upserts on a static pk_columns list cannot use it,
+	// so the re-snapshot would duplicate every keyless row. Fail closed at
+	// validation time instead of at the first re-snapshot.
+	if strings.EqualFold(spec.Source.Type, "mysql_snapshot_cdc") {
+		if mode, ok := stringConfig(spec.Source.Config, "no_pk_snapshot"); ok && strings.EqualFold(strings.TrimSpace(mode), "hash") {
+			if enabled, _ := boolConfig(spec.Sink.Config, "pk_columns_from_metadata"); !enabled {
+				return fmt.Errorf(
+					"invalid pipeline %q: source.config.no_pk_snapshot=hash writes a synthetic %s key through record metadata, "+
+						"so sink.config.pk_columns_from_metadata must be true (sink %q)",
+					spec.Name, "_row_hash", spec.Sink.Type,
+				)
+			}
+		}
+	}
+
 	// Block dangerous CDC + non-idempotent sink combinations.
 	// These combinations cause silent data duplication on crash recovery
 	// because the sink cannot deduplicate replayed records.
-	cdcSources := map[string]bool{
-		"mysql_cdc": true, "mysql_snapshot_cdc": true, "postgres_cdc": true, "kafka": true,
-	}
-	nonIdempotentSinks := map[string]bool{
-		"file_sink": true, "s3": true,
-	}
-	if !spec.AllowUnsafe && cdcSources[spec.Source.Type] && nonIdempotentSinks[spec.Sink.Type] {
+	if !spec.AllowUnsafe && UnsafeDuplicateBoundary(spec) {
 		return fmt.Errorf(
 			"unsafe pipeline %q: CDC source %q with non-idempotent sink %q will silently duplicate data on crash recovery; "+
 				"use an idempotent sink (mysql/postgres/clickhouse/doris with upsert) or a batch source instead, or set allow_unsafe: true after accepting the documented duplicate boundary",
@@ -654,6 +664,7 @@ func ValidateTransformConfigRequirements(spec *Spec) []string {
 					problems = append(problems, fmt.Sprintf("%s.cache_ttl_seconds requires Redis cache configuration; set cache_ttl_seconds=0 or configure etl.state.redis.addr", transformPath))
 				}
 			}
+			problems = append(problems, validateLookupIncrementalConfig(transformPath, mode, cfg)...)
 			problems = append(problems, validateAsyncIOConfig(transformPath, cfg)...)
 		case "enricher":
 			mode := "http"
@@ -677,6 +688,38 @@ func ValidateTransformConfigRequirements(spec *Spec) []string {
 			}
 			problems = append(problems, validateAsyncIOConfig(transformPath, cfg)...)
 		}
+	}
+	return problems
+}
+
+// validateLookupIncrementalConfig enforces the incremental dimension-refresh
+// contract: a monotonic column without a parameterised query (or the reverse)
+// would silently fall back to full reloads or skip rows.
+func validateLookupIncrementalConfig(transformPath, mode string, config map[string]any) []string {
+	var problems []string
+	column, _ := stringConfig(config, "incremental_column")
+	query, _ := stringConfig(config, "incremental_query")
+	deleteColumn, _ := stringConfig(config, "incremental_delete_column")
+	column = strings.TrimSpace(column)
+	query = strings.TrimSpace(query)
+	deleteColumn = strings.TrimSpace(deleteColumn)
+
+	if column == "" && query == "" && deleteColumn == "" {
+		return problems
+	}
+	if mode != "cache" {
+		problems = append(problems, fmt.Sprintf("%s.incremental_column only applies to lookup mode=cache (got mode=%s)", transformPath, mode))
+	}
+	if column == "" {
+		problems = append(problems, fmt.Sprintf("%s.incremental_query/incremental_delete_column require incremental_column", transformPath))
+	}
+	if query == "" {
+		problems = append(problems, fmt.Sprintf("%s.incremental_column requires incremental_query (e.g. SELECT ... WHERE %s > ?)", transformPath, column))
+	} else if !strings.Contains(query, "?") && !strings.Contains(query, "$1") {
+		problems = append(problems, fmt.Sprintf("%s.incremental_query must contain exactly one watermark placeholder (? or $1)", transformPath))
+	}
+	if n, ok := intConfig(config, "full_refresh_interval_sec"); ok && n < 0 {
+		problems = append(problems, fmt.Sprintf("%s.full_refresh_interval_sec must be >= 0", transformPath))
 	}
 	return problems
 }
@@ -1180,4 +1223,28 @@ func IsCheckpointIncompatible(old, new *Spec) bool {
 		return true
 	}
 	return false
+}
+
+// UnsafeSourceSinkPair reports whether a source type feeding a sink type can
+// silently duplicate data on replay because the sink cannot deduplicate.
+// It is the single source of truth for the allow_unsafe gate: pipeline
+// validation, preflight, DLQ replay and DAG replay must all agree.
+func UnsafeSourceSinkPair(sourceType, sinkType string) bool {
+	cdcSources := map[string]bool{
+		"mysql_cdc": true, "mysql_snapshot_cdc": true, "postgres_cdc": true, "kafka": true,
+	}
+	nonIdempotentSinks := map[string]bool{
+		"file_sink": true, "s3": true,
+	}
+	return cdcSources[strings.ToLower(strings.TrimSpace(sourceType))] &&
+		nonIdempotentSinks[strings.ToLower(strings.TrimSpace(sinkType))]
+}
+
+// UnsafeDuplicateBoundary reports whether the spec's source/sink pair requires
+// allow_unsafe to accept the documented duplicate boundary.
+func UnsafeDuplicateBoundary(spec *Spec) bool {
+	if spec == nil {
+		return false
+	}
+	return UnsafeSourceSinkPair(spec.Source.Type, spec.Sink.Type)
 }

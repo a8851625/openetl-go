@@ -239,6 +239,9 @@ func (s *Store) runVersionedMigrations() error {
 		{20, "add generation to pipelines", "ALTER TABLE pipelines ADD COLUMN generation BIGINT NOT NULL DEFAULT 0"},
 		{21, "add generation to checkpoints", "ALTER TABLE checkpoints ADD COLUMN generation BIGINT NOT NULL DEFAULT 0"},
 		{22, "add identity context to dead_letters", "ALTER TABLE dead_letters ADD COLUMN identity_context_json LONGTEXT"},
+		// PR-DLQ-2: recorded here, executed by
+		// EnsureDeadLetterHashUniqueness (backfill + dedup + unique index).
+		{24, "deduplicate dead_letters by record hash", "SELECT 1"},
 	}
 
 	for _, m := range migrations {
@@ -264,9 +267,17 @@ func (s *Store) runVersionedMigrations() error {
 			_, _ = s.db.Exec(`CREATE UNIQUE INDEX idx_pipelines_id ON pipelines(id)`)
 			_, _ = s.db.Exec(`CREATE INDEX idx_pipelines_name ON pipelines(name)`)
 		}
+		if m.version == 24 {
+			if err := sqlstore.New(s.db, sqlstore.MySQLDialect{}).EnsureDeadLetterHashUniqueness(context.Background()); err != nil {
+				return err
+			}
+		}
 		if _, err := s.db.Exec("INSERT INTO _schema_version (version, description) VALUES (?, ?)", m.version, m.description); err != nil {
 			return fmt.Errorf("record schema version %d: %w", m.version, err)
 		}
+	}
+	if err := sqlstore.New(s.db, sqlstore.MySQLDialect{}).EnsureDeadLetterHashUniqueness(context.Background()); err != nil {
+		return err
 	}
 	if err := s.backfillPipelineIDs(); err != nil {
 		return err

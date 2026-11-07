@@ -39,6 +39,12 @@ func TestConnectorCertificationKitProductionSet(t *testing.T) {
 			Gates:        productionSourceGates("pass", "pass"),
 		},
 		{
+			Kind: "source", Type: "postgres_cdc", DocPath: "docs/components/source-postgres_cdc.md",
+			Scripts:      []string{"hack/e2e-postgres-cdc.sh"},
+			SecretFields: []string{"password"},
+			Gates:        productionSourceGates("partial", "pass"),
+		},
+		{
 			Kind: "source", Type: "mysql_snapshot_cdc", DocPath: "docs/components/source-mysql_snapshot_cdc.md",
 			Scripts:      []string{"hack/e2e-snapshot-cdc.sh", "hack/e2e-snapshot-cdc-clickhouse.sh"},
 			SecretFields: []string{"password"},

@@ -198,6 +198,18 @@ func sourceSchemaGate(typ string, capSet map[string]bool) ConnectorReadinessGate
 		return passGate("schema_introspection", "Schema introspection", "source implements SchemaDescriptor for table/query metadata")
 	case "mysql_cdc", "mysql_snapshot_cdc":
 		return passGate("schema_introspection", "Schema introspection", "single-table SchemaDescriptor plus per-table multi-table/wildcard preflight contract")
+	case "postgres_cdc":
+		// pgoutput Relation messages carry per-column types at stream time, and
+		// preflight verifies table existence plus wal_level/replication/role/slot
+		// readiness, but no column-level descriptor is exposed before the first
+		// relation message arrives.
+		return ConnectorReadinessGate{
+			Code:        "schema_introspection",
+			Label:       "Schema introspection",
+			Status:      "partial",
+			Evidence:    "column types come from pgoutput Relation messages at stream time; preflight verifies table existence, wal_level, replication role, publication and slot readiness",
+			Remediation: "validate target column types with the sink schema validator, or enable pk_columns_from_metadata when the sink must derive its key from the source identity",
+		}
 	case "file", "http", "kafka", "rest_source", "salesforce", "github", "hubspot", "stripe", "notion":
 		return ConnectorReadinessGate{
 			Code:        "schema_introspection",
@@ -368,7 +380,7 @@ func evidenceGateAt(kind, typ, maturity string, now time.Time, manifest Connecto
 // while the manifest is rolled out to the production certification set.
 func legacyConnectorEvidence(kind, typ string) string {
 	evidence := map[string]string{
-		"source:postgres_cdc": "hack/e2e-postgres-cdc.sh covers PostgreSQL CDC source insert/update/delete and checkpoint restart into MySQL; on_truncate defaults to error (PR-2.3)",
+		"source:postgres_cdc": "hack/e2e-postgres-cdc.sh covers PostgreSQL 16 pgoutput insert/update/delete into MySQL with metadata primary-key upsert, idle keepalive across wal_sender_timeout, checkpoint restart without duplicate replay, and TRUNCATE fail-closed",
 		"sink:elasticsearch":  "hack/e2e-elasticsearch.sh covers OpenSearch bulk indexing and mapping-conflict DLQ/replay",
 		"sink:es":             "hack/e2e-elasticsearch.sh covers OpenSearch bulk indexing and mapping-conflict DLQ/replay",
 		"sink:maxcompute":     "hack/e2e-maxcompute.sh is env-gated; real MaxCompute evidence is still required",

@@ -18,11 +18,16 @@ func TestDerivePipelineHealth(t *testing.T) {
 		{"completed ok", PipelineHealthInput{Status: "completed"}, PipelineCompleted},
 		{"scheduled ok", PipelineHealthInput{Status: "scheduled"}, PipelineScheduled},
 		{"running healthy", PipelineHealthInput{Status: "running"}, PipelineHealthy},
-		{"running dlq degraded", PipelineHealthInput{Status: "running", RecordsDLQ: 1}, PipelineDegraded},
+		{"running dlq backlog degraded", PipelineHealthInput{Status: "running", DLQFileCount: 1}, PipelineDegraded},
+		// Cumulative per-process counters must not pin a recovered pipeline to
+		// degraded forever, and a restarted runner must not look healthy just
+		// because it has not failed yet.
+		{"cumulative dlq counter ignored", PipelineHealthInput{Status: "running", RecordsDLQ: 5, RecordsFailed: 5}, PipelineHealthy},
+		{"sticky last error ignored", PipelineHealthInput{Status: "running", LastError: "transient boom"}, PipelineHealthy},
+		{"unknown backlog count not degraded", PipelineHealthInput{Status: "running", DLQFileCount: -1}, PipelineHealthy},
 		{"running lag degraded", PipelineHealthInput{Status: "running", CDCLagMs: th.HighCDCLagMs + 1}, PipelineDegraded},
 		{"running checkpoint stale", PipelineHealthInput{Status: "running", CheckpointAgeSeconds: th.StaleCheckpointSec + 1}, PipelineDegraded},
 		{"running cb open", PipelineHealthInput{Status: "running", CircuitBreakerState: 1}, PipelineDegraded},
-		{"running last error", PipelineHealthInput{Status: "running", LastError: "boom"}, PipelineDegraded},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

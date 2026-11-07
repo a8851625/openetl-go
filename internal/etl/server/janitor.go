@@ -13,6 +13,7 @@ import (
 
 	"github.com/a8851625/openetl-go/internal/etl/alert"
 	"github.com/a8851625/openetl-go/internal/etl/storage"
+	"github.com/a8851625/openetl-go/internal/etl/telemetry"
 )
 
 // RetentionConfig holds TTL / max-count knobs for the control-plane janitor.
@@ -197,6 +198,37 @@ func (s *Server) retentionJanitorLoop(ctx context.Context) {
 	}
 }
 
+// purgeOldestDLQ deletes the oldest DLQ rows deterministically. Stores that do
+// not implement DLQOldestPurger fall back to the filter path with an explicit
+// ascending order so the oldest rows are still the ones removed.
+func (s *Server) purgeOldestDLQ(ctx context.Context, limit int) (int64, error) {
+	if purger, ok := s.store.(storage.DLQOldestPurger); ok {
+		return purger.PurgeOldestDeadLetters(ctx, limit)
+	}
+	return s.store.DeleteDeadLettersByFilter(ctx, storage.DLQFilter{
+		Until:     time.Now().Add(time.Hour),
+		Limit:     limit,
+		Ascending: true,
+	})
+}
+
+// alertDLQEviction makes retention-caused DLQ deletion visible. Evicting
+// dead-letter rows is dropping the safety net: it must never be a silent Info
+// log line. The metric is always incremented; the alert fires for max-count
+// eviction, which means the configured capacity is being exceeded.
+func (s *Server) alertDLQEviction(ctx context.Context, evicted int64, reason string) {
+	telemetry.DefaultRegistry.Counter("dlq_evicted_total").Add(evicted)
+	if s.alertManager == nil || evicted <= 0 {
+		return
+	}
+	s.alertManager.Send(ctx, alert.Event{
+		Level:   alert.LevelWarning,
+		Title:   "DLQ retention evicted dead-letter rows",
+		Message: fmt.Sprintf("Retention deleted %d dead-letter row(s) without replay (%s). Raise ETL_DLQ_MAX_COUNT/ETL_DLQ_TTL or drain the backlog if these records still need remediation.", evicted, reason),
+		JobName: "retention",
+	})
+}
+
 func (s *Server) runRetentionJanitor(ctx context.Context) {
 	cfg := s.retention
 	if !cfg.enabled() {
@@ -228,6 +260,9 @@ func (s *Server) runRetentionJanitor(ctx context.Context) {
 			dlqN += n
 			total += n
 			if n > 0 {
+				// TTL purge is the configured policy, so it is counted and logged
+				// but does not page: the metric keeps it auditable.
+				telemetry.DefaultRegistry.Counter("dlq_evicted_total").Add(n)
 				g.Log().Infof(ctx, "DLQ janitor: purged %d entries older than %s", n, cutoff.Format(time.RFC3339))
 			}
 		}
@@ -243,23 +278,19 @@ func (s *Server) runRetentionJanitor(ctx context.Context) {
 				if excess > batch {
 					excess = batch
 				}
-				// Delete oldest by Until far in the future is wrong; use raw delete
-				// of oldest N via filter with a synthetic high Until and limit.
-				// Prefer a dedicated path: delete where created_at <= now ordered by age.
-				n, err := s.store.DeleteDeadLettersByFilter(ctx, storage.DLQFilter{
-					Until: time.Now().Add(time.Hour),
-					Limit: excess,
-				})
-				// The above may delete newest if ORDER BY is missing on DELETE.
-				// For max-count we rely on rewriteDeleteLimitForPostgres ORDER BY created_at ASC
-				// and SQLite/MySQL LIMIT without ORDER (implementation-defined).
-				// Prefer explicit oldest purge via a secondary path when available.
+				// Oldest-first is guaranteed by PurgeOldestDeadLetters (explicit
+				// ORDER BY created_at). The previous implementation issued a
+				// DELETE ... LIMIT with no ORDER BY, so which rows were evicted
+				// was implementation-defined and could delete the newest
+				// failures an operator had not seen yet.
+				n, err := s.purgeOldestDLQ(ctx, int(excess))
 				recordErr(err)
 				if err == nil {
 					dlqN += n
 					total += n
 					if n > 0 {
-						g.Log().Infof(ctx, "DLQ janitor: purged %d entries to enforce max_count=%d", n, cfg.DLQMaxCount)
+						g.Log().Warningf(ctx, "DLQ janitor: evicted %d oldest entries to enforce max_count=%d", n, cfg.DLQMaxCount)
+						s.alertDLQEviction(ctx, n, fmt.Sprintf("max_count=%d", cfg.DLQMaxCount))
 					}
 				}
 			}

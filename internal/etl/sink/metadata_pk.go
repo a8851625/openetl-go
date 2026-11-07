@@ -226,3 +226,27 @@ func sameIdentifierSet(a, b []string) bool {
 	}
 	return true
 }
+
+// metadataPKDocumentID renders a stable document/key identifier from a record's
+// declared metadata primary key. The values are taken from the record image (or
+// its before image for deletes) in declared column order, so the same business
+// row always maps to the same identifier regardless of which event carried it.
+func metadataPKDocumentID(rec core.Record, columns []string) string {
+	if len(columns) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(columns))
+	for _, column := range columns {
+		value, ok := rec.Data[column]
+		if !ok || value == nil {
+			if rec.Before != nil {
+				value, ok = rec.Before[column]
+			}
+			if !ok || value == nil {
+				return ""
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%v", value))
+	}
+	return strings.Join(parts, ":")
+}

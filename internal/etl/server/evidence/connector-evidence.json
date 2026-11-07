@@ -3,21 +3,21 @@
   "policy": {
     "max_age_hours": 720
   },
-  "certified_commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-  "certified_image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+  "certified_commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+  "certified_image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
   "records": [
     {
       "kind": "source",
       "type": "file",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e.sh"
       ],
@@ -26,21 +26,21 @@
         "checkpoint_persisted"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "source",
       "type": "http",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "http_fixture": "python 3.12-alpine"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-http-source.sh"
       ],
@@ -49,22 +49,22 @@
         "auth_headers"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "source",
       "type": "kafka",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "redpanda": "24.1.1",
         "mysql": "8.0.46"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-kafka.sh",
         "hack/e2e-kafka-raw-ods.sh"
@@ -76,22 +76,22 @@
         "rebalance"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "source",
       "type": "mysql_batch",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e.sh",
         "hack/e2e-mysql-postgres.sh"
@@ -102,22 +102,22 @@
         "schema_preflight"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "source",
       "type": "mysql_cdc",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-cdc-mysql.sh",
         "hack/e2e-cdc-postgres.sh"
@@ -128,22 +128,22 @@
         "postgres_upsert"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "source",
       "type": "mysql_snapshot_cdc",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "clickhouse": "24.3.18.7"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-snapshot-cdc.sh",
         "hack/e2e-snapshot-cdc-clickhouse.sh"
@@ -155,20 +155,20 @@
         "checkpoint_reset"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "sink",
       "type": "file_sink",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e.sh"
       ],
@@ -177,21 +177,21 @@
         "checkpoint_persisted"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "sink",
       "type": "s3",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "minio": "RELEASE.2024-07-16T23-46-41Z"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-s3-minio.sh"
       ],
@@ -201,22 +201,22 @@
         "dlq_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "sink",
       "type": "kafka",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "redpanda": "24.1.1",
         "mysql": "8.0.46"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-kafka.sh",
         "hack/e2e-kafka-raw-ods.sh"
@@ -227,22 +227,22 @@
         "append_duplicate_boundary"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "sink",
       "type": "mysql",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "redpanda": "24.1.1"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-cdc-mysql.sh",
         "hack/e2e-debezium-mysql.sh"
@@ -253,22 +253,22 @@
         "dlq_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "sink",
       "type": "postgres",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-mysql-postgres.sh",
         "hack/e2e-cdc-postgres.sh"
@@ -279,22 +279,22 @@
         "checkpoint_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "sink",
       "type": "postgresql",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "postgres": "16.14"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-mysql-postgres.sh",
         "hack/e2e-cdc-postgres.sh"
@@ -305,22 +305,22 @@
         "checkpoint_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "sink",
       "type": "clickhouse",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "clickhouse": "24.3.18.7"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-clickhouse.sh",
         "hack/e2e-snapshot-cdc-clickhouse.sh"
@@ -331,47 +331,49 @@
         "outage_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "sink",
       "type": "doris",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "mysql": "8.0.46",
         "doris": "2.1.11"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
-        "hack/e2e-doris.sh"
+        "hack/e2e-doris.sh",
+        "hack/e2e-doris-source-order.sh"
       ],
       "cases": [
         "stream_load",
         "upsert",
-        "outage_dlq_replay"
+        "outage_dlq_replay",
+        "source_order_replay"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     },
     {
       "kind": "sink",
       "type": "clickhouse_multi_table",
-      "commit": "a020ddff1667797f38449e81ee9f68610a2b573a",
-      "image": "93e51d8a9c74e34c47fccbbd974a73d03245e348472c8b67660f30388ea464f3",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
         "clickhouse": "24.3.18.7",
         "redpanda": "v24.1.1"
       },
-      "started_at": "2026-09-22T14:58:20Z",
-      "finished_at": "2026-09-22T15:17:30Z",
-      "expires_at": "2026-10-22T15:17:30Z",
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
       "scripts": [
         "hack/e2e-kafka-multitable-clickhouse.sh"
       ],
@@ -399,7 +401,34 @@
         "year_type_uint16"
       ],
       "verified": true,
-      "note": "All listed scripts and cases passed on the certified linux/arm64 image (v0.2.12-beta.20 release certification; 14 scripts re-run 2026-09-22 14:58-15:17 UTC against image 93e51d8a at commit a020ddf)."
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
+    },
+    {
+      "kind": "source",
+      "type": "postgres_cdc",
+      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
+      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "dependencies": {
+        "go": "1.24.13",
+        "container_runtime": "podman 5.8.2",
+        "mysql": "8.0.46",
+        "postgres": "16-alpine"
+      },
+      "started_at": "2026-11-03T14:11:54Z",
+      "finished_at": "2026-11-03T15:08:00Z",
+      "expires_at": "2026-12-03T15:08:00Z",
+      "scripts": [
+        "hack/e2e-postgres-cdc.sh"
+      ],
+      "cases": [
+        "insert_update_delete",
+        "metadata_pk_upsert",
+        "idle_keepalive",
+        "checkpoint_restart_no_duplicate",
+        "truncate_fail_closed"
+      ],
+      "verified": true,
+      "note": "Re-certified 2026-11-03: all 16 scripts re-run green with CONTAINER_CLI=podman on the local build of commit fe8692d (image f4a97b460169, podman 5.8.2, mysql 8.0 / clickhouse 24.3 / doris 2.1.11 / postgres 16 / redpanda / minio). Adds the Doris source_order ordering proof and the real-PostgreSQL postgres_cdc path."
     }
   ]
 }

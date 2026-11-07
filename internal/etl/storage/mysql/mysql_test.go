@@ -191,7 +191,7 @@ func TestDLQCRUD(t *testing.T) {
 		t.Errorf("contains = %d, want 5", len(contains))
 	}
 
-	if err := s.DeleteDeadLetterByID(ctx, items[0].ID); err != nil {
+	if err := s.DeleteDeadLetterByID(ctx, "test-pipe", items[0].ID); err != nil {
 		t.Fatalf("delete by id: %v", err)
 	}
 	rest, _ := s.ListDeadLetters(ctx, storage.DLQFilter{JobName: "test-pipe", Limit: 10})

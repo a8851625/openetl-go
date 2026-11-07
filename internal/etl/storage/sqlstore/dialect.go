@@ -58,6 +58,32 @@ func (SQLiteDialect) SchemaContractUpsert() string {
 		   table_name = excluded.table_name,
 		   created_at = CURRENT_TIMESTAMP`
 }
+
+// DeadLetterUpsert deduplicates on (job_name, record_hash): a repeated capture
+// of the same failed record refreshes the existing row and bumps attempt.
+func (SQLiteDialect) DeadLetterUpsert() string {
+	return `INSERT INTO dead_letters (job_name, record_json, error, error_class, identity_context_json, attempt, record_hash, pipeline_version, dag_node, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(job_name, record_hash) DO UPDATE SET
+		   record_json = excluded.record_json,
+		   error = excluded.error,
+		   error_class = excluded.error_class,
+		   identity_context_json = excluded.identity_context_json,
+		   attempt = dead_letters.attempt + 1,
+		   pipeline_version = excluded.pipeline_version,
+		   dag_node = excluded.dag_node,
+		   created_at = excluded.created_at`
+}
+
+// InsertIgnore renders an insert that silently skips rows conflicting with an
+// existing primary key or unique index. Restore uses it for dead_letters: a
+// backup taken before the (job_name, record_hash) unique key may contain
+// duplicates that the new invariant cannot represent, and a restore must not
+// fail because of them.
+func (SQLiteDialect) InsertIgnore(table, columns, placeholders string) string {
+	return "INSERT INTO " + table + " (" + columns + ") VALUES (" + placeholders + ") ON CONFLICT DO NOTHING"
+}
+
 func (SQLiteDialect) BoolValue(v bool) any {
 	if v {
 		return 1
@@ -99,6 +125,7 @@ func (MySQLDialect) ConnectionUpsert() string {
 		 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))
 		 ON DUPLICATE KEY UPDATE kind=VALUES(kind), type=VALUES(type), config_json=VALUES(config_json), updated_at=CURRENT_TIMESTAMP(3)`
 }
+
 // SchemaContractUpsert mirrors the SQLite statement with MySQL upsert syntax.
 func (MySQLDialect) SchemaContractUpsert() string {
 	return `INSERT INTO pipeline_schema_contracts (pipeline, version, fingerprint, columns_json, source_type, database, table_name, created_at)
@@ -111,6 +138,29 @@ func (MySQLDialect) SettingUpsert() string {
 		 ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP(3)`
 }
 func (MySQLDialect) SettingKeyColumn() string { return "`key`" }
+
+// InsertIgnore mirrors the SQLite statement with MySQL syntax. ON DUPLICATE KEY
+// UPDATE is used instead of INSERT IGNORE because INSERT IGNORE downgrades every
+// error (including truncation and NOT NULL violations) to a warning; restore
+// must only tolerate duplicate-key conflicts.
+func (MySQLDialect) InsertIgnore(table, columns, placeholders string) string {
+	return "INSERT INTO " + table + " (" + columns + ") VALUES (" + placeholders + ") ON DUPLICATE KEY UPDATE id=id"
+}
+
+// DeadLetterUpsert mirrors the SQLite statement with MySQL upsert syntax.
+func (MySQLDialect) DeadLetterUpsert() string {
+	return `INSERT INTO dead_letters (job_name, record_json, error, error_class, identity_context_json, attempt, record_hash, pipeline_version, dag_node, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE
+		   record_json = VALUES(record_json),
+		   error = VALUES(error),
+		   error_class = VALUES(error_class),
+		   identity_context_json = VALUES(identity_context_json),
+		   attempt = attempt + 1,
+		   pipeline_version = VALUES(pipeline_version),
+		   dag_node = VALUES(dag_node),
+		   created_at = VALUES(created_at)`
+}
 
 type PostgresDialect struct{ SQLiteDialect }
 

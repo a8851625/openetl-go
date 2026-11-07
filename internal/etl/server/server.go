@@ -39,24 +39,33 @@ import (
 )
 
 type Server struct {
-	ctx               context.Context
-	store             storage.Storage
-	pipelines         map[string]pipeline.RunnerInterface
-	specs             map[string]*pipeline.Spec
-	dagSpecs          map[string]*orchestrator.PipelineSpec
-	pipelineNames     map[string]string
-	pipelineNameRefs  map[string]map[string]struct{}
-	restoreFailures   map[string]RestoreFailure
-	lifecycleStore    storage.PipelineLifecycleStore
-	cpAdapter         *storage.CheckpointStoreAdapter
-	dlqWriter         *storage.DLQCompatWriter
-	auditAdapter      *storage.AuditWriterAdapter
-	specStore         *storage.PipelineSpecStore
-	alertManager      *alert.Manager
-	httpServer        *http.Server
-	mu                sync.RWMutex
-	lifecycleLocksMu  sync.Mutex
-	lifecycleLocks    map[string]*sync.Mutex
+	ctx              context.Context
+	store            storage.Storage
+	pipelines        map[string]pipeline.RunnerInterface
+	specs            map[string]*pipeline.Spec
+	dagSpecs         map[string]*orchestrator.PipelineSpec
+	pipelineNames    map[string]string
+	pipelineNameRefs map[string]map[string]struct{}
+	restoreFailures  map[string]RestoreFailure
+	lifecycleStore   storage.PipelineLifecycleStore
+
+	// reconcileSourceOpener / reconcileTargetOpener are test seams for the data
+	// reconciliation engine. Production always uses the concrete openers.
+	reconcileSourceOpener func(context.Context, *pipeline.Spec) (*reconcileSide, error)
+	reconcileTargetOpener func(context.Context, *pipeline.Spec) (*reconcileSide, error)
+	reconcileColumnsFn    func(context.Context, *reconcileSide, string) ([]columnMetadata, []string, error)
+	cpAdapter             *storage.CheckpointStoreAdapter
+	dlqWriter             *storage.DLQCompatWriter
+	auditAdapter          *storage.AuditWriterAdapter
+	specStore             *storage.PipelineSpecStore
+	alertManager          *alert.Manager
+	httpServer            *http.Server
+	mu                    sync.RWMutex
+	lifecycleLocksMu      sync.Mutex
+	lifecycleLocks        map[string]*sync.Mutex
+	// dlqReplayLocks serialises DLQ replay per pipeline instance so two
+	// concurrent replay requests cannot write the same row to the sink twice.
+	dlqReplayLocks    sync.Map
 	specsDir          string
 	apiToken          string
 	runtimeProfile    RuntimeProfileConfig
@@ -1353,6 +1362,7 @@ func (s *Server) handleSpecValidate(w http.ResponseWriter, r *http.Request) {
 	// Connection-catalog behavior-field deprecation warnings (scope collapse).
 	warnings = append(warnings, s.connDeprecations.drain()...)
 	warnings = append(warnings, tapUnimplementedConfigWarningsForPipeline(&spec)...)
+	warnings = append(warnings, dlqConfigWarnings(&spec)...)
 
 	// Worker selector: if match_labels is set, the pipeline can only run on
 	// workers whose registered Labels match. Warn so users know to register
@@ -1744,6 +1754,36 @@ func scheduleLabel(sc *pipeline.ScheduleConfig) string {
 	return strings.TrimSpace(sc.Type)
 }
 
+// dlqBacklogSnapshot returns the current DLQ row count per pipeline instance.
+// It is computed outside the inventory read lock because it performs one
+// COUNT(*) per pipeline. The second map records whether the count succeeded:
+// a failed count is unknown, never an empty backlog.
+func (s *Server) dlqBacklogSnapshot(ctx context.Context) (map[string]int, map[string]bool) {
+	if s.dlqWriter == nil {
+		return nil, nil
+	}
+	s.mu.RLock()
+	ids := make([]string, 0, len(s.pipelines))
+	for id := range s.pipelines {
+		ids = append(ids, id)
+	}
+	s.mu.RUnlock()
+	counts := make(map[string]int, len(ids))
+	known := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		n, err := s.dlqWriter.Count(ctx, id)
+		if err != nil {
+			g.Log().Warningf(ctx, "DLQ backlog count failed for pipeline %s: %v", id, err)
+			counts[id] = 0
+			known[id] = false
+			continue
+		}
+		counts[id] = n
+		known[id] = true
+	}
+	return counts, known
+}
+
 func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -1763,6 +1803,10 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				lifecycleRows[row.ID] = row
 			}
 		}
+		// Count DLQ backlogs before taking the inventory read lock: COUNT(*)
+		// per pipeline must not extend the window in which lifecycle writers
+		// (start/stop/create/delete) are blocked.
+		dlqBacklogs, dlqBacklogKnown := s.dlqBacklogSnapshot(r.Context())
 		s.mu.RLock()
 		ids := make([]string, 0, len(s.pipelines)+len(s.restoreFailures))
 		seenIDs := make(map[string]struct{}, len(s.pipelines)+len(s.restoreFailures))
@@ -1848,6 +1892,15 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				"status": runner.Status(),
 				"stats":  runner.Stats(),
 				"dag":    dagSpec != nil,
+			}
+			// dlq_backlog is the CURRENT dead-letter backlog (rows in the DLQ
+			// right now). stats.records_dlq is a cumulative per-process counter
+			// that resets on restart and never decreases after replay, so clients
+			// must not use it as a backlog. dlq_backlog_known=false means the
+			// count could not be read and the value is unknown, not zero.
+			if backlog, ok := dlqBacklogs[id]; ok {
+				info["dlq_backlog"] = backlog
+				info["dlq_backlog_known"] = dlqBacklogKnown[id]
 			}
 			if lifecycle != nil {
 				info["desired_state"] = lifecycle.DesiredState
@@ -3404,6 +3457,7 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 	standaloneActions := map[string]bool{
 		"": true, "spec": true, "checkpoint": true, "checkpoint/reset": true, "checkpoint/set": true,
 		"history": true, "export": true, "dag": true, "delete": true, "schedule": true,
+		"reconcile": true, "resync": true, "output/compact": true,
 	}
 	if !ok && !standaloneActions[action] {
 		if restoreFailed {
@@ -3584,6 +3638,15 @@ func (s *Server) handlePipelineAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"checkpoint": cp})
+
+	case "reconcile":
+		s.handlePipelineReconcile(w, r, id, spec, runner)
+
+	case "resync":
+		s.handlePipelineResync(w, r, id, spec, runner)
+
+	case "output/compact":
+		s.handlePipelineOutputCompact(w, r, id, spec)
 
 	case "checkpoint/reset":
 		if r.Method == http.MethodPost {
@@ -4462,7 +4525,7 @@ func pluginCapabilityMetadata() map[string]any {
 			"mysql_cdc":          pluginInfo([]string{"cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
 			"mysql_snapshot_cdc": pluginInfo([]string{"snapshot", "cdc", "checkpoint", "schema_descriptor_single_table"}, "production"),
 			"kafka":              pluginInfo([]string{"stream", "checkpoint", "schema_registry"}, "production"),
-			"postgres_cdc":       pluginInfo([]string{"cdc", "snapshot", "checkpoint"}, "beta"),
+			"postgres_cdc":       pluginInfo([]string{"cdc", "snapshot", "checkpoint", "metadata_pk"}, "production"),
 			"redis":              pluginInfo([]string{"stream", "checkpoint"}, "experimental"),
 			"feishu_sheet":       pluginInfo([]string{"batch", "oauth2_client_credentials", "scheduled_pull"}, "beta"),
 			"rest_source":        pluginInfo([]string{"batch", "pagination", "auth_headers", "checkpoint", "oauth2_client_credentials"}, "beta"),
@@ -4617,7 +4680,7 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"deleted": 0})
 			return
 		}
-		if err := s.dlqWriter.DeleteByID(r.Context(), id); err != nil {
+		if err := s.dlqWriter.DeleteByID(r.Context(), name, id); err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
@@ -4630,6 +4693,15 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"deleted": 1})
 	case r.Method == http.MethodPost && action == "replay":
+		if isDryRunRequest(r) {
+			result, err := s.dryRunDLQReplay(r.Context(), name, filter)
+			if err != nil {
+				writeDLQReplayError(w, err, 0)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
+			return
+		}
 		count, err := s.replayDLQ(r.Context(), name, filter)
 		if err != nil {
 			writeDLQReplayError(w, err, count)
@@ -4750,10 +4822,15 @@ func parseDLQIdentityIDAction(action string) (int64, bool) {
 
 type dlqFilter struct {
 	Limit         int
+	Offset        int
 	From          time.Time
 	Until         time.Time
 	Contains      string
 	ErrorContains string
+	ErrorClass    string
+	// Ascending is set by replay so a backlog drains oldest-first; listings
+	// keep the default newest-first order.
+	Ascending bool
 }
 
 func dlqFilterFromRequest(r *http.Request) dlqFilter {
@@ -4764,6 +4841,11 @@ func dlqFilterFromRequest(r *http.Request) dlqFilter {
 			filter.Limit = n
 		}
 	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			filter.Offset = n
+		}
+	}
 	if v := q.Get("from"); v != "" {
 		filter.From, _ = time.Parse(time.RFC3339Nano, v)
 	}
@@ -4772,6 +4854,7 @@ func dlqFilterFromRequest(r *http.Request) dlqFilter {
 	}
 	filter.Contains = q.Get("contains")
 	filter.ErrorContains = q.Get("error_contains")
+	filter.ErrorClass = q.Get("error_class")
 	return filter
 }
 
@@ -4779,10 +4862,13 @@ func (s *Server) toStorageFilter(name string, f dlqFilter) storage.DLQFilter {
 	return storage.DLQFilter{
 		JobName:       name,
 		Limit:         f.Limit,
+		Offset:        f.Offset,
 		From:          f.From,
 		Until:         f.Until,
 		Contains:      f.Contains,
 		ErrorContains: f.ErrorContains,
+		ErrorClass:    f.ErrorClass,
+		Ascending:     f.Ascending,
 	}
 }
 
@@ -4792,10 +4878,17 @@ func (s *Server) readFilteredDLQ(ctx context.Context, name string, filter dlqFil
 
 func (s *Server) deleteFilteredDLQ(ctx context.Context, name string, filter dlqFilter) (int, error) {
 	if !hasSelectiveDLQFilter(filter) {
+		// Count before deleting so the API can report how many rows were
+		// removed. A sentinel like -1 made the response lie and drove the
+		// dlq_delete_count counter negative.
+		count, err := s.dlqWriter.Count(ctx, name)
+		if err != nil {
+			return 0, err
+		}
 		if err := s.dlqWriter.DeleteAll(ctx, name); err != nil {
 			return 0, err
 		}
-		return -1, nil
+		return count, nil
 	}
 	count, err := s.dlqWriter.DeleteFiltered(ctx, s.toStorageFilter(name, filter))
 	if err != nil {
@@ -4805,18 +4898,53 @@ func (s *Server) deleteFilteredDLQ(ctx context.Context, name string, filter dlqF
 }
 
 func hasSelectiveDLQFilter(filter dlqFilter) bool {
-	return !filter.From.IsZero() || !filter.Until.IsZero() || filter.Contains != "" || filter.ErrorContains != ""
+	return !filter.From.IsZero() || !filter.Until.IsZero() || filter.Contains != "" || filter.ErrorContains != "" || filter.ErrorClass != ""
 }
 
+// dlqReplayLock returns the per-pipeline mutex that serialises DLQ replay.
+// Without it two concurrent replay requests (double click, two operators, a
+// retried HTTP request) both observe the same pending row and both write it to
+// the sink, producing duplicate sink writes.
+func (s *Server) dlqReplayLock(name string) *sync.Mutex {
+	if v, ok := s.dlqReplayLocks.Load(name); ok {
+		return v.(*sync.Mutex)
+	}
+	actual, _ := s.dlqReplayLocks.LoadOrStore(name, &sync.Mutex{})
+	return actual.(*sync.Mutex)
+}
+
+// replayTimeout bounds one replay request. Replay runs detached from the HTTP
+// request context so a client disconnect or proxy timeout cannot abort a batch
+// halfway through (which would leave the remaining rows pending after earlier
+// ones were already acknowledged by the sink).
+const replayTimeout = 10 * time.Minute
+
 func (s *Server) replayDLQ(ctx context.Context, name string, filter dlqFilter) (int, error) {
+	mu := s.dlqReplayLock(name)
+	if !mu.TryLock() {
+		return 0, fmt.Errorf("another DLQ replay is already running for pipeline %s", name)
+	}
+	defer mu.Unlock()
+
+	// Drain oldest-first so a large backlog is fully processed by repeated
+	// passes instead of only the newest page being retried forever.
+	filter.Ascending = true
 	items, err := s.readFilteredDLQ(ctx, name, filter)
 	if err != nil {
 		return 0, err
 	}
-	return s.replayDLQItems(ctx, name, items)
+	replayCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replayTimeout)
+	defer cancel()
+	return s.replayDLQItems(replayCtx, name, items)
 }
 
 func (s *Server) replayDLQByID(ctx context.Context, name string, id int64) (int, error) {
+	mu := s.dlqReplayLock(name)
+	if !mu.TryLock() {
+		return 0, fmt.Errorf("another DLQ replay is already running for pipeline %s", name)
+	}
+	defer mu.Unlock()
+
 	item, err := s.dlqWriter.ReadByID(ctx, name, id)
 	if err != nil {
 		return 0, err
@@ -4824,7 +4952,9 @@ func (s *Server) replayDLQByID(ctx context.Context, name string, id int64) (int,
 	if item == nil {
 		return 0, nil
 	}
-	return s.replayDLQItems(ctx, name, []storage.DeadLetter{*item})
+	replayCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replayTimeout)
+	defer cancel()
+	return s.replayDLQItems(replayCtx, name, []storage.DeadLetter{*item})
 }
 
 func (s *Server) replayDLQItems(ctx context.Context, name string, items []storage.DeadLetter) (int, error) {
@@ -4842,6 +4972,13 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 	}
 	if len(items) == 0 {
 		return 0, nil
+	}
+	// Replay writes through the sink outside the runner, so it must enforce the
+	// same duplicate-boundary gate the pipeline creation path applies. Without
+	// this, replay could duplicate rows into a non-idempotent sink for a spec
+	// that never set allow_unsafe.
+	if pipelineUnsafeForReplay(spec) {
+		return 0, fmt.Errorf("pipeline %s uses a CDC source with a non-idempotent sink and does not set allow_unsafe; replaying would duplicate records, so it is refused until the spec accepts that boundary", name)
 	}
 
 	replayed := 0
@@ -4869,6 +5006,10 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 		}
 		transforms = append(transforms, t)
 	}
+	// Pipeline-level processors run before transforms at read time, so replay
+	// must reproduce them. Without this, a replayed row from a table_mapping
+	// pipeline targets the source table name instead of the mapped target.
+	processors := pipeline.BuildProcessors(spec)
 	sink, err := registry.BuildSink(spec.Sink.Type, spec.Sink.Config)
 	if err != nil {
 		return 0, fmt.Errorf("build sink: %w", err)
@@ -4886,17 +5027,27 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 	}
 
 	for _, item := range pending {
-		prepared, err := s.prepareLinearDLQReplay(ctx, spec, item)
+		prepared, err := s.prepareDLQReplayIdentity(ctx, spec, item, true)
 		if err != nil {
 			return replayed, err
 		}
-		rec, err := transforms.Apply(ctx, prepared.Record)
+		record := prepared.Record
+		if len(processors) > 0 {
+			processed, pErr := processors.Apply(ctx, record)
+			if pErr != nil {
+				replayErr := fmt.Errorf("apply pipeline processors to dlq record: %w", pErr)
+				s.markDLQReplayFailure(ctx, prepared, replayErr)
+				return replayed, replayErr
+			}
+			record = processed
+		}
+		rec, err := transforms.Apply(ctx, record)
 		if err != nil {
 			replayErr := fmt.Errorf("transform dlq record: %w", err)
 			s.markDLQReplayFailure(ctx, prepared, replayErr)
 			return replayed, replayErr
 		}
-		if err := s.validateLinearReplayIdentity(ctx, spec, prepared, rec); err != nil {
+		if err := s.validateDLQReplayIdentity(ctx, spec, prepared, rec, true); err != nil {
 			return replayed, err
 		}
 		if err := retry.Do(ctx, cfg, core.IsRetryableError, func() error { return sink.Write(ctx, []core.Record{rec}) }); err != nil {
@@ -4956,6 +5107,19 @@ func (s *Server) replayDAGDLQItems(ctx context.Context, name string, dagSpec *or
 		if nodeID == "" {
 			return replayed, fmt.Errorf("dag dlq record %s has no dag_node; replay requires node context", dlqItemRef(item))
 		}
+		// DAG replay used to write straight to the sink, skipping the identity
+		// contract that linear replay enforces. Apply the same gate for every
+		// metadata-PK sink reachable from the failing node.
+		identitySpecs := dagReplayIdentitySpecs(dagSpec, nodeID)
+		prepared := item
+		for _, identitySpec := range identitySpecs {
+			var prepErr error
+			prepared, prepErr = s.prepareDLQReplayIdentity(ctx, identitySpec, prepared, true)
+			if prepErr != nil {
+				return replayed, prepErr
+			}
+		}
+		item = prepared
 		if err := replayer.Replay(ctx, nodeID, item.Record); err != nil {
 			replayErr := fmt.Errorf("replay dag dlq record %s from node %s: %w", dlqItemRef(item), nodeID, err)
 			s.markDLQReplayFailure(ctx, item, replayErr)
@@ -4979,16 +5143,15 @@ func (s *Server) deleteReplayedDLQItem(ctx context.Context, name string, item st
 	// (P4-10, SV-1). Timestamp-based deletion is imprecise when multiple
 	// DLQ entries share the same second.
 	if item.ID != 0 {
-		if err := s.dlqWriter.DeleteByID(ctx, item.ID); err != nil {
+		if err := s.dlqWriter.DeleteByID(ctx, name, item.ID); err != nil {
 			return fmt.Errorf("delete replayed dlq id %d: %w", item.ID, err)
 		}
 		return nil
 	}
-	// Fallback for file-backed DLQ (no auto-increment ID).
-	if err := s.dlqWriter.Delete(ctx, name, item.Timestamp); err != nil {
-		return fmt.Errorf("delete replayed dlq timestamp %s: %w", item.Timestamp.Format(time.RFC3339Nano), err)
-	}
-	return nil
+	// Every row read from the SQL-backed DLQ has a primary key. Refuse the
+	// timestamp fallback rather than risk the imprecise same-second window (and,
+	// for a zero timestamp, Delete(name, zero) deletes the whole job).
+	return fmt.Errorf("cannot delete replayed dlq record for %s: missing row id", name)
 }
 
 func dlqItemRef(item storage.DeadLetter) string {
@@ -5029,7 +5192,12 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 		if cp, err := s.cpAdapter.Load(ctx, id); err == nil && cp != nil && !cp.Timestamp.IsZero() {
 			checkpointAgeSeconds = int64(time.Since(cp.Timestamp).Seconds())
 		}
-		dlqFileCount := s.dlqWriter.Count(ctx, id)
+		dlqFileCount, dlqCountErr := s.dlqWriter.Count(ctx, id)
+		if dlqCountErr != nil {
+			// A failed count must not be reported as an empty backlog.
+			g.Log().Warningf(ctx, "DLQ backlog count failed for pipeline %s: %v", id, dlqCountErr)
+			dlqFileCount = -1
+		}
 		cbState := runner.CircuitBreakerState()
 		health := telemetry.DerivePipelineHealth(telemetry.PipelineHealthInput{
 			Status:               string(runner.Status()),
@@ -5231,7 +5399,12 @@ func (s *Server) getHealthStatus() map[string]string {
 		}
 		dlqCount := 0
 		if s.dlqWriter != nil {
-			dlqCount = s.dlqWriter.Count(ctx, id)
+			if n, err := s.dlqWriter.Count(ctx, id); err == nil {
+				dlqCount = n
+			} else {
+				g.Log().Warningf(ctx, "DLQ backlog count failed for pipeline %s: %v", id, err)
+				dlqCount = -1
+			}
 		}
 		display := names[id]
 		if display == "" {

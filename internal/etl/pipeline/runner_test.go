@@ -530,6 +530,30 @@ type failingDLQ struct{ err error }
 
 func (d failingDLQ) WriteDLQ(context.Context, DLQEntry) error { return d.err }
 
+// flakyDLQ fails while failing is true and records entries otherwise. It models
+// a metadata store that is temporarily unavailable and later recovers.
+type flakyDLQ struct {
+	mu      sync.Mutex
+	failing bool
+	entries []DLQEntry
+}
+
+func (d *flakyDLQ) setFailing(failing bool) {
+	d.mu.Lock()
+	d.failing = failing
+	d.mu.Unlock()
+}
+
+func (d *flakyDLQ) WriteDLQ(_ context.Context, e DLQEntry) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.failing {
+		return errors.New("metadata store unavailable")
+	}
+	d.entries = append(d.entries, e)
+	return nil
+}
+
 type commitMetadataFailSink struct{ recordingSink }
 
 func (s *commitMetadataFailSink) SinkCommitMetadata(context.Context) (map[string]any, error) {
@@ -821,8 +845,12 @@ func TestRunnerWritesDLQAfterSinkContextDeadline(t *testing.T) {
 	if stats.RecordsFailed != int64(len(checkpointTestBatch())) || stats.RecordsDLQ != int64(len(checkpointTestBatch())) {
 		t.Fatalf("stats failed/dlq = %d/%d, want %d/%d", stats.RecordsFailed, stats.RecordsDLQ, len(checkpointTestBatch()), len(checkpointTestBatch()))
 	}
-	if checkpointSaved(t, store, r.spec.Name) {
-		t.Fatal("checkpoint advanced after sink deadline sent every record to DLQ")
+	// Every record is durably in the DLQ, so its source position may advance:
+	// replay would only re-capture the same rows. Before PR-DLQ-3 this path
+	// refused to checkpoint, which let one poison record hold the position
+	// forever and re-DLQ the same records on every restart.
+	if !checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint did not advance although every failed record is durably in the DLQ")
 	}
 }
 
@@ -1723,11 +1751,114 @@ func TestRunnerIsolationUsesFreshContextAfterCommitBudgetExhausted(t *testing.T)
 	if len(dlq.entries) != 0 {
 		t.Fatalf("DLQ entries = %d, want 0 (transient batch timeout must not flood the DLQ)", len(dlq.entries))
 	}
-	// Checkpoint intentionally does NOT advance on a failed batch write
-	// (at-least-once: the source range replays on restart and the idempotent
-	// sink absorbs it), so only assert it was not saved — same contract as
-	// TestRunnerWritesDLQAfterSinkContextDeadline.
+	// Isolation recovered every record into the sink, so the batch boundary is
+	// fully durable and may advance. This is the invariant shared with the
+	// source/transform/identity paths: a boundary advances only after every
+	// record in it reached a durable destination.
+	if !checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint did not advance after isolation recovered every record (fully durable batch)")
+	}
+}
+
+// TestRunnerIsolationCheckpointFollowsDLQDurability pins the two halves of the
+// sink-failure boundary contract:
+//
+//   - every failed record is durably in the DLQ  -> checkpoint advances, so a
+//     poison record cannot hold the source position forever (previously it did,
+//     producing an unbounded replay window and duplicate DLQ rows per restart);
+//   - the DLQ write failed -> checkpoint stays blocked and the entry is queued
+//     for retry, so the record can never be silently acknowledged.
+func TestRunnerIsolationCheckpointFollowsDLQDurability(t *testing.T) {
+	t.Run("durable dlq advances checkpoint", func(t *testing.T) {
+		store := newMemoryCPStore()
+		dlq := &captureDLQ{}
+		r := newCheckpointWriteBatchRunner(t, nil, store, dlq)
+		r.sink = &recordingSink{alwaysFail: true}
+		r.retryConfig.MaxAttempts = 1
+
+		r.writeBatch(context.Background(), checkpointTestBatch())
+
+		dlq.mu.Lock()
+		gotEntries := len(dlq.entries)
+		attempt := 0
+		if gotEntries > 0 {
+			attempt = dlq.entries[0].Attempt
+		}
+		dlq.mu.Unlock()
+		if gotEntries != len(checkpointTestBatch()) {
+			t.Fatalf("DLQ entries = %d, want %d", gotEntries, len(checkpointTestBatch()))
+		}
+		if attempt != 1 {
+			t.Fatalf("DLQ entry attempt = %d, want 1 (first capture must not be zero)", attempt)
+		}
+		if !checkpointSaved(t, store, r.spec.Name) {
+			t.Fatal("checkpoint did not advance although every failed record is durably in the DLQ")
+		}
+	})
+
+	t.Run("dlq write failure blocks checkpoint and queues retry", func(t *testing.T) {
+		store := newMemoryCPStore()
+		dlq := failingDLQ{err: errors.New("metadata store unavailable")}
+		r := newCheckpointWriteBatchRunner(t, nil, store, dlq)
+		r.sink = &recordingSink{alwaysFail: true}
+		r.retryConfig.MaxAttempts = 1
+
+		r.writeBatch(context.Background(), checkpointTestBatch())
+
+		if checkpointSaved(t, store, r.spec.Name) {
+			t.Fatal("checkpoint advanced although DLQ persistence failed (record would be lost)")
+		}
+		r.mu.RLock()
+		queued := len(r.pendingDLQ)
+		blocked := r.checkpointBlocked
+		r.mu.RUnlock()
+		if queued == 0 {
+			t.Fatal("failed DLQ write was not queued for retry")
+		}
+		if !blocked {
+			t.Fatal("checkpoint block was not recorded after DLQ persistence failure")
+		}
+	})
+}
+
+// TestRunnerDLQRetryRecoversCheckpointBlock verifies the block is recoverable
+// without a restart: a later successful flush persists the queued entries and
+// clears the block, after which a new batch may checkpoint.
+func TestRunnerDLQRetryRecoversCheckpointBlock(t *testing.T) {
+	store := newMemoryCPStore()
+	dlq := &flakyDLQ{failing: true}
+	r := newCheckpointWriteBatchRunner(t, nil, store, dlq)
+	r.sink = &recordingSink{alwaysFail: true}
+	r.retryConfig.MaxAttempts = 1
+
+	r.writeBatch(context.Background(), checkpointTestBatch())
 	if checkpointSaved(t, store, r.spec.Name) {
-		t.Fatal("checkpoint advanced after a failed batch write (isolation recovery does not checkpoint; replay absorbs duplicates)")
+		t.Fatal("checkpoint advanced while the DLQ was failing")
+	}
+	r.mu.RLock()
+	blockedBefore := r.checkpointBlocked
+	r.mu.RUnlock()
+	if !blockedBefore {
+		t.Fatal("checkpoint block missing after DLQ failure")
+	}
+
+	// The DLQ recovers; a sink that now accepts records lets the next batch
+	// advance the boundary after the queued entries are flushed.
+	dlq.setFailing(false)
+	r.sink = &recordingSink{}
+	r.writeBatch(context.Background(), checkpointTestBatch())
+
+	r.mu.RLock()
+	queued := len(r.pendingDLQ)
+	blockedAfter := r.checkpointBlocked
+	r.mu.RUnlock()
+	if queued != 0 {
+		t.Fatalf("pending DLQ queue = %d, want 0 after the DLQ recovered", queued)
+	}
+	if blockedAfter {
+		t.Fatal("checkpoint block was not cleared after the queued DLQ entries became durable")
+	}
+	if !checkpointSaved(t, store, r.spec.Name) {
+		t.Fatal("checkpoint did not advance after DLQ recovery")
 	}
 }

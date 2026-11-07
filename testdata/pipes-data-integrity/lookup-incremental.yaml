@@ -1,0 +1,36 @@
+name: "lookup-incremental"
+source:
+  type: demo
+  config:
+    interval_ms: 250
+    count: 40
+    fields:
+      - { name: user_id, type: "static:0" }
+      - { name: seq, type: counter }
+
+transforms:
+  - type: lookup
+    config:
+      mode: "cache"
+      dsn: "sync_user:sync_password_123@tcp(host.docker.internal:13306)/integrity_src"
+      query: "SELECT id, name, region, updated_at FROM dim_users"
+      # Incremental (CDC-lite) dimension refresh: after the first full load only
+      # rows whose updated_at advanced are fetched and merged into the cache.
+      incremental_column: "updated_at"
+      incremental_query: "SELECT id, name, region, updated_at FROM dim_users WHERE updated_at > ?"
+      full_refresh_interval_sec: 0
+      join_key: "user_id"
+      dim_key: "id"
+      fields: ["name", "region"]
+      refresh_interval_sec: 1
+
+sink:
+  type: file_sink
+  config:
+    output_dir: "/app/data/output/lookup-incremental"
+    format: "jsonl"
+    prefix: "rec_"
+
+batch_size: 2
+checkpoint_interval_sec: 1
+backpressure_buffer: 32

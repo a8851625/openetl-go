@@ -27,14 +27,18 @@ func init() {
 }
 
 type JDBCSink struct {
-	name                   string
-	dsnRaw                 string
-	driverOverride         string
-	driver                 string
-	table                  string
-	database               string
-	schema                 string
-	pkColumns              []string
+	name           string
+	dsnRaw         string
+	driverOverride string
+	driver         string
+	table          string
+	database       string
+	schema         string
+	pkColumns      []string
+	// pkColumnsFromMetadata derives the key columns per record from
+	// Metadata.PrimaryKeyColumns + Metadata.Key, so one pipeline can upsert and
+	// delete into many tables with different keys (multi-table CDC over JDBC).
+	pkColumnsFromMetadata  bool
 	batchMode              string
 	db                     *sql.DB
 	insertChunkSize        int
@@ -83,6 +87,7 @@ func NewJDBCSink(config map[string]any) (*JDBCSink, error) {
 		}
 	}
 	s.pkColumns = append(s.pkColumns, stringSliceConfig(config, "pk_columns")...)
+	s.pkColumnsFromMetadata = boolConfig(config, "pk_columns_from_metadata", false)
 	if v, ok := config["batch_mode"]; ok {
 		if vs, ok := v.(string); ok {
 			s.batchMode = vs
@@ -213,6 +218,24 @@ func (s *JDBCSink) Write(ctx context.Context, records []core.Record) (err error)
 		return err
 	}
 
+	// pk_columns_from_metadata: resolve (and validate) the per-table key set
+	// before the transaction opens, so a keyless record fails closed instead of
+	// upserting against the wrong conflict target.
+	pkByTable := map[string][]string{}
+	if s.pkColumnsFromMetadata {
+		validation, validationErr := validateMetadataPKBatch(s.name, records, s.pkColumns, func(record core.Record) (metadataPKTarget, error) {
+			table := s.table
+			if record.Metadata.Table != "" {
+				table = record.Metadata.Table
+			}
+			return metadataPKTarget{Database: s.database, Table: table}, nil
+		})
+		if validationErr != nil {
+			return validationErr
+		}
+		pkByTable = validation.ColumnsByTable
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -224,20 +247,27 @@ func (s *JDBCSink) Write(ctx context.Context, records []core.Record) (err error)
 		}
 	}()
 
-	// Compact by (table, PK) in source order to preserve CDC semantics.
-	records = CompactRecordsByPK(records, func(table string) []string {
+	pkFor := func(table string) []string {
+		if cols, ok := pkByTable[table]; ok && len(cols) > 0 {
+			return cols
+		}
 		if len(s.pkColumns) > 0 {
 			return s.pkColumns
 		}
 		return []string{"id"}
-	})
+	}
+
+	// Compact by (table, PK) in source order to preserve CDC semantics.
+	records = CompactRecordsByPK(records, pkFor)
 
 	type groupKey struct {
 		table string
 		cols  string
+		pk    string
 	}
 	type groupBuf struct {
 		cols       []string
+		pkCols     []string
 		rows       [][]any
 		ops        []core.OpType
 		deleteRows [][]any
@@ -255,17 +285,18 @@ func (s *JDBCSink) Write(ctx context.Context, records []core.Record) (err error)
 			cols = append(cols, k)
 		}
 		sort.Strings(cols)
-		key := groupKey{table: tableName, cols: strings.Join(cols, ",")}
+		pkCols := pkFor(tableName)
+		key := groupKey{table: tableName, cols: strings.Join(cols, ","), pk: strings.Join(pkCols, ",")}
 
 		g, ok := groups[key]
 		if !ok {
-			g = &groupBuf{cols: cols}
+			g = &groupBuf{cols: cols, pkCols: pkCols}
 			groups[key] = g
 			groupOrder = append(groupOrder, key)
 		}
 
 		if rec.Operation == core.OpDelete {
-			vals, err := s.deleteValues(cols, rec)
+			vals, err := s.deleteValues(cols, rec, g.pkCols)
 			if err != nil {
 				return err
 			}
@@ -290,12 +321,12 @@ func (s *JDBCSink) Write(ctx context.Context, records []core.Record) (err error)
 					break
 				}
 			}
-			if err := s.batchInsert(ctx, tx, key.table, g.cols, g.rows, mode); err != nil {
+			if err := s.batchInsert(ctx, tx, key.table, g.cols, g.rows, mode, g.pkCols); err != nil {
 				return err
 			}
 		}
 		if len(g.deleteRows) > 0 {
-			if err := s.batchDelete(ctx, tx, key.table, g.deleteRows); err != nil {
+			if err := s.batchDelete(ctx, tx, key.table, g.deleteRows, g.pkCols); err != nil {
 				return err
 			}
 		}
@@ -309,7 +340,7 @@ func (s *JDBCSink) Write(ctx context.Context, records []core.Record) (err error)
 	return nil
 }
 
-func (s *JDBCSink) batchInsert(ctx context.Context, tx *sql.Tx, table string, cols []string, rows [][]any, mode string) error {
+func (s *JDBCSink) batchInsert(ctx context.Context, tx *sql.Tx, table string, cols []string, rows [][]any, mode string, pkCols []string) error {
 	for offset := 0; offset < len(rows); offset += s.insertChunkSize {
 		end := offset + s.insertChunkSize
 		if end > len(rows) {
@@ -319,7 +350,7 @@ func (s *JDBCSink) batchInsert(ctx context.Context, tx *sql.Tx, table string, co
 		if len(chunk) == 0 {
 			continue
 		}
-		query := s.buildBatchInsertStatement(table, cols, len(chunk), mode)
+		query := s.buildBatchInsertStatement(table, cols, len(chunk), mode, pkCols)
 		args := make([]any, 0, len(chunk)*len(cols))
 		for _, row := range chunk {
 			args = append(args, row...)
@@ -331,7 +362,7 @@ func (s *JDBCSink) batchInsert(ctx context.Context, tx *sql.Tx, table string, co
 	return nil
 }
 
-func (s *JDBCSink) buildBatchInsertStatement(table string, cols []string, rowCount int, mode string) string {
+func (s *JDBCSink) buildBatchInsertStatement(table string, cols []string, rowCount int, mode string, pkCols []string) string {
 	quotedCols := make([]string, len(cols))
 	for i, c := range cols {
 		quotedCols[i] = s.quote(c)
@@ -384,7 +415,9 @@ func (s *JDBCSink) buildBatchInsertStatement(table string, cols []string, rowCou
 			}
 			b.WriteString(strings.Join(updates, ","))
 		} else {
-			pkCols := s.pkColumns
+			if len(pkCols) == 0 {
+				pkCols = s.pkColumns
+			}
 			if len(pkCols) == 0 {
 				pkCols = []string{"id"}
 			}
@@ -418,7 +451,7 @@ func (s *JDBCSink) buildBatchInsertStatement(table string, cols []string, rowCou
 	return b.String()
 }
 
-func (s *JDBCSink) batchDelete(ctx context.Context, tx *sql.Tx, table string, rows [][]any) error {
+func (s *JDBCSink) batchDelete(ctx context.Context, tx *sql.Tx, table string, rows [][]any, pkCols []string) error {
 	for offset := 0; offset < len(rows); offset += s.insertChunkSize {
 		end := offset + s.insertChunkSize
 		if end > len(rows) {
@@ -428,8 +461,8 @@ func (s *JDBCSink) batchDelete(ctx context.Context, tx *sql.Tx, table string, ro
 		if len(chunk) == 0 {
 			continue
 		}
-		query := s.buildBatchDeleteStatement(table, len(chunk))
-		args := make([]any, 0, len(chunk)*len(s.pkColumns))
+		query := s.buildBatchDeleteStatement(table, len(chunk), pkCols)
+		args := make([]any, 0, len(chunk)*len(pkCols))
 		for _, row := range chunk {
 			args = append(args, row...)
 		}
@@ -440,8 +473,10 @@ func (s *JDBCSink) batchDelete(ctx context.Context, tx *sql.Tx, table string, ro
 	return nil
 }
 
-func (s *JDBCSink) buildBatchDeleteStatement(table string, rowCount int) string {
-	pkCols := s.pkColumns
+func (s *JDBCSink) buildBatchDeleteStatement(table string, rowCount int, pkCols []string) string {
+	if len(pkCols) == 0 {
+		pkCols = s.pkColumns
+	}
 	if len(pkCols) == 0 {
 		pkCols = []string{"id"}
 	}
@@ -501,8 +536,10 @@ func (s *JDBCSink) buildBatchDeleteStatement(table string, rowCount int) string 
 	return b.String()
 }
 
-func (s *JDBCSink) deleteValues(cols []string, rec core.Record) ([]any, error) {
-	pkCols := s.pkColumns
+func (s *JDBCSink) deleteValues(cols []string, rec core.Record, pkCols []string) ([]any, error) {
+	if len(pkCols) == 0 {
+		pkCols = s.pkColumns
+	}
 	if len(pkCols) == 0 {
 		pkCols = []string{"id"}
 	}

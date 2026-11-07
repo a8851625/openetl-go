@@ -1,0 +1,24 @@
+name: "manifest-file"
+source:
+  type: demo
+  config:
+    interval_ms: 20
+    count: 6
+    fields:
+      # Distinct content per row: identical payloads would (correctly) be
+      # deduplicated by the content-based batch id and commit only once.
+      - { name: id, type: counter }
+      - { name: payload, type: "static:manifest-demo" }
+
+sink:
+  type: file_sink
+  config:
+    output_dir: "/app/data/output/manifest-demo"
+    format: "jsonl"
+    prefix: "batch_"
+    # Two-step commit: data object first, then the manifest that commits it.
+    manifest: true
+
+batch_size: 2
+checkpoint_interval_sec: 1
+backpressure_buffer: 16

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,15 +27,17 @@ func init() {
 // emits rows as records. For periodic refresh, schedule the pipeline with
 // schedule.type: periodic.
 type FeishuSheetSource struct {
-	name            string
-	appID           string
-	appSecret       string
+	name             string
+	appID            string
+	appSecret        string
 	spreadsheetToken string
-	sheetRange      string
-	sheetID         string
-	baseURL         string
-	pollIntervalSec int
-	httpClient      *http.Client
+	sheetRange       string
+	sheetID          string
+	baseURL          string
+	pollIntervalSec  int
+	maxRetries       int
+	retryBaseMs      int
+	httpClient       *http.Client
 	// token management
 	tokenMu     sync.Mutex
 	accessToken string
@@ -47,6 +50,8 @@ func NewFeishuSheetSource(config map[string]any) (*FeishuSheetSource, error) {
 		name:            "feishu_sheet",
 		baseURL:         "https://open.feishu.cn",
 		pollIntervalSec: 0,
+		maxRetries:      3,
+		retryBaseMs:     500,
 		httpClient:      &http.Client{Timeout: 30 * time.Second},
 	}
 	if v, ok := config["name"]; ok {
@@ -81,6 +86,28 @@ func NewFeishuSheetSource(config map[string]any) (*FeishuSheetSource, error) {
 		case float64:
 			s.pollIntervalSec = int(p)
 		}
+	}
+	if v, ok := config["max_retries"]; ok {
+		switch mr := v.(type) {
+		case int:
+			s.maxRetries = mr
+		case float64:
+			s.maxRetries = int(mr)
+		}
+	}
+	if v, ok := config["retry_base_ms"]; ok {
+		switch rb := v.(type) {
+		case int:
+			s.retryBaseMs = rb
+		case float64:
+			s.retryBaseMs = int(rb)
+		}
+	}
+	if s.maxRetries < 0 {
+		s.maxRetries = 0
+	}
+	if s.retryBaseMs <= 0 {
+		s.retryBaseMs = 500
 	}
 	if s.appID == "" || s.appSecret == "" {
 		return nil, fmt.Errorf("feishu_sheet source requires app_id and app_secret")
@@ -155,9 +182,49 @@ func (s *FeishuSheetSource) ensureToken(ctx context.Context) (string, error) {
 // fetchSheet fetches the spreadsheet values for the configured range.
 // API: GET {base_url}/open-apis/sheets/v3/spreadsheets/{spreadsheet_token}/values/{range}
 func (s *FeishuSheetSource) fetchSheet(ctx context.Context) ([][]any, error) {
+	var lastErr error
+	tokenRefreshed := false
+	for attempt := 0; attempt <= s.maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(s.retryBaseMs<<(attempt-1)) * time.Millisecond
+			if waitErr, ok := lastErr.(*feishuRetryableError); ok && waitErr.retryAfter > 0 {
+				delay = waitErr.retryAfter
+			}
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		rows, retryable, err := s.fetchSheetOnce(ctx)
+		if err == nil {
+			return rows, nil
+		}
+		lastErr = err
+		// An expired/invalid access token is recoverable exactly once: drop the
+		// cached token and retry immediately instead of failing the batch.
+		if feishuTokenInvalid(err) && !tokenRefreshed {
+			s.invalidateToken()
+			tokenRefreshed = true
+			continue
+		}
+		if !retryable {
+			return nil, err
+		}
+	}
+	if lastErr == nil {
+		return nil, fmt.Errorf("feishu sheet fetch: exhausted retries")
+	}
+	return nil, lastErr
+}
+
+// fetchSheetOnce performs one attempt. retryable reports whether the failure is
+// worth another attempt (rate limit or transient server error).
+func (s *FeishuSheetSource) fetchSheetOnce(ctx context.Context) (rows [][]any, retryable bool, err error) {
 	tok, err := s.ensureToken(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	rangePath := s.sheetRange
 	if rangePath == "" {
@@ -166,20 +233,30 @@ func (s *FeishuSheetSource) fetchSheet(ctx context.Context) ([][]any, error) {
 	url := fmt.Sprintf("%s/open-apis/sheets/v3/spreadsheets/%s/values/%s", s.baseURL, s.spreadsheetToken, rangePath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("feishu sheet request: %w", err)
+		return nil, false, fmt.Errorf("feishu sheet request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("feishu sheet fetch: %w", err)
+		return nil, true, fmt.Errorf("feishu sheet fetch: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, fmt.Errorf("feishu sheet fetch: rate limited (429)")
+		return nil, true, &feishuRetryableError{
+			retryAfter: feishuRetryAfter(resp),
+			err:        fmt.Errorf("feishu sheet fetch: rate limited (429): %s", string(respBody)),
+		}
+	}
+	if resp.StatusCode >= 500 {
+		return nil, true, &feishuRetryableError{
+			retryAfter: feishuRetryAfter(resp),
+			err:        fmt.Errorf("feishu sheet fetch: HTTP %d: %s", resp.StatusCode, string(respBody)),
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("feishu sheet fetch: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, false, fmt.Errorf("feishu sheet fetch: HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	var parsed struct {
 		Code int    `json:"code"`
@@ -191,12 +268,77 @@ func (s *FeishuSheetSource) fetchSheet(ctx context.Context) ([][]any, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, fmt.Errorf("feishu sheet decode: %w", err)
+		return nil, false, fmt.Errorf("feishu sheet decode: %w", err)
 	}
 	if parsed.Code != 0 {
-		return nil, fmt.Errorf("feishu sheet error code=%d msg=%s", parsed.Code, parsed.Msg)
+		codeErr := fmt.Errorf("feishu sheet error code=%d msg=%s", parsed.Code, parsed.Msg)
+		// Feishu reports frequency limits inside a 200 response.
+		if feishuRateLimitedCode(parsed.Code) {
+			return nil, true, &feishuRetryableError{err: codeErr}
+		}
+		return nil, false, codeErr
 	}
-	return parsed.Data.ValueRange.Values, nil
+	return parsed.Data.ValueRange.Values, false, nil
+}
+
+// feishuRetryableError marks a failure that is worth retrying, optionally with a
+// server-provided wait.
+type feishuRetryableError struct {
+	retryAfter time.Duration
+	err        error
+}
+
+func (e *feishuRetryableError) Error() string { return e.err.Error() }
+func (e *feishuRetryableError) Unwrap() error { return e.err }
+
+// Feishu business codes that mean "slow down" or "token is no longer valid".
+const (
+	feishuCodeRateLimited    = 99991400
+	feishuCodeTokenInvalid   = 99991663
+	feishuCodeTokenExpired   = 99991677
+	feishuCodeTokenNotExists = 99991661
+)
+
+func feishuRateLimitedCode(code int) bool { return code == feishuCodeRateLimited }
+
+func feishuTokenInvalid(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	for _, code := range []int{feishuCodeTokenInvalid, feishuCodeTokenExpired, feishuCodeTokenNotExists} {
+		if strings.Contains(message, fmt.Sprintf("code=%d", code)) {
+			return true
+		}
+	}
+	return false
+}
+
+func feishuRetryAfter(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if raw == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if when, err := http.ParseTime(raw); err == nil {
+		if d := time.Until(when); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// invalidateToken drops the cached token so the next call re-authenticates.
+func (s *FeishuSheetSource) invalidateToken() {
+	s.tokenMu.Lock()
+	s.accessToken = ""
+	s.tokenExpiry = time.Time{}
+	s.tokenMu.Unlock()
 }
 
 func (s *FeishuSheetSource) Open(ctx context.Context, cp *core.Checkpoint) (core.RecordReader, error) {

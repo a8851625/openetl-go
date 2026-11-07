@@ -188,7 +188,7 @@ func productionPathContracts() []PathContract {
 			Maturity:         "production_with_review",
 			RPO:              defaultPathRPO,
 			RTO:              defaultPathRTO,
-			Residuals:        []string{"first-class manifests are not implemented"},
+			Residuals:        []string{"manifest is a two-step commit, not a lakehouse transaction: no metadata rewrite, no small-file compaction, and a cross-day replay of the same batch commits a second object"},
 			RequiredCases:    []string{"happy", "checkpoint_reset", "sink_outage_dlq_replay"},
 			DescriptorRefs:   []string{"source:file", "sink:s3"},
 		},

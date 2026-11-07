@@ -94,8 +94,9 @@ func (w *DLQCompatWriter) DeleteFiltered(ctx context.Context, filter DLQFilter) 
 	return w.adapter.DeleteByFilter(ctx, filter)
 }
 
-// Count returns the number of dead-letter records for a job.
-func (w *DLQCompatWriter) Count(ctx context.Context, jobName string) int {
+// Count returns the number of dead-letter records for a job and the count
+// error, so callers can distinguish "empty backlog" from "could not read".
+func (w *DLQCompatWriter) Count(ctx context.Context, jobName string) (int, error) {
 	return w.adapter.Count(ctx, jobName)
 }
 
@@ -104,12 +105,12 @@ func (w *DLQCompatWriter) DeleteAll(ctx context.Context, jobName string) error {
 	return w.adapter.DeleteAll(ctx, jobName)
 }
 
-// DeleteByID removes a single dead-letter record by its primary key.
-// This is the preferred method for replay cleanup — it targets exactly the
-// replayed record, unlike timestamp-based deletion which is imprecise when
+// DeleteByID removes a single dead-letter record by its primary key, scoped to
+// the job. This is the preferred method for replay cleanup — it targets exactly
+// the replayed record, unlike timestamp-based deletion which is imprecise when
 // multiple DLQ entries share the same second (P4-10, SV-1).
-func (w *DLQCompatWriter) DeleteByID(ctx context.Context, id int64) error {
-	return w.adapter.DeleteByID(ctx, id)
+func (w *DLQCompatWriter) DeleteByID(ctx context.Context, jobName string, id int64) error {
+	return w.adapter.DeleteByID(ctx, jobName, id)
 }
 
 // Update persists a repaired record and/or its replay checkpoint context.

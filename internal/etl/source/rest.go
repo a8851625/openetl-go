@@ -26,40 +26,45 @@ func init() {
 
 // RestSource 是通用 REST API 源：通过配置驱动认证、分页、解析与重试。
 type RestSource struct {
-	name   string
-	url    string
-	method string
-	headers map[string]string
-	body    string
+	name     string
+	url      string
+	method   string
+	headers  map[string]string
+	body     string
 	bodyType string // json | form
 
 	// 认证
-	authType       string // none | api_key | basic_auth | bearer | oauth2_client_credentials
-	apiKeyHeader   string
-	apiKeyQuery    string
-	apiKeyValue    string
-	username       string
-	password       string
-	bearerToken    string
-	oauth2TokenURL string
-	oauth2ClientID string
+	authType           string // none | api_key | basic_auth | bearer | oauth2_client_credentials
+	apiKeyHeader       string
+	apiKeyQuery        string
+	apiKeyValue        string
+	username           string
+	password           string
+	bearerToken        string
+	oauth2TokenURL     string
+	oauth2ClientID     string
 	oauth2ClientSecret string
-	oauth2Scopes   string
-	oauth2TokenField string
-	oauth2HeaderFmt  string
+	oauth2Scopes       string
+	oauth2TokenField   string
+	oauth2HeaderFmt    string
 
 	// 分页
-	pagination  string // offset | cursor | page_token | "" (无)
-	pageParam   string
-	sizeParam   string
-	pageSize    int
-	maxPages    int
-	totalField  string
-	cursorParam string
-	cursorField string
+	pagination   string // offset | cursor | page_token | "" (无)
+	pageParam    string
+	sizeParam    string
+	pageSize     int
+	maxPages     int
+	totalField   string
+	cursorParam  string
+	cursorField  string
 	cursorHeader string
-	tokenParam  string
-	tokenField  string
+	tokenParam   string
+	tokenField   string
+	// nextURLField names a response-body field that carries the absolute (or
+	// instance-relative) URL of the next page. Salesforce-style APIs (SOQL
+	// queryMore) page this way and reject deep offset paging, so following the
+	// server-provided URL is the only correct behaviour there.
+	nextURLField string
 
 	// 响应
 	resultKey string
@@ -86,18 +91,18 @@ type RestSource struct {
 // NewRestSource 从配置构建 RestSource。
 func NewRestSource(config map[string]any) (*RestSource, error) {
 	s := &RestSource{
-		name:            "rest_source",
-		method:          "GET",
-		bodyType:        "json",
-		authType:        "none",
-		pageSize:        100,
-		maxPages:        0,
-		maxRetries:      3,
-		retryBaseMs:     500,
+		name:             "rest_source",
+		method:           "GET",
+		bodyType:         "json",
+		authType:         "none",
+		pageSize:         100,
+		maxPages:         0,
+		maxRetries:       3,
+		retryBaseMs:      500,
 		oauth2TokenField: "access_token",
 		oauth2HeaderFmt:  "Bearer %s",
-		client:          &http.Client{Timeout: 30 * time.Second},
-		variables:       map[string]string{},
+		client:           &http.Client{Timeout: 30 * time.Second},
+		variables:        map[string]string{},
 	}
 
 	if v, ok := config["name"].(string); ok && v != "" {
@@ -197,6 +202,9 @@ func NewRestSource(config map[string]any) (*RestSource, error) {
 	}
 	if v, ok := config["cursor_field"].(string); ok {
 		s.cursorField = v
+	}
+	if v, ok := config["next_url_field"].(string); ok {
+		s.nextURLField = strings.TrimSpace(v)
 	}
 	if v, ok := config["cursor_header"].(string); ok {
 		s.cursorHeader = v
@@ -462,6 +470,7 @@ func (s *RestSource) Open(ctx context.Context, cp *core.Checkpoint) (core.Record
 			reader.pageCount = pos.PageCount
 			reader.cursor = pos.Cursor
 			reader.pageToken = pos.PageToken
+			reader.nextURL = pos.NextURL
 			reader.committed = pos
 		}
 	}
@@ -477,6 +486,9 @@ type restReader struct {
 	pageCount int
 	cursor    string
 	pageToken string
+	// nextURL is the absolute next-page URL when the API pages by handing back a
+	// URL (next_url_field), e.g. Salesforce nextRecordsUrl.
+	nextURL   string
 	committed restPosition
 }
 
@@ -485,6 +497,9 @@ type restPosition struct {
 	PageCount int    `json:"page_count"`
 	Cursor    string `json:"cursor,omitempty"`
 	PageToken string `json:"page_token,omitempty"`
+	// NextURL resumes a URL-paged stream (Salesforce nextRecordsUrl) exactly
+	// where it stopped instead of restarting from offset zero.
+	NextURL string `json:"next_url,omitempty"`
 }
 
 func (r *restReader) Read(ctx context.Context) (core.Record, error) {
@@ -510,6 +525,7 @@ func (r *restReader) Read(ctx context.Context) (core.Record, error) {
 			PageCount: r.pageCount,
 			Cursor:    r.cursor,
 			PageToken: r.pageToken,
+			NextURL:   r.nextURL,
 		}
 	}
 	return rec, nil
@@ -534,6 +550,7 @@ func (r *restReader) ReadBatch(ctx context.Context, n int) ([]core.Record, error
 			PageCount: r.pageCount,
 			Cursor:    r.cursor,
 			PageToken: r.pageToken,
+			NextURL:   r.nextURL,
 		}
 		return result, nil
 	}
@@ -545,6 +562,7 @@ func (r *restReader) ReadBatch(ctx context.Context, n int) ([]core.Record, error
 			PageCount: r.pageCount,
 			Cursor:    r.cursor,
 			PageToken: r.pageToken,
+			NextURL:   r.nextURL,
 		}
 	}
 	return result, nil
@@ -579,6 +597,23 @@ func (r *restReader) fetchPage(ctx context.Context) ([]core.Record, error) {
 		}
 	}
 
+	// URL-paged streams (next_url_field) advance by the URL the server returned;
+	// an empty URL means the last page. The cursor-unchanged guard keeps a
+	// provider that echoes the same cursor from looping forever.
+	if r.source.nextURLField != "" {
+		if nextCursor == "" || len(items) == 0 {
+			r.nextURL = ""
+			r.done = true
+		} else {
+			r.nextURL = nextCursor
+			if nextCursor == r.cursor {
+				r.done = true
+			}
+			r.cursor = nextCursor
+		}
+		return records, nil
+	}
+
 	// 推进分页状态
 	switch r.source.pagination {
 	case "offset":
@@ -590,6 +625,12 @@ func (r *restReader) fetchPage(ctx context.Context) ([]core.Record, error) {
 			r.done = true
 		}
 	case "cursor":
+		if nextCursor != "" && nextCursor == r.cursor {
+			// The provider returned the cursor we just sent: stop instead of
+			// re-fetching the same page forever.
+			r.done = true
+			break
+		}
 		r.cursor = nextCursor
 		if nextCursor == "" || len(items) == 0 {
 			r.done = true
@@ -653,10 +694,16 @@ func (r *restReader) doRequest(ctx context.Context) (items []any, nextCursor, ne
 	method := s.method
 	bodyStr := s.expandVars(s.body)
 
-	// 组装分页参数
-	requestURL, bodyStr, err = r.applyPagination(requestURL, bodyStr)
-	if err != nil {
-		return nil, "", "", 0, false, err
+	// URL-paged streams (Salesforce nextRecordsUrl) target the URL the server
+	// handed back instead of re-deriving page parameters.
+	if r.nextURL != "" {
+		requestURL = r.nextURL
+	} else {
+		// 组装分页参数
+		requestURL, bodyStr, err = r.applyPagination(requestURL, bodyStr)
+		if err != nil {
+			return nil, "", "", 0, false, err
+		}
 	}
 
 	// api_key query 模式
@@ -699,21 +746,10 @@ func (r *restReader) doRequest(ctx context.Context) (items []any, nextCursor, ne
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 || isRateLimitedResponse(resp) {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
 		httpErr := &restHTTPError{statusCode: resp.StatusCode, body: string(body)}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			if ra := resp.Header.Get("Retry-After"); ra != "" {
-				if secs, parseErr := strconv.Atoi(strings.TrimSpace(ra)); parseErr == nil && secs > 0 {
-					httpErr.retryAfter = time.Duration(secs) * time.Second
-				} else if when, parseErr := http.ParseTime(ra); parseErr == nil {
-					d := time.Until(when)
-					if d > 0 {
-						httpErr.retryAfter = d
-					}
-				}
-			}
-		}
+		httpErr.retryAfter = rateLimitDelay(resp)
 		return nil, "", "", 0, true, httpErr
 	}
 	if resp.StatusCode >= 400 {
@@ -734,6 +770,15 @@ func (r *restReader) doRequest(ctx context.Context) (items []any, nextCursor, ne
 	// 解析下一页游标/token/total
 	var raw map[string]any
 	_ = json.Unmarshal(body, &raw)
+
+	// URL-paged streams take precedence: the server tells us where the next page
+	// lives, so no cursor parameter is derived at all.
+	if s.nextURLField != "" {
+		if raw != nil {
+			nextCursor = resolveNextURL(s.url, lookupStringPath(raw, s.nextURLField))
+		}
+		return items, nextCursor, nextToken, total, false, nil
+	}
 
 	switch s.pagination {
 	case "cursor":
@@ -996,4 +1041,79 @@ func (s *RestSource) PreflightProbe(ctx context.Context) error {
 		return fmt.Errorf("http status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+// isRateLimitedResponse detects provider-specific throttling that does not use
+// 429. GitHub's primary rate limit answers 403 with
+// `x-ratelimit-remaining: 0`, and secondary limits add `retry-after`; treating
+// those as terminal errors used to fail the record instead of backing off.
+func isRateLimitedResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	if strings.TrimSpace(resp.Header.Get("x-ratelimit-remaining")) == "0" {
+		return true
+	}
+	if strings.TrimSpace(resp.Header.Get("retry-after")) != "" {
+		return true
+	}
+	if strings.TrimSpace(resp.Header.Get("x-rate-limit-remaining")) == "0" {
+		return true
+	}
+	return false
+}
+
+// rateLimitDelay resolves how long to wait before retrying: Retry-After (delta
+// seconds or HTTP date), then the provider's reset timestamp, otherwise zero so
+// the caller falls back to exponential backoff.
+func rateLimitDelay(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 0
+	}
+	if ra := strings.TrimSpace(resp.Header.Get("Retry-After")); ra != "" {
+		if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+		if when, err := http.ParseTime(ra); err == nil {
+			if d := time.Until(when); d > 0 {
+				return d
+			}
+		}
+	}
+	for _, header := range []string{"x-ratelimit-reset", "x-rate-limit-reset"} {
+		if raw := strings.TrimSpace(resp.Header.Get(header)); raw != "" {
+			if epoch, err := strconv.ParseInt(raw, 10, 64); err == nil {
+				if d := time.Until(time.Unix(epoch, 0)); d > 0 {
+					return d
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// resolveNextURL turns a server-provided next-page reference into an absolute
+// URL. Salesforce returns an instance-relative path, other APIs return the full
+// URL; both must work or the stream would silently stop after one page.
+func resolveNextURL(base, next string) string {
+	next = strings.TrimSpace(next)
+	if next == "" {
+		return ""
+	}
+	parsed, err := url.Parse(next)
+	if err == nil && parsed.IsAbs() {
+		return next
+	}
+	baseURL, baseErr := url.Parse(base)
+	if baseErr != nil {
+		return next
+	}
+	ref, refErr := url.Parse(next)
+	if refErr != nil {
+		return next
+	}
+	return baseURL.ResolveReference(ref).String()
 }

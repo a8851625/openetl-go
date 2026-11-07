@@ -649,7 +649,11 @@ func (t *EnricherTransform) Close() error {
 //	join_key: "user_id"          // field in the record to match on
 //	dim_key: "id"                // column in the dimension table
 //	fields: [name, region]       // which dimension columns to copy
-//	refresh_interval_sec: 300    // full refresh interval (0 = no auto-refresh)
+//	refresh_interval_sec: 300    // refresh interval (0 = no auto-refresh)
+//	incremental_column: "updated_at"                      // opt-in: refresh only changed dimension rows
+//	incremental_query:  "SELECT id, name, region, updated_at FROM dim_users WHERE updated_at > ?"
+//	full_refresh_interval_sec: 3600                       // safety-net full reload (0 = never)
+//	incremental_delete_column: "is_deleted"               // optional soft-delete flag
 //	max_cache_entries: 100000    // optional cache entry cap (0 = unlimited)
 //	on_miss: "pass"              // "pass" | "null" | "dlq" | "error"
 //	on_refresh_error: "pass"     // "pass" | "error"
@@ -662,10 +666,21 @@ type LookupTransform struct {
 	fields      []string
 	refreshIv   time.Duration
 	lastRefresh time.Time
-	maxCache    int
-	onMiss      string
-	onRefresh   string
-	timeout     time.Duration
+	// Incremental (CDC-lite) dimension refresh: when incrementalColumn is set,
+	// refreshes after the first load fetch only rows whose monotonic column
+	// advanced, and merge them into the cache instead of reloading everything.
+	// A periodic full refresh (fullRefreshIv) stays the correctness safety net
+	// for hard deletes and for rows whose monotonic column did not change.
+	incrementalColumn string
+	incrementalQuery  string
+	incrementalDelete string
+	fullRefreshIv     time.Duration
+	watermark         any
+	lastFullRefresh   time.Time
+	maxCache          int
+	onMiss            string
+	onRefresh         string
+	timeout           time.Duration
 
 	concurrency int
 	maxInFlight int
@@ -697,6 +712,10 @@ type LookupTransform struct {
 	restoreSuccesses   int64
 	scanErrors         int64
 	cacheLimitExceeded int64
+	incrementalMerges  int64
+	incrementalRows    int64
+	incrementalDeleted int64
+	incrementalSkips   int64
 	cacheHits          int64
 	cacheMisses        int64
 	querySuccesses     int64
@@ -766,6 +785,29 @@ func NewLookupTransform(config map[string]any) (*LookupTransform, error) {
 				t.refreshIv = time.Duration(n) * time.Second
 			}
 		}
+	}
+	if v, ok := config["incremental_column"].(string); ok {
+		t.incrementalColumn = strings.TrimSpace(v)
+	}
+	if v, ok := config["incremental_query"].(string); ok {
+		t.incrementalQuery = strings.TrimSpace(v)
+	}
+	if v, ok := config["incremental_delete_column"].(string); ok {
+		t.incrementalDelete = strings.TrimSpace(v)
+	}
+	if v, ok := config["full_refresh_interval_sec"]; ok {
+		if n, ok := toInt(v); ok && n >= 0 {
+			t.fullRefreshIv = time.Duration(n) * time.Second
+		}
+	}
+	if t.incrementalColumn != "" && t.incrementalQuery == "" {
+		return nil, fmt.Errorf("lookup: incremental_column requires incremental_query (e.g. SELECT ... WHERE %s > ?)", t.incrementalColumn)
+	}
+	if t.incrementalQuery != "" && t.incrementalColumn == "" {
+		return nil, fmt.Errorf("lookup: incremental_query requires incremental_column so the high-water mark can be advanced")
+	}
+	if t.incrementalDelete != "" && t.incrementalColumn == "" {
+		return nil, fmt.Errorf("lookup: incremental_delete_column requires incremental_column (it only applies to incremental refresh)")
 	}
 	if v, ok := config["timeout_seconds"]; ok {
 		if n, ok := toInt(v); ok && n > 0 {
@@ -1280,6 +1322,21 @@ func (t *LookupTransform) loadCache(ctx context.Context) (err error) {
 	if len(t.cache) > 0 && t.refreshIv == 0 {
 		return nil // already loaded, no refresh
 	}
+	// Incremental refresh: after the first successful full load, fetch only the
+	// rows whose monotonic column advanced. A periodic full reload stays the
+	// safety net (hard deletes and rows whose marker did not change).
+	if t.incrementalColumn != "" && len(t.cache) > 0 && t.watermark != nil {
+		if t.fullRefreshIv > 0 && time.Since(t.lastFullRefresh) > t.fullRefreshIv {
+			atomic.AddInt64(&t.incrementalSkips, 1)
+		} else if err := t.mergeIncrementalLocked(ctx); err == nil {
+			return nil
+		} else {
+			// Fall through to a full reload: an incremental failure must never
+			// leave the cache partially updated.
+			fmt.Printf("[WARN] lookup: incremental refresh failed, falling back to a full reload: %v\n", err)
+			atomic.AddInt64(&t.incrementalSkips, 1)
+		}
+	}
 	if t.db == nil {
 		restored, err := t.restoreCacheFromStateLocked(ctx)
 		if err != nil {
@@ -1344,11 +1401,244 @@ func (t *LookupTransform) loadCache(ctx context.Context) (err error) {
 
 	t.cache = newCache
 	t.lastRefresh = time.Now()
+	t.lastFullRefresh = t.lastRefresh
+	t.watermark = nil
+	if t.incrementalColumn != "" {
+		// Re-read the high-water mark from the freshly loaded rows; the full
+		// query must therefore project the incremental column (validated at
+		// load time below so a misconfiguration fails loudly).
+		mark, ok := lookupHighWater(newCache, t.incrementalColumn)
+		if !ok {
+			return fmt.Errorf("lookup: query must select the incremental_column %q so the high-water mark can be advanced", t.incrementalColumn)
+		}
+		t.watermark = mark
+	}
 	atomic.AddInt64(&t.refreshSuccesses, 1)
 	if err := t.persistCacheToStateLocked(ctx); err != nil {
 		fmt.Printf("[WARN] lookup: persist state cache failed: %v\n", err)
 	}
 	return nil
+}
+
+// mergeIncrementalLocked fetches dimension rows newer than the current
+// high-water mark and merges them into the cache. Callers must hold t.mu.
+//
+// Contract: incremental_query must be parameterised with exactly one
+// placeholder for the watermark and must project dim_key, the copied fields and
+// the incremental_column. Rows are upserted by dim_key; when
+// incremental_delete_column is configured, a truthy value removes the row from
+// the cache instead (soft delete).
+func (t *LookupTransform) mergeIncrementalLocked(ctx context.Context) error {
+	rows, err := t.db.QueryContext(ctx, t.incrementalQuery, t.watermark)
+	if err != nil {
+		return fmt.Errorf("lookup: incremental query: %w", err)
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	var (
+		merged    int64
+		deleted   int64
+		newMark   = t.watermark
+		sawMarker bool
+	)
+	for rows.Next() {
+		values := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			atomic.AddInt64(&t.scanErrors, 1)
+			fmt.Printf("[WARN] lookup: incremental row scan error: %v (row skipped)\n", err)
+			continue
+		}
+		row := make(map[string]any, len(cols))
+		var dimKeyVal any
+		markerIdx := -1
+		for i, col := range cols {
+			row[col] = normalizeSQLValue(values[i])
+			switch col {
+			case t.dimKey:
+				dimKeyVal = row[col]
+			case t.incrementalColumn:
+				markerIdx = i
+			}
+		}
+		if markerIdx >= 0 {
+			// Keep the driver-typed value for the next comparison; the cache row
+			// keeps the normalized value.
+			if lookupMonotonicGreater(values[markerIdx], newMark) {
+				newMark = values[markerIdx]
+			}
+			sawMarker = true
+		}
+		if dimKeyVal == nil {
+			continue
+		}
+		key := normalizeLookupKey(dimKeyVal)
+		if t.incrementalDelete != "" && lookupTruthy(row[t.incrementalDelete]) {
+			if _, exists := t.cache[key]; exists {
+				delete(t.cache, key)
+				deleted++
+			}
+			continue
+		}
+		if t.maxCache > 0 {
+			if _, exists := t.cache[key]; !exists && len(t.cache) >= t.maxCache {
+				atomic.AddInt64(&t.cacheLimitExceeded, 1)
+				return fmt.Errorf("lookup: cache entry limit exceeded: max_cache_entries=%d", t.maxCache)
+			}
+		}
+		t.cache[key] = row
+		merged++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("lookup: iterate incremental rows: %w", err)
+	}
+	if !sawMarker {
+		// The query did not project the marker column: refuse to advance so the
+		// next refresh does not silently skip rows.
+		return fmt.Errorf("lookup: incremental_query must select the incremental_column %q", t.incrementalColumn)
+	}
+	t.watermark = newMark
+	t.lastRefresh = time.Now()
+	atomic.AddInt64(&t.incrementalMerges, 1)
+	atomic.AddInt64(&t.incrementalRows, merged)
+	atomic.AddInt64(&t.incrementalDeleted, deleted)
+	atomic.AddInt64(&t.refreshSuccesses, 1)
+	if err := t.persistCacheToStateLocked(ctx); err != nil {
+		fmt.Printf("[WARN] lookup: persist state cache failed: %v\n", err)
+	}
+	return nil
+}
+
+// lookupHighWater returns the maximum value of column across the loaded rows so
+// the next incremental refresh can ask for strictly newer rows.
+func lookupHighWater(cache map[string]map[string]any, column string) (any, bool) {
+	var mark any
+	found := false
+	for _, row := range cache {
+		v, ok := row[column]
+		if !ok {
+			continue
+		}
+		found = true
+		if mark == nil || lookupMonotonicGreater(v, mark) {
+			mark = v
+		}
+	}
+	return mark, found
+}
+
+// lookupMonotonicGreater reports whether a is strictly greater than b for the
+// driver-typed values a monotonic dimension column can produce (time-like,
+// integer, float, string). Unknown or incomparable pairs return false so a
+// watermark never moves backwards.
+func lookupMonotonicGreater(a, b any) bool {
+	if a == nil {
+		return false
+	}
+	if b == nil {
+		return true
+	}
+	switch av := a.(type) {
+	case time.Time:
+		switch bv := b.(type) {
+		case time.Time:
+			return av.After(bv)
+		case string:
+			return av.Format(time.RFC3339Nano) > bv
+		}
+	case int64:
+		if bv, ok := lookupAsInt64(b); ok {
+			return av > bv
+		}
+	case float64:
+		if bv, ok := lookupAsFloat64(b); ok {
+			return av > bv
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			return av > bv
+		}
+	}
+	if af, ok := lookupAsFloat64(a); ok {
+		if bf, ok := lookupAsFloat64(b); ok {
+			return af > bf
+		}
+	}
+	return false
+}
+
+func lookupAsInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case uint64:
+		return int64(n), true
+	case []byte:
+		if parsed, err := strconv.ParseInt(string(n), 10, 64); err == nil {
+			return parsed, true
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(n, 10, 64); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
+func lookupAsFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case []byte:
+		if parsed, err := strconv.ParseFloat(string(n), 64); err == nil {
+			return parsed, true
+		}
+	case string:
+		if parsed, err := strconv.ParseFloat(n, 64); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
+// lookupTruthy interprets a soft-delete flag from a dimension row.
+func lookupTruthy(v any) bool {
+	switch b := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return b
+	case int64:
+		return b != 0
+	case int:
+		return b != 0
+	case float64:
+		return b != 0
+	case []byte:
+		return lookupTruthy(string(b))
+	case string:
+		switch strings.ToLower(strings.TrimSpace(b)) {
+		case "1", "t", "true", "y", "yes":
+			return true
+		}
+	}
+	return false
 }
 
 func (t *LookupTransform) persistCacheToStateLocked(ctx context.Context) error {
@@ -1463,6 +1753,10 @@ func (t *LookupTransform) TransformMetrics() core.TransformMetrics {
 			"retries":              atomic.LoadInt64(&t.retries),
 			"in_flight":            atomic.LoadInt64(&t.inFlight),
 			"backpressure_waits":   atomic.LoadInt64(&t.backpressureWaits),
+			"incremental_merge":    atomic.LoadInt64(&t.incrementalMerges),
+			"incremental_rows":     atomic.LoadInt64(&t.incrementalRows),
+			"incremental_deleted":  atomic.LoadInt64(&t.incrementalDeleted),
+			"incremental_skips":    atomic.LoadInt64(&t.incrementalSkips),
 		},
 	}
 }

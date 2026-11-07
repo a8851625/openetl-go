@@ -1328,10 +1328,15 @@ func TestRunPreflightGuidesAppendOnlyReplayRisk(t *testing.T) {
 	if !preflightGuidanceContain(result, "readiness-sink-file_sink-replay_absorption") {
 		t.Fatalf("guidance = %#v, want file sink replay readiness guidance", result.Guidance)
 	}
-	for _, path := range []string{"batch_size", "checkpoint_interval_sec", "dlq.enable"} {
+	// dlq.enable is intentionally NOT recommended: DLQ is always enabled at
+	// runtime, so advising `dlq.enable: true` would be a no-op suggestion.
+	for _, path := range []string{"batch_size", "checkpoint_interval_sec"} {
 		if _, ok := preflightRecommendation(result, path); !ok {
 			t.Fatalf("recommendations = %#v, want %s", result.Recommendations, path)
 		}
+	}
+	if _, ok := preflightRecommendation(result, "dlq.enable"); ok {
+		t.Fatalf("recommendations = %#v, want no dlq.enable no-op recommendation", result.Recommendations)
 	}
 	prefix, ok := preflightRecommendation(result, "sink.config.prefix")
 	if !ok || prefix.Value != "append-only-replay-guidance_" || prefix.Safety != "safe" {
@@ -1828,8 +1833,10 @@ func TestRunPreflightBlocksInvalidDorisSinkConfig(t *testing.T) {
 				"stream_load_scheme":      "ftp",
 				"stream_load_timeout_sec": 0,
 				"insert_chunk_size":       0,
-				"schema_drift":            "sync",
-				"ddl_policy":              "fail",
+				// "sync" is now a supported Doris drift mode (add_columns +
+				// widened-type ALTER); "rewrite" stays invalid.
+				"schema_drift": "rewrite",
+				"ddl_policy":   "fail",
 			},
 		},
 	}

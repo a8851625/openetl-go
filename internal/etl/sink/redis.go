@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -36,11 +37,15 @@ func init() {
 //	max_retries:        Max command retries (default 3)
 //	pipeline_chunk_size: Number of records per pipeline exec batch (default 1000)
 type RedisSink struct {
-	host                   string
-	port                   int
-	password               string
-	db                     int
-	keyField               string
+	host     string
+	port     int
+	password string
+	db       int
+	keyField string
+	// pkColumnsFromMetadata builds the Redis key from the record's declared
+	// metadata primary key instead of a single key_field, so multi-table CDC can
+	// address per-table rows with different key shapes.
+	pkColumnsFromMetadata  bool
 	keyPrefix              string
 	dataType               string
 	ttl                    time.Duration
@@ -93,6 +98,7 @@ func NewRedisSink(config map[string]any) (*RedisSink, error) {
 	if v, ok := config["key_prefix"].(string); ok {
 		s.keyPrefix = v
 	}
+	s.pkColumnsFromMetadata = boolConfig(config, "pk_columns_from_metadata", false)
 	if v, ok := config["data_type"].(string); ok && v != "" {
 		s.dataType = v
 	}
@@ -189,6 +195,23 @@ func (s *RedisSink) Write(ctx context.Context, records []core.Record) (err error
 		}
 	}() // P5-12: count write failures
 	start := time.Now()
+	pkByTable := map[string][]string{}
+	if s.pkColumnsFromMetadata {
+		validation, validationErr := validateMetadataPKBatch("redis", records, nil, func(record core.Record) (metadataPKTarget, error) {
+			table := strings.TrimSpace(record.Metadata.Table)
+			if table == "" {
+				table = s.keyField
+			}
+			if table == "" {
+				table = "redis"
+			}
+			return metadataPKTarget{Database: "redis", Table: table}, nil
+		})
+		if validationErr != nil {
+			return validationErr
+		}
+		pkByTable = validation.ColumnsByTable
+	}
 	chunkSize := s.pipelineChunkSize
 	if chunkSize <= 0 {
 		chunkSize = 1000
@@ -203,7 +226,7 @@ func (s *RedisSink) Write(ctx context.Context, records []core.Record) (err error
 
 		pipe := s.client.Pipeline()
 		for _, rec := range chunk {
-			key := s.makeKey(rec)
+			key := s.makeKeyFor(rec, pkByTable)
 			if key == "" {
 				count := atomic.AddUint64(&s.skipCounter, 1)
 				if count%100 == 0 {
@@ -272,6 +295,22 @@ func (s *RedisSink) Close() error {
 		return s.client.Close()
 	}
 	return nil
+}
+
+// makeKeyFor resolves the Redis key, preferring the record's declared metadata
+// primary key when pk_columns_from_metadata is enabled.
+func (s *RedisSink) makeKeyFor(rec core.Record, pkByTable map[string][]string) string {
+	if s.pkColumnsFromMetadata {
+		table := strings.TrimSpace(rec.Metadata.Table)
+		if table == "" {
+			table = "redis"
+		}
+		if raw := metadataPKDocumentID(rec, pkByTable[table]); raw != "" {
+			return s.keyPrefix + raw
+		}
+		return ""
+	}
+	return s.makeKey(rec)
 }
 
 func (s *RedisSink) makeKey(rec core.Record) string {

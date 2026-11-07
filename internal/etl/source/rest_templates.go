@@ -87,17 +87,20 @@ func buildSalesforceConfig(config map[string]any) (map[string]any, error) {
 	// login 主机用于 token；数据 API 使用 instance_url（可与 login 相同，生产通常是 *.my.salesforce.com）
 	loginURL := strings.TrimRight(configString(config, "login_url", "https://login.salesforce.com"), "/")
 	instanceURL := strings.TrimRight(configString(config, "instance_url", loginURL), "/")
+	// SOQL paging is URL-based: the response carries nextRecordsUrl and the next
+	// request must target that URL. Offset paging works only to the first 2000
+	// records and then fails, so the template follows the server-provided URL.
 	defaults := map[string]any{
-		"name":        "salesforce",
-		"method":      "GET",
-		"auth":        "oauth2_client_credentials",
-		"token_url":   loginURL + "/services/oauth2/token",
-		"pagination":  "offset",
-		"page_param":  "offset",
-		"size_param":  "limit",
-		"page_size":   200,
-		"result_key":  "records",
-		"total_field": "totalSize",
+		"name":           "salesforce",
+		"method":         "GET",
+		"auth":           "oauth2_client_credentials",
+		"token_url":      loginURL + "/services/oauth2/token",
+		"pagination":     "cursor",
+		"next_url_field": "nextRecordsUrl",
+		"size_param":     "limit",
+		"page_size":      2000,
+		"result_key":     "records",
+		"total_field":    "totalSize",
 	}
 	if _, ok := config["url"]; !ok {
 		// 默认 SOQL：SELECT Id FROM <object>；完整字段查询可覆盖 url
@@ -178,16 +181,16 @@ func buildHubSpotConfig(config map[string]any) (map[string]any, error) {
 	baseURL := strings.TrimRight(configString(config, "base_url", "https://api.hubapi.com"), "/")
 
 	defaults := map[string]any{
-		"name":         "hubspot",
-		"method":       "GET",
-		"auth":         "api_key",
+		"name":          "hubspot",
+		"method":        "GET",
+		"auth":          "api_key",
 		"api_key_query": "hapikey",
-		"pagination":   "cursor",
-		"cursor_param": "after",
-		"cursor_field": "paging.next.after",
-		"size_param":   "limit",
-		"page_size":    100,
-		"result_key":   "results",
+		"pagination":    "cursor",
+		"cursor_param":  "after",
+		"cursor_field":  "paging.next.after",
+		"size_param":    "limit",
+		"page_size":     100,
+		"result_key":    "results",
 	}
 	if _, ok := config["url"]; !ok {
 		defaults["url"] = fmt.Sprintf("%s/crm/v3/objects/%s", baseURL, object)

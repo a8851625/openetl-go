@@ -52,10 +52,35 @@ func (s *Store) WriteDeadLetterFidelity(ctx context.Context, r *storage.DLQRecor
 	if err != nil {
 		return fmt.Errorf("marshal restored DLQ identity: %w", err)
 	}
-	return s.insertBackupRow(ctx, "dead_letters",
+	// dead_letters carries a unique (job_name, record_hash) key since
+	// PR-DLQ-2. A backup taken before that invariant can legitimately contain
+	// duplicate rows, so restore skips conflicts instead of failing the whole
+	// restore. Skipped rows are duplicates of a row that is being restored.
+	//
+	// Legacy backups also omit record_hash; derive it from record_json so the
+	// unique key is meaningful and distinct records never collide on "".
+	hash := r.RecordHash
+	if hash == "" {
+		hash = storage.RecordHashJSON(record)
+	}
+	return s.insertBackupRowIgnoreConflict(ctx, "dead_letters",
 		"id,job_name,record_json,error,error_class,identity_context_json,attempt,record_hash,pipeline_version,dag_node,created_at",
 		r.ID, r.JobName, string(record), r.Error, r.ErrorClass, string(identity), r.Attempt,
-		r.RecordHash, r.PipelineVersion, r.DAGNode, r.CreatedAt)
+		hash, r.PipelineVersion, r.DAGNode, r.CreatedAt)
+}
+
+// insertBackupRowIgnoreConflict is insertBackupRow for tables whose unique
+// constraints may legitimately conflict with pre-migration backup content.
+func (s *Store) insertBackupRowIgnoreConflict(ctx context.Context, table, columns string, values ...any) error {
+	if s.txFromContext(ctx) == nil {
+		return fmt.Errorf("restore %s requires a transaction", table)
+	}
+	if err := s.injectFailure("backup.restore." + table); err != nil {
+		return err
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(values)), ",")
+	_, err := s.exec(ctx, s.dialect.InsertIgnore(table, columns, placeholders), values...)
+	return err
 }
 
 func (s *Store) WriteWorkerFidelity(ctx context.Context, w *storage.WorkerInfo) error {

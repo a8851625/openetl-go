@@ -26,6 +26,7 @@ import (
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
 	"github.com/a8851625/openetl-go/internal/etl/registry"
 	etlsink "github.com/a8851625/openetl-go/internal/etl/sink"
+	"github.com/a8851625/openetl-go/internal/etl/source"
 )
 
 // PreflightIssue describes a single check failure with remediation.
@@ -738,7 +739,7 @@ func sinkDerivesPKFromMetadata(spec *pipeline.Spec) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(spec.Sink.Type)) {
-	case "mysql", "postgres", "postgresql", "clickhouse", "doris":
+	case "mysql", "postgres", "postgresql", "clickhouse", "doris", "jdbc", "elasticsearch", "es", "redis":
 		return boolField(spec.Sink.Config, "pk_columns_from_metadata", false)
 	default:
 		// The flag is not implemented by the other relational sinks yet. Do
@@ -1080,7 +1081,7 @@ func checkClickHouseSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 				"clickhouse source_order receives mutable records but no explicit replacement/ORDER BY business key is configured",
 				"set sink.config.pk_columns to the complete business key, or enable pk_columns_from_metadata with a compatible source identity contract")
 		}
-		checkClickHouseSourceOrderCapability(spec, result)
+		checkSourceOrderCapability(spec, "clickhouse", "ClickHouse", result)
 		return
 	}
 
@@ -1091,13 +1092,18 @@ func checkClickHouseSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 	}
 }
 
-func checkClickHouseSourceOrderCapability(spec *pipeline.Spec, result *PreflightResult) {
+// checkSourceOrderCapability is the single source-order capability gate shared
+// by every sink that offers a source-order mode (ClickHouse, Doris). sinkLabel
+// is the config-facing sink name ("clickhouse"/"doris") and sinkDisplay is the
+// product spelling used in messages, so the two sinks can never disagree about
+// which sources can order replacements.
+func checkSourceOrderCapability(spec *pipeline.Spec, sinkLabel, sinkDisplay string, result *PreflightResult) {
 	for index, transform := range spec.Transforms {
 		switch strings.ToLower(strings.TrimSpace(transform.Type)) {
 		case "window":
-			addStaticFieldError(result, "clickhouse-source-order-transform", fmt.Sprintf("transforms[%d].type", index),
+			addStaticFieldError(result, sinkLabel+"-source-order-transform", fmt.Sprintf("transforms[%d].type", index),
 				"window emits derived aggregate records without one connector-owned source position that can order replacements",
-				"set sink.config.version_mode=append for an INSERT-only aggregate landing table, or materialize a source-owned revision contract before using source_order")
+				"set sink.config.version_mode=append (clickhouse) or version_mode=off (doris) for an INSERT-only aggregate landing table, or materialize a source-owned revision contract before using source_order")
 			return
 		}
 	}
@@ -1107,19 +1113,19 @@ func checkClickHouseSourceOrderCapability(spec *pipeline.Spec, result *Preflight
 		return
 	case "postgres_cdc":
 		if boolField(spec.Source.Config, "enable_snapshot", false) {
-			addStaticFieldError(result, "clickhouse-source-order-capability", "source.config.enable_snapshot",
-				"postgres_cdc initial snapshot rows do not expose metadata.lsn or another durable numeric row cursor required by ClickHouse source_order mode",
+			addStaticFieldError(result, sinkLabel+"-source-order-capability", "source.config.enable_snapshot",
+				"postgres_cdc initial snapshot rows do not expose metadata.lsn or another durable numeric row cursor required by "+sinkDisplay+" source_order mode",
 				"disable enable_snapshot and seed the target separately, or use an INSERT-only append target for the snapshot in a separate pipeline")
 		}
 		return
 	case "file", "http", "rest", "rest_source", "salesforce", "github", "hubspot", "stripe", "notion", "redis", "demo":
-		addStaticFieldError(result, "clickhouse-source-order-capability", "source.type",
-			fmt.Sprintf("source %q does not produce connector-owned metadata required for ClickHouse version_mode=source_order", spec.Source.Type),
-			"set sink.config.version_mode=append only for an INSERT-only target, or use a source that supplies metadata.source_type plus a numeric durable position (binlog file/pos, LSN, Kafka partition/offset, or numeric cursor)")
+		addStaticFieldError(result, sinkLabel+"-source-order-capability", "source.type",
+			fmt.Sprintf("source %q does not produce connector-owned metadata required for "+sinkDisplay+" source_order mode", spec.Source.Type),
+			"set sink.config.version_mode=append (clickhouse) or version_mode=off (doris) only for an INSERT-only target, or use a source that supplies metadata.source_type plus a numeric durable position (binlog file/pos, LSN, Kafka partition/offset, or numeric cursor)")
 	default:
-		addStaticFieldError(result, "clickhouse-source-order-capability", "source.type",
-			fmt.Sprintf("source %q has no registered numeric source-order contract for ClickHouse version_mode=source_order", spec.Source.Type),
-			"implement the shared core.SourceOrder contract with metadata.source_type plus a connector-owned numeric durable position, or use version_mode=append only when the path is provably INSERT-only")
+		addStaticFieldError(result, sinkLabel+"-source-order-capability", "source.type",
+			fmt.Sprintf("source %q has no registered numeric source-order contract for "+sinkDisplay+" source_order mode", spec.Source.Type),
+			"implement the shared core.SourceOrder contract with metadata.source_type plus a connector-owned numeric durable position, or disable the source-order mode when the path is provably INSERT-only")
 	}
 }
 
@@ -1248,16 +1254,86 @@ func checkDorisSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
 			fmt.Sprintf("doris sink insert_chunk_size must be > 0, got %d", chunkSize),
 			"set sink.config.insert_chunk_size to a positive row count such as 500")
 	}
-	if schemaDrift := strings.ToLower(strings.TrimSpace(stringField(cfg, "schema_drift", "ignore"))); schemaDrift != "" && !isSupportedRelationalSchemaDrift(schemaDrift) {
+	if schemaDrift := strings.ToLower(strings.TrimSpace(stringField(cfg, "schema_drift", "ignore"))); schemaDrift != "" && !isSupportedDorisSchemaDrift(schemaDrift) {
 		addStaticSinkFieldError(result, "doris-sink-schema-drift", "sink.config.schema_drift",
 			fmt.Sprintf("doris sink schema_drift %q is not supported", schemaDrift),
-			"set sink.config.schema_drift to ignore, fail, or add_columns")
+			"set sink.config.schema_drift to ignore, fail, add_columns, or sync (add_columns + ALTER ... MODIFY COLUMN type widening)")
 	}
 	if ddlPolicy := strings.ToLower(strings.TrimSpace(stringField(cfg, "ddl_policy", "reject"))); ddlPolicy != "" && !isSupportedDDLPolicy(ddlPolicy) {
 		addStaticSinkFieldError(result, "doris-sink-ddl-policy", "sink.config.ddl_policy",
 			fmt.Sprintf("doris sink ddl_policy %q is not supported", ddlPolicy),
 			"set sink.config.ddl_policy to reject, ignore, or apply")
 	}
+	checkDorisSourceOrderConfig(spec, cfg, writeMode, batchMode, result)
+}
+
+// checkDorisSourceOrderConfig mirrors the sink constructor's fail-closed contract
+// so an impossible version_mode=source_order combination is rejected in preflight
+// instead of at first write, and so sources that cannot supply a durable numeric
+// position are rejected before the pipeline starts (shared gate with ClickHouse).
+func checkDorisSourceOrderConfig(spec *pipeline.Spec, cfg map[string]any, writeMode, batchMode string, result *PreflightResult) {
+	versionMode := strings.ToLower(strings.TrimSpace(stringField(cfg, "version_mode", "off")))
+	if versionMode == "" {
+		versionMode = "off"
+	}
+	if versionMode != "off" && versionMode != "source_order" {
+		addStaticSinkFieldError(result, "doris-sink-version-mode", "sink.config.version_mode",
+			fmt.Sprintf("doris sink version_mode %q is not supported", versionMode),
+			"set sink.config.version_mode to off (default, last-write-wins) or source_order (sequence column + merge-on-write)")
+		return
+	}
+	if versionMode != "source_order" {
+		return
+	}
+	sequenceType := strings.ToLower(strings.TrimSpace(stringField(cfg, "sequence_type", "largeint")))
+	if sequenceType == "" {
+		sequenceType = "largeint"
+	}
+	if sequenceType != "largeint" && sequenceType != "bigint" {
+		addStaticSinkFieldError(result, "doris-sink-sequence-type", "sink.config.sequence_type",
+			fmt.Sprintf("doris sink sequence_type %q is not supported", sequenceType),
+			"set sink.config.sequence_type to largeint (default, full uint64 source-order domain) or bigint (opt-in; values above MaxInt64 are rejected)")
+	}
+	sequenceColumn := strings.TrimSpace(stringField(cfg, "sequence_column", "_version"))
+	if sequenceColumn == "" {
+		addStaticSinkFieldError(result, "doris-sink-sequence-column", "sink.config.sequence_column",
+			"doris sink sequence_column must not be blank in source_order mode",
+			"remove sink.config.sequence_column to use _version, or set a numeric column name")
+	} else if strings.EqualFold(sequenceColumn, "__DORIS_DELETE_SIGN") {
+		addStaticSinkFieldError(result, "doris-sink-sequence-column", "sink.config.sequence_column",
+			"doris sink sequence_column must not be __DORIS_DELETE_SIGN: that name is reserved by Doris for the merge-on-write delete marker",
+			"use a dedicated numeric column such as _version")
+	} else {
+		for _, key := range stringSliceField(cfg, "pk_columns") {
+			if strings.EqualFold(strings.TrimSpace(key), sequenceColumn) {
+				addStaticSinkFieldError(result, "doris-sink-sequence-column", "sink.config.sequence_column",
+					fmt.Sprintf("doris sink sequence_column %q collides with pk_columns %q", sequenceColumn, key),
+					"the sequence column must not be part of the UNIQUE KEY; use a separate numeric column such as _version")
+			}
+		}
+	}
+	if writeMode == "insert" {
+		addStaticSinkFieldError(result, "doris-sink-source-order-write-mode", "sink.config.write_mode",
+			"doris sink version_mode=source_order requires write_mode=stream_load: the MySQL INSERT fallback bypasses Doris sequence handling, so ordered writes could silently regress",
+			"remove sink.config.write_mode (default stream_load) or set it to stream_load")
+	}
+	if batchMode != "upsert" {
+		addStaticSinkFieldError(result, "doris-sink-source-order-batch-mode", "sink.config.batch_mode",
+			"doris sink version_mode=source_order requires batch_mode=upsert: upsert enables the UNIQUE KEY + merge-on-write contract validation that source_order depends on",
+			"set sink.config.batch_mode to upsert")
+	}
+	if clickHouseSourceMayEmitMutableRecords(spec) && !sinkDerivesPKFromMetadata(spec) && len(stringSliceField(cfg, "pk_columns")) == 0 {
+		addStaticSinkFieldError(result, "doris-sink-source-order-primary-key", "sink.config.pk_columns",
+			"doris source_order receives mutable records but no explicit UNIQUE KEY business key is configured",
+			"set sink.config.pk_columns to the complete Doris UNIQUE KEY, or enable pk_columns_from_metadata with a compatible source identity contract")
+	}
+	checkSourceOrderCapability(spec, "doris", "Doris", result)
+}
+
+// isSupportedDorisSchemaDrift allows the Doris-only "sync" mode (add_columns plus
+// ALTER ... MODIFY COLUMN type widening) on top of the shared relational modes.
+func isSupportedDorisSchemaDrift(value string) bool {
+	return value == "sync" || isSupportedRelationalSchemaDrift(value)
 }
 
 func checkMaxComputeSinkConfig(spec *pipeline.Spec, result *PreflightResult) {
@@ -1469,6 +1545,8 @@ func elasticsearchSinkHosts(cfg map[string]any) []string {
 
 // ── Source: MySQL CDC checks ─────────────────────────────────────────
 
+var openMySQLCDCPreflightDB = sql.Open
+
 func (s *Server) checkMySQLCDC(ctx context.Context, spec *pipeline.Spec, result *PreflightResult) {
 	if spec.Source.Type != "mysql_cdc" && spec.Source.Type != "mysql_snapshot_cdc" {
 		return
@@ -1482,7 +1560,7 @@ func (s *Server) checkMySQLCDC(ctx context.Context, spec *pipeline.Spec, result 
 
 	// Connect to MySQL.
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?timeout=5s&readTimeout=5s", user, password, host, port)
-	db, err := sql.Open("mysql", dsn)
+	db, err := openMySQLCDCPreflightDB("mysql", dsn)
 	if err != nil {
 		result.Issues = append(result.Issues, PreflightIssue{
 			Level:       "error",
@@ -1596,6 +1674,95 @@ func (s *Server) checkMySQLCDC(ctx context.Context, spec *pipeline.Spec, result 
 	if len(result.Issues) == 0 {
 		g.Log().Infof(ctx, "MySQL preflight passed: binlog_format=ROW, binlog_row_image=FULL, grants OK")
 	}
+
+	// mysql_snapshot_cdc only: surface the snapshot coverage plan (which
+	// tables will be snapshotted, which are skipped for lacking a usable
+	// snapshot key) so existing-data gaps are visible before start. This is
+	// informational: skips are CDC-covered and legitimate for junction/log
+	// tables, but the user must see them at preflight time.
+	if spec.Source.Type == "mysql_snapshot_cdc" {
+		s.checkMySQLSnapshotCoverage(ctx, db, spec, result)
+	}
+}
+
+// checkMySQLSnapshotCoverage probes the snapshot key plan via the source
+// package's runtime resolution (no classification drift) and attaches it to
+// the preflight result as a structured field issue plus a WARN per skipped
+// table.
+func (s *Server) checkMySQLSnapshotCoverage(ctx context.Context, db *sql.DB, spec *pipeline.Spec, result *PreflightResult) {
+	cfg := spec.Source.Config
+	database := stringField(cfg, "database", "")
+	if database == "" {
+		return
+	}
+	tables := trimmedStringSlice(stringSliceField(cfg, "tables"))
+	if len(tables) == 0 {
+		if t := strings.TrimSpace(stringField(cfg, "table", "")); t != "" {
+			tables = []string{t}
+		}
+	}
+	if len(tables) == 0 {
+		return
+	}
+	pkColumn := stringField(cfg, "pk_column", "")
+	// Mirror NewMySQLSnapshotCDCSource: an explicit per-table pk_columns map
+	// wins; a blank string means auto-detect.
+	pkColumns := map[string]string{}
+	if raw, ok := cfg["pk_columns"].(map[string]any); ok {
+		for k, v := range raw {
+			if str, ok := v.(string); ok {
+				pkColumns[k] = str
+			}
+		}
+	}
+	cov, err := source.ProbeSnapshotCoverage(ctx, db, database, tables, pkColumn, pkColumns, str(spec.Source.Config, "no_pk_snapshot"))
+	if err != nil {
+		// Coverage is best-effort: a probe failure must not block start (the
+		// runtime resolution remains authoritative and fail-closed).
+		g.Log().Warningf(ctx, "mysql_snapshot_cdc snapshot coverage probe failed: %v", err)
+		return
+	}
+	for _, skipped := range cov.SkippedTables {
+		result.Issues = append(result.Issues, PreflightIssue{
+			Level:       "warning",
+			Check:       "snapshot-coverage",
+			Message:     fmt.Sprintf("table %s.%s has no usable snapshot key (no single or composite primary key); snapshot phase will skip it and CDC will capture changes from the handoff position", database, skipped),
+			Remediation: fmt.Sprintf("add a PRIMARY KEY to %s.%s, set source.config.pk_columns, or set source.config.no_pk_snapshot=hash to snapshot it with a synthetic %s key (requires a sink with pk_columns_from_metadata: true)", database, skipped, source.SnapshotRowHashColumn),
+		})
+	}
+	if cov.TablesSkipped > 0 && !strings.EqualFold(strings.TrimSpace(str(spec.Source.Config, "no_pk_snapshot")), "hash") {
+		addPreflightRecommendation(result, PreflightRecommendation{
+			Path:  "source.config.no_pk_snapshot",
+			Value: "hash",
+			Reason: fmt.Sprintf("%d table(s) will be skipped during the snapshot phase, so their existing rows never reach the sink. "+
+				"no_pk_snapshot: hash streams those tables and writes a synthetic %s content-hash key, which is idempotent under a sink that upserts on metadata primary keys. "+
+				"Trade-off: rows with identical column values collapse into one.", cov.TablesSkipped, source.SnapshotRowHashColumn),
+			Safety: "review",
+		})
+	}
+	covJSON, err := json.Marshal(cov)
+	if err != nil {
+		return
+	}
+	result.FieldIssues = append(result.FieldIssues, PreflightFieldIssue{
+		Level:      "info",
+		Field:      "source.config.tables",
+		Check:      "snapshot_coverage",
+		SourceType: "mysql_snapshot_cdc",
+		Message: fmt.Sprintf("snapshot plan: %d table(s) snapshotted (%d numeric / %d ordered / %d composite cursor), %d skipped for no usable key: %s",
+			cov.TablesSnapshotted, countCoverageKind(cov, "numeric"), countCoverageKind(cov, "ordered"), countCoverageKind(cov, "composite"), cov.TablesSkipped, strings.Join(cov.SkippedTables, ", ")),
+		Remediation: string(covJSON),
+	})
+}
+
+func countCoverageKind(cov *source.SnapshotCoverage, kind string) int {
+	n := 0
+	for _, e := range cov.Entries {
+		if e.Kind == kind {
+			n++
+		}
+	}
+	return n
 }
 
 // ── Source: MySQL batch checks ───────────────────────────────────────
@@ -3712,11 +3879,13 @@ func addFirstRunRecommendations(spec *pipeline.Spec, result *PreflightResult) {
 	sourceType := strings.ToLower(spec.Source.Type)
 	sinkType := strings.ToLower(spec.Sink.Type)
 
-	if spec.DLQ == nil || !spec.DLQ.Enable {
+	// DLQ is always enabled at runtime, so recommending dlq.enable=true would
+	// be a no-op suggestion. Only surface the deprecated, ignored dlq.sink.
+	if spec.DLQ != nil && (spec.DLQ.Sink.Type != "" || len(spec.DLQ.Sink.Config) > 0) {
 		addPreflightRecommendation(result, PreflightRecommendation{
-			Path:   "dlq.enable",
-			Value:  true,
-			Reason: "Enable DLQ so failed records stay visible and replayable instead of becoming an operational blind spot.",
+			Path:   "dlq.sink",
+			Value:  nil,
+			Reason: "dlq.sink is deprecated and ignored; the DLQ is persisted in the configured SQL storage backend. Remove the field.",
 			Safety: "safe",
 		})
 	}
@@ -3735,6 +3904,22 @@ func addFirstRunRecommendations(spec *pipeline.Spec, result *PreflightResult) {
 				Path:   "checkpoint_interval_sec",
 				Value:  10,
 				Reason: "Commit checkpoints frequently enough to keep at-least-once replay bounded.",
+				Safety: "safe",
+			})
+		}
+	}
+
+	// Object/file sinks default to "write data object, then hope the checkpoint
+	// lands". Without a manifest a crash in between leaves an object that no
+	// reader can classify, so production candidates should commit a manifest.
+	if sinkType == "s3" || sinkType == "file_sink" {
+		if !boolField(spec.Sink.Config, "manifest", false) {
+			addPreflightRecommendation(result, PreflightRecommendation{
+				Path:  "sink.config.manifest",
+				Value: true,
+				Reason: "Without a manifest the sink cannot distinguish a committed object from a crash-window leftover: " +
+					"a crash between the object write and the checkpoint save leaves data that downstream readers will consume. " +
+					"manifest: true writes a per-batch commit marker listing the object and its checksum.",
 				Safety: "safe",
 			})
 		}

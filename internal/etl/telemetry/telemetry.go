@@ -58,13 +58,15 @@ func (r *MetricsRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 type PipelineMetrics struct {
-	ID                    string     `json:"id,omitempty"`
-	Name                  string     `json:"name"`
-	Status                string     `json:"status"`
-	RecordsRead           int64      `json:"records_read"`
-	RecordsWritten        int64      `json:"records_written"`
-	RecordsFailed         int64      `json:"records_failed"`
-	RecordsDLQ            int64      `json:"records_dlq"`
+	ID             string `json:"id,omitempty"`
+	Name           string `json:"name"`
+	Status         string `json:"status"`
+	RecordsRead    int64  `json:"records_read"`
+	RecordsWritten int64  `json:"records_written"`
+	RecordsFailed  int64  `json:"records_failed"`
+	RecordsDLQ     int64  `json:"records_dlq"`
+	// DLQFileCount is the current DLQ backlog. -1 means the count query failed
+	// and the value is unknown; it must not be rendered as an empty backlog.
 	DLQFileCount          int        `json:"dlq_file_count"`
 	DLQReplayCount        int64      `json:"dlq_replay_count"`
 	DLQDeleteCount        int64      `json:"dlq_delete_count"`
@@ -164,7 +166,7 @@ func PrometheusHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 # TYPE etl_records_failed_total counter
 # HELP etl_records_dlq_total Total records sent to dead-letter queue.
 # TYPE etl_records_dlq_total counter
-# HELP etl_dlq_file_count Number of dead-letter queue files.
+# HELP etl_dlq_file_count Current dead-letter backlog (rows in the DLQ). This is the authoritative backlog gauge; -1 means the count could not be read.
 # TYPE etl_dlq_file_count gauge
 # HELP etl_dlq_replay_total Number of DLQ records replayed.
 # TYPE etl_dlq_replay_total counter
@@ -216,6 +218,8 @@ func PrometheusHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 # TYPE etl_transform_metric_total counter
 # HELP etl_alert_dropped_total Alerts dropped because the internal queue was full.
 # TYPE etl_alert_dropped_total counter
+# HELP etl_dlq_evicted_total Dead-letter rows deleted by retention (TTL or max-count) without being replayed.
+# TYPE etl_dlq_evicted_total counter
 # HELP etl_pipeline_health Pipeline health (1=healthy, 0=not healthy display state).
 # TYPE etl_pipeline_health gauge
 `))
@@ -225,7 +229,9 @@ func PrometheusHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 			fmt.Fprintf(w, "etl_records_written_total{pipeline=\"%s\"} %d\n", p, m.RecordsWritten)
 			fmt.Fprintf(w, "etl_records_failed_total{pipeline=\"%s\"} %d\n", p, m.RecordsFailed)
 			fmt.Fprintf(w, "etl_records_dlq_total{pipeline=\"%s\"} %d\n", p, m.RecordsDLQ)
-			fmt.Fprintf(w, "etl_dlq_file_count{pipeline=\"%s\"} %d\n", p, m.DLQFileCount)
+			if m.DLQFileCount >= 0 {
+				fmt.Fprintf(w, "etl_dlq_file_count{pipeline=\"%s\"} %d\n", p, m.DLQFileCount)
+			}
 			fmt.Fprintf(w, "etl_dlq_replay_total{pipeline=\"%s\"} %d\n", p, m.DLQReplayCount)
 			fmt.Fprintf(w, "etl_dlq_delete_total{pipeline=\"%s\"} %d\n", p, m.DLQDeleteCount)
 			fmt.Fprintf(w, "etl_checkpoint_age_seconds{pipeline=\"%s\"} %d\n", p, m.CheckpointAgeSeconds)
@@ -284,5 +290,6 @@ func PrometheusHandler(getMetrics func() []PipelineMetrics) http.HandlerFunc {
 		}
 		// Global process counters that are not per-pipeline.
 		fmt.Fprintf(w, "etl_alert_dropped_total %d\n", DefaultRegistry.Counter("alert_dropped_total").Value())
+		fmt.Fprintf(w, "etl_dlq_evicted_total %d\n", DefaultRegistry.Counter("dlq_evicted_total").Value())
 	}
 }

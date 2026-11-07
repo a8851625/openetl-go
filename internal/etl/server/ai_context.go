@@ -388,12 +388,20 @@ func reviewGeneratedSpec(ctx context.Context, spec *pipeline.Spec, preflight *Pr
 			Remediation: "Review target DDL preview and connector-specific safe DDL limits before starting.",
 		})
 	}
-	if spec.DLQ == nil || !spec.DLQ.Enable {
+	if spec.DLQ != nil && !spec.DLQ.Enable {
 		review.RiskFlags = append(review.RiskFlags, AIRiskFlag{
-			Code:        "dlq_disabled",
+			Code:        "dlq_enable_ignored",
 			Level:       "warning",
-			Message:     "DLQ is disabled or omitted.",
-			Remediation: "Enable DLQ for first production-candidate runs so failed records remain visible and replayable.",
+			Message:     "dlq.enable=false is ignored: the DLQ is always enabled at runtime.",
+			Remediation: "Remove dlq.enable. Failed records are persisted to the control-plane DLQ and stay replayable; there is no supported way to disable that safety net.",
+		})
+	}
+	if spec.DLQ != nil && (spec.DLQ.Sink.Type != "" || len(spec.DLQ.Sink.Config) > 0) {
+		review.RiskFlags = append(review.RiskFlags, AIRiskFlag{
+			Code:        "dlq_sink_ignored",
+			Level:       "warning",
+			Message:     "dlq.sink is deprecated and ignored.",
+			Remediation: "Remove dlq.sink. DLQ rows live in the configured SQL storage backend; the field never selected the DLQ writer.",
 		})
 	}
 	if preflight != nil {

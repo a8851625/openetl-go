@@ -60,6 +60,27 @@ func expectColumnExists(mock sqlmock.Sqlmock, database, table, col string, exist
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(n))
 }
 
+// expectCompositePK programs sqlmock to answer the composite PRIMARY KEY
+// detection query (KEY_COLUMN_USAGE join TABLE_CONSTRAINTS) with the ordered
+// column set. No arguments simulate "no PRIMARY constraint".
+func expectCompositePK(mock sqlmock.Sqlmock, database, table string, cols ...string) {
+	rows := sqlmock.NewRows([]string{"column_name"})
+	for _, c := range cols {
+		rows.AddRow(c)
+	}
+	mock.ExpectQuery("SELECT kcu.column_name FROM information_schema.key_column_usage").
+		WithArgs(database, table).
+		WillReturnRows(rows)
+}
+
+// expectCompositeColumnMeta programs sqlmock to answer the per-column
+// is_nullable/data_type lookup used by the composite cursor constraint.
+func expectCompositeColumnMeta(mock sqlmock.Sqlmock, database, table, col, nullable, dataType string) {
+	mock.ExpectQuery("SELECT is_nullable, data_type FROM information_schema.columns").
+		WithArgs(database, table, col).
+		WillReturnRows(sqlmock.NewRows([]string{"is_nullable", "data_type"}).AddRow(nullable, dataType))
+}
+
 func TestResolveTablePKs_AutoDetectIntegerPK(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -178,10 +199,10 @@ func TestResolveTablePKs_PerTableOverrideWins(t *testing.T) {
 	}
 }
 
-func TestResolveTablePKs_CompositePKSkippedAndExplicitTableRejected(t *testing.T) {
-	// A table explicitly listed (not via "*") with a composite PK and no
-	// override must be rejected, because silently dropping it would hide a
-	// configuration mistake.
+func TestResolveTablePKs_CompositePKResolvedForExplicitTable(t *testing.T) {
+	// IT-6: a composite PRIMARY KEY whose columns are all NOT NULL and
+	// orderable is now a usable snapshot cursor (row-value comparison), so an
+	// explicitly listed table no longer needs skip_no_pk_tables to snapshot.
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -189,19 +210,87 @@ func TestResolveTablePKs_CompositePKSkippedAndExplicitTableRejected(t *testing.T
 	defer db.Close()
 
 	s := newPKTestSource("shop", []string{"order_items"}, "", nil, false)
-	// global pkCol empty -> auto-detect returns 2 PK columns -> none
+	// global pkCol empty -> auto-detect returns 2 PK columns -> composite probe
 	expectPKDetection(mock, "shop", "order_items", "order_id", "product_id")
+	expectCompositePK(mock, "shop", "order_items", "order_id", "product_id")
+	expectCompositeColumnMeta(mock, "shop", "order_items", "order_id", "NO", "bigint")
+	expectCompositeColumnMeta(mock, "shop", "order_items", "product_id", "NO", "int")
 
-	_, err = s.resolveTablePKs(context.Background(), db)
-	if err == nil {
-		t.Fatalf("expected error for explicit table with composite PK and no override")
+	out, err := s.resolveTablePKs(context.Background(), db)
+	if err != nil {
+		t.Fatalf("resolveTablePKs: %v", err)
+	}
+	rpk := out["order_items"]
+	if rpk.kind != pkKindComposite {
+		t.Fatalf("kind = %v, want pkKindComposite", rpk.kind)
+	}
+	if len(rpk.columns) != 2 || rpk.columns[0] != "order_id" || rpk.columns[1] != "product_id" {
+		t.Fatalf("columns = %v, want [order_id product_id]", rpk.columns)
+	}
+	if rpk.column != "order_id" {
+		t.Errorf("compat column = %q, want first key column order_id", rpk.column)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet: %v", err)
 	}
 }
 
-func TestResolveTablePKs_CompositePKSkippedWithSkipFlag(t *testing.T) {
+func TestResolveTablePKs_CompositePKRejectedWhenNotOrderable(t *testing.T) {
+	// A composite key containing a NULL-able or non-orderable column cannot
+	// form a stable total-order cursor, so the table falls back to pkKindNone;
+	// an explicitly listed table without skip_no_pk_tables is then rejected.
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	s := newPKTestSource("shop", []string{"order_items"}, "", nil, false)
+	expectPKDetection(mock, "shop", "order_items", "order_id", "note")
+	expectCompositePK(mock, "shop", "order_items", "order_id", "note")
+	expectCompositeColumnMeta(mock, "shop", "order_items", "order_id", "NO", "bigint")
+	expectCompositeColumnMeta(mock, "shop", "order_items", "note", "YES", "varchar(64)") // nullable
+
+	_, err = s.resolveTablePKs(context.Background(), db)
+	if err == nil {
+		t.Fatalf("expected error for explicit table with unusable composite PK")
+	}
+	if !strings.Contains(err.Error(), "no usable primary key") {
+		t.Errorf("error = %v, want no-usable-primary-key diagnosis", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
+}
+
+func TestResolveTablePKs_CompositePKNonOrderableTypeFallsBackToNone(t *testing.T) {
+	// Composite key whose column type is not orderable (blob) -> pkKindNone
+	// even with skip_no_pk_tables=false in whole-db mode.
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	s := newPKTestSource("shop", []string{"attachments"}, "", nil, true)
+	expectPKDetection(mock, "shop", "attachments", "entity_id", "payload")
+	expectCompositePK(mock, "shop", "attachments", "entity_id", "payload")
+	expectCompositeColumnMeta(mock, "shop", "attachments", "entity_id", "NO", "int")
+	expectCompositeColumnMeta(mock, "shop", "attachments", "payload", "NO", "blob")
+
+	out, err := s.resolveTablePKs(context.Background(), db)
+	if err != nil {
+		t.Fatalf("resolveTablePKs: %v", err)
+	}
+	if out["attachments"].kind != pkKindNone {
+		t.Errorf("kind = %v, want pkKindNone for non-orderable composite", out["attachments"].kind)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
+}
+
+func TestResolveTablePKs_CompositePKUnusableSkippedWithSkipFlag(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -210,6 +299,9 @@ func TestResolveTablePKs_CompositePKSkippedWithSkipFlag(t *testing.T) {
 
 	s := newPKTestSource("shop", []string{"order_items"}, "", nil, true) // skip_no_pk_tables=true
 	expectPKDetection(mock, "shop", "order_items", "order_id", "product_id")
+	expectCompositePK(mock, "shop", "order_items", "order_id", "product_id")
+	expectCompositeColumnMeta(mock, "shop", "order_items", "order_id", "NO", "bigint")
+	expectCompositeColumnMeta(mock, "shop", "order_items", "product_id", "YES", "int") // nullable
 
 	out, err := s.resolveTablePKs(context.Background(), db)
 	if err != nil {
@@ -240,11 +332,15 @@ func TestResolveTablePKs_WholeDatabaseSkipsNoPKTables(t *testing.T) {
 	// orders: integer PK
 	expectPKDetection(mock, "shop", "orders", "order_id")
 	expectColumnType(mock, "shop", "orders", "order_id", "bigint(20)")
-	// log: composite PK -> none (whole-db: skip, do not reject)
+	// log: composite PK (datetime + bigint, both NOT NULL orderable) ->
+	// resolved as a composite cursor (IT-6), no longer skipped.
 	expectPKDetection(mock, "shop", "log", "ts", "seq")
-	// users: no PK at all -> none (whole-db: skip, do not reject)
+	expectCompositePK(mock, "shop", "log", "ts", "seq")
+	expectCompositeColumnMeta(mock, "shop", "log", "ts", "NO", "datetime")
+	expectCompositeColumnMeta(mock, "shop", "log", "seq", "NO", "bigint")
+	// users: no PK at all -> composite probe finds no PRIMARY -> none
 	expectPKDetection(mock, "shop", "users")
-	// No column_type lookup is issued for users because detection returned no column.
+	expectCompositePK(mock, "shop", "users")
 
 	out, err := s.resolveTablePKs(context.Background(), db)
 	if err != nil {
@@ -253,8 +349,8 @@ func TestResolveTablePKs_WholeDatabaseSkipsNoPKTables(t *testing.T) {
 	if out["orders"].kind != pkKindNumeric {
 		t.Errorf("orders = %+v, want numeric", out["orders"])
 	}
-	if out["log"].kind != pkKindNone {
-		t.Errorf("log = %+v, want pkKindNone", out["log"])
+	if out["log"].kind != pkKindComposite || len(out["log"].columns) != 2 {
+		t.Errorf("log = %+v, want composite [ts seq]", out["log"])
 	}
 	if out["users"].kind != pkKindNone {
 		t.Errorf("users = %+v, want pkKindNone", out["users"])

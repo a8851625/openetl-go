@@ -519,17 +519,19 @@ func TestPGKeepaliveWithoutDurableLSNDoesNotAckServerEnd(t *testing.T) {
 	}
 }
 
+// buildTruncateMsg builds a pgoutput Truncate body in wire order:
+// Int32 number_of_relations, Int8 option bits, then Int32 relation ID per
+// relation (no per-relation option byte; see pglogrepl.TruncateMessage.Decode).
 func buildTruncateMsg(relIDs []uint32) []byte {
 	var buf []byte
-	buf = append(buf, 0) // flags
 	n := make([]byte, 4)
 	binary.BigEndian.PutUint32(n, uint32(len(relIDs)))
 	buf = append(buf, n...)
+	buf = append(buf, 0) // option bits (cascade / restart identity)
 	for _, id := range relIDs {
 		rid := make([]byte, 4)
 		binary.BigEndian.PutUint32(rid, id)
 		buf = append(buf, rid...)
-		buf = append(buf, 0) // option bits
 	}
 	return buf
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -503,6 +504,17 @@ func testCheckpointConcurrent(t *testing.T, newStore func(t *testing.T) (storage
 
 // ── Dead letters ─────────────────────────────────────────────────────
 
+// replayHash computes the storage-level record hash for a DLQ record, matching
+// what WriteDeadLetter derives when RecordHash is empty.
+func replayHash(t *testing.T, rec *storage.DLQRecord) string {
+	t.Helper()
+	raw, err := json.Marshal(rec.Record)
+	if err != nil {
+		t.Fatalf("marshal record for hash: %v", err)
+	}
+	return storage.RecordHashJSON(raw)
+}
+
 func testDLQ(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())) {
 	s, cleanup := newStore(t)
 	defer cleanup()
@@ -538,6 +550,46 @@ func testDLQ(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())
 	}
 	if items[0].RecordHash == "" {
 		t.Fatal("record_hash is empty")
+	}
+
+	// Re-writing the same failed record (source replay / restart / rebalance)
+	// must refresh the existing row and bump attempt instead of appending a
+	// duplicate. This is the (job_name, record_hash) unique key.
+	replay := &storage.DLQRecord{
+		JobName: "test-pipe",
+		Record: core.Record{Operation: core.OpInsert, Data: map[string]any{"id": 0}, Metadata: core.Metadata{
+			Database: "source_db", Table: "orders", Key: `{"id":0}`,
+			PrimaryKeyColumns: []string{"id"}, FormatContractID: core.FormatContractCanalJSONV1,
+		}},
+		Error:      "schema mismatch: unknown column (retry)",
+		ErrorClass: "schema",
+		Attempt:    1,
+	}
+	if err := s.WriteDeadLetter(ctx, replay); err != nil {
+		t.Fatalf("rewrite duplicate: %v", err)
+	}
+	afterDedup, err := s.ListDeadLetters(ctx, storage.DLQFilter{JobName: "test-pipe", Limit: 10})
+	if err != nil {
+		t.Fatalf("list after dedup: %v", err)
+	}
+	if len(afterDedup) != 5 {
+		t.Fatalf("duplicate DLQ write created a new row: count = %d, want 5", len(afterDedup))
+	}
+	var deduped *storage.DLQRecord
+	for _, item := range afterDedup {
+		if item.RecordHash == replayHash(t, replay) {
+			deduped = item
+			break
+		}
+	}
+	if deduped == nil {
+		t.Fatal("deduplicated row not found by record hash")
+	}
+	if deduped.Attempt != 2 {
+		t.Fatalf("attempt = %d, want 2 after a repeated capture", deduped.Attempt)
+	}
+	if !strings.Contains(deduped.Error, "retry") {
+		t.Fatalf("error not refreshed on duplicate capture: %q", deduped.Error)
 	}
 	byID, err := s.GetDeadLetterByID(ctx, "test-pipe", items[0].ID)
 	if err != nil {
@@ -590,7 +642,7 @@ func testDLQ(t *testing.T, newStore func(t *testing.T) (storage.Storage, func())
 	}
 
 	// Delete by ID.
-	if err := s.DeleteDeadLetterByID(ctx, items[0].ID); err != nil {
+	if err := s.DeleteDeadLetterByID(ctx, "test-pipe", items[0].ID); err != nil {
 		t.Fatalf("delete by id: %v", err)
 	}
 	rest, _ := s.ListDeadLetters(ctx, storage.DLQFilter{JobName: "test-pipe", Limit: 10})

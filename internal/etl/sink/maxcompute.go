@@ -89,6 +89,13 @@ func NewMaxComputeSink(config map[string]any) (*MaxComputeSink, error) {
 	s.autoCreatePartition = boolConfig(config, "auto_create_partition", s.autoCreatePartition)
 	s.columns = stringMapConfig(config, "columns")
 	s.partition = stringMapConfig(config, "partition")
+	// MaxCompute/ODPS is append-only here (INSERT plus optional partition
+	// overwrite) with no UNIQUE KEY, so a metadata primary key cannot make a
+	// replay idempotent. Reject the flag instead of accepting a key that the
+	// write path could not honour.
+	if boolConfig(config, "pk_columns_from_metadata", false) {
+		return nil, fmt.Errorf("%s sink does not support pk_columns_from_metadata: MaxCompute/ODPS has no upsert/UNIQUE KEY contract, so a replayed batch cannot be deduplicated by key; use a write_mode=partition_overwrite pipeline whose partition makes the replay idempotent, or land into a keyed sink (mysql/postgres/clickhouse/doris/jdbc/elasticsearch)", s.name)
+	}
 	s.partitionFields = stringSliceConfig(config, "partition_fields")
 	if err := s.validateConfig(); err != nil {
 		return nil, err

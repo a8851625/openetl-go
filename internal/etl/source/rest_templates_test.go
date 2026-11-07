@@ -27,8 +27,12 @@ func TestSalesforceTemplateDefaults(t *testing.T) {
 	if cfg["auth"] != "oauth2_client_credentials" {
 		t.Errorf("auth=%v", cfg["auth"])
 	}
-	if cfg["pagination"] != "offset" {
-		t.Errorf("pagination=%v", cfg["pagination"])
+	// SOQL pages by URL (nextRecordsUrl); offset paging breaks past 2000 rows.
+	if cfg["pagination"] != "cursor" {
+		t.Errorf("pagination=%v, want cursor", cfg["pagination"])
+	}
+	if cfg["next_url_field"] != "nextRecordsUrl" {
+		t.Errorf("next_url_field=%v, want nextRecordsUrl", cfg["next_url_field"])
 	}
 	if cfg["result_key"] != "records" {
 		t.Errorf("result_key=%v", cfg["result_key"])

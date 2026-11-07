@@ -36,6 +36,12 @@ type ElasticsearchSink struct {
 	password string
 	index    string
 	idColumn string
+	// pkColumnsFromMetadata builds the document _id from the record's declared
+	// metadata primary key (Metadata.PrimaryKeyColumns + Metadata.Key) instead of
+	// a single id_column or a source-position hash. That makes an UPDATE of the
+	// same business row reuse the same _id, so replay and CDC updates cannot
+	// create duplicate documents.
+	pkColumnsFromMetadata bool
 	// indexTemplate routes records to per-table indices via {table}/{db}
 	// substitution (multi-table fan-out, GAP-4). Empty = pre-existing behavior.
 	indexTemplate string
@@ -101,6 +107,7 @@ func NewElasticsearchSink(config map[string]any) (*ElasticsearchSink, error) {
 			s.idColumn = vs
 		}
 	}
+	s.pkColumnsFromMetadata = boolConfig(config, "pk_columns_from_metadata", false)
 	s.mappingTypes = parseESMappingTypes(config)
 	if v, ok := config["max_retries"]; ok {
 		switch mr := v.(type) {
@@ -146,8 +153,8 @@ func (s *ElasticsearchSink) validateConfig() error {
 	if len(s.hosts) == 0 {
 		return fmt.Errorf("elasticsearch sink hosts are required")
 	}
-	if s.index == "" {
-		return fmt.Errorf("elasticsearch sink index is required")
+	if s.index == "" && s.indexTemplate == "" {
+		return fmt.Errorf("elasticsearch sink requires index or index_template (multi-table fan-out routes per record)")
 	}
 	if s.chunkSize <= 0 {
 		return fmt.Errorf("elasticsearch sink chunk_size must be > 0")
@@ -394,6 +401,27 @@ func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (e
 	}
 	start := time.Now()
 
+	// pk_columns_from_metadata: validate the declared identity of every record
+	// before any index request so an incomplete key fails closed instead of
+	// silently falling back to a position-derived _id.
+	pkByTable := map[string][]string{}
+	if s.pkColumnsFromMetadata {
+		validation, validationErr := validateMetadataPKBatch(s.name, records, nil, func(record core.Record) (metadataPKTarget, error) {
+			index, indexErr := s.resolveIndex(record)
+			if indexErr != nil {
+				return metadataPKTarget{}, indexErr
+			}
+			if strings.TrimSpace(index) == "" {
+				index = strings.ToLower(s.name)
+			}
+			return metadataPKTarget{Database: index, Table: index}, nil
+		})
+		if validationErr != nil {
+			return validationErr
+		}
+		pkByTable = validation.ColumnsByTable
+	}
+
 	// Chunk to avoid exceeding ES http.max_content_length (~100MB default).
 	for offset := 0; offset < len(records); offset += s.chunkSize {
 		end := offset + s.chunkSize
@@ -413,14 +441,26 @@ func (s *ElasticsearchSink) Write(ctx context.Context, records []core.Record) (e
 			}
 
 			docID := ""
-			if v, ok := rec.Data[s.idColumn]; ok && v != nil {
-				docID = fmt.Sprintf("%v", v)
+			if s.pkColumnsFromMetadata {
+				docID = metadataPKDocumentID(rec, pkByTable[indexName])
+			}
+			if docID == "" {
+				if v, ok := rec.Data[s.idColumn]; ok && v != nil {
+					docID = fmt.Sprintf("%v", v)
+				}
 			}
 			// When no id_column is configured or the value is missing, derive
 			// a deterministic _id from source metadata so that replay does not
 			// create duplicate documents under ES auto-generated IDs.
 			if docID == "" {
 				docID = deriveESDocID(rec)
+			}
+			// A DELETE must address a document that the index path could have
+			// written. The content-hash fallback is only unique per payload, so
+			// deleting by it would silently remove nothing (and leave a stale
+			// document behind) — fail closed instead.
+			if rec.Operation == core.OpDelete && docID == deriveESContentDocID(rec) {
+				return fmt.Errorf("elasticsearch delete for %s needs a stable document id: set sink.config.id_column, enable pk_columns_from_metadata, or use a source that supplies a durable position (the content-hash fallback cannot address an existing document)", indexName)
 			}
 
 			// Route by operation: DELETE → delete action, others → index
@@ -775,9 +815,16 @@ func deriveESDocID(rec core.Record) string {
 	} else {
 		// No usable source metadata: fall back to hashing the data map so
 		// identical content at least collapses, though ordering is not encoded.
-		key = fmt.Sprintf("data=%v", rec.Data)
+		return deriveESContentDocID(rec)
 	}
 	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:16])
+}
+
+// deriveESContentDocID is the payload-derived fallback id. It is deliberately
+// separate so the delete path can recognise it and refuse it.
+func deriveESContentDocID(rec core.Record) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("data=%v", rec.Data)))
 	return hex.EncodeToString(sum[:16])
 }
 

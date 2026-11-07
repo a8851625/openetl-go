@@ -1,0 +1,26 @@
+name: "manifest-s3"
+source:
+  type: demo
+  config:
+    interval_ms: 20
+    count: 6
+    fields:
+      - { name: id, type: counter }
+      - { name: payload, type: "static:s3-manifest-demo" }
+
+sink:
+  type: s3
+  config:
+    endpoint: "http://host.docker.internal:9001"
+    bucket: "etl-bucket"
+    access_key: "minio"
+    secret_key: "minio123"
+    region: "us-east-1"
+    format: "jsonl"
+    prefix: "s3-integrity/"
+    # Same two-step commit as file_sink, but the manifest is an S3 object.
+    manifest: true
+
+batch_size: 2
+checkpoint_interval_sec: 1
+backpressure_buffer: 16

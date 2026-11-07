@@ -558,6 +558,38 @@ func (s *MySQLSnapshotCDCSource) ValidateCheckpoint(_ context.Context, cp *core.
 			}
 		}
 	}
+	if raw, present := obj["last_composite_cursors"]; present {
+		var compositeCursors map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &compositeCursors); err != nil || compositeCursors == nil {
+			if err == nil {
+				err = fmt.Errorf("last_composite_cursors must be a JSON object")
+			}
+			return invalidSourceCheckpoint("mysql_snapshot_cdc", fmt.Sprintf("invalid last_composite_cursors: %v", err))
+		}
+		for table, rawTuple := range compositeCursors {
+			if strings.TrimSpace(table) == "" {
+				return invalidSourceCheckpoint("mysql_snapshot_cdc", "last_composite_cursors contains an empty table name")
+			}
+			var tuple []json.RawMessage
+			if err := json.Unmarshal(rawTuple, &tuple); err != nil || len(tuple) == 0 {
+				if err == nil {
+					err = fmt.Errorf("tuple must be a non-empty JSON array")
+				}
+				return invalidSourceCheckpoint("mysql_snapshot_cdc", fmt.Sprintf("invalid last_composite_cursors[%q]: %v", table, err))
+			}
+			for i, el := range tuple {
+				var s string
+				if err := json.Unmarshal(el, &s); err == nil {
+					continue
+				}
+				var f float64
+				if err := json.Unmarshal(el, &f); err == nil {
+					continue
+				}
+				return invalidSourceCheckpoint("mysql_snapshot_cdc", fmt.Sprintf("last_composite_cursors[%q][%d] must be a string or number", table, i))
+			}
+		}
+	}
 	return nil
 }
 
@@ -615,6 +647,11 @@ func decodeSnapshotCDCCheckpointPosition(raw json.RawMessage) (snapshotCDCPositi
 	}
 	if value, ok := rawField(obj, "last_strs"); ok {
 		if err := json.Unmarshal(value, &pos.LastStrs); err != nil {
+			return snapshotCDCPosition{}, err
+		}
+	}
+	if value, ok := rawField(obj, "last_composite_cursors"); ok {
+		if err := json.Unmarshal(value, &pos.LastCompositeCursors); err != nil {
 			return snapshotCDCPosition{}, err
 		}
 	}

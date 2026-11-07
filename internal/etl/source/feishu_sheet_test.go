@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -155,5 +157,127 @@ func TestFeishuSheetTokenFetchFailure(t *testing.T) {
 	}
 	if _, err := src.Open(context.Background(), nil); err == nil {
 		t.Fatalf("expected token fetch failure")
+	}
+}
+
+// ── rate limit / token refresh hardening (beta source development) ──────────
+
+func newFeishuTestServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *FeishuSheetSource) {
+	t.Helper()
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	src, err := NewFeishuSheetSource(map[string]any{
+		"app_id":            "cli_x",
+		"app_secret":        "secret",
+		"spreadsheet_token": "sht_x",
+		"sheet_range":       "Sheet1!A1:B2",
+		"base_url":          ts.URL,
+		"max_retries":       2,
+		"retry_base_ms":     1,
+	})
+	if err != nil {
+		t.Fatalf("NewFeishuSheetSource: %v", err)
+	}
+	return ts, src
+}
+
+func TestFeishuSheetRetriesRateLimitAndSucceeds(t *testing.T) {
+	var sheetCalls int64
+	_, src := newFeishuTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/tenant_access_token/"):
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"tok","expire":7200}`))
+		default:
+			if atomic.AddInt64(&sheetCalls, 1) == 1 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				w.Header().Set("Retry-After", "0")
+				_, _ = w.Write([]byte(`{"code":99991400,"msg":"frequency limit"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0,"data":{"value_range":{"values":[["id","name"],[1,"a"]]}}}`))
+		}
+	})
+
+	rows, err := src.fetchSheet(context.Background())
+	if err != nil {
+		t.Fatalf("fetchSheet: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if n := atomic.LoadInt64(&sheetCalls); n != 2 {
+		t.Fatalf("sheet calls = %d, want 2 (the 429 must be retried)", n)
+	}
+}
+
+func TestFeishuSheetRetriesBusinessRateLimitCode(t *testing.T) {
+	var sheetCalls int64
+	_, src := newFeishuTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/tenant_access_token/") {
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"tok","expire":7200}`))
+			return
+		}
+		if atomic.AddInt64(&sheetCalls, 1) == 1 {
+			// HTTP 200 but a business-level frequency limit.
+			_, _ = w.Write([]byte(`{"code":99991400,"msg":"too many requests"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0,"data":{"value_range":{"values":[["id"],[1]]}}}`))
+	})
+	rows, err := src.fetchSheet(context.Background())
+	if err != nil {
+		t.Fatalf("fetchSheet: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if n := atomic.LoadInt64(&sheetCalls); n != 2 {
+		t.Fatalf("sheet calls = %d, want 2", n)
+	}
+}
+
+func TestFeishuSheetRefreshesInvalidTokenOnce(t *testing.T) {
+	var tokenCalls int64
+	var sheetCalls int64
+	_, src := newFeishuTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/tenant_access_token/") {
+			n := atomic.AddInt64(&tokenCalls, 1)
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"code":0,"tenant_access_token":"tok%d","expire":7200}`, n)))
+			return
+		}
+		if atomic.AddInt64(&sheetCalls, 1) == 1 {
+			_, _ = w.Write([]byte(`{"code":99991663,"msg":"invalid access token"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0,"data":{"value_range":{"values":[["id"],[7]]}}}`))
+	})
+	rows, err := src.fetchSheet(context.Background())
+	if err != nil {
+		t.Fatalf("fetchSheet: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if n := atomic.LoadInt64(&tokenCalls); n != 2 {
+		t.Fatalf("token calls = %d, want 2 (an invalid token must force one refresh)", n)
+	}
+}
+
+func TestFeishuSheetNonRetryableErrorFailsFast(t *testing.T) {
+	var sheetCalls int64
+	_, src := newFeishuTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/tenant_access_token/") {
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"tok","expire":7200}`))
+			return
+		}
+		atomic.AddInt64(&sheetCalls, 1)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":91403,"msg":"forbidden"}`))
+	})
+	if _, err := src.fetchSheet(context.Background()); err == nil {
+		t.Fatal("expected an error")
+	}
+	if n := atomic.LoadInt64(&sheetCalls); n != 1 {
+		t.Fatalf("sheet calls = %d, want 1 (a 403 must not be retried)", n)
 	}
 }

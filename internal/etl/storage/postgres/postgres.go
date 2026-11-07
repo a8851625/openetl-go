@@ -261,6 +261,9 @@ func (s *Store) runVersionedMigrations(ctx context.Context) error {
 		{20, "add generation to pipelines", "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0"},
 		{21, "add generation to checkpoints", "ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0"},
 		{22, "add identity context to dead_letters", "ALTER TABLE dead_letters ADD COLUMN IF NOT EXISTS identity_context_json TEXT"},
+		// PR-DLQ-2: recorded here, executed by
+		// EnsureDeadLetterHashUniqueness (backfill + dedup + unique index).
+		{24, "deduplicate dead_letters by record hash", "SELECT 1"},
 	}
 
 	for _, m := range migrations {
@@ -284,9 +287,17 @@ func (s *Store) runVersionedMigrations(ctx context.Context) error {
 			_, _ = s.pool.Exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_pipelines_id ON pipelines(id)`)
 			_, _ = s.pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_pipelines_name ON pipelines(name)`)
 		}
+		if m.version == 24 {
+			if err := sqlstore.New(s.db, sqlstore.PostgresDialect{}).EnsureDeadLetterHashUniqueness(ctx); err != nil {
+				return err
+			}
+		}
 		if _, err := s.pool.Exec(ctx, "INSERT INTO _schema_version (version, description) VALUES ($1, $2)", m.version, m.description); err != nil {
 			return fmt.Errorf("record schema version %d: %w", m.version, err)
 		}
+	}
+	if err := sqlstore.New(s.db, sqlstore.PostgresDialect{}).EnsureDeadLetterHashUniqueness(ctx); err != nil {
+		return err
 	}
 	if err := s.backfillPipelineIDs(ctx); err != nil {
 		return err

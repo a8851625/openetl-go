@@ -29,7 +29,7 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 
 	assertFields(t, sources, "mysql_batch", "query", "cursor_column", "shard_index", "shard_total")
 	assertFields(t, sources, "mysql_cdc", "server_id_base", "shard_index", "shard_total", "start_from")
-	assertFields(t, sources, "mysql_snapshot_cdc", "tables", "pk_columns", "skip_no_pk_tables", "consistent_snapshot_lock", "server_id_base")
+	assertFields(t, sources, "mysql_snapshot_cdc", "tables", "pk_columns", "skip_no_pk_tables", "no_pk_snapshot", "consistent_snapshot_lock", "server_id_base")
 	assertFields(t, sources, "http", "body", "auth_type", "auth_user", "auth_pass", "max_retries", "retry_base_ms")
 	assertFields(t, sources, "rest_source", "url", "auth", "pagination", "api_key_header", "cursor_field", "token_param", "variables", "max_retries", "retry_base_ms")
 	assertFields(t, sources, "salesforce", "object", "api_version", "instance_url", "client_id", "client_secret")
@@ -45,21 +45,21 @@ func TestPluginSchemaIncludesImplementedConfigFields(t *testing.T) {
 	assertFields(t, sinks, "mysql", "auto_create", "column_types", "schema_drift", "insert_chunk_size", "ddl_policy")
 	assertFields(t, sinks, "postgres", "sslmode", "auto_create", "column_types", "schema_drift", "insert_chunk_size", "ddl_policy")
 	assertFields(t, sinks, "postgresql", "sslmode", "auto_create", "column_types", "schema_drift", "insert_chunk_size", "ddl_policy")
-	assertFields(t, sinks, "clickhouse", "source_dialect", "ddl_policy", "async_insert", "ttl", "version_mode", "version_column", "delete_column")
+	assertFields(t, sinks, "clickhouse", "source_dialect", "ddl_policy", "async_insert", "ttl", "version_mode", "version_column", "delete_column", "table_template")
 	assertFields(t, sinks, "kafka", "auto_create_topic", "retry_backoff_ms")
-	assertFields(t, sinks, "elasticsearch", "host", "chunk_size", "retry_base_ms")
+	assertFields(t, sinks, "elasticsearch", "host", "chunk_size", "retry_base_ms", "pk_columns_from_metadata")
 	assertFields(t, sinks, "es", "host", "chunk_size", "retry_base_ms")
-	assertFields(t, sinks, "doris", "allow_mixed_cdc_non_atomic", "ddl_policy")
-	assertFields(t, sinks, "jdbc", "schema", "tls_ca_cert", "allow_unsupported_driver", "ddl_policy")
+	assertFields(t, sinks, "doris", "allow_mixed_cdc_non_atomic", "ddl_policy", "version_mode", "sequence_column", "sequence_type")
+	assertFields(t, sinks, "jdbc", "schema", "tls_ca_cert", "allow_unsupported_driver", "ddl_policy", "pk_columns_from_metadata")
 	assertFields(t, sinks, "maxcompute", "endpoint", "project", "table", "access_key_id", "access_key_secret", "columns", "partition", "partition_fields", "write_mode")
 	assertFields(t, sinks, "odps", "endpoint", "project", "table", "access_key_id", "access_key_secret", "columns", "partition", "partition_fields", "write_mode")
 	assertFields(t, sinks, "redis", "allow_non_idempotent_list", "pipeline_chunk_size")
-	assertFields(t, sinks, "file_sink", "output_dir", "path")
+	assertFields(t, sinks, "file_sink", "output_dir", "path", "manifest", "manifest_prefix")
 
 	assertFields(t, transforms, "router", "field", "routes", "default")
 	assertFields(t, transforms, "rate_limiter", "rps", "burst")
 	assertFields(t, transforms, "enricher", "timeout_seconds", "cache_ttl_seconds", "on_error")
-	assertFields(t, transforms, "lookup", "mode", "dsn", "query", "fields", "timeout_seconds", "concurrency", "max_in_flight", "max_retries", "retry_base_ms", "cache_ttl_seconds", "on_miss", "on_refresh_error", "state_backend", "state_ttl_seconds")
+	assertFields(t, transforms, "lookup", "mode", "dsn", "query", "fields", "timeout_seconds", "concurrency", "max_in_flight", "max_retries", "retry_base_ms", "cache_ttl_seconds", "on_miss", "on_refresh_error", "state_backend", "state_ttl_seconds", "incremental_column", "incremental_query", "incremental_delete_column", "full_refresh_interval_sec")
 	assertFields(t, transforms, "normalize_envelope", "keep_metadata")
 	assertFields(t, transforms, "debezium_envelope", "keep_metadata")
 	assertFields(t, transforms, "project", "fields", "mappings", "constants", "time_formats", "keep_unmapped")
@@ -170,7 +170,7 @@ func TestPluginMetadataUsesEvidenceDrivenMaturity(t *testing.T) {
 		{"sources", "mysql_cdc", "production"},
 		{"sources", "mysql_snapshot_cdc", "production"},
 		{"sources", "kafka", "production"},
-		{"sources", "postgres_cdc", "beta"},
+		{"sources", "postgres_cdc", "production"},
 		{"sources", "redis", "experimental"},
 		{"sinks", "file_sink", "production"},
 		{"sinks", "s3", "production"},

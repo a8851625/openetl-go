@@ -207,19 +207,22 @@ func (a *DLQWriterAdapter) DeleteByFilter(ctx context.Context, filter DLQFilter)
 	return a.store.DeleteDeadLettersByFilter(ctx, filter)
 }
 
-// DeleteByID removes a single dead-letter record by ID.
-func (a *DLQWriterAdapter) DeleteByID(ctx context.Context, id int64) error {
-	return a.store.DeleteDeadLetterByID(ctx, id)
+// DeleteByID removes a single dead-letter record by ID, scoped to the job so a
+// caller cannot delete another pipeline's row.
+func (a *DLQWriterAdapter) DeleteByID(ctx context.Context, jobName string, id int64) error {
+	return a.store.DeleteDeadLetterByID(ctx, jobName, id)
 }
 
 // Count returns the number of dead-letter records for a job. Uses COUNT(*) on
-// the storage backend (avoids loading up to 100k rows into memory).
-func (a *DLQWriterAdapter) Count(ctx context.Context, jobName string) int {
+// the storage backend (avoids loading up to 100k rows into memory). The error
+// is returned rather than swallowed: a failed count must not be reported as an
+// empty backlog.
+func (a *DLQWriterAdapter) Count(ctx context.Context, jobName string) (int, error) {
 	n, err := a.store.CountDeadLetters(ctx, jobName)
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	return int(n)
+	return int(n), nil
 }
 
 // ── AuditWriter adapter ──────────────────────────────────────────────
