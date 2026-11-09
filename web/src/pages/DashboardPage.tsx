@@ -8,6 +8,7 @@ import { normalizePipelines, pipelineKey } from '@/lib/api';
 import { pipelineDLQBacklog } from '@/lib/dlq';
 import {
   countHealth,
+  healthBuckets,
   deriveIssues,
   deriveModeLabel,
   derivePipelineHealth,
@@ -210,26 +211,26 @@ export function DashboardPage({
             {runtimeBadge || t('dash.eyebrow')}
           </div>
           <h2 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">
-            {t('dash.heroTitle')}
+            {issues.length > 0 ? t('dash.heroTitle') : t('dash.heroTitleClear')}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            {t('dash.heroSub')
-              .replace('{issues}', String(issues.length))
-              .replace('{healthy}', String(counts.healthy))
-              .replace('{total}', String(counts.total))}
+            {issues.length > 0
+              ? t('dash.heroSub')
+                  .replace('{issues}', String(issues.length))
+                  .replace('{healthy}', String(counts.healthy))
+                  .replace('{total}', String(counts.total))
+              : t('dash.heroSubClear')
+                  .replace('{healthy}', String(counts.healthy))
+                  .replace('{total}', String(counts.total))}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* UI-A.3 (P0-1): the old 15m/24h/cumulative switch fabricated windowed
               numbers (24h showed all-time; 15m showed all-time*0.08). Removed —
               every metric here is cumulative and labeled as such until a real
-              time-series metrics API exists. */}
-          <span
-            data-testid="dash-scope-badge"
-            className="rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
-          >
-            {t('dash.cumulativeScope')}
-          </span>
+              time-series metrics API exists. The scope note lives once on the
+              Run health card and once on the throughput section instead of a
+              third time here. */}
           <Button onClick={onCreatePipeline}>
             <Plus className="h-4 w-4" />
             {t('nav.createPipeline')}
@@ -265,7 +266,12 @@ export function DashboardPage({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-semibold">{t('dash.runHealth')}</CardTitle>
-            <span className="text-xs text-muted-foreground">{range}</span>
+            {/* UI-A.3 anchor: the dashboard must not offer a fake time-range
+                switch; this badge is the single authoritative scope label and
+                is asserted by hack/e2e-ui.sh A3.2b. */}
+            <span data-testid="dash-scope-badge" className="text-xs text-muted-foreground">
+              {range}
+            </span>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
@@ -280,26 +286,12 @@ export function DashboardPage({
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <span className="tabular font-semibold">{counts.healthy}</span>{' '}
-                <span className="text-muted-foreground">{t('health.healthy')}</span>
-              </div>
-              <div>
-                <span className="tabular font-semibold">{counts.degraded}</span>{' '}
-                <span className="text-muted-foreground">{t('health.degraded')}</span>
-              </div>
-              <div>
-                <span className="tabular font-semibold">{counts.failed}</span>{' '}
-                <span className="text-muted-foreground">{t('health.failed')}</span>
-              </div>
-              <div>
-                <span className="tabular font-semibold">{counts.paused}</span>{' '}
-                <span className="text-muted-foreground">{t('health.paused')}</span>
-              </div>
-              <div>
-                <span className="tabular font-semibold">{counts.stopped}</span>{' '}
-                <span className="text-muted-foreground">{t('health.stopped')}</span>
-              </div>
+              {healthBuckets(counts).map((b) => (
+                <div key={b.key}>
+                  <span className="tabular font-semibold">{b.value}</span>{' '}
+                  <span className="text-muted-foreground">{t(`health.${b.key}`)}</span>
+                </div>
+              ))}
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">{t('dash.healthNote')}</p>
           </CardContent>
@@ -427,14 +419,25 @@ export function DashboardPage({
                 )}
               </div>
               <div>
+                {/* The badge must name the actual derived state. A binary
+                    "not failed/degraded => Healthy" badge contradicted the
+                    health card above (3 completed pipelines read as 3 Healthy
+                    in the list but 0 Healthy / 3 Completed in the summary). */}
                 {health === 'failed' || health === 'degraded' ? (
                   <span className="inline-flex items-center gap-1 rounded bg-rose-50 px-2 py-1 text-[11px] font-bold text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
                     <AlertTriangle className="h-3 w-3" />
-                    {t('dash.actionView')}
+                    {t(`health.${health}`)}
                   </span>
                 ) : (
-                  <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                    {t('health.healthy')}
+                  <span
+                    className={cn(
+                      'inline-flex rounded px-2 py-1 text-[11px] font-bold',
+                      health === 'healthy'
+                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+                        : 'bg-muted text-muted-foreground',
+                    )}
+                  >
+                    {t(`health.${health}`)}
                   </span>
                 )}
               </div>

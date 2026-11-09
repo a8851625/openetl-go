@@ -205,6 +205,7 @@ const PipelineRow = React.memo(
               uptimeFallback={p.stats.uptime || 'N/A'}
               written={p.stats.records_written}
               cdcLagMs={m?.cdc_lag_ms}
+              sourceMode={p.spec_summary?.source_mode}
             />
           )}
         </div>
@@ -730,7 +731,7 @@ export function PipelinesPage({
                   size="sm"
                   onClick={() => onOpenWizard?.()}
                 >
-                  {t('pipe.createWizard')}
+                  {t('nav.createPipeline')}
                 </Button>
                 <Button variant="secondary" size="sm" onClick={() => setShowImport(true)}>
                   {t('pipe.import')}
@@ -907,7 +908,7 @@ export function PipelinesPage({
                       size="sm"
                       onClick={() => onOpenWizard?.()}
                     >
-                      {t('pipe.createWizard')}
+                      {t('nav.createPipeline')}
                     </Button>
                   )}
                 </EmptyState>

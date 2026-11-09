@@ -635,9 +635,9 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
           {!selected ? (
             <EmptyState text={t('dash.selectPipeline')} />
           ) : !hasBacklog ? (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
-              {t('dlq.emptyHint')}
-            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {t('dlq.confirmIdle')}
+            </p>
           ) : (
             <>
               <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3 text-xs">

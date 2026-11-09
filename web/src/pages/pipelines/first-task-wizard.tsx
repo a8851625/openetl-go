@@ -2708,24 +2708,43 @@ export function FirstTaskWizard({
                 <div className="text-[11px] text-muted-foreground">{t('wizard.fieldName')}</div>
                 <div className="font-semibold">{name || '—'}</div>
               </div>
+              {/* Only reflect what the user has actually reached: the draft keeps
+                  the previous run's source/sink, and showing them at step 1 made
+                  the wizard look pre-configured. */}
               <div>
                 <div className="text-[11px] text-muted-foreground">{t('wizard.fieldSource')}</div>
                 <div className="rounded-md bg-card px-2 py-1.5 text-xs">
-                  {sourceType}
-                  {sourceConnection ? ` · ${sourceConnection}` : ''}
+                  {stepIndex >= 1 ? (
+                    <>
+                      {sourceType}
+                      {sourceConnection ? ` · ${sourceConnection}` : ''}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">{t('wizard.notSelected')}</span>
+                  )}
                 </div>
               </div>
               <div>
                 <div className="text-[11px] text-muted-foreground">{t('wizard.fieldTransform')}</div>
                 <div className="rounded-md bg-card px-2 py-1.5 text-xs">
-                  {transformConfigs.map((x) => x.type).join(' → ') || '—'}
+                  {stepIndex >= 3 ? (
+                    transformConfigs.map((x) => x.type).join(' → ') || '—'
+                  ) : (
+                    <span className="text-muted-foreground">{t('wizard.notSelected')}</span>
+                  )}
                 </div>
               </div>
               <div>
                 <div className="text-[11px] text-muted-foreground">{t('wizard.fieldSink')}</div>
                 <div className="rounded-md bg-card px-2 py-1.5 text-xs">
-                  {sinkType}
-                  {sinkConnection ? ` · ${sinkConnection}` : ''}
+                  {stepIndex >= 2 ? (
+                    <>
+                      {sinkType}
+                      {sinkConnection ? ` · ${sinkConnection}` : ''}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">{t('wizard.notSelected')}</span>
+                  )}
                 </div>
               </div>
               <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
@@ -2740,7 +2759,6 @@ export function FirstTaskWizard({
               >
                 API docs
               </a>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">{t('wizard.summaryFoot')}</p>
             </div>
           </aside>
         </div>

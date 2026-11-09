@@ -20,7 +20,7 @@ import {
 import type { DetailTab } from '@/lib/routing';
 import type { Checkpoint, MetricsPipeline, Pipeline, TFunc } from '@/lib/types';
 import type { Lang } from '@/i18n';
-import { ArrowLeft, CalendarClock, Play, RotateCcw, ScrollText, Square } from 'lucide-react';
+import { ArrowLeft, CalendarClock, Check, Copy, Play, RotateCcw, ScrollText, Square } from 'lucide-react';
 import { PipelineRowMeta } from '@/lib/uptime';
 import { cn } from '@/lib/utils';
 import { PipelineIntegrityPanel } from './pipeline-integrity';
@@ -71,6 +71,9 @@ export function PipelineDetailPage({
   onOpenDesigner,
   onOpenDLQ,
 }: Props) {
+  // Declared before any early return: hooks must run in the same order on
+  // every render, including the loading/not-found branches.
+  const [idCopied, setIdCopied] = useState(false);
 
   // UI-B.3: destructive actions confirm via the shared dialog.
   const [pendingReset, setPendingReset] = useState(false);
@@ -196,6 +199,14 @@ export function PipelineDetailPage({
   }
 
   const health = derivePipelineHealth(pipeline, metric);
+  // Primary-action hierarchy: "Handle issues" is only the primary CTA when
+  // there is actually something to handle. With a clean pipeline the everyday
+  // action (Start) takes the primary slot and issue handling stays available
+  // as a secondary affordance.
+  const sourceMode = pipeline?.spec_summary?.source_mode;
+  const showUptime = sourceMode === undefined || sourceMode === 'cdc' || sourceMode === 'streaming';
+  const needsAction =
+    health === 'failed' || health === 'degraded' || (pipeline?.dlq_backlog ?? 0) > 0;
   const ref = pipelineRef(pipeline);
   const key = pipelineKey(pipeline);
   const checkpointFailure = Boolean(
@@ -244,7 +255,25 @@ export function PipelineDetailPage({
         <CardContent className="space-y-4 p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0 space-y-2">
-              <div className="text-xs text-muted-foreground">/pipelines/{key}</div>
+              <button
+                type="button"
+                data-testid="detail-copy-id"
+                title={t('pipe.copyId')}
+                onClick={() => {
+                  void navigator.clipboard?.writeText(key).then(
+                    () => {
+                      setIdCopied(true);
+                      window.setTimeout(() => setIdCopied(false), 1500);
+                    },
+                    () => undefined,
+                  );
+                }}
+                className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+              >
+                <span className="font-mono">{key.length > 18 ? `${key.slice(0, 8)}…${key.slice(-4)}` : key}</span>
+                {idCopied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
+                <span className="sr-only">{idCopied ? t('pipe.copied') : t('pipe.copyId')}</span>
+              </button>
               <div className="flex items-center gap-2">
                 <HealthDot health={health} />
                 <h2 className="text-2xl font-semibold tracking-tight">{pipeline.name}</h2>
@@ -256,12 +285,13 @@ export function PipelineDetailPage({
                 uptimeFallback={pipeline.stats.uptime || 'N/A'}
                 written={pipeline.stats.records_written}
                 cdcLagMs={metric?.cdc_lag_ms}
+                sourceMode={pipeline.spec_summary?.source_mode}
               />
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
-                variant="secondary"
+                variant={!needsAction && pipeline.status !== 'running' ? 'default' : 'secondary'}
                 disabled={pipeline.status === 'running'}
                 onClick={() =>
                   onAction(`Start ${pipeline.name}`, () =>
@@ -287,7 +317,11 @@ export function PipelineDetailPage({
               <Button size="sm" variant="outline" onClick={() => onTabChange('logs')}>
                 <ScrollText className="h-3.5 w-3.5" /> {t('pipe.logs')}
               </Button>
-              <Button size="sm" onClick={() => onOpenDLQ(key)}>
+              <Button
+                size="sm"
+                variant={needsAction ? 'default' : 'outline'}
+                onClick={() => onOpenDLQ(key)}
+              >
                 {t('pipe.handleIssues')}
               </Button>
             </div>
@@ -347,10 +381,16 @@ export function PipelineDetailPage({
                   label={t('dash.dlqCapturedTotal')}
                   value={(pipeline.stats.records_dlq || 0).toLocaleString()}
                 />
-                <MiniStat
-                  label={t('metric.cdcLag')}
-                  value={metric ? formatLag(metric.cdc_lag_ms) : '—'}
-                />
+                {/* CDC lag only exists for log-based sources; rendering an
+                    em-dash card for a batch run implies a broken metric. */}
+                {(pipeline.spec_summary?.source_mode === 'cdc' ||
+                  pipeline.spec_summary?.source_mode === 'streaming' ||
+                  pipeline.spec_summary?.source_mode === undefined) && (
+                  <MiniStat
+                    label={t('metric.cdcLag')}
+                    value={metric ? formatLag(metric.cdc_lag_ms) : '—'}
+                  />
+                )}
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <Card className="border-dashed" data-testid="write-semantics-card">
@@ -386,10 +426,14 @@ export function PipelineDetailPage({
                       <span className="text-muted-foreground">{t('detail.mode')}</span>
                       <span>{deriveModeLabel(pipeline, metric)}</span>
                     </div>
-                    <div className="flex justify-between gap-2">
-                      <span className="text-muted-foreground">{t('detail.uptime')}</span>
-                      <span className="tabular text-xs">{pipeline.stats.uptime || '—'}</span>
-                    </div>
+                    {/* Uptime is a streaming concept; a completed batch run
+                        would always read "0s", which looks like a fault. */}
+                    {showUptime && (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-muted-foreground">{t('detail.uptime')}</span>
+                        <span className="tabular text-xs">{pipeline.stats.uptime || '—'}</span>
+                      </div>
+                    )}
                     {/* UI-G.4: honest restart-policy state from the stored spec. */}
                     <div className="flex items-center justify-between gap-2" data-testid="detail-restart-policy">
                       <span className="text-muted-foreground">{t('wizard.restartPolicyMode')}</span>

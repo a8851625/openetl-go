@@ -90,6 +90,11 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const [jsonError, setJsonError] = useState('');
   const [openOnTest, setOpenOnTest] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const startNewConnection = () => {
+    setDrawerOpen(true);
+    setName('');
+    applyConfig(nextConfigFor(kind, type));
+  };
   const [pendingDelete, setPendingDelete] = useState<ConnectionEntry | null>(null);
   const [deleting, setDeleting] = useState('');
   const [actionNotice, setActionNotice] = useState('');
@@ -280,20 +285,18 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
       <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="text-xs font-bold uppercase tracking-[0.08em] text-primary">{t('conn.resources')}</div>
-          <h2 className="mt-1 text-2xl font-semibold tracking-tight">{t('nav.connections')}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {connections.length} instances · {connections.filter((c) => c.last_status === 'ok').length} healthy
-          </p>
+          <h2 className="text-2xl font-semibold tracking-tight">{t('nav.connections')}</h2>
+          {connections.length > 0 && (
+            <p className="mt-1 text-sm text-muted-foreground">
+              {connections.length} instances ·{' '}
+              {connections.filter((c) => c.last_status === 'ok').length} healthy
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
-            onClick={() => {
-              setDrawerOpen(true);
-              setName('');
-              applyConfig(nextConfigFor(kind, type));
-            }}
+            onClick={startNewConnection}
             data-testid="connection-new"
           >
             {t('conn.new')}
@@ -326,7 +329,7 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
         <Card className="min-w-0">
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
-            <CardTitle className="text-sm">{t('nav.connections')}</CardTitle>
+            <CardTitle className="text-sm">{t('conn.saved')}</CardTitle>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <input
@@ -347,7 +350,11 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
               <div className="p-8 text-center text-sm text-muted-foreground">{t('common.loading')}</div>
             ) : connections.length === 0 ? (
               <div className="p-6">
-                <EmptyState text={t('conn.empty')} hint={t('conn.emptyHint')} />
+                <EmptyState text={t('conn.empty')} hint={t('conn.emptyHint')}>
+                  <Button size="sm" className="mt-3" onClick={startNewConnection}>
+                    {t('conn.new')}
+                  </Button>
+                </EmptyState>
               </div>
             ) : (
               <Table>

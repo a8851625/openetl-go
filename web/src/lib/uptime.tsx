@@ -37,17 +37,27 @@ export function PipelineRowMeta({
   uptimeFallback,
   written,
   cdcLagMs,
+  sourceMode,
 }: {
   t: TFunc;
   startedAt?: string;
   uptimeFallback: string;
   written: number;
   cdcLagMs?: number;
+  /** Streaming-ish modes are the only ones where uptime is meaningful; a
+   *  completed batch run reporting "uptime 0s" reads as a fault. */
+  sourceMode?: 'cdc' | 'batch' | 'streaming' | 'scheduled' | 'dag';
 }) {
   const uptime = useLiveUptime(startedAt);
+  const showUptime = sourceMode === undefined || sourceMode === 'cdc' || sourceMode === 'streaming';
   return (
     <div className="mt-0.5 text-xs text-muted-foreground">
-      {t('dash.uptime')} {startedAt ? uptime : uptimeFallback} · {written} {t('pipe.written')}
+      {showUptime && (
+        <>
+          {t('dash.uptime')} {startedAt ? uptime : uptimeFallback} ·{' '}
+        </>
+      )}
+      {written} {t('pipe.written')}
       {cdcLagMs && cdcLagMs > 0 ? ` · lag ${cdcLagMs}ms` : ''}
     </div>
   );

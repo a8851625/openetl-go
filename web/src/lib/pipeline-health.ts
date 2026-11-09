@@ -95,6 +95,33 @@ export function countHealth(
   return counts;
 }
 
+/**
+ * healthBuckets returns the buckets a health summary must render so that every
+ * pipeline is accounted for. Healthy/Degraded/Failed are always shown (they are
+ * the states an operator must act on); every other bucket is shown once it has
+ * a non-zero count. Because all non-zero buckets are included, the rendered
+ * values always sum to `total` — a summary that silently drops Completed /
+ * Scheduled / Starting / Unknown reads as "0 of N healthy" with no way to
+ * explain where the remaining pipelines went.
+ */
+export function healthBuckets(
+  counts: HealthCounts,
+): Array<{ key: keyof Omit<HealthCounts, 'total'>; value: number }> {
+  const always: Array<keyof Omit<HealthCounts, 'total'>> = ['healthy', 'degraded', 'failed'];
+  const optional: Array<keyof Omit<HealthCounts, 'total'>> = [
+    'paused',
+    'stopped',
+    'completed',
+    'scheduled',
+    'starting',
+    'unknown',
+  ];
+  return [
+    ...always.map((key) => ({ key, value: counts[key] })),
+    ...optional.filter((key) => counts[key] > 0).map((key) => ({ key, value: counts[key] })),
+  ];
+}
+
 export function findMetric(
   p: Pipeline,
   metrics: MetricsPipeline[] = [],
