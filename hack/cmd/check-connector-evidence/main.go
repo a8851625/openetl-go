@@ -198,6 +198,11 @@ func relatedSourceDirs(pathID string) []string {
 	case "mysql_snap_cdc__ch_rmt":
 		dirs = append(dirs, "internal/etl/ddl")
 	}
+	// internal/etl/server/evidence holds the certification manifest itself.
+	// Rebinding the manifest necessarily touches that path, so counting it as
+	// a related source made every rebind immediately invalidate all path
+	// evidence, forcing an endless rebind/rerun loop at release time.
+	dirs = append(dirs, ":(exclude)internal/etl/server/evidence")
 	return dirs
 }
 
