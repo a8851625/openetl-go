@@ -3,13 +3,13 @@
   "policy": {
     "max_age_hours": 720
   },
-  "certified_commit": "d82ddc5",
+  "certified_commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
   "certified_image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
   "records": [
     {
       "kind": "source",
       "type": "file",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -31,7 +31,7 @@
     {
       "kind": "source",
       "type": "http",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -54,7 +54,7 @@
     {
       "kind": "source",
       "type": "kafka",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -81,7 +81,7 @@
     {
       "kind": "source",
       "type": "mysql_batch",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -107,7 +107,7 @@
     {
       "kind": "source",
       "type": "mysql_cdc",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -133,7 +133,7 @@
     {
       "kind": "source",
       "type": "mysql_snapshot_cdc",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -160,7 +160,7 @@
     {
       "kind": "sink",
       "type": "file_sink",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -182,7 +182,7 @@
     {
       "kind": "sink",
       "type": "s3",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -206,7 +206,7 @@
     {
       "kind": "sink",
       "type": "kafka",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -232,7 +232,7 @@
     {
       "kind": "sink",
       "type": "mysql",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -258,7 +258,7 @@
     {
       "kind": "sink",
       "type": "postgres",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -284,7 +284,7 @@
     {
       "kind": "sink",
       "type": "postgresql",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -310,7 +310,7 @@
     {
       "kind": "sink",
       "type": "clickhouse",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -336,7 +336,7 @@
     {
       "kind": "sink",
       "type": "doris",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -363,7 +363,7 @@
     {
       "kind": "sink",
       "type": "clickhouse_multi_table",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
@@ -406,7 +406,7 @@
     {
       "kind": "source",
       "type": "postgres_cdc",
-      "commit": "d82ddc5",
+      "commit": "210afd784a170e3d0c38d6f4aba722b88a108cf1",
       "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
