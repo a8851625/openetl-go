@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   ReactFlow, Controls, Background, MiniMap, Handle, Position,
   addEdge, useNodesState, useEdgesState,
@@ -6,6 +6,7 @@ import {
   BackgroundVariant, MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { Workflow } from 'lucide-react';
 import YAML from 'yaml';
 import cronstrue from 'cronstrue';
 import type { TFunc, Lang } from './types';
@@ -14,7 +15,14 @@ import { Button } from '@/components/ui/button';
 import { ApiErrorPanel } from '@/components/shared/api-error-panel';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { ErrorDetails } from '@/components/shared/error-details';
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { cn } from '@/lib/utils';
+import {
+  validateTopology,
+  wouldCreateCycle,
+  issueNodeIds,
+  type TopologyIssue,
+} from '@/lib/dag-topology';
 import { useTheme } from '@/components/theme-provider';
 import {
   api,
@@ -234,12 +242,17 @@ function schedulePolicyForSources(sourcePlugins: string[], descriptors: Connecto
 function PipelineNode({ id, data, selected }: NodeProps) {
   const d = data as DAGNodeData;
   const style = KIND_STYLES[d.kind] || KIND_STYLES.transform;
+  // Topology failures are anchored to the offending node so the operator can
+  // see which one to fix instead of reading a detached error list.
+  const invalid = Boolean((d as DAGNodeData & { invalid?: boolean }).invalid);
   return (
     <div
+      data-invalid={invalid ? 'true' : undefined}
+      title={invalid ? (d as DAGNodeData & { invalidReason?: string }).invalidReason : undefined}
       style={{
-        background: style.bg,
-        borderColor: selected ? style.color : style.border,
-        borderWidth: selected ? 2.5 : 2,
+        background: invalid ? '#fff1f2' : style.bg,
+        borderColor: invalid ? '#e11d48' : selected ? style.color : style.border,
+        borderWidth: invalid ? 2.5 : selected ? 2.5 : 2,
         borderStyle: 'solid',
         borderRadius: 10,
         padding: '10px 16px',
@@ -419,6 +432,20 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   const [backpressureBuffer, setBackpressureBuffer] = useState(100);
   const [hooks, setHooks] = useState<Record<string, { type: string; code: string; name: string; enabled: boolean }>>({});
   const [showNodeProps, setShowNodeProps] = useState(false);
+  /** Transient feedback for a rejected connection (cycle / self loop). */
+  const [topologyNotice, setTopologyNotice] = useState('');
+  /** Topology problems surfaced on the last validate/create attempt. */
+  const [topologyIssues, setTopologyIssues] = useState<TopologyIssue[]>([]);
+  /** Node ids to outline as invalid (kept separate so edge-level checks can
+   *  flag both endpoints). */
+  const [invalidNodeIds, setInvalidNodeIds] = useState<Set<string>>(new Set());
+  /** Node id awaiting delete confirmation (deleting is destructive and was
+   *  previously instant and irreversible). */
+  const [pendingDeleteNodeId, setPendingDeleteNodeId] = useState<string | null>(null);
+  /** True once the canvas has content the operator has not saved yet. */
+  const [canvasDirty, setCanvasDirty] = useState(false);
+  /** React Flow instance, used to place new nodes in the visible viewport. */
+  const flowRef = useRef<any>(null);
   const [testResult, setTestResult] = useState<string>('');
   const [connections, setConnections] = useState<ConnectionEntry[]>([]);
   const [descriptors, setDescriptors] = useState<ConnectorDescriptor[]>([]);
@@ -454,6 +481,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       setSelectedNodeId(nodeID);
       setShowNodeProps(true);
       setDrawerTab(null);
+      // Bring the offending node into view: it may sit outside the current
+      // viewport (nodes keep their stored x/y), which made "jump to node"
+      // highlight something the operator could not see.
+      window.setTimeout(() => {
+        document
+          .querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(nodeID)}"]`)
+          ?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+      }, 50);
       const fieldPath = issue.field?.replace(/^dag\.nodes\[([^\]]+)\]/, 'dag.nodes.$1') || '';
       window.setTimeout(() => {
         document.querySelector<HTMLElement>(`[data-field-path="${CSS.escape(fieldPath)}"]`)?.focus();
@@ -614,6 +649,58 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Unsaved-draft persistence ───────────────────────────────────────────
+  // The canvas used to lose everything on refresh while the wizard kept a
+  // local draft; both creation paths now behave the same way. The key is
+  // per-pipeline so editing pipeline A never overwrites B's draft.
+  const draftKey = `etl_dag_draft_v1:${editTarget || '__new__'}`;
+
+  // Restore once, before the operator starts editing.
+  const restoredDraftRef = useRef(false);
+  useEffect(() => {
+    if (restoredDraftRef.current) return;
+    restoredDraftRef.current = true;
+    try {
+      const raw = window.localStorage.getItem(draftKey);
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      // Only restore when the canvas is still empty: an explicitly opened
+      // pipeline (editTarget) already loaded its spec and must win.
+      if (nodes.length > 0) return;
+      if (!Array.isArray(draft?.nodes) || draft.nodes.length === 0) return;
+      setNodes(draft.nodes);
+      setEdges(Array.isArray(draft.edges) ? draft.edges : []);
+      if (typeof draft.pipelineName === 'string' && draft.pipelineName) setPipelineName(draft.pipelineName);
+      setCanvasDirty(true);
+      setTopologyNotice(t('dag.draftRestored'));
+    } catch {
+      /* corrupt draft — start empty */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
+  // Persist on every graph mutation (cheap: the graph is small).
+  useEffect(() => {
+    if (nodes.length === 0 && edges.length === 0) return;
+    try {
+      window.localStorage.setItem(draftKey, JSON.stringify({ nodes, edges, pipelineName }));
+    } catch {
+      /* quota or private mode — persistence is best effort */
+    }
+  }, [nodes, edges, pipelineName, draftKey]);
+
+  // Warn before losing unsaved work on a real navigation/refresh.
+  useEffect(() => {
+    if (!canvasDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = t('dag.unsavedWarning');
+      return t('dag.unsavedWarning');
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [canvasDirty, t]);
+
   useEffect(() => {
     if (!editTarget) return;
     let cancelled = false;
@@ -625,13 +712,31 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   }, [editTarget]);
 
   const onConnect = useCallback((params: Connection) => {
-    setEdges((eds) => addEdge({
-      ...params,
-      animated: true,
-      markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
-      style: { stroke: '#94a3b8', strokeWidth: 2 },
-    }, eds));
-  }, [setEdges]);
+    if (!params.source || !params.target) return;
+    // Reject connections that would close a loop: the runtime walks the graph
+    // forward only, so a cycle can never make progress and would be caught
+    // much later at validation with no indication of which edge caused it.
+    const topoNodes = nodes.map((n) => ({ id: n.id, kind: n.data.kind }));
+    const topoEdges = edges.map((e) => ({ source: e.source, target: e.target }));
+    if (wouldCreateCycle(topoNodes, topoEdges, params.source, params.target)) {
+      setTopologyNotice(
+        params.source === params.target
+          ? t('dag.rejectSelfLoop')
+          : t('dag.rejectCycle'),
+      );
+      return;
+    }
+    setTopologyNotice('');
+    setEdges((eds) => {
+      if (eds.some((e) => e.source === params.source && e.target === params.target)) return eds;
+      return addEdge({
+        ...params,
+        animated: true,
+        markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
+        style: { stroke: '#94a3b8', strokeWidth: 2 },
+      }, eds);
+    });
+  }, [setEdges, nodes, edges, t]);
 
   const addNode = (kind: string, defaultPlugin: string) => {
     if (ADVANCED_NODE_KINDS.includes(kind)) setDagFormat(true);
@@ -646,12 +751,26 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         transform: 200, fanout: 200, router: 200, tap: 200,
         rate_limiter: 350, enricher: 350, lookup: 350,
       };
-      // Stack multiple transforms vertically so they don't sit on top of each other.
+      // Stack multiple nodes of the same kind so they don't sit on top of each
+      // other.
       const sameKindCount = nds.filter((n) => n.data.kind === kind).length;
-      const pos = {
-        x: 200 + offset,
-        y: (laneY[kind] || 250) + sameKindCount * 90,
-      };
+      // Place the node where the operator is actually looking. The old
+      // hardcoded lane coordinates put a new Sink ~500px down the graph, which
+      // on a short viewport landed outside the visible canvas and read as
+      // "the click did nothing".
+      const viewport = flowRef.current?.screenToFlowPosition({
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2,
+      });
+      // Fan every new node out from the viewport centre on a small spiral so
+      // two different kinds added in a row never land on top of each other.
+      const step = nds.length;
+      const pos = viewport
+        ? {
+            x: viewport.x - 80 + (step % 3) * 220 + sameKindCount * 24,
+            y: viewport.y - 40 + Math.floor(step / 3) * 130 + sameKindCount * 24,
+          }
+        : { x: 200 + offset, y: (laneY[kind] || 250) + sameKindCount * 90 };
       const newNode: Node<DAGNodeData> = {
         id,
         type: 'pipelineNode',
@@ -660,16 +779,27 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       };
       // Defer selection so it observes the committed id from this updater.
       queueMicrotask(() => setSelectedNodeId(id));
+      setCanvasDirty(true);
       return [...nds, newNode];
     });
   };
 
+  /** Destructive: removing a node also drops every edge touching it. */
+  const performDeleteNode = useCallback((nodeId: string) => {
+    setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+    setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+    setSelectedNodeId((cur) => (cur === nodeId ? null : cur));
+    setShowNodeProps(false);
+    setCanvasDirty(true);
+    setPendingDeleteNodeId(null);
+  }, [setNodes, setEdges]);
+
+  // The delete button and the Delete key both route through the confirmation
+  // dialog; only performDeleteNode mutates the graph.
   const deleteSelected = useCallback(() => {
     if (!selectedNodeId) return;
-    setNodes((nds) => nds.filter((n) => n.id !== selectedNodeId));
-    setEdges((eds) => eds.filter((e) => e.source !== selectedNodeId && e.target !== selectedNodeId));
-    setSelectedNodeId(null);
-  }, [selectedNodeId, setNodes, setEdges]);
+    setPendingDeleteNodeId(selectedNodeId);
+  }, [selectedNodeId]);
 
   // Keyboard delete
   useEffect(() => {
@@ -971,6 +1101,36 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
     setPipelineName(trimmedName);
 
     const spec = buildSpec();
+
+    // Topology gate: the server preflight only inspects per-node config, so a
+    // canvas whose sink is not connected from any source used to pass. Run the
+    // graph checks first and anchor the failures to their nodes.
+    const topo = validateTopology(
+      nodes.map((n) => ({ id: n.id, kind: n.data.kind })),
+      edges.map((e) => ({ source: e.source, target: e.target })),
+    );
+    if (!topo.ok) {
+      setTopologyIssues(topo.issues);
+      setInvalidNodeIds(issueNodeIds(topo));
+      const failure = {
+        error: t('dag.errTopologyInvalid'),
+        valid: false,
+        issues: topo.issues.map((i) => ({
+          code: i.code,
+          scope: 'dag',
+          field: i.nodeIds[0] ? `dag.nodes.${i.nodeIds[0]}` : 'dag',
+          message: i.message,
+          remediation: t('dag.topologyRemediation'),
+        })),
+      };
+      const details = toApiErrorDetails(failure);
+      setOperationError(details);
+      onAction(t('dag.validate'), () => Promise.reject(Object.assign(new Error(details.summary), { payload: failure })));
+      return;
+    }
+    setTopologyIssues([]);
+    setInvalidNodeIds(new Set());
+
     const hasSource = spec.source?.type || spec.dag?.nodes?.some((n: any) => n.kind === 'source');
     const hasSink = spec.sink?.type || spec.dag?.nodes?.some((n: any) => n.kind === 'sink');
     if (!hasSource || !hasSink) {
@@ -984,18 +1144,32 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       onAction(t('dag.validate'), () => Promise.reject(Object.assign(new Error(details.summary), { payload: failure })));
       return;
     }
+    // Once the server has the pipeline the local draft is no longer "unsaved".
+    const clearDraft = () => {
+      setCanvasDirty(false);
+      try {
+        window.localStorage.removeItem(draftKey);
+      } catch {
+        /* best effort */
+      }
+    };
     if (editTarget) {
       // Update follows the same validation contract as create; a failed
       // validation never reaches persistence or replaces the active runner.
       runEditorAction(`${t('dag.updatePipeline')}: ${pipelineName}`, async () => {
         await validateCurrentSpec(spec);
-        return apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: false }, 'PUT');
+        const res = await apiPost('/api/v2/pipelines', { id: editTarget, spec, reset_checkpoint: false }, 'PUT');
+        clearDraft();
+        return res;
       });
     } else {
       // Create mode: POST
       runEditorAction(`${t('dag.createPipeline')}: ${pipelineName}`, () =>
         validateCurrentSpec(spec).then(() =>
-          apiPost('/api/v2/pipelines', { spec }, 'POST')
+          apiPost('/api/v2/pipelines', { spec }, 'POST').then((res) => {
+            clearDraft();
+            return res;
+          })
         )
       );
     }
@@ -1014,6 +1188,22 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
   // ── Schema for selected node ──────────────────────────────────────
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
+  // Decorate nodes with topology validity so the custom node can outline the
+  // offending ones without threading a second prop through React Flow.
+  const displayNodes = useMemo(() => {
+    if (invalidNodeIds.size === 0) return nodes;
+    const reasonByNode = new Map<string, string>();
+    for (const issue of topologyIssues) {
+      for (const id of issue.nodeIds) {
+        if (!reasonByNode.has(id)) reasonByNode.set(id, issue.message);
+      }
+    }
+    return nodes.map((n) =>
+      invalidNodeIds.has(n.id)
+        ? { ...n, data: { ...n.data, invalid: true, invalidReason: reasonByNode.get(n.id) } }
+        : { ...n, data: { ...n.data, invalid: false, invalidReason: undefined } },
+    );
+  }, [nodes, invalidNodeIds, topologyIssues]);
   const selectedNodeIssues = useMemo(() => {
     return [...apiErrorIssues(validateError), ...apiErrorIssues(operationError)].filter((issue) => {
       if (!selectedNode) return false;
@@ -1097,6 +1287,21 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
 
   return (
     <div className="flex h-[calc(100vh-120px)] flex-col gap-2">
+      <ConfirmDialog
+        open={pendingDeleteNodeId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteNodeId(null);
+        }}
+        title={t('dag.confirmDeleteTitle').replace('{id}', pendingDeleteNodeId || '')}
+        description={t('dag.confirmDeleteBody')}
+        confirmLabel={t('common.delete')}
+        cancelLabel={t('ui.cancel')}
+        destructive
+        onConfirm={() => {
+          if (pendingDeleteNodeId) performDeleteNode(pendingDeleteNodeId);
+        }}
+      />
+
       {/* ── Compact Toolbar ─────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3 shadow-sm">
         <div className="flex items-center gap-2">
@@ -1107,7 +1312,12 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         {/* Node palette — icon-only compact. On narrow screens the palette row
             scrolls horizontally inside its own container instead of widening
             the document (UI-D.3 containment contract). */}
-        <div className="flex max-w-full min-w-0 items-center gap-0.5 overflow-x-auto">
+        <div
+          className="flex max-w-full min-w-0 items-center gap-0.5 overflow-x-auto"
+          role="group"
+          aria-label={t('dag.groupNodes')}
+          data-testid="dag-toolbar-nodes"
+        >
           {NODE_PALETTE(t).map((cat) => cat.nodes.map((nd) => {
             const st = KIND_STYLES[nd.kind] || KIND_STYLES.transform;
             const disabled = nd.kind === 'lookup' && !redisStateConfigured;
@@ -1129,7 +1339,12 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
         </div>
         {selectedNodeId ? <Button variant="destructive" size="sm" className="shrink-0 px-2" onClick={deleteSelected} title={t('dag.deleteNode')} aria-label={t('dag.deleteNode')}>{t('common.delete')}</Button> : null}
         {/* Drawer tabs */}
-        <div className="flex max-w-full min-w-0 items-center gap-0.5 overflow-x-auto">
+        <div
+          className="flex max-w-full min-w-0 items-center gap-0.5 overflow-x-auto"
+          role="group"
+          aria-label={t('dag.groupActions')}
+          data-testid="dag-toolbar-actions"
+        >
           <Button size="sm" className="shrink-0 px-2" variant={drawerTab === 'schedule' ? 'default' : 'secondary'} onClick={() => toggleDrawer('schedule')} title={t('dag.toolbarSchedule')}><span className="hidden sm:inline">{t('dag.toolbarSchedule')}</span></Button>
           <Button size="sm" className="shrink-0 px-2" variant={drawerTab === 'hooks' ? 'default' : 'secondary'} onClick={() => toggleDrawer('hooks')} title={t('dag.toolbarHooks')}><span className="hidden sm:inline">{t('dag.toolbarHooks')}</span></Button>
           <Button size="sm" className="shrink-0 px-2" variant={drawerTab === 'advanced' ? 'default' : 'secondary'} onClick={() => toggleDrawer('advanced')} title={t('dag.toolbarAdvanced')}><span className="hidden sm:inline">{t('dag.toolbarAdvanced')}</span></Button>
@@ -1152,6 +1367,18 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
           )}
         </div>
       </div>
+
+      {topologyNotice && (
+        <div
+          data-testid="dag-topology-notice"
+          className="flex items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
+        >
+          <span>{topologyNotice}</span>
+          <button type="button" className="shrink-0 font-medium" onClick={() => setTopologyNotice('')}>
+            ✕
+          </button>
+        </div>
+      )}
 
       {validateError && !operationError && (
         <ErrorDetails
@@ -1239,9 +1466,14 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
       {/* ── Main Area: Canvas + Drawer ──────────────────────────────── */}
       <div className="flex min-h-0 flex-1 gap-2">
         {/* DAG Canvas — primary focus, fills available space */}
-        <div className="relative flex-1 overflow-hidden rounded-xl border border-border bg-slate-50 shadow-sm dark:bg-slate-100">
+        <div
+          className={cn(
+            'relative min-w-0 flex-1 overflow-hidden rounded-xl border border-border bg-slate-50 shadow-sm dark:bg-slate-100',
+            showNodeProps && selectedNode && 'sm:mr-80',
+          )}
+        >
           <ReactFlow
-            nodes={nodes}
+            nodes={displayNodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
@@ -1249,6 +1481,7 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
             onNodeClick={(_, node) => { setSelectedNodeId(node.id); setShowNodeProps(true); }}
             onPaneClick={() => { setSelectedNodeId(null); setShowNodeProps(false); }}
             nodeTypes={nodeTypes}
+            onInit={(inst) => { flowRef.current = inst; }}
             fitView
             defaultEdgeOptions={{
               animated: true,
@@ -1258,17 +1491,30 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={resolvedTheme === "dark" ? "#334155" : "#cbd5e1"} />
             <Controls showInteractive={false} position="bottom-left" />
-            <MiniMap
-              nodeColor={(n) => KIND_STYLES[(n.data as DAGNodeData)?.kind]?.color || '#94a3b8'}
-              nodeStrokeWidth={2}
-              maskColor={resolvedTheme === "dark" ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.05)"}
-              position="bottom-right"
-            />
+            {/* MiniMap is noise on an empty canvas and eats a third of a
+                phone screen; render it only when there is a graph to navigate
+                and there is room for it. */}
+            {nodes.length > 0 && (
+              <MiniMap
+                className="hidden sm:block"
+                nodeColor={(n) => KIND_STYLES[(n.data as DAGNodeData)?.kind]?.color || '#94a3b8'}
+                nodeStrokeWidth={2}
+                maskColor={resolvedTheme === "dark" ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.05)"}
+                position="bottom-right"
+              />
+            )}
           </ReactFlow>
 
-          {/* ── Node Properties Floating Overlay ──────────────────── */}
+          {/* ── Node Properties (docked column, not an overlay) ──────
+               A floating card covered the right edge of the graph, so the
+               operator could not see the node they were editing in context.
+               The panel now takes its own column and the canvas keeps the rest
+               of the width. */}
           {showNodeProps && selectedNode && (
-            <div className="absolute right-3 top-3 z-20 max-h-[calc(100%-24px)] w-72 overflow-y-auto rounded-xl border border-border bg-card shadow-lg">
+            <div
+              data-testid="dag-node-props"
+              className="absolute right-0 top-0 z-20 h-full w-80 overflow-y-auto rounded-r-xl border-l border-border bg-card shadow-[-8px_0_16px_-12px_rgba(0,0,0,0.25)]"
+            >
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <div className="flex items-center gap-2">
                   <ToneBadge tone={selKind === 'source' ? 'emerald' : selKind === 'sink' ? 'emerald' : 'slate'}>{selKind}</ToneBadge>
@@ -1321,9 +1567,13 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
                         {selectedConnection.last_error && <div className="mt-1 text-xs text-rose-600">{selectedConnection.last_error}</div>}
                       </div>
                     ) : (
-                      <button className="w-full rounded-lg border border-dashed border-border bg-white px-3 py-2 text-left text-sm text-muted-foreground hover:border-primary/40 hover:bg-accent/40" onClick={() => updateNodeConnection('')}>
-                        {t('conn.inlineConfig')}
-                      </button>
+                      // This is a mode switch, not a dropdown value: style it as
+                      // an explicit selected-state row so it does not read as
+                      // "a picker showing a missing option".
+                      <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-accent/60 px-3 py-2">
+                        <span className="text-sm font-medium text-foreground/80">{t('conn.inlineConfig')}</span>
+                        <ToneBadge tone="blue">{t('dag.activeMode')}</ToneBadge>
+                      </div>
                     )}
                     {matchingConnections.length > 0 ? (
                       <div className="mt-2 max-h-36 space-y-1 overflow-y-auto">
@@ -1413,9 +1663,16 @@ export function DagEditorPage({ t, lang, plugins, schema, onAction, editTarget }
           {nodes.length === 0 && !selectedNodeId && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="pointer-events-auto rounded-xl border border-dashed border-border bg-card/90 px-8 py-6 text-center backdrop-blur-sm">
-                <div className="mb-2 text-2xl">🎨</div>
+                <div className="mb-2 flex justify-center text-muted-foreground">
+                  <Workflow className="h-7 w-7" strokeWidth={1.5} />
+                </div>
                 <div className="text-sm font-medium text-muted-foreground">{t('dag.emptyHint')}</div>
                 <div className="mt-1 text-xs text-muted-foreground">{t('dag.emptyHint2')}</div>
+                {/* Small screens cannot meaningfully drag a graph; say so
+                    instead of letting the operator fight the canvas. */}
+                <div className="mt-3 border-t border-border pt-2 text-[11px] text-amber-600 sm:hidden">
+                  {t('dag.mobileHint')}
+                </div>
               </div>
             </div>
           )}
