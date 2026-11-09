@@ -283,6 +283,7 @@ func allowedEvidenceDescendantPath(path string) bool {
 		// IT-5 path evidence (CH-C1/C3/C2): same regeneration pattern as the
 		// two forced primary paths; committed after a certification run when
 		// the manifest rebind lands.
+		"docs/evidence/mysql_snap_cdc__ch_rmt_composite_pk.json",
 		"docs/evidence/ch_dedup_crash_window.json",
 		"docs/evidence/ch_dedup_crash_window_multitable.json",
 		"docs/evidence/kafka_envelope_roundtrip.json",

@@ -3,14 +3,14 @@
   "policy": {
     "max_age_hours": 720
   },
-  "certified_commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-  "certified_image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+  "certified_commit": "d82ddc5",
+  "certified_image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
   "records": [
     {
       "kind": "source",
       "type": "file",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
@@ -31,8 +31,8 @@
     {
       "kind": "source",
       "type": "http",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -54,8 +54,8 @@
     {
       "kind": "source",
       "type": "kafka",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -81,8 +81,8 @@
     {
       "kind": "source",
       "type": "mysql_batch",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -107,8 +107,8 @@
     {
       "kind": "source",
       "type": "mysql_cdc",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -133,8 +133,8 @@
     {
       "kind": "source",
       "type": "mysql_snapshot_cdc",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -160,8 +160,8 @@
     {
       "kind": "sink",
       "type": "file_sink",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2"
@@ -182,8 +182,8 @@
     {
       "kind": "sink",
       "type": "s3",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -206,8 +206,8 @@
     {
       "kind": "sink",
       "type": "kafka",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -232,8 +232,8 @@
     {
       "kind": "sink",
       "type": "mysql",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -258,8 +258,8 @@
     {
       "kind": "sink",
       "type": "postgres",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -284,8 +284,8 @@
     {
       "kind": "sink",
       "type": "postgresql",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -310,8 +310,8 @@
     {
       "kind": "sink",
       "type": "clickhouse",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -336,8 +336,8 @@
     {
       "kind": "sink",
       "type": "doris",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -363,8 +363,8 @@
     {
       "kind": "sink",
       "type": "clickhouse_multi_table",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
@@ -406,8 +406,8 @@
     {
       "kind": "source",
       "type": "postgres_cdc",
-      "commit": "fe8692d46a501c32f9a1a4ff29da4d8a32346906",
-      "image": "f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da",
+      "commit": "d82ddc5",
+      "image": "a531bd8617228ebbd79191d768cd32dc4e10a683a4e69dd45683654b44ebd83c",
       "dependencies": {
         "go": "1.24.13",
         "container_runtime": "podman 5.8.2",
