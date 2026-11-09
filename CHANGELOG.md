@@ -4,6 +4,63 @@
 
 ## [Unreleased]
 
+## [0.2.12-beta.21] - 2026-11-09
+
+### Fixed
+
+- **DAG designer: the canvas could certify an unrunnable graph.** `validateAndCreate` only asked
+  whether a node of kind `source` and one of kind `sink` existed anywhere, so a graph with two
+  disconnected nodes produced `Validation passed` while the server preflight (which only inspects
+  per-node config) found nothing to complain about. Topology is now checked before the server call:
+  missing ends, sinks unreachable from any source, orphan nodes, self loops, duplicate edges and
+  cycles. Cycle detection uses Tarjan SCC because a Kahn peel reported innocent nodes downstream of
+  a loop. Offending nodes are outlined in red and the error is anchored to `dag.nodes.<id>` so
+  "Open node" scrolls it into view.
+- **Dragging a connection that would close a loop** is rejected at drag time with a message instead
+  of silently producing a graph that fails later with no pointer to the bad edge.
+- **The canvas lost everything on refresh** while the wizard kept a local draft. Drafts are now
+  persisted per pipeline id, restored on mount, cleared after a successful create/update, and an
+  unsaved canvas warns on unload.
+- **Deleting a node was instant and irreversible.** It now goes through the shared confirmation
+  dialog.
+- **New nodes were placed outside the visible viewport** (hardcoded lane coordinates put a Sink
+  ~500px down a graph that was shorter than that), which read as "the button did nothing". Nodes
+  now land in the viewport centre with a spread so two consecutive adds never overlap.
+- **DAG node properties covered the graph**; the panel is now a docked column and the canvas yields
+  the width.
+- **ConfigForm gave no feedback while typing.** Clearing a required field produced nothing until
+  submit. Required fields now validate on blur, descriptions and errors are wired with
+  `aria-describedby`, and an unparseable `map` value keeps the operator's text and is flagged
+  instead of being silently swallowed.
+- **Secrets could not be verified**: `password` fields had no reveal toggle, and no field carried an
+  `autocomplete` token so password managers could not fill credentials.
+- **Raw schema keys leaked into the UI** (`field.path`, `field.has_header`). Unmapped fields now
+  render a readable label with the raw key preserved in `title`.
+- **Dashboard health contradicted its own pipeline list**: the summary rendered only five of the
+  nine health buckets, so `completed`/`scheduled`/`starting`/`unknown` pipelines vanished and the
+  card read `0/3 healthy` next to three rows badged `Healthy`. All non-zero buckets are rendered
+  and the row badge reports the real derived state.
+- Detail and list rows reported `uptime 0s` and a `CDC Lag` em-dash card for batch pipelines, which
+  are streaming-only concepts.
+- Duplicate-action cleanups: `Create from wizard` and `New pipeline` were the same handler under two
+  labels; the Connections page repeated its own title three times; the DLQ panel repeated the empty
+  state copy; the wizard summary pre-filled the previous draft's connections and duplicated the
+  draft-saved notice.
+
+### Changed
+
+- Long connector schemas (>8 fields) are grouped into connection / task-behaviour sections with a
+  scope legend.
+- DAG toolbar groups are labelled for assistive tech, the empty state uses an icon instead of an
+  emoji, and the minimap is hidden on an empty graph and on small screens (which now also state
+  that graph editing needs a desktop).
+
+### Tests
+
+- 16 new unit tests for the topology checker (`web/src/lib/dag-topology.test.ts`, run with
+  `node --test`).
+- Full UI e2e suite `hack/e2e-ui.sh`: 296 passed / 0 failed.
+
 ### Added
 - **postgres_cdc promoted to production** with a real-PostgreSQL 16 certification path
   (`hack/e2e-postgres-cdc.sh`): insert/update/delete propagation with metadata primary-key upsert,
