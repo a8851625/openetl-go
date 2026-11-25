@@ -1,21 +1,43 @@
 # OpenETL-Go Roadmap
 
-> 当前审计基线：`cfbd496`（v0.2.11-beta.3 后续开发，2026-07-24）
+> 当前执行快照（2026-11-26，代码基线 `e28a740` / v0.2.12-beta.21）：
+> 唯一 `active` 是 EV-2。用户已授权本轮评估的全部 P1 技术修复，新增四个有界后续，
+> 按依赖排为健康事实、连接引用保护、恢复事实契约、最终候选资产认证。
+> UI-E 的外部用户研究继续 `blocked_external`，用户明确要求先完成技术修复。
+> EV-3 保持原状态，MaxCompute P0 保持 `deferred`。
 >
-> 最后核对：2026-09-04（补充 ClickHouse 26.1–26.8 迭代观察与候选规划）
->
-> 复审基线：`c2ac396`（v0.2.12-beta.17，2026-08-29）—— 代码级重新核对结果见
+> 历史审计基线：`cfbd496`（v0.2.11-beta.3 后续开发，2026-07-24）；复审基线
+> `c2ac396`（v0.2.12-beta.17，2026-08-29），代码级核对结果见
 > [Production Ready 复审缺口（RA）](#production-ready-复审缺口ra2026-08-29-代码核对)。
-> 该复审只登记当前代码实测仍打开的缺口，不改变 P0 与既有 backlog 的优先级。
+> 该复审只登记当时实测仍打开的缺口，不改变 P0 与既有 backlog 的优先级。
 >
-> 迭代编排：已进入当前执行 backlog 的未实现条目按依赖与伤害组织为 IT-1..IT-4 主线迭代与 PT-A 并行轨，
+> 迭代编排：已进入当前执行 backlog 的未实现条目按依赖与伤害组织为 IT-1..IT-8 与 UI-A..UI-G 迭代，
 > 见 [docs/iterations/](./iterations/README.md)。该目录提供 spec/plan/tasks 三件套与
 > 技术方案、交付约束，**不改变本文的验收标准**；两者冲突时以本文为准。
 >
-> 2026-09-12 起，UI 加固迭代 **UI-A**（前端交互与向导逻辑，源自 v0.2.12-beta.19 发布后的两轮
-> 页面/向导审计）进入执行，见 [UI-A-frontend-hardening](./iterations/UI-A-frontend-hardening/spec.md)。
+> UI 加固迭代 UI-A/UI-C/UI-D/UI-F/UI-G 已全部 delivered；UI-E 因缺外部用户研究输入为
+> `blocked_external`（其 UI-E.3 只读契约 preflight 已于 2026-11-09 完成，见
+> [contract-preflight.md](./iterations/UI-E-task-flow-recovery/contract-preflight.md)）。
 
 本文只维护尚未完成、可以验收的产品和工程工作。已经交付的功能、测试命令和版本说明进入 [CHANGELOG.zh.md](../CHANGELOG.zh.md)；本文末尾只保留必要的证据索引，不再重复完整实现日志。
+
+## 2026-11-26 P1 技术修复窗口
+
+用户决策：完成前轮分析列出的全部 P1；目前没有外部参与者，先完成技术修复。
+本窗口默认上限 5 rounds，依赖与允许范围见
+[P1 技术修复迭代](./iterations/P1-technical-closure-20261126/spec.md)。
+发布认证安排在运行时修改之后，认证必须覆盖最终候选资产。
+
+| 顺序 / Round | Roadmap item | 状态 | 有界结果 |
+| --- | --- | --- | --- |
+| 1/5 | EV-2 | `active` | MySQL smoke 验证提交后的实际记录，真实 MySQL 的 CI integration job 和聚合门禁通过。 |
+| 2/5 | P5-H1（P5/UI-F 后续） | `queued` | 熔断器打开、恢复失败、DLQ 数量未知在 API、Dashboard、列表、详情与 Issues 中一致可见。 |
+| 3/5 | PR-0-C1（PR-0/UI-E.5 后续） | `queued` | 服务端列出 connection 的线性/DAG 引用，拒绝破坏引用的删除，并覆盖并发创建/更新/删除和重启。 |
+| 4/5 | UI-E-R1（UI-E.3 已授权契约后续） | `queued` | 故障与 replay 结果具备可查询的持久化身份，深链在刷新/重启后恢复上下文；三 backend、备份/恢复与故障路径有证据。 |
+| 5/5 | GA-C1（GA 阻断项 #1 后续） | `queued` | 候选资产先构建、再认证、再发布同一资产；提交/镜像/二进制与实际测试结果绑定，旧证据看板同步。 |
+
+UI-E 的 3–5 人首次任务/恢复任务研究仍按原验收标准另行记录，技术修复不将该研究置为
+delivered。EV-3 与运行历史遗留行是本窗口之外的 P2。
 
 ## 产品定位与边界
 
@@ -940,6 +962,27 @@ PR-2.4.4 本轮验收矩阵（Round 1/5）：
 | D1.2 Task ownership | `ClaimTask`/`CASUpdateTask`；`task_fence_test.go`；`master/fence_test.go` | passed | generation CAS；旧 owner 完成 fenced；lease/max-attempts requeue |
 | D1.3 拓扑 | `hack/e2e-distributed.sh`；`TestDistributed*` integration；可选 `OPENETL_BIN` 多进程 smoke | passed (hermetic+integration) | MySQL 共享 store + master HTTP + 2 workers；compose 强制 token 并标 beta |
 | 边界 | `docker-compose.distributed.yml`、`docs/runtime-modes.md` | documented | 单 master、DAG master-local、单 continuous shard 非 multi-active HA |
+
+#### PR-D1 当前版本重认证（2026-11-09，`e28a740`）
+
+GA 判定（`docs/ga-assessment-2026-09-16.md:13`）把 distributed 列为「保持 beta：证据链绑定旧
+commit/镜像，未随当前版本重验」。2026-11-09 在当前 HEAD 上重跑，**首次补齐真实多进程拓扑**
+（此前 D1.3 只跑过 hermetic + integration，`OPENETL_BIN` 分支被 skip）：
+
+| 验收项 | 证据（2026-11-09 实跑） | 结果 |
+| --- | --- | --- |
+| 真实三进程拓扑（1 master + 2 worker 独立 OS 进程） | `OPENETL_BIN=/tmp/openetl-go-d1 ./hack/e2e-distributed.sh`；master `--role master` + `--role worker`×2，共享 MySQL store | passed |
+| worker 在线注册 | `/api/v2/workers` 返回 `e2e-w1`、`e2e-w2` 均 `status: online`、`slots: 2` | passed |
+| 无 token 注册被拒 | 未带 token 的 `POST /api/v2/workers` 返回 401 | passed |
+| shard 分发无重叠 | `TestDistributedDispatchMySQL`、`TestDistributedDispatchMySQLReal`：`w-real-1:2 w-real-2:2` | passed |
+| label 限制 | `TestDistributedDispatchLabelsMySQLHTTP`：3 shard 全部落在 `w-secure` | passed |
+| worker 丢失后重新分配 | `TestDistributedReassignOnWorkerLossMySQL`：`2/2 shards completed by survivor` | passed |
+| generation CAS fencing | `TestReportTaskResultFencesStaleOwner` 等 hermetic 用例（`-race`） | passed |
+
+结论：distributed 的 D1.1–D1.3 在当前 commit 上重新通过，且 D1.3 的「三个以上独立进程」
+验收项这次是**真的执行了**而非 skip。但 GA 阻断项 #2 的解除还需把该结果绑定到发布候选
+commit + 发布镜像 digest 并写入 release evidence；本次结果绑定的是工作树 HEAD `e28a740`
+与本地构建二进制，故 distributed 仍保持 beta 声明，不据此提升。
 
 Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard multi-active；跨地域 active-active。
 
@@ -2521,18 +2564,12 @@ RA-1 / IT-2 源序与删除复活
 
 ## 待用户决策
 
-- **schema evolution 立场是否需要显式决议**（2026-08-29 提出；**2026-09-06 用户确认：采 (b)，立项 additive-only，单独排期**）：
-  采纳复盘建议：立项做受限 schema evolution（仅 additive 列变更，破坏性变更仍拒绝），承诺
-  additive-only contract、可审计的版本/fingerprint 与明确类型兼容矩阵；不在 IT-3 交付面内实施，
-  作为独立后续排期（记录于本条目与有界后续）。`ddl_guard` 当前拒绝语义保持为覆盖期基线。
-  用户可随时重审此决议。
-  …（原始选项描述保留如下）
-  **拒绝**源端 DDL 变更，而 Flink CDC 等对标实现是自动传播到 sink。这两者都是合理选择，但目前
-  文档未明确声明这是有意边界还是未实现的能力，用户无法据此判断适用性。可选项：(a) 明确写入
-  「明确暂缓或不做」并在 positioning/README 声明为边界；(b) 立项做受限的 schema evolution
-  （仅 additive 列变更，破坏性变更仍拒绝）。本项只需决定立场，不改变当前排序。
-  **本次 ClickHouse 复盘建议**：选择 (b)，但只承诺 additive-only contract、可审计的版本/fingerprint
-  与明确的类型兼容矩阵；删除列、重命名和不兼容类型仍在 preflight 阻断，不承诺自动迁移全部 DDL。
+- **schema evolution 立场是否需要显式决议** —— **已关闭**（2026-08-29 提出；2026-09-06 用户确认采 (b)
+  additive-only；2026-09-19 由 IT-5/CH-C2 交付实现）。决议与交付证据：
+  additive-only contract、可审计的版本/fingerprint 与明确类型兼容矩阵已随
+  [IT-5](./iterations/IT-5-ch-write-contract/spec.md) T5.4/T5.5 落地（`schema_contract_enforcement`
+  路径证据 5/5）；删除列、重命名与不兼容类型仍在 validate/preflight 阻断。`ddl_guard` 的拒绝
+  语义未改变。本项不再占用待决策列表；如需重审决议请显式提出。
 
 - **ClickHouse 写入吞吐性能分析是否立项**（2026-08-21 提出；**2026-09-06 复核：等待用户确认**）：
   旧记录自行写成“2026-09-05 已决议”，本次复核未据此视为授权。已向用户提交是否并入
@@ -2551,6 +2588,119 @@ RA-1 / IT-2 源序与删除复活
   native/HTTP parity、`async_insert` 等待确认和去重 token 开销的对比，先以 warning 模式跑一个
   版本周期，再决定是否升级为发布门禁。
 
+## 认证证据链可信度（2026-11-09 发现，`active`）
+
+### EV-1：connector evidence manifest 的 provenance 与真实运行脱节
+
+状态：`delivered`（2026-11-09 同日闭合：门禁已加 provenance 校验，16/16 脚本全部真实重跑通过，`-strict` 恢复全绿。详见下方「2026-11-09 闭合记录」）
+
+**发现**：`internal/etl/server/evidence/connector-evidence.json` 的 16 条记录共用一个
+note，声称「Re-certified 2026-11-03: all 16 scripts re-run green ... on the local build of
+commit fe8692d (image f4a97b460169)」。逐条核对后，该声明在四个独立事实上不成立：
+
+1. **记录指向的 commit 不含被声称跑过的脚本。** `git cat-file -e fe8692d:hack/e2e-doris-source-order.sh`
+   失败——该脚本首次落盘于 `f4e7f89`（2026-11-07 19:43）。`fe8692d` 是 2026-09-25 的提交。
+2. **声称的窗口内没有任何提交。** `git log --since=2026-09-26 --until=2026-11-06` 为空；
+   2026-11-03 的镜像只能从「`fe8692d` + 未提交的 IT-7/IT-8 工作区改动」构建。
+3. **声称的镜像在窗口关闭之后才存在。** 窗口 `finished_at` 为 `2026-11-03T15:08:00Z`，
+   而 `f4a97b460169` 的构建时间是 `2026-11-03T16:32:24Z`——晚 84 分钟。
+4. **两条被点名的脚本在窗口之后仍被修改。** `hack/e2e-doris-source-order.sh` 与
+   `hack/e2e-postgres-cdc.sh` 的最后改动都是 `2026-11-07T11:43:16Z`。
+
+manifest 随后被连推四次（`210afd7`→`4577bbc`→`36f8853`→`e28a740`），每次只改
+`certified_commit` 字段、note 原文不变。`checkCommitBinding` 只验证「certified commit 是
+当前 commit 的祖先，且中间只改白名单文件」，不校验 note 与运行记录的一致性，因此
+`-strict` 门禁一直是绿的。
+
+**影响**：`-strict` 绿在此前不能作为「这 16 条在当前 commit 上验证过」的证据。这是
+AGENTS.md「证据即事实」原则的直接违反面，且污染所有 production 声明的前提。
+
+**已落地（2026-11-09）**：
+
+- `hack/cmd/check-connector-evidence/main.go` 新增 `checkRecordProvenance`：校验
+  ① 记录 commit 可解析且是 certified commit 的祖先；② 每个被列出的脚本在该 commit
+  上确实存在（`git cat-file -e <commit>:<script>`）；③ 脚本最后改动时间不晚于记录声称的
+  `finished_at`。任一不满足即计入 issue 并使门禁失败。该检查已能自动复现上述第 1、4 条矛盾。
+- manifest 按 2026-11-09 的真实重跑结果重写：全部 16 条 `verified: true`，provenance 与
+  实际执行对齐。
+
+#### 2026-11-09 闭合记录
+
+首轮重跑时有两条路径因环境不可用被如实标为 `partial`，同日网络恢复后已全部补齐：
+
+| 路径 | 首轮 | 结论 | 解除方式 |
+| --- | --- | --- | --- |
+| `s3`（`hack/e2e-s3-minio.sh`） | blocked | **passed** | `minio/mc` 独立镜像已不再分发（quay.io 与 Docker Hub 均返回授权错误，多个固定 tag 同样失败）。`minio/minio` 服务端镜像自带 `/usr/bin/mc`，脚本改为从本地 MinIO 镜像解析客户端（`MC_IMAGE` 可覆盖），不再新增 registry 依赖。记录型 outage→DLQ→replay 全链路通过。 |
+| `doris`（`hack/e2e-doris.sh`） | blocked | **passed** | registry 恢复后拉到 fe/be 2.1.11；batch / CDC / snapshot+CDC / schema drift / restart-reset / BE outage DLQ-replay 全部通过 |
+| `doris`（`hack/e2e-doris-source-order.sh`） | blocked | **passed** | 同上；`_version` 注入真实源位置、随事件递增、旧序写入被拒三条断言通过 |
+
+最终门禁状态：
+
+```sh
+$ ./hack/check-connector-evidence.sh -strict
+path evidence OK: 7 file(s) under docs/evidence, bound to e28a740d6e4c7c1265a00403e7797f754234bf2b
+connector evidence manifest OK: 16 record(s), certified_commit=e28a740d6e4c7c1265a00403e7797f754234bf2b
+```
+
+**仍需注意（不阻塞本条关闭）**：本次认证绑定的是工作树 HEAD `e28a740` 与本地构建镜像
+`f4a97b46`，不是发布候选 commit + 发布镜像 digest。GA 阻断项 #1 要求的是后者，因此该阻断项
+仍按「需在发布候选上重跑并重绑」保留，本条关闭的是「证据本身不可信」这个问题。
+
+**后续要求**：发布候选 commit 上重跑全部 16 条脚本 → 回写 manifest（含真实窗口与镜像 digest）
+→ 再执行 `-strict`。禁止只改 `certified_commit` 字段而不重跑。
+
+### EV-2：MySQL integration smoke 的 CI 耗时断言不稳定
+
+状态：`active`（根因已修复，等待下一次 CI run 复验）
+
+**发现**：`v0.2.12-beta.21` 的 tag commit `e28a740` 的 `test.yml` 运行
+（run `42542843252`，2026-11-09T00:56Z）结论为 **failure**：
+
+```text
+Gate / Integration Tests        failure
+Gate / Gate Passed (aggregated) failure
+--- FAIL: TestMySQLBenchmarkRealDB (0.19s)
+    mysql_test.go:179: 1000-row write took 170.78742ms, want <=100ms
+```
+
+本次 API 核查确认：main 的 Test run 失败；同一提交的 Release run
+`42542865524` 和 Release Beta Container run `42542865547` 各自执行门禁并成功。
+对照此前两个成功 Test run（`35750985097`、`35748755916`，均 2026-09-22）该测试未失败。
+
+**根因**：`internal/etl/sink/mysql_test.go` 的 `TestMySQLBenchmarkRealDB` 是一个
+smoke test，却断言绝对墙钟阈值 `elapsed > 100ms`。共享 CI runner 的调度抖动即可越过该阈值，
+而真正的性能基线属于 `docs/resource-baseline.md` 与 `hack/bench-baseline.sh` 的职责
+（在记录过的硬件画像上测量）。绝对阈值断言放在必过 job 里，只会制造 flaky 门禁。
+
+**当前修正（2026-11-26，Round 1/5）**：先前工作区的 5s 阈值被实际提交记录校验替代：
+读取 total/matching rows，核对 1000 个主键范围内的 name/email 值。
+耗时保留为测量输出，批量 SQL/事务继续由既有测试覆盖。
+使用 Go 1.24.13 linux/arm64 容器与隔离 MySQL 8 实际执行
+`go test -race -count=1 -run '^TestMySQL(BenchmarkRealDB|BuildBatchInsertSQL|BuildBatchDeleteSQL)$' -v ./internal/etl/sink`：
+3 个 tests passed，1000 行字段对账通过，write=21.160856ms，exit 0。
+该记录明确包含真实数据库执行。
+
+**Residual**：需在下一个 tag/PR 的 CI run 上确认该 job 转绿。在那之前不得声称发布门禁全绿。
+
+### EV-3：resource-baseline 的 CI 阈值决策（数据已足，结论为「暂维持 warning」）
+
+状态：`blocked_external`（阻塞项是指标口径缺陷，非缺观测）
+
+详见 [bench-gate-decision.md](./bench-gate-decision.md)。要点：
+
+- `bench-baseline` job 在托管 Actions 上已执行 17 次、其中 14 次产出有效测量，
+  跨 beta.19→beta.21（约 59 天），**满足 GA 阻断项 #3 的「一个版本周期」**；
+  14 次全部零预算告警，warning 模式未造成 CI flaky。
+- 但两个口径缺陷使阈值不可可靠设定：① Docker 29 改变了镜像体积语义
+  （28.0.4 报 137.57–137.84 MiB，29.4.2 报 45.24 MiB，而同期二进制为 64 MiB）；
+  ② `source.dirty` 恒为 `true`，由 job 自己 tee 的 `baseline-run.log` 造成。
+- **②已于 2026-11-09 修复**：`.gitignore` 补 `/baseline-run.log`，
+  `git check-ignore -v baseline-run.log` 现命中 `.gitignore:46`。
+- ①仍未解决；在 Docker 版本被固定或体积口径被重新定义前，体积类阈值不应 blocking。
+
+**解除条件**：固定 Docker engine 版本（或在 `bench_baseline.py` 里记录 engine 版本并按版本
+分别设阈值），然后按该文件 §6 的路径用 `--enforce-budgets` 开关灰度升级，而非直接调紧常量。
+
 ## 有界后续
 
 这些事项只有在上方当前任务完成或被明确重新排序后才进入执行：
@@ -2559,9 +2709,12 @@ RA-1 / IT-2 源序与删除复活
   三件套落地前，不进入当前执行 backlog。优先关注 CH-C1 ack/dedup、CH-C2 additive-only schema、
   CH-C3 Kafka metadata、CH-C4 manifest、CH-C5 资源预算、CH-C6 诊断事件、CH-C7 原子 rollout、
   CH-C8 确定性插件 ABI。
-- S3/File first-class manifest（即 CH-C4）：**主体已由 IT-8 交付**（`manifest: true` 两步提交 +
-  checkpoint `manifest_key` + 读取侧 `ReadLocalManifests`/`CommittedObjectKeys`）。仍未做的是湖仓事务化
-  （元数据改写、小文件合并、跨日重放去重），因此仍不宣称通用 exactly-once 文件输出。
+- S3/File first-class manifest（即 CH-C4）：**已由 IT-8 交付**（`manifest: true` 两步提交 +
+  checkpoint `manifest_key` + 读取侧 `ReadLocalManifests`/`CommittedObjectKeys`），后续由
+  `output/compact` 补齐小文件合并（`kind: compaction` + `replaces` + `source_batch_ids`），
+  并由 manifest 内容级 `batch_id` 吸收跨日重放（同一 `BatchID` 已提交则不再提交第二次）。
+  仍未做的是通用湖仓事务化（外部 catalog/Iceberg 元数据改写），因此仍不宣称通用
+  exactly-once 文件输出。
 - ODPS/MaxCompute lookup/source 方向；MaxCompute sink 认证主线已于 2026-09-17 移除（deferred），此方向一并下线；优先推荐将维表镜像到 MySQL/PostgreSQL/Redis。
 - Feishu 内置 source 和插件样板的真实环境、429/rate-limit、token failure 和 restart 证据；完成前保持 beta/dev-only。
 - JS/TS/WASM parser 示例扩展；不得将具体行业协议硬编码进核心。
