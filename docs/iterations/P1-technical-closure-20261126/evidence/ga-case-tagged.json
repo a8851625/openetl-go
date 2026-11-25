@@ -1,0 +1,29 @@
+{
+  "name": "tagged",
+  "source_commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+  "image_id": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+  "execution_image_id": "sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33",
+  "execution_config_id": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+  "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2",
+  "started_at": "2026-11-25T21:24:42Z",
+  "finished_at": "2026-11-25T21:27:37Z",
+  "result": "passed",
+  "exit_code": 0,
+  "error": "",
+  "log_sha256": "7ca45eda8ecfa63b2d12ae75b01b0e49adea8c8cc2254744d9aabe68629874a4",
+  "artifact_sha256": {
+    "paths/ch_dedup_crash_window.json": "ecb8065b570395d5c3319cca679e5d599d139b8809a14fde8fab618f3577a259",
+    "paths/ch_dedup_crash_window_multitable.json": "39f2b19179920d5b1a2e2da63d3253876043f181e3bc8e564aedb60f32f4ace4",
+    "paths/kafka_envelope_roundtrip.json": "cbe0200ccf542e2ccb28329fce0d29a26db56d7ae758a7eeb66f98fd293004c0",
+    "paths/mysql_cdc__mysql_upsert.json": "671f0e3971244d30eaf90f45b35390df0f408ab28d5b378acc634ba624503d42",
+    "paths/mysql_snap_cdc__ch_rmt.json": "fbc2c781cb61edf19d1989f7a0a3ad2fa1b9961c3d9ec376d81b2d3edb8d3ef0",
+    "paths/mysql_snap_cdc__ch_rmt_composite_pk.json": "28bc1a34ab2dbc8055a7e11fa757f5687dff80d73622cf8b4c690b779cdd0e45",
+    "paths/schema_contract_enforcement.json": "338659d0b360b5b9c37a8276fd4c0ced19625b28e99beb946af736900bebfd68"
+  },
+  "container_runtime": "Docker version 29.4.2, build 055a478",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+    "docker.io/redpandadata/redpanda:v24.1.1": "sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d",
+    "docker.io/clickhouse/clickhouse-server:24.3": "sha256:85b97f63dcfff47790d26bb5d5801637aaddb2b93e5e9aee27a686c2fb2b9916"
+  }
+}

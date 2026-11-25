@@ -77,6 +77,33 @@ func TestCheckPathEvidenceAcceptsFreshPassed(t *testing.T) {
 	}
 }
 
+func TestCheckPathEvidenceAbsoluteDirectory(t *testing.T) {
+	root := initEvidenceGitRepo(t)
+	writeEvidenceTestFile(t, root, "internal/etl/source/mysql_cdc.go", "source")
+	commitEvidenceTest(t, root, "source baseline")
+	commit := mustGitOutput(t, root, "rev-parse", "HEAD")
+	external := t.TempDir()
+	writeEvidenceTestFile(t, external, "mysql_cdc__mysql_upsert.json", pathEvidenceJSON("mysql_cdc__mysql_upsert", commit, `{"name":"happy_path","result":"passed"}`))
+	if err := checkPathEvidenceDir(root, commit, external, true); err != nil {
+		t.Fatalf("absolute candidate evidence rejected: %v", err)
+	}
+	// A failing file in the same external directory must be read and rejected.
+	writeEvidenceTestFile(t, external, "mysql_cdc__mysql_upsert.json", pathEvidenceJSON("mysql_cdc__mysql_upsert", commit, `{"name":"happy_path","result":"failed"}`))
+	if err := checkPathEvidenceDir(root, commit, external, true); err == nil {
+		t.Fatal("absolute candidate evidence was skipped instead of rejected")
+	}
+}
+
+func TestCheckPathEvidenceStrictRequiresFiles(t *testing.T) {
+	root, empty := t.TempDir(), t.TempDir()
+	if err := checkPathEvidenceDir(root, "", empty, true); err == nil {
+		t.Fatal("strict check accepted an empty evidence directory")
+	}
+	if err := checkPathEvidenceDir(root, "", empty, false); err != nil {
+		t.Fatalf("optional structural legacy check changed: %v", err)
+	}
+}
+
 func TestCheckPathEvidenceRejectsStaleAfterSourceChange(t *testing.T) {
 	root := initEvidenceGitRepo(t)
 	writeEvidenceTestFile(t, root, "internal/etl/source/mysql_cdc.go", "v1")

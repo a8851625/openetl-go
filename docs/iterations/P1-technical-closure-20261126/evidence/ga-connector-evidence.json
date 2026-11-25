@@ -1,0 +1,441 @@
+{
+  "version": "v1",
+  "policy": {
+    "max_age_hours": 720
+  },
+  "certified_commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+  "certified_image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+  "records": [
+    {
+      "kind": "source",
+      "type": "file",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\"}"
+      },
+      "started_at": "2026-11-25T21:23:32Z",
+      "finished_at": "2026-11-25T21:24:00Z",
+      "expires_at": "2026-12-25T21:24:00Z",
+      "scripts": [
+        "hack/e2e.sh"
+      ],
+      "cases": [
+        "file_to_file",
+        "checkpoint_persisted"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "source",
+      "type": "http",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{}"
+      },
+      "started_at": "2026-11-25T21:25:16Z",
+      "finished_at": "2026-11-25T21:25:26Z",
+      "expires_at": "2026-12-25T21:25:26Z",
+      "scripts": [
+        "hack/e2e-http-source.sh"
+      ],
+      "cases": [
+        "pagination",
+        "auth_headers"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "source",
+      "type": "kafka",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\", \"docker.io/redpandadata/redpanda:v24.1.1\": \"sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d\"}"
+      },
+      "started_at": "2026-11-25T21:23:33Z",
+      "finished_at": "2026-11-25T21:25:25Z",
+      "expires_at": "2026-12-25T21:25:25Z",
+      "scripts": [
+        "hack/e2e-kafka.sh",
+        "hack/e2e-kafka-raw-ods.sh"
+      ],
+      "cases": [
+        "source_sink",
+        "offset_replay",
+        "broker_restart",
+        "rebalance"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "source",
+      "type": "mysql_batch",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\", \"docker.io/library/postgres:16-alpine\": \"sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d\"}"
+      },
+      "started_at": "2026-11-25T21:23:32Z",
+      "finished_at": "2026-11-25T21:24:16Z",
+      "expires_at": "2026-12-25T21:24:16Z",
+      "scripts": [
+        "hack/e2e.sh",
+        "hack/e2e-mysql-postgres.sh"
+      ],
+      "cases": [
+        "batch_read",
+        "custom_query",
+        "schema_preflight"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "source",
+      "type": "mysql_cdc",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\", \"docker.io/library/postgres:16-alpine\": \"sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d\"}"
+      },
+      "started_at": "2026-11-25T21:23:30Z",
+      "finished_at": "2026-11-25T21:24:39Z",
+      "expires_at": "2026-12-25T21:24:39Z",
+      "scripts": [
+        "hack/e2e-cdc-mysql.sh",
+        "hack/e2e-cdc-postgres.sh"
+      ],
+      "cases": [
+        "insert_update_delete",
+        "checkpoint_restart",
+        "postgres_upsert"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "source",
+      "type": "mysql_snapshot_cdc",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/clickhouse/clickhouse-server:24.3-alpine\": \"sha256:c3f166f4a80098480463d897a63f6867d24e3a7661fc1fe72e889788115a25f1\", \"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\"}"
+      },
+      "started_at": "2026-11-25T21:23:33Z",
+      "finished_at": "2026-11-25T21:24:31Z",
+      "expires_at": "2026-12-25T21:24:31Z",
+      "scripts": [
+        "hack/e2e-snapshot-cdc.sh",
+        "hack/e2e-snapshot-cdc-clickhouse.sh"
+      ],
+      "cases": [
+        "snapshot",
+        "cdc_handoff",
+        "checkpoint_restart",
+        "checkpoint_reset"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "sink",
+      "type": "file_sink",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\"}"
+      },
+      "started_at": "2026-11-25T21:23:32Z",
+      "finished_at": "2026-11-25T21:24:00Z",
+      "expires_at": "2026-12-25T21:24:00Z",
+      "scripts": [
+        "hack/e2e.sh"
+      ],
+      "cases": [
+        "file_output",
+        "checkpoint_persisted"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "sink",
+      "type": "s3",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"quay.io/minio/minio:RELEASE.2024-07-16T23-46-41Z\": \"sha256:5fb1d1c9375e413b73a04c74b06105570bb042cc918a0d6c3471222d1b4ed999\"}"
+      },
+      "started_at": "2026-11-25T21:25:16Z",
+      "finished_at": "2026-11-25T21:26:04Z",
+      "expires_at": "2026-12-25T21:26:04Z",
+      "scripts": [
+        "hack/e2e-s3-minio.sh"
+      ],
+      "cases": [
+        "deterministic_replay",
+        "target_outage",
+        "dlq_replay"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "sink",
+      "type": "kafka",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\", \"docker.io/redpandadata/redpanda:v24.1.1\": \"sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d\"}"
+      },
+      "started_at": "2026-11-25T21:23:33Z",
+      "finished_at": "2026-11-25T21:25:25Z",
+      "expires_at": "2026-12-25T21:25:25Z",
+      "scripts": [
+        "hack/e2e-kafka.sh",
+        "hack/e2e-kafka-raw-ods.sh"
+      ],
+      "cases": [
+        "producer_write",
+        "offset_replay",
+        "append_duplicate_boundary"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "sink",
+      "type": "mysql",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\", \"docker.io/redpandadata/redpanda:v24.1.1\": \"sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d\"}"
+      },
+      "started_at": "2026-11-25T21:23:34Z",
+      "finished_at": "2026-11-25T21:24:39Z",
+      "expires_at": "2026-12-25T21:24:39Z",
+      "scripts": [
+        "hack/e2e-cdc-mysql.sh",
+        "hack/e2e-debezium-mysql.sh"
+      ],
+      "cases": [
+        "upsert",
+        "metadata_pk",
+        "dlq_replay"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "sink",
+      "type": "postgres",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\", \"docker.io/library/postgres:16-alpine\": \"sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d\"}"
+      },
+      "started_at": "2026-11-25T21:23:30Z",
+      "finished_at": "2026-11-25T21:24:16Z",
+      "expires_at": "2026-12-25T21:24:16Z",
+      "scripts": [
+        "hack/e2e-mysql-postgres.sh",
+        "hack/e2e-cdc-postgres.sh"
+      ],
+      "cases": [
+        "insert_update_delete",
+        "upsert",
+        "checkpoint_replay"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "sink",
+      "type": "postgresql",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\", \"docker.io/library/postgres:16-alpine\": \"sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d\"}"
+      },
+      "started_at": "2026-11-25T21:23:30Z",
+      "finished_at": "2026-11-25T21:24:16Z",
+      "expires_at": "2026-12-25T21:24:16Z",
+      "scripts": [
+        "hack/e2e-mysql-postgres.sh",
+        "hack/e2e-cdc-postgres.sh"
+      ],
+      "cases": [
+        "insert_update_delete",
+        "upsert",
+        "checkpoint_replay"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "sink",
+      "type": "clickhouse",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/clickhouse/clickhouse-server:24.3-alpine\": \"sha256:c3f166f4a80098480463d897a63f6867d24e3a7661fc1fe72e889788115a25f1\", \"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\"}"
+      },
+      "started_at": "2026-11-25T21:23:40Z",
+      "finished_at": "2026-11-25T21:25:08Z",
+      "expires_at": "2026-12-25T21:25:08Z",
+      "scripts": [
+        "hack/e2e-clickhouse.sh",
+        "hack/e2e-snapshot-cdc-clickhouse.sh"
+      ],
+      "cases": [
+        "schema_autocreate",
+        "replacing_merge_tree",
+        "outage_replay"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "sink",
+      "type": "doris",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/apache/doris:be-2.1.11\": \"sha256:835a4cc7bc26c682a2ea1641328f5decdc98f8e661f7b955cdf579afb86f50f5\", \"docker.io/apache/doris:fe-2.1.11\": \"sha256:f0d54ae0e7ca21e93cafcc0324c1b153fd15eb6a77e9bd5f3d239557940b9fb8\", \"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\"}"
+      },
+      "started_at": "2026-11-25T21:23:34Z",
+      "finished_at": "2026-11-25T21:26:47Z",
+      "expires_at": "2026-12-25T21:26:47Z",
+      "scripts": [
+        "hack/e2e-doris.sh",
+        "hack/e2e-doris-source-order.sh"
+      ],
+      "cases": [
+        "stream_load",
+        "upsert",
+        "outage_dlq_replay",
+        "source_order_replay"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "sink",
+      "type": "clickhouse_multi_table",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/clickhouse/clickhouse-server:24.3-alpine\": \"sha256:c3f166f4a80098480463d897a63f6867d24e3a7661fc1fe72e889788115a25f1\", \"docker.io/redpandadata/redpanda:v24.1.1\": \"sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d\"}"
+      },
+      "started_at": "2026-11-25T21:24:22Z",
+      "finished_at": "2026-11-25T21:25:14Z",
+      "expires_at": "2026-12-25T21:25:14Z",
+      "scripts": [
+        "hack/e2e-kafka-multitable-clickhouse.sh"
+      ],
+      "cases": [
+        "binlog_purge_recovery",
+        "cdc_delete_metadata_key",
+        "checkpoint_reset_replay",
+        "date_column_rfc3339",
+        "datetime_empty_string_coercion",
+        "debezium_envelope_keeps_pk",
+        "debezium_envelope_schema",
+        "delete_mutation",
+        "empty_string_numeric_coercion",
+        "heterogeneous_order_by",
+        "kafka_schema_propagation",
+        "metainfo_declared_types",
+        "multi_sample_hint_safety",
+        "schema_drift_add_columns",
+        "snapshot_cdc_metainfo",
+        "sqlite_read_write_split",
+        "string_safe_numeric_hints",
+        "table_template_fanout",
+        "temporal_hint_string_safe",
+        "update_absorption",
+        "year_type_uint16"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    },
+    {
+      "kind": "source",
+      "type": "postgres_cdc",
+      "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "image": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+      "dependencies": {
+        "go": "go version go1.24.13 linux/amd64",
+        "container_runtime": "Docker version 29.4.2, build 055a478",
+        "fixture_images": "{\"docker.io/library/mysql:8.0\": \"sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b\", \"docker.io/library/postgres:16-alpine\": \"sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d\"}"
+      },
+      "started_at": "2026-11-25T21:23:34Z",
+      "finished_at": "2026-11-25T21:25:43Z",
+      "expires_at": "2026-12-25T21:25:43Z",
+      "scripts": [
+        "hack/e2e-postgres-cdc.sh"
+      ],
+      "cases": [
+        "insert_update_delete",
+        "metadata_pk_upsert",
+        "idle_keepalive",
+        "checkpoint_restart_no_duplicate",
+        "truncate_fail_closed"
+      ],
+      "verified": true,
+      "note": "Executed on this preserved candidate; raw per-script logs and image identities are retained in its certification bundle.",
+      "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+    }
+  ],
+  "certified_binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+}

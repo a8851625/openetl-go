@@ -4,15 +4,21 @@
 
 ## [Unreleased]
 
-## [0.2.12-beta.21] - 2026-11-09
-
 ### Fixed
+
+- Release candidates preserve the tested image, executable and ten default/extism archives through build, certification and promotion. Source/config/binary hashes, raw case results and execution windows gate publication; missing, failed, skipped, stale or mutated evidence blocks it. The publisher loads the saved assets and verifies the digest returned by the registry push. DLQ maintenance backups also preserve legacy SQL NULL and JSON shape.
+
+- MySQL integration smoke now reconciles 1000 committed business keys and fields; elapsed time remains an observation rather than an absolute shared-runner pass threshold.
 
 - DLQ recovery now retains server-owned identities, captured endpoint/connection context and dry-run/replay outcomes across restart and row removal. Result persistence failures retain sink acknowledgements and return 503; discard/retention is recorded separately. Exact task links preserve scope and reject invalid or sensitive parameters. Verified on three SQL backends and 21 real-container API/UI checks.
 
 - Saved connection deletion and kind/type changes now protect references in current persisted linear/DAG specs under a shared SQL transaction guard. The reference API and deletion dialog show stable affected pipeline/node IDs; encrypted or unreadable legacy specs block deletion. Verified across SQLite/MySQL/PostgreSQL, backup/restore, concurrent spec mutation and a nine-check real-container API/YAML/UI run.
 
 - Running health now follows the server thresholds and current signals: an open write circuit, an unreadable DLQ count, and failed spec restoration appear consistently across the existing UI. Circuit cooldown precedes the batch commit deadline, so the default 30-second cooldown can recover without exhausting it. Verified with Go race tests, nine frontend contracts and 14 real-container API/UI checks.
+
+## [0.2.12-beta.21] - 2026-11-09
+
+### Fixed
 
 - **DAG designer: the canvas could certify an unrunnable graph.** `validateAndCreate` only asked
   whether a node of kind `source` and one of kind `sink` existed anywhere, so a graph with two

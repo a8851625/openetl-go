@@ -1,8 +1,8 @@
 {
   "path_id": "schema_contract_enforcement",
-  "commit": "d82ddc50eaab03a3fbc2fda043d7b4d5422396ca",
-  "run_started_at": "2026-11-09T00:35:22Z",
-  "runner": "local",
+  "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+  "run_started_at": "2026-11-25T21:27:27Z",
+  "runner": "github-actions",
   "deps": {
     "harness": "e2e",
     "mysql": "docker.io/library/mysql:8.0"
@@ -30,5 +30,9 @@
     }
   ],
   "result": "passed",
-  "finished_at": "2026-11-09T00:35:23Z"
+  "finished_at": "2026-11-25T21:27:28Z",
+  "asset": {
+    "kind": "binary",
+    "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2"
+  }
 }

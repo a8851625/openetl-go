@@ -1,0 +1,354 @@
+[1/2] STEP 1/8: FROM docker.io/library/golang:1.24.13-alpine AS build
+Trying to pull docker.io/library/golang:1.24.13-alpine...
+Getting image source signatures
+Copying blob sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1
+Copying blob sha256:d8ad8cd72600f46cc068e16c39046ebc76526e41051f43a8c249884b200936c0
+Copying blob sha256:f5657497bb4612f95697098fd984bb9e638887aa2070ae81081ed7887c453027
+Copying blob sha256:2b15849378b44c08f252c20f78b44186fe48e31a46e2085dc3020ba5f7d6b7c0
+Copying blob sha256:0967cf60864b908575d28f945a5205b71a8c9f31c257aa7ef3eb74438d790a98
+Copying config sha256:fa0811e6d279edea461b508a8f1c66f0fee2ba0b75dcaddd07ffda3661d7e2d3
+Writing manifest to image destination
+[1/2] STEP 2/8: RUN apk add --no-cache git ca-certificates && mkdir -p /out
+( 1/12) Installing brotli-libs (1.2.1-r0)
+( 2/12) Installing c-ares (1.34.9-r0)
+( 3/12) Installing libunistring (1.4.1-r0)
+( 4/12) Installing libidn2 (2.3.8-r0)
+( 5/12) Installing nghttp2-libs (1.69.0-r0)
+( 6/12) Installing libpsl (0.21.5-r3)
+( 7/12) Installing zstd-libs (1.6.0-r1)
+( 8/12) Installing libcurl (8.23.0-r0)
+( 9/12) Installing libexpat (2.11.0-r0)
+(10/12) Installing pcre2 (10.49-r0)
+(11/12) Installing git (2.52.1-r0)
+(12/12) Installing git-init-template (2.52.1-r0)
+Executing busybox-1.37.0-r30.trigger
+OK: 21.3 MiB in 29 packages
+--> 144358405088
+[1/2] STEP 3/8: ENV CGO_ENABLED=0 GOTOOLCHAIN=go1.24.13
+--> a26c59db0d44
+[1/2] STEP 4/8: WORKDIR /src
+--> c1c247c40b8a
+[1/2] STEP 5/8: RUN git init minio && cd minio &&     git remote add origin https://github.com/minio/minio.git &&     git fetch --depth=1 origin 3535197f993dea840dcb96302ba4d883dc619097 &&     git checkout --detach FETCH_HEAD &&     test "$(git rev-parse HEAD)" = 3535197f993dea840dcb96302ba4d883dc619097
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: will change to "main" in Git 3.0. To configure the initial branch name
+hint: to use in all of your new repositories, which will suppress this warning,
+hint: call:
+hint:
+hint: 	git config --global init.defaultBranch <name>
+hint:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint:
+hint: 	git branch -m <name>
+hint:
+hint: Disable this message with "git config set advice.defaultBranchName false"
+Initialized empty Git repository in /src/minio/.git/
+From https://github.com/minio/minio
+ * branch            3535197f993dea840dcb96302ba4d883dc619097 -> FETCH_HEAD
+HEAD is now at 3535197 replication: proxy only on missing object or read quorum err (#20101)
+--> ffb6b9858249
+[1/2] STEP 6/8: RUN cd minio && go build -trimpath -ldflags '-s -w -X github.com/minio/minio/cmd.Version=2024-07-16T23:46:41Z -X github.com/minio/minio/cmd.ReleaseTag=OPENETL-FIXTURE.2024-07-16T23-46-41Z -X github.com/minio/minio/cmd.CommitID=3535197f993dea840dcb96302ba4d883dc619097 -X github.com/minio/minio/cmd.ShortCommitID=3535197f993d -X github.com/minio/minio/cmd.CopyrightYear=2024' -o /out/minio .
+go: downloading cloud.google.com/go/storage v1.42.0
+go: downloading github.com/Azure/azure-storage-blob-go v0.15.0
+go: downloading github.com/Azure/go-autorest/autorest/adal v0.9.24
+go: downloading github.com/Azure/go-autorest/autorest v0.11.29
+go: downloading github.com/bcicen/jstream v1.0.1
+go: downloading github.com/Azure/go-autorest v14.2.0+incompatible
+go: downloading cloud.google.com/go v0.115.0
+go: downloading github.com/cespare/xxhash/v2 v2.3.0
+go: downloading github.com/cheggaaa/pb v1.0.29
+go: downloading github.com/coreos/go-oidc/v3 v3.10.0
+go: downloading github.com/coreos/go-systemd/v22 v22.5.0
+go: downloading github.com/cosnicolaou/pbzip2 v1.0.3
+go: downloading github.com/dchest/siphash v1.2.3
+go: downloading github.com/dustin/go-humanize v1.0.1
+go: downloading github.com/fatih/color v1.17.0
+go: downloading github.com/felixge/fgprof v0.9.4
+go: downloading github.com/go-ldap/ldap/v3 v3.4.8
+go: downloading github.com/go-openapi/loads v0.22.0
+go: downloading github.com/golang-jwt/jwt/v4 v4.5.0
+go: downloading github.com/google/uuid v1.6.0
+go: downloading github.com/hashicorp/golang-lru/v2 v2.0.7
+go: downloading github.com/inconshreveable/mousetrap v1.1.0
+go: downloading github.com/json-iterator/go v1.1.12
+go: downloading github.com/klauspost/compress v1.17.9
+go: downloading github.com/hashicorp/golang-lru v1.0.2
+go: downloading github.com/klauspost/filepathx v1.1.1
+go: downloading github.com/klauspost/pgzip v1.2.6
+go: downloading github.com/klauspost/readahead v1.4.0
+go: downloading github.com/klauspost/reedsolomon v1.12.3
+go: downloading github.com/lithammer/shortuuid/v4 v4.0.0
+go: downloading github.com/miekg/dns v1.1.61
+go: downloading github.com/minio/cli v1.24.2
+go: downloading github.com/minio/console v1.6.3
+go: downloading github.com/minio/dnscache v0.1.1
+go: downloading github.com/minio/dperf v0.5.3
+go: downloading github.com/minio/highwayhash v1.0.3
+go: downloading github.com/minio/kms-go/kes v0.3.0
+go: downloading github.com/minio/madmin-go/v3 v3.0.58
+go: downloading github.com/minio/minio-go/v7 v7.0.73
+go: downloading github.com/minio/mux v1.9.0
+go: downloading github.com/minio/pkg/v3 v3.0.8
+go: downloading github.com/minio/sio v0.4.0
+go: downloading github.com/minio/selfupdate v0.6.0
+go: downloading github.com/minio/xxml v0.0.3
+go: downloading github.com/mitchellh/go-homedir v1.1.0
+go: downloading github.com/minio/zipindex v0.3.0
+go: downloading github.com/pierrec/lz4 v2.6.1+incompatible
+go: downloading github.com/philhofer/fwd v1.1.2
+go: downloading github.com/pkg/errors v0.9.1
+go: downloading github.com/pkg/sftp v1.13.6
+go: downloading github.com/pkg/xattr v0.4.9
+go: downloading github.com/prometheus/client_golang v1.19.1
+go: downloading github.com/prometheus/client_model v0.6.1
+go: downloading github.com/prometheus/common v0.55.0
+go: downloading github.com/prometheus/procfs v0.15.1
+go: downloading github.com/puzpuzpuz/xsync/v3 v3.2.0
+go: downloading github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
+go: downloading github.com/rs/cors v1.11.0
+go: downloading github.com/secure-io/sio-go v0.3.1
+go: downloading github.com/shirou/gopsutil/v3 v3.24.5
+go: downloading github.com/tinylib/msgp v1.1.9
+go: downloading github.com/valyala/bytebufferpool v1.0.0
+go: downloading github.com/zeebo/xxh3 v1.0.2
+go: downloading go.etcd.io/etcd/api/v3 v3.5.14
+go: downloading go.etcd.io/etcd/client/v3 v3.5.14
+go: downloading go.uber.org/atomic v1.11.0
+go: downloading goftp.io/server/v2 v2.0.1
+go: downloading golang.org/x/crypto v0.24.0
+go: downloading golang.org/x/exp v0.0.0-20240613232115-7f521ea00fb8
+go: downloading golang.org/x/oauth2 v0.21.0
+go: downloading golang.org/x/sync v0.7.0
+go: downloading golang.org/x/sys v0.21.0
+go: downloading golang.org/x/term v0.21.0
+go: downloading google.golang.org/api v0.187.0
+go: downloading gopkg.in/yaml.v2 v2.4.0
+go: downloading gopkg.in/yaml.v3 v3.0.1
+go: downloading github.com/Azure/azure-pipeline-go v0.2.3
+go: downloading github.com/Azure/go-autorest/logger v0.2.1
+go: downloading github.com/Azure/go-autorest/tracing v0.6.0
+go: downloading github.com/Azure/go-autorest/autorest/date v0.3.0
+go: downloading cloud.google.com/go/compute/metadata v0.4.0
+go: downloading cloud.google.com/go/iam v1.1.10
+go: downloading github.com/googleapis/gax-go/v2 v2.12.5
+go: downloading google.golang.org/genproto v0.0.0-20240701130421-f6361c86f094
+go: downloading google.golang.org/grpc v1.65.0
+go: downloading google.golang.org/protobuf v1.34.2
+go: downloading github.com/mattn/go-runewidth v0.0.15
+go: downloading github.com/go-jose/go-jose/v4 v4.0.2
+go: downloading github.com/mattn/go-colorable v0.1.13
+go: downloading github.com/mattn/go-isatty v0.0.20
+go: downloading github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358
+go: downloading github.com/go-asn1-ber/asn1-ber v1.5.7
+go: downloading github.com/google/pprof v0.0.0-20240625030939-27f56978b8b0
+go: downloading github.com/go-openapi/spec v0.21.0
+go: downloading github.com/go-openapi/analysis v0.23.0
+go: downloading github.com/go-openapi/swag v0.23.0
+go: downloading github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd
+go: downloading github.com/modern-go/reflect2 v1.0.2
+go: downloading github.com/klauspost/cpuid/v2 v2.2.8
+go: downloading golang.org/x/net v0.26.0
+go: downloading github.com/minio/pkg/v2 v2.0.19
+go: downloading github.com/ncw/directio v1.0.5
+go: downloading aead.dev/mem v0.2.0
+go: downloading github.com/prometheus/prom2json v1.3.3
+go: downloading github.com/safchain/ethtool v0.4.1
+go: downloading github.com/goccy/go-json v0.10.3
+go: downloading github.com/minio/md5-simd v1.1.2
+go: downloading github.com/go-ini/ini v1.67.0
+go: downloading github.com/rs/xid v1.5.0
+go: downloading golang.org/x/time v0.5.0
+go: downloading github.com/beevik/ntp v1.4.3
+go: downloading github.com/coredns/coredns v1.11.3
+go: downloading go.uber.org/zap v1.27.0
+go: downloading github.com/IBM/sarama v1.43.2
+go: downloading github.com/eclipse/paho.mqtt.golang v1.4.3
+go: downloading github.com/elastic/go-elasticsearch/v7 v7.17.10
+go: downloading github.com/go-sql-driver/mysql v1.8.1
+go: downloading github.com/gomodule/redigo v1.9.2
+go: downloading github.com/lib/pq v1.10.9
+go: downloading github.com/nats-io/nats.go v1.36.0
+go: downloading github.com/nats-io/stan.go v0.10.4
+go: downloading github.com/nsqio/go-nsq v1.1.0
+go: downloading github.com/rabbitmq/amqp091-go v1.10.0
+go: downloading github.com/xdg/scram v1.0.5
+go: downloading github.com/gobwas/ws v1.4.0
+go: downloading github.com/buger/jsonparser v1.1.1
+go: downloading github.com/minio/kms-go/kms v0.4.0
+go: downloading github.com/minio/simdjson-go v0.4.5
+go: downloading github.com/go-openapi/errors v0.22.0
+go: downloading github.com/go-openapi/runtime v0.28.0
+go: downloading github.com/jessevdk/go-flags v1.6.1
+go: downloading github.com/minio/mc v0.0.0-20240702213905-74032bc16a3f
+go: downloading github.com/minio/websocket v1.6.0
+go: downloading github.com/unrolled/secure v1.15.0
+go: downloading github.com/go-openapi/strfmt v0.23.0
+go: downloading github.com/rjeczalik/notify v0.9.3
+go: downloading github.com/montanaflynn/stats v0.7.1
+go: downloading github.com/fatih/structs v1.1.0
+go: downloading github.com/lestrrat-go/jwx v1.2.29
+go: downloading aead.dev/minisign v0.3.0
+go: downloading github.com/kr/fs v0.1.0
+go: downloading github.com/beorn7/perks v1.0.1
+go: downloading github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
+go: downloading github.com/tklauser/go-sysconf v0.3.14
+go: downloading github.com/gogo/protobuf v1.3.2
+go: downloading github.com/golang/protobuf v1.5.4
+go: downloading go.etcd.io/etcd/client/pkg/v3 v3.5.14
+go: downloading github.com/mattn/go-ieproxy v0.0.12
+go: downloading google.golang.org/genproto/googleapis/api v0.0.0-20240701130421-f6361c86f094
+go: downloading go.opencensus.io v0.24.0
+go: downloading go.opentelemetry.io/otel v1.28.0
+go: downloading go.opentelemetry.io/otel/trace v1.28.0
+go: downloading google.golang.org/genproto/googleapis/rpc v0.0.0-20240701130421-f6361c86f094
+go: downloading cloud.google.com/go/auth v0.6.1
+go: downloading cloud.google.com/go/auth/oauth2adapt v0.2.2
+go: downloading go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.52.0
+go: downloading github.com/rivo/uniseg v0.4.7
+go: downloading github.com/go-openapi/jsonpointer v0.21.0
+go: downloading github.com/go-openapi/jsonreference v0.21.0
+go: downloading github.com/mailru/easyjson v0.7.7
+go: downloading github.com/matttproud/golang_protobuf_extensions v1.0.4
+go: downloading go.uber.org/multierr v1.11.0
+go: downloading github.com/gorilla/websocket v1.5.3
+go: downloading github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
+go: downloading github.com/eapache/go-resiliency v1.6.0
+go: downloading github.com/eapache/go-xerial-snappy v0.0.0-20230731223053-c322873962e3
+go: downloading github.com/eapache/queue v1.1.0
+go: downloading github.com/hashicorp/go-multierror v1.1.1
+go: downloading github.com/jcmturner/gofork v1.7.6
+go: downloading github.com/jcmturner/gokrb5/v8 v8.4.4
+go: downloading github.com/pierrec/lz4/v4 v4.1.21
+go: downloading filippo.io/edwards25519 v1.1.0
+go: downloading github.com/nats-io/nuid v1.0.1
+go: downloading github.com/nats-io/nkeys v0.4.7
+go: downloading github.com/golang/snappy v0.0.4
+go: downloading github.com/xdg/stringprep v1.0.3
+go: downloading github.com/minio/csvparser v1.0.0
+go: downloading github.com/fraugster/parquet-go v0.12.0
+go: downloading github.com/alecthomas/participle v0.7.1
+go: downloading github.com/gobwas/httphead v0.1.0
+go: downloading github.com/gobwas/pool v0.2.1
+go: downloading github.com/go-openapi/validate v0.24.0
+go: downloading github.com/tidwall/gjson v1.17.1
+go: downloading github.com/docker/go-units v0.5.0
+go: downloading github.com/jedib0t/go-pretty/v6 v6.5.9
+go: downloading github.com/charmbracelet/bubbles v0.18.0
+go: downloading github.com/charmbracelet/bubbletea v0.26.6
+go: downloading github.com/charmbracelet/lipgloss v0.11.0
+go: downloading github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
+go: downloading github.com/minio/colorjson v1.0.8
+go: downloading github.com/minio/filepath v1.0.0
+go: downloading github.com/muesli/reflow v0.3.0
+go: downloading github.com/muesli/termenv v0.15.2
+go: downloading github.com/olekukonko/tablewriter v0.0.5
+go: downloading github.com/posener/complete v1.2.3
+go: downloading github.com/vbauerster/mpb/v8 v8.7.3
+go: downloading golang.org/x/text v0.16.0
+go: downloading github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2
+go: downloading github.com/mitchellh/mapstructure v1.5.0
+go: downloading github.com/oklog/ulid v1.3.1
+go: downloading go.mongodb.org/mongo-driver v1.16.0
+go: downloading github.com/lestrrat-go/backoff/v2 v2.0.8
+go: downloading github.com/lestrrat-go/blackmagic v1.0.2
+go: downloading github.com/lestrrat-go/httpcc v1.0.1
+go: downloading github.com/lestrrat-go/iter v1.0.2
+go: downloading github.com/lestrrat-go/option v1.0.1
+go: downloading github.com/coreos/go-semver v0.3.1
+go: downloading github.com/tklauser/numcpus v0.8.0
+go: downloading github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
+go: downloading github.com/go-logr/logr v1.4.2
+go: downloading go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.52.0
+go: downloading go.opentelemetry.io/otel/metric v1.28.0
+go: downloading github.com/google/s2a-go v0.1.7
+go: downloading github.com/googleapis/enterprise-certificate-proxy v0.3.2
+go: downloading github.com/felixge/httpsnoop v1.0.4
+go: downloading github.com/josharian/intern v1.0.0
+go: downloading github.com/hashicorp/errwrap v1.1.0
+go: downloading github.com/jcmturner/dnsutils/v2 v2.0.0
+go: downloading github.com/hashicorp/go-uuid v1.0.3
+go: downloading github.com/apache/thrift v0.20.0
+go: downloading github.com/tidwall/match v1.1.1
+go: downloading github.com/tidwall/pretty v1.2.1
+go: downloading github.com/charmbracelet/x/ansi v0.1.2
+go: downloading github.com/juju/ratelimit v1.0.2
+go: downloading github.com/charmbracelet/x/term v0.1.1
+go: downloading github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6
+go: downloading github.com/muesli/cancelreader v0.2.2
+go: downloading github.com/aymanbagabas/go-osc52/v2 v2.0.1
+go: downloading github.com/lucasb-eyer/go-colorful v1.2.0
+go: downloading github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d
+go: downloading github.com/VividCortex/ewma v1.2.0
+go: downloading github.com/go-logr/stdr v1.2.2
+go: downloading github.com/jcmturner/rpc/v2 v2.0.3
+go: downloading github.com/charmbracelet/x/input v0.1.2
+go: downloading github.com/jcmturner/aescts/v2 v2.0.0
+go: downloading github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e
+go: downloading github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f
+--> d172dc7e7d73
+[1/2] STEP 7/8: RUN git init mc && cd mc &&     git remote add origin https://github.com/minio/mc.git &&     git fetch --depth=1 origin 11034f9de1e9f993c36fbad961f76f876a753328 &&     git checkout --detach FETCH_HEAD &&     test "$(git rev-parse HEAD)" = 11034f9de1e9f993c36fbad961f76f876a753328
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: will change to "main" in Git 3.0. To configure the initial branch name
+hint: to use in all of your new repositories, which will suppress this warning,
+hint: call:
+hint:
+hint: 	git config --global init.defaultBranch <name>
+hint:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint:
+hint: 	git branch -m <name>
+hint:
+hint: Disable this message with "git config set advice.defaultBranchName false"
+Initialized empty Git repository in /src/mc/.git/
+From https://github.com/minio/mc
+ * branch            11034f9de1e9f993c36fbad961f76f876a753328 -> FETCH_HEAD
+HEAD is now at 11034f9 mirror: let user decide whether to skip errors if client runs in watch / active-active mode (#4986)
+--> 9b5c539c290d
+[1/2] STEP 8/8: RUN cd mc && go build -trimpath -ldflags '-s -w -X github.com/minio/mc/cmd.Version=2024-07-15T17:46:06Z -X github.com/minio/mc/cmd.ReleaseTag=OPENETL-FIXTURE.2024-07-15T17-46-06Z -X github.com/minio/mc/cmd.CommitID=11034f9de1e9f993c36fbad961f76f876a753328 -X github.com/minio/mc/cmd.ShortCommitID=11034f9de1e9 -X github.com/minio/mc/cmd.CopyrightYear=2024' -o /out/mc .
+go: downloading github.com/minio/pkg/v3 v3.0.3
+go: downloading github.com/tinylib/msgp v1.2.0
+go: downloading github.com/philhofer/fwd v1.1.3-0.20240612014219-fbbf4953d986
+--> fc282b5529e5
+[2/2] STEP 1/9: FROM docker.io/library/alpine:3.19
+[2/2] STEP 2/9: RUN apk add --no-cache ca-certificates curl
+fetch https://dl-cdn.alpinelinux.org/alpine/v3.19/main/aarch64/APKINDEX.tar.gz
+fetch https://dl-cdn.alpinelinux.org/alpine/v3.19/community/aarch64/APKINDEX.tar.gz
+(1/9) Installing ca-certificates (20261020-r0)
+(2/9) Installing brotli-libs (1.1.0-r1)
+(3/9) Installing c-ares (1.27.0-r0)
+(4/9) Installing libunistring (1.1-r2)
+(5/9) Installing libidn2 (2.3.4-r4)
+(6/9) Installing nghttp2-libs (1.58.0-r0)
+(7/9) Installing libpsl (0.21.5-r0)
+(8/9) Installing libcurl (8.14.1-r2)
+(9/9) Installing curl (8.14.1-r2)
+Executing busybox-1.36.1-r20.trigger
+Executing ca-certificates-20261020-r0.trigger
+OK: 13 MiB in 24 packages
+--> 476de554a4ba
+[2/2] STEP 3/9: LABEL io.openetl.test-fixture="minio-source-build"       io.openetl.minio.commit="3535197f993dea840dcb96302ba4d883dc619097"       io.openetl.mc.commit="11034f9de1e9f993c36fbad961f76f876a753328"
+--> ea79d1f89512
+[2/2] STEP 4/9: COPY --from=build /out/minio /out/mc /usr/bin/
+--> cf748951f355
+[2/2] STEP 5/9: COPY --from=build /src/minio/LICENSE /licenses/minio/LICENSE
+--> 53bcca589d76
+[2/2] STEP 6/9: COPY --from=build /src/mc/LICENSE /licenses/mc/LICENSE
+--> 3e133d552b98
+[2/2] STEP 7/9: EXPOSE 9000 9001
+--> dacd4ca3d6f1
+[2/2] STEP 8/9: ENTRYPOINT ["/usr/bin/minio"]
+--> 5420f6018c2f
+[2/2] STEP 9/9: CMD ["server", "/data"]
+[2/2] COMMIT openetl-minio-fixture:2024-07-16
+--> ac802dc0dba1
+Successfully tagged localhost/openetl-minio-fixture:2024-07-16
+ac802dc0dba18f4338bce6566aa8a44fa28145188df313b334cb4cbbca2bc881
+minio version OPENETL-FIXTURE.2024-07-16T23-46-41Z (commit-id=3535197f993dea840dcb96302ba4d883dc619097)
+Runtime: go1.24.13 linux/arm64
+License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html
+Copyright: 2015-2024 MinIO, Inc.
+mc version OPENETL-FIXTURE.2024-07-15T17-46-06Z (commit-id=11034f9de1e9f993c36fbad961f76f876a753328)
+Runtime: go1.24.13 linux/arm64
+Copyright (c) 2015-2024 MinIO, Inc.
+License GNU AGPLv3 <https://www.gnu.org/licenses/agpl-3.0.html>

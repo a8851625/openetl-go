@@ -1,0 +1,45 @@
+{
+  "image": "sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33",
+  "started_at": "2026-11-25T21:23:53Z",
+  "image_id": "sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33",
+  "finished_at": "2026-11-25T21:24:38Z",
+  "checks": [
+    {
+      "name": "connection references resolve through a real MySQL write",
+      "result": "passed"
+    },
+    {
+      "name": "linear and DAG stable identities with no config secrets",
+      "result": "passed"
+    },
+    {
+      "name": "YAML hot load participates in persisted reference protection",
+      "result": "passed"
+    },
+    {
+      "name": "DELETE 409 returns current affected endpoints",
+      "result": "passed"
+    },
+    {
+      "name": "UI lists affected pipelines and disables referenced deletion",
+      "result": "passed"
+    },
+    {
+      "name": "encrypted current references survive application restart",
+      "result": "passed"
+    },
+    {
+      "name": "current update releases references while retaining old spec versions",
+      "result": "passed"
+    },
+    {
+      "name": "unreadable legacy spec blocks deletion with a stable repair identity",
+      "result": "passed"
+    },
+    {
+      "name": "UI permits atomic deletion only after references and unknown specs are removed",
+      "result": "passed"
+    }
+  ],
+  "result": "passed"
+}

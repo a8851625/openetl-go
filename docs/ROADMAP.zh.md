@@ -35,7 +35,7 @@
 | 2/5 | P5-H1（P5/UI-F 后续） | `delivered` | API/Go race 与真实容器 UI 14/14；默认熔断冷却后恢复、DLQ unknown、restore_failed 四入口一致。见 [H1 evidence](./iterations/P1-technical-closure-20261126/h1-evidence.md)。 |
 | 3/5 | PR-0-C1（PR-0/UI-E.5 后续） | `delivered` | 共享 SQL 事务保护当前引用；三 backend 竞争/备份/加密重启与真实 UI 9/9。见 [C1 evidence](./iterations/P1-technical-closure-20261126/c1-evidence.md)。 |
 | 4/5 | UI-E-R1（UI-E.3 已授权契约后续） | `delivered` | 故障与 replay 结果保留稳定身份；三 backend recovery/migration/backup、完整 Go race 与真实 UI 21/21，见 [R1 evidence](./iterations/P1-technical-closure-20261126/r1-evidence.md)。 |
-| 5/5 | GA-C1（GA 阻断项 #1 后续） | `active` | 候选资产先构建、再认证、再发布同一资产；提交/镜像/二进制与实际测试结果绑定，旧证据看板同步。 |
+| 5/5 | GA-C1（GA 阻断项 #1 后续） | `active` | 1388b5d 候选 23/23、七个 path、44 UI checks 和本地 registry 同字节晋升通过；最后 validator/evidence 更新后复验 PR aggregate。见 [GA evidence](./iterations/P1-technical-closure-20261126/ga-evidence.md)。 |
 
 UI-E 的 3–5 人首次任务/恢复任务研究仍按原验收标准另行记录，技术修复不将该研究置为
 delivered。EV-3 与运行历史遗留行是本窗口之外的 P2。

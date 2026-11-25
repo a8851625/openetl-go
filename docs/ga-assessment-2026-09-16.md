@@ -4,6 +4,18 @@
 > 方法：按 [ROADMAP](./ROADMAP.zh.md)「项目级发布门槛」五条 + [IT-4 spec](./iterations/IT-4-ga-closeout/spec.md)
 > 十项验收逐条核验；证据只认当前版本实际执行结果。本判定保守：证据不完整即 fail。
 
+## 2026-11-26 技术修复复核
+
+下方 2026-09-16 与 2026-11-09 表格是历史基线。当前候选技术证据见
+[GA-C1 验收矩阵](./iterations/P1-technical-closure-20261126/ga-evidence.md)：
+`1388b5d` 的 23 个 mandatory cases 与十个平台/variant 归档已通过，
+源码、镜像配置、可执行文件、真实窗口和结果相互绑定。发布流程消费保存的产物，
+并在独立 loopback registry 验证 load/tag/push/pull 后的配置与 executable SHA。
+最终 PR aggregate 仍在本轮证据/validator 更新后复验，GA-C1 当前保持 active。
+
+本复核只关闭 P1 技术范围。外部用户研究仍缺 3–5 名参与者；distributed 与 EV-3
+预算决策保持既有边界。未发布新版本，不据此移除项目 beta 或提高 connector maturity。
+
 ## 结论（显式判定）
 
 | 声明分级 | 判定 | 一句话理由 |

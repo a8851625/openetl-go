@@ -1,0 +1,21 @@
+{
+  "name": "hack/e2e-clickhouse-replay-ordering.sh",
+  "source_commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+  "image_id": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+  "execution_image_id": "sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33",
+  "execution_config_id": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+  "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2",
+  "started_at": "2026-11-25T21:23:35Z",
+  "finished_at": "2026-11-25T21:24:40Z",
+  "result": "passed",
+  "exit_code": 0,
+  "error": "",
+  "log_sha256": "99ca16c7a9fc7cf6fb0be76b2ded96888b6a87fe5de418bba25d66ebfa61755a",
+  "artifact_sha256": {},
+  "container_runtime": "Docker version 29.4.2, build 055a478",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+    "docker.io/redpandadata/redpanda:v24.1.1": "sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d",
+    "docker.io/clickhouse/clickhouse-server:24.3-alpine": "sha256:c3f166f4a80098480463d897a63f6867d24e3a7661fc1fe72e889788115a25f1"
+  }
+}

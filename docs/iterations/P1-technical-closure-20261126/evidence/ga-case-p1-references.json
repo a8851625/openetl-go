@@ -1,0 +1,27 @@
+{
+  "name": "p1-references",
+  "source_commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+  "image_id": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+  "execution_image_id": "sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33",
+  "execution_config_id": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+  "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2",
+  "started_at": "2026-11-25T21:23:53Z",
+  "finished_at": "2026-11-25T21:24:43Z",
+  "result": "passed",
+  "exit_code": 0,
+  "error": "",
+  "log_sha256": "3d31241f14c6e9b11421743d074f13fee2835449eceb09921a728491a3bdc6b5",
+  "artifact_sha256": {
+    "probe/blocked-reference.png": "4dacfc26aaba87d7510eabef89194d240ad791355f075959eb0262733dcedd9b",
+    "probe/openetl-health-2442-app.log": "f961e9fa3cbb01a5a1796dd6ea71d81a1a6734ab9191acca2f6ba850ce79e3b9",
+    "probe/openetl-health-2442-mysql.log": "248e262fc3167134400aaf7d1bc22922bb7a282e0a47126be4172e557ccb7d9a",
+    "probe/openetl-health-2442-sqlite.log": "e6a885a90602332f2f575f16f98d9e9093ebf0b73b75f09f5c9eafc0304efe53",
+    "probe/references-blocked.js": "91da83723f33ce465cdd830aa900f5bce22ef37b7151b31698e99014da6458eb",
+    "probe/references-clear.js": "81f21c61e92db0d7d09b6d231c1045f96f90c8610efd6de75c7979ca398fe1c7",
+    "probe/result.json": "e16e08cdd434a7e2413f7a7a841a3b6dba5a34652517ef572570a3abf471f719"
+  },
+  "container_runtime": "Docker version 29.4.2, build 055a478",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+  }
+}

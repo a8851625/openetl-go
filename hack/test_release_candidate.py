@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -177,9 +178,18 @@ class CandidateGateTest(unittest.TestCase):
     def test_registry_configuration_change_is_rejected(self):
         with patch.object(rc, "load", return_value={"id": self.data["image"]["engine_id"]}), \
                 patch.object(rc, "command") as command, \
-                patch.object(rc, "config_of_image", return_value={"id": "sha256:" + "0" * 64}):
-            command.return_value.stdout = json.dumps([{"Id": "sha256:" + "c" * 64}])
+                patch.object(rc, "config_of_image", return_value={"id": "sha256:" + "0" * 64}), \
+                patch.object(rc, "cli", return_value="docker"):
+            command.side_effect = lambda args: SimpleNamespace(
+                stdout="v1: digest: sha256:" + "d" * 64 + " size: 100" if args[1] == "push" else json.dumps([{"Id": "sha256:" + "c" * 64}]), stderr="")
             with self.assertRaisesRegex(ValueError, "changed candidate image bytes"):
+                rc.promote(self.base, "unused.example/fixture:v1")
+
+    def test_push_without_authoritative_digest_is_rejected(self):
+        with patch.object(rc, "load", return_value={"id": self.data["image"]["engine_id"]}), \
+                patch.object(rc, "command", return_value=SimpleNamespace(stdout="cached RepoDigests are insufficient", stderr="")), \
+                patch.object(rc, "cli", return_value="docker"):
+            with self.assertRaisesRegex(ValueError, "one immutable digest"):
                 rc.promote(self.base, "unused.example/fixture:v1")
 
     def test_expired_certificate_does_not_refresh_itself(self):

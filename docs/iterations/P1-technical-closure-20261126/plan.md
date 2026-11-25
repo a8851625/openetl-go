@@ -113,3 +113,19 @@ Allowed files remain the candidate helper/tests, workflow receipt consumers and
 candidate evidence docs. Do not change EV-3 resource metric semantics. Acceptance:
 real Docker→Podman load/promotion, wrong configuration rejection, and full current
 candidate/PR gates; no rewritten legacy source/date/hash claims.
+
+The local post-run strict check found that filepath.Join incorrectly re-rooted
+an absolute -path-evidence directory and the checker accepted zero files.
+Fix absolute-directory resolution and require nonempty path evidence in strict
+mode, with targeted checker tests. Scope: hack/cmd/check-connector-evidence
+main.go/main_test.go and evidence docs. The runner already verified seven actual
+candidate path files; the independent freshness/provenance gate must also read
+them. Preserve optional structural-only legacy checking and rerun the full current
+candidate/aggregate after this validator correction.
+
+The real local-registry promotion kept config/executable bytes but Podman
+RepoDigests included cached source aliases alongside the pushed digest. Bind the
+receipt to the digest returned by push (Podman digestfile / Docker push output),
+pull and verify that immutable reference, and rerun local promotion. Scope stays
+in release_candidate.py/tests and this evidence record; no registry publication
+outside the task-owned loopback service.

@@ -53,7 +53,7 @@ func main() {
 			current = head
 		}
 	}
-	if err := checkPathEvidenceDir(repoRoot, current, *pathEvidenceDir); err != nil {
+	if err := checkPathEvidenceDir(repoRoot, current, *pathEvidenceDir, *strict); err != nil {
 		fail("%v", err)
 	}
 	if *currentImage != "" && manifest.CertifiedImage != *currentImage {
@@ -94,13 +94,20 @@ func main() {
 // checkPathEvidenceDir validates every committed path evidence JSON under
 // dir (IT-1/T1.5 acceptance 2). current may be empty when no revision is
 // bound (structural-only mode); commit binding then uses HEAD.
-func checkPathEvidenceDir(repoRoot, current, dir string) error {
-	pattern := filepath.Join(repoRoot, filepath.FromSlash(dir), "*.json")
+func checkPathEvidenceDir(repoRoot, current, dir string, required bool) error {
+	resolved := filepath.FromSlash(dir)
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(repoRoot, resolved)
+	}
+	pattern := filepath.Join(resolved, "*.json")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return fmt.Errorf("path evidence glob %s: %w", pattern, err)
 	}
 	if len(files) == 0 {
+		if required {
+			return fmt.Errorf("required path evidence: no files under %s", dir)
+		}
 		fmt.Printf("path evidence: no files under %s\n", dir)
 		return nil
 	}

@@ -590,6 +590,8 @@ def bundle(base):
 
 def promote(base, destination, *, release_tag=None, insecure=False, image_only=False):
     data = verify(base)
+    if "@" in destination or ":" not in destination.rsplit("/", 1)[-1]:
+        raise ValueError("promotion destination requires an explicit tag")
     if release_tag:
         tag_commit = command(["git", "rev-parse", release_tag + "^{commit}"]).stdout.strip()
         if tag_commit != data["source"]["commit"]:
@@ -598,22 +600,34 @@ def promote(base, destination, *, release_tag=None, insecure=False, image_only=F
     before = data["image"]["id"]
     command([cli(), "tag", loaded["id"], destination])
     args = [cli(), "push"]
+    digest_path = Path(base) / "pushed-image.digest"
+    podman = Path(cli()).name == "podman"
+    if podman:
+        args += ["--digestfile", str(digest_path)]
     if insecure and Path(cli()).name == "podman":
         args += ["--tls-verify=false"]
-    command([*args, destination])
+    pushed = command([*args, destination])
+    if podman:
+        pushed_digest = digest(digest_path.read_text().strip())
+    else:
+        matches = re.findall(r"\bdigest:\s+(sha256:[a-f0-9]{64})\b", pushed.stdout + pushed.stderr)
+        if len(matches) != 1:
+            raise ValueError("registry push did not return one immutable digest")
+        pushed_digest = matches[0]
+    immutable = destination.rsplit(":", 1)[0] + "@" + pushed_digest
     pull = [cli(), "pull"]
     if insecure and Path(cli()).name == "podman":
         pull += ["--tls-verify=false"]
-    command([*pull, destination])
-    info = json.loads(command([cli(), "image", "inspect", destination]).stdout)[0]
-    if config_of_image(destination)["id"] != before:
+    command([*pull, immutable])
+    info = json.loads(command([cli(), "image", "inspect", immutable]).stdout)[0]
+    if config_of_image(immutable)["id"] != before:
         raise ValueError("registry promotion changed candidate image bytes")
-    actual = command([cli(), "run", "--rm", "--entrypoint", "sha256sum", destination,
+    actual = command([cli(), "run", "--rm", "--entrypoint", "sha256sum", immutable,
                       data["image"]["binary_path"]]).stdout.split()[0]
     if actual != data["image"]["binary_sha256"]:
         raise ValueError("promoted executable hash mismatch")
     receipt = {"source_commit": data["source"]["commit"], "candidate_sha256": sha(Path(base) / "candidate.json"),
-               "image_id": before, "destination": destination, "registry_digests": info.get("RepoDigests", []),
+               "image_id": before, "destination": destination, "registry_digests": [immutable],
                "source_engine_id": data["image"].get("engine_id"), "loaded_image_id": loaded["id"],
                "promoted_image_id": digest(info["Id"]),
                "binary_sha256": actual, "promoted_at": utc(), "result": "passed"}

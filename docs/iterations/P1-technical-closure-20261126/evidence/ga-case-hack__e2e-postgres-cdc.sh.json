@@ -1,0 +1,20 @@
+{
+  "name": "hack/e2e-postgres-cdc.sh",
+  "source_commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+  "image_id": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+  "execution_image_id": "sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33",
+  "execution_config_id": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+  "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2",
+  "started_at": "2026-11-25T21:23:34Z",
+  "finished_at": "2026-11-25T21:25:43Z",
+  "result": "passed",
+  "exit_code": 0,
+  "error": "",
+  "log_sha256": "858ef90d1e079aed832926c5fb562c737283c4b136bb85ae8afe122a8939daa5",
+  "artifact_sha256": {},
+  "container_runtime": "Docker version 29.4.2, build 055a478",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+    "docker.io/library/postgres:16-alpine": "sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d"
+  }
+}
