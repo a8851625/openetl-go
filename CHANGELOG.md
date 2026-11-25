@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- DLQ recovery now retains server-owned identities, captured endpoint/connection context and dry-run/replay outcomes across restart and row removal. Result persistence failures retain sink acknowledgements and return 503; discard/retention is recorded separately. Exact task links preserve scope and reject invalid or sensitive parameters. Verified on three SQL backends and 21 real-container API/UI checks.
+
 - Saved connection deletion and kind/type changes now protect references in current persisted linear/DAG specs under a shared SQL transaction guard. The reference API and deletion dialog show stable affected pipeline/node IDs; encrypted or unreadable legacy specs block deletion. Verified across SQLite/MySQL/PostgreSQL, backup/restore, concurrent spec mutation and a nine-check real-container API/YAML/UI run.
 
 - Running health now follows the server thresholds and current signals: an open write circuit, an unreadable DLQ count, and failed spec restoration appear consistently across the existing UI. Circuit cooldown precedes the batch commit deadline, so the default 30-second cooldown can recover without exhausting it. Verified with Go race tests, nine frontend contracts and 14 real-container API/UI checks.

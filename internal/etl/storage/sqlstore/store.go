@@ -177,6 +177,7 @@ func (s *Store) WipeControlPlane(ctx context.Context) error {
 		return err
 	}
 	tables := []string{
+		"recovery_operations", "recovery_events",
 		"dead_letters", "audit_logs", "run_history", "task_assignments",
 		"checkpoints", "pipeline_versions", "pipelines", "workers",
 		"plugins", "connections", "settings",
@@ -416,6 +417,30 @@ func (s *Store) runVersionedMigrations() error {
 		// the migration ran.
 		{24, "deduplicate dead_letters by record hash", "SELECT 1"},
 		{25, "coordinate current connection references", `CREATE TABLE IF NOT EXISTS connection_reference_guard (id INTEGER PRIMARY KEY, generation BIGINT NOT NULL DEFAULT 0)`},
+		{26, "link DLQ recovery identities", "ALTER TABLE dead_letters ADD COLUMN recovery_event_id VARCHAR(36)"},
+		{27, "freeze DLQ recovery context", "ALTER TABLE dead_letters ADD COLUMN recovery_context_json TEXT"},
+		{28, "link DLQ recovery operations", "ALTER TABLE dead_letters ADD COLUMN recovery_operation_id VARCHAR(36)"},
+		{29, "expose DLQ recovery tracking errors", "ALTER TABLE dead_letters ADD COLUMN recovery_tracking_error TEXT"},
+		{30, "persist recovery events", `CREATE TABLE IF NOT EXISTS recovery_events (
+ id VARCHAR(36) PRIMARY KEY, scope_key CHAR(64) NOT NULL,
+ pipeline_id VARCHAR(128) NOT NULL, pipeline_name TEXT NOT NULL,
+ endpoint VARCHAR(128) NOT NULL, node_id VARCHAR(255) NOT NULL DEFAULT '',
+ connection_name VARCHAR(128) NOT NULL DEFAULT '', connection_known INTEGER NOT NULL DEFAULT 0,
+ spec_version INTEGER NOT NULL DEFAULT 0, error_class VARCHAR(32) NOT NULL,
+ first_error TEXT NOT NULL, state VARCHAR(16) NOT NULL,
+ opened_at TIMESTAMP NOT NULL, closed_at TIMESTAMP NULL,
+ attempt_count BIGINT NOT NULL DEFAULT 0, record_count BIGINT NOT NULL DEFAULT 0,
+ replayed_rows BIGINT NOT NULL DEFAULT 0, abandoned_rows BIGINT NOT NULL DEFAULT 0,
+ tracking_incomplete INTEGER NOT NULL DEFAULT 0
+)`},
+		{31, "retain recovery outcomes", `CREATE TABLE IF NOT EXISTS recovery_operations (
+ id VARCHAR(36) PRIMARY KEY, event_id VARCHAR(36) NOT NULL DEFAULT '',
+ pipeline_id VARCHAR(128) NOT NULL, dlq_row_id BIGINT NOT NULL,
+ record_hash CHAR(64) NOT NULL, kind VARCHAR(32) NOT NULL, state VARCHAR(32) NOT NULL,
+ error TEXT NOT NULL, started_at TIMESTAMP NOT NULL,
+ finished_at TIMESTAMP NULL, acknowledged_at TIMESTAMP NULL
+)`},
+		{32, "index recovery identities", "SELECT 1"},
 	}
 
 	for _, m := range migrations {
@@ -443,6 +468,11 @@ func (s *Store) runVersionedMigrations() error {
 			}
 			if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_pipelines_name ON pipelines(name)`); err != nil {
 				return fmt.Errorf("create pipeline name index: %w", err)
+			}
+		}
+		if m.version == 32 {
+			if err := s.EnsureRecoveryIndexes(context.Background()); err != nil {
+				return err
 			}
 		}
 		if m.version == 24 {
@@ -799,7 +829,7 @@ func (s *Store) DeletePipelineWithCheckpoint(ctx context.Context, ref string) er
 		if _, err := s.exec(txCtx, `DELETE FROM checkpoints WHERE job_name=? OR job_name=?`, id, name); err != nil {
 			return fmt.Errorf("delete pipeline checkpoint: %w", err)
 		}
-		if _, err := s.exec(txCtx, `DELETE FROM dead_letters WHERE job_name=? OR job_name=?`, id, name); err != nil {
+		if _, err := s.abandonRecoveryRows(txCtx, "SELECT "+recoveryDeletionColumns+" FROM dead_letters WHERE job_name=? OR job_name=?", []any{id, name}, "pipeline_delete"); err != nil {
 			return fmt.Errorf("delete pipeline dead letters: %w", err)
 		}
 		if _, err := s.exec(txCtx, `DELETE FROM pipelines WHERE id=? OR name=?`, ref, ref); err != nil {
@@ -1155,6 +1185,33 @@ func (s *Store) ListCheckpoints(ctx context.Context) ([]*storage.CheckpointRecor
 // ── Dead letters ─────────────────────────────────────────────────────
 
 func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) error {
+	if rec == nil {
+		return fmt.Errorf("DLQ record is required")
+	}
+	if rec.RecordHash == "" {
+		data, err := json.Marshal(rec.Record)
+		if err != nil {
+			return err
+		}
+		rec.RecordHash = storage.RecordHashJSON(data)
+	}
+	if rec.RecoveryContext.Endpoint != "" {
+		trackingCtx, cancel := context.WithTimeout(ctx, time.Second)
+		err := s.writeTrackedDeadLetter(trackingCtx, rec)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		// Never retain a UUID from a rolled-back/unknown metadata transaction.
+		// The upsert preserves any previously committed row association.
+		rec.RecoveryEventID = ""
+		rec.RecoveryTrackingError = "capture_metadata_unavailable"
+		s.reportCaptureTrackingFailure(ctx, rec, err)
+	}
+	return s.writeDeadLetterRow(ctx, rec)
+}
+
+func (s *Store) writeDeadLetterRow(ctx context.Context, rec *storage.DLQRecord) error {
 	recJSON, err := json.Marshal(rec.Record)
 	if err != nil {
 		return fmt.Errorf("marshal dlq record: %w", err)
@@ -1179,9 +1236,18 @@ func (s *Store) WriteDeadLetter(ctx context.Context, rec *storage.DLQRecord) err
 	//
 	// created_at is refreshed so repeated failures keep the row at the top of
 	// the (newest-first) listing and out of the oldest-first retention purge.
+	var recoveryJSON any
+	if rec.RecoveryContext.Endpoint != "" {
+		data, marshalErr := json.Marshal(rec.RecoveryContext)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		recoveryJSON = string(data)
+	}
 	_, err = s.exec(ctx,
 		s.dialect.DeadLetterUpsert(),
 		rec.JobName, string(recJSON), rec.Error, rec.ErrorClass, string(identityJSON), rec.Attempt, rec.RecordHash, rec.PipelineVersion, rec.DAGNode, time.Now(),
+		recoveryNullable(rec.RecoveryEventID), recoveryNullable(rec.RecoveryOperationID), recoveryJSON, rec.RecoveryTrackingError,
 	)
 	return err
 }
@@ -1190,13 +1256,14 @@ func (s *Store) GetDeadLetterByID(ctx context.Context, jobName string, id int64)
 	rec := &storage.DLQRecord{}
 	var recJSON string
 	var identityJSON string
+	var recoveryJSON string
 	var errMsg, errClass sql.NullString
 	err := s.queryRow(ctx,
 		`SELECT id, job_name, record_json, error, error_class, COALESCE(identity_context_json, '{}'), attempt,
-		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
+		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at, COALESCE(recovery_event_id,''), COALESCE(recovery_operation_id,''), COALESCE(recovery_context_json,'{}'), COALESCE(recovery_tracking_error,'')
 		 FROM dead_letters WHERE job_name=? AND id=?`,
 		jobName, id,
-	).Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &identityJSON, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt)
+	).Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &identityJSON, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt, &rec.RecoveryEventID, &rec.RecoveryOperationID, &recoveryJSON, &rec.RecoveryTrackingError)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1210,6 +1277,9 @@ func (s *Store) GetDeadLetterByID(ctx context.Context, jobName string, id int64)
 	}
 	if err := json.Unmarshal([]byte(identityJSON), &rec.IdentityContext); err != nil {
 		return nil, fmt.Errorf("unmarshal dlq identity context: %w", err)
+	}
+	if err := json.Unmarshal([]byte(recoveryJSON), &rec.RecoveryContext); err != nil {
+		return nil, fmt.Errorf("unmarshal DLQ recovery context: %w", err)
 	}
 	core.NormalizePersistedDLQIdentityContext(&rec.IdentityContext)
 	return rec, nil
@@ -1227,8 +1297,9 @@ func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) (
 		rec := &storage.DLQRecord{}
 		var recJSON string
 		var identityJSON string
+		var recoveryJSON string
 		var errMsg, errClass sql.NullString
-		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &identityJSON, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.JobName, &recJSON, &errMsg, &errClass, &identityJSON, &rec.Attempt, &rec.RecordHash, &rec.PipelineVersion, &rec.DAGNode, &rec.CreatedAt, &rec.RecoveryEventID, &rec.RecoveryOperationID, &recoveryJSON, &rec.RecoveryTrackingError); err != nil {
 			return nil, err
 		}
 		rec.Error = errMsg.String
@@ -1238,6 +1309,9 @@ func (s *Store) ListDeadLetters(ctx context.Context, filter storage.DLQFilter) (
 		}
 		if err := json.Unmarshal([]byte(identityJSON), &rec.IdentityContext); err != nil {
 			return nil, fmt.Errorf("unmarshal dlq identity context: %w", err)
+		}
+		if err := json.Unmarshal([]byte(recoveryJSON), &rec.RecoveryContext); err != nil {
+			return nil, fmt.Errorf("unmarshal DLQ recovery context: %w", err)
 		}
 		core.NormalizePersistedDLQIdentityContext(&rec.IdentityContext)
 		result = append(result, rec)
@@ -1263,8 +1337,8 @@ func (s *Store) UpdateDeadLetter(ctx context.Context, rec *storage.DLQRecord) er
 	}
 	rec.RecordHash = storage.RecordHashJSON(recJSON)
 	result, err := s.exec(ctx,
-		`UPDATE dead_letters SET record_json=?, error=?, error_class=?, identity_context_json=?, attempt=?, record_hash=?, pipeline_version=?, dag_node=? WHERE job_name=? AND id=?`,
-		string(recJSON), rec.Error, rec.ErrorClass, string(identityJSON), rec.Attempt, rec.RecordHash, rec.PipelineVersion, rec.DAGNode, rec.JobName, rec.ID)
+		`UPDATE dead_letters SET record_json=?, error=?, error_class=?, identity_context_json=?, attempt=?, record_hash=?, pipeline_version=?, dag_node=?, recovery_operation_id=?, recovery_tracking_error=? WHERE job_name=? AND id=?`,
+		string(recJSON), rec.Error, rec.ErrorClass, string(identityJSON), rec.Attempt, rec.RecordHash, rec.PipelineVersion, rec.DAGNode, recoveryNullable(rec.RecoveryOperationID), rec.RecoveryTrackingError, rec.JobName, rec.ID)
 	if err != nil {
 		return err
 	}
@@ -1280,17 +1354,16 @@ func (s *Store) UpdateDeadLetter(ctx context.Context, rec *storage.DLQRecord) er
 
 func (s *Store) DeleteDeadLettersByFilter(ctx context.Context, filter storage.DLQFilter) (int64, error) {
 	qb := newDLQDeleteBuilder(filter)
-	q := qb.query
-	// modernc SQLite and PostgreSQL both reject bare DELETE ... LIMIT;
-	// rewrite every limited delete into a portable subquery form.
+	query := qb.query
 	if filter.Limit > 0 {
-		q = rewriteLimitedDelete(q, filter.Limit, s.dialect.SupportsDeleteLimit())
+		query = rewriteLimitedDelete(query, filter.Limit, s.dialect.SupportsDeleteLimit())
 	}
-	res, err := s.exec(ctx, q, qb.args...)
-	if err != nil {
-		return 0, err
+	selection := strings.Replace(query, "DELETE FROM dead_letters", "SELECT "+recoveryDeletionColumns+" FROM dead_letters", 1)
+	kind := "delete"
+	if filter.DeletionReason == "retention" {
+		kind = "retention"
 	}
-	return res.RowsAffected()
+	return s.abandonRecoveryRows(ctx, selection, qb.args, kind)
 }
 
 // rewriteLimitedDelete turns "DELETE FROM t WHERE pred LIMIT N" into a
@@ -1326,14 +1399,12 @@ func (s *Store) DeleteDeadLetterByID(ctx context.Context, jobName string, id int
 	if err := s.injectFailure("dlq.delete"); err != nil {
 		return err
 	}
-	// Scoped by job_name so a direct storage caller cannot delete another
-	// pipeline's row by guessing an id.
-	_, err := s.exec(ctx, `DELETE FROM dead_letters WHERE job_name=? AND id=?`, jobName, id)
+	_, err := s.abandonRecoveryRows(ctx, "SELECT "+recoveryDeletionColumns+" FROM dead_letters WHERE job_name=? AND id=?", []any{jobName, id}, "delete")
 	return err
 }
 
 func (s *Store) DeleteAllDeadLetters(ctx context.Context, jobName string) error {
-	_, err := s.exec(ctx, `DELETE FROM dead_letters WHERE job_name=?`, jobName)
+	_, err := s.abandonRecoveryRows(ctx, "SELECT "+recoveryDeletionColumns+" FROM dead_letters WHERE job_name=?", []any{jobName}, "delete")
 	return err
 }
 
@@ -1418,12 +1489,8 @@ func (s *Store) PurgeOldestDeadLetters(ctx context.Context, limit int) (int64, e
 	if limit <= 0 {
 		return 0, nil
 	}
-	res, err := s.exec(ctx, fmt.Sprintf(
-		`DELETE FROM dead_letters WHERE id IN (SELECT id FROM (SELECT id FROM dead_letters ORDER BY created_at ASC, id ASC LIMIT %d) AS purge_rows)`, limit))
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	selection := fmt.Sprintf("SELECT "+recoveryDeletionColumns+" FROM dead_letters ORDER BY created_at ASC,id ASC LIMIT %d", limit)
+	return s.abandonRecoveryRows(ctx, selection, nil, "eviction")
 }
 
 // ── DLQ query builders ───────────────────────────────────────────────
@@ -1436,6 +1503,22 @@ type dlqQueryBuilder struct {
 func newDLQQueryBuilder(f storage.DLQFilter) *dlqQueryBuilder {
 	where := []string{"job_name = ?"}
 	args := []any{f.JobName}
+	if f.DAGNode != "" {
+		where = append(where, "dag_node = ?")
+		args = append(args, f.DAGNode)
+	}
+	if f.ConnectionName != "" {
+		where = append(where, "recovery_event_id IN (SELECT id FROM recovery_events WHERE connection_name=?)")
+		args = append(args, f.ConnectionName)
+	}
+	if f.ID > 0 {
+		where = append(where, "id = ?")
+		args = append(args, f.ID)
+	}
+	if f.RecoveryEventID != "" {
+		where = append(where, "recovery_event_id = ?")
+		args = append(args, f.RecoveryEventID)
+	}
 	if !f.From.IsZero() {
 		where = append(where, "created_at >= ?")
 		args = append(args, f.From)
@@ -1466,7 +1549,7 @@ func newDLQQueryBuilder(f storage.DLQFilter) *dlqQueryBuilder {
 	}
 	q := fmt.Sprintf(
 		`SELECT id, job_name, record_json, error, error_class, COALESCE(identity_context_json, '{}'), attempt,
-		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at
+		        COALESCE(record_hash, ''), COALESCE(pipeline_version, 0), COALESCE(dag_node, ''), created_at, COALESCE(recovery_event_id,''), COALESCE(recovery_operation_id,''), COALESCE(recovery_context_json,'{}'), COALESCE(recovery_tracking_error,'')
 		 FROM dead_letters WHERE %s ORDER BY created_at %s, id %s LIMIT %d OFFSET %d`,
 		strings.Join(where, " AND "), order, order, limit, f.Offset,
 	)
@@ -1493,6 +1576,22 @@ type dlqDeleteBuilder struct {
 func newDLQDeleteBuilder(f storage.DLQFilter) *dlqDeleteBuilder {
 	var where []string
 	var args []any
+	if f.DAGNode != "" {
+		where = append(where, "dag_node = ?")
+		args = append(args, f.DAGNode)
+	}
+	if f.ConnectionName != "" {
+		where = append(where, "recovery_event_id IN (SELECT id FROM recovery_events WHERE connection_name=?)")
+		args = append(args, f.ConnectionName)
+	}
+	if f.ID > 0 {
+		where = append(where, "id = ?")
+		args = append(args, f.ID)
+	}
+	if f.RecoveryEventID != "" {
+		where = append(where, "recovery_event_id = ?")
+		args = append(args, f.RecoveryEventID)
+	}
 	// Empty JobName means cross-pipeline purge (janitor TTL / max-count paths).
 	if f.JobName != "" {
 		where = append(where, "job_name = ?")
@@ -2379,6 +2478,8 @@ func (s *Store) CountObjects(ctx context.Context) (storage.ObjectCounts, error) 
 		{"task_assignments", &c.Tasks},
 		{"plugins", &c.Plugins},
 		{"connections", &c.Connections},
+		{"recovery_events", &c.RecoveryEvents},
+		{"recovery_operations", &c.RecoveryOperations},
 		{"settings", &c.Settings},
 	}
 	for _, t := range tables {

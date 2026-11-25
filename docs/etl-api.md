@@ -52,6 +52,9 @@ observed error remain diagnostic after recovery.
 Dead-letter records include `error_class` when the runtime can classify the failure. Current classes are `transient`, `data`, `schema`, `auth`, `config`, `programming`, and `unknown`. Retry policy uses the same classifier: transient and unknown errors are retried, while data/schema/auth/config/programming errors fail fast into DLQ or fail the operation.
 
 ### List DLQ Records
+
+Recovery association and retained outcomes are described in
+[Durable recovery records](./recovery-tracking.md).
 `GET /api/v2/dlq/{pipeline}`
 
 Query parameters:
@@ -80,6 +83,10 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
 ```
 
 ### Replay DLQ Records
+
+Recovery metadata errors return HTTP `503` with
+`code: recovery_metadata_unavailable`; retained `sink_acked` rows can be retried
+to finalize cleanup without rewriting the sink.
 `POST /api/v2/dlq/{pipeline}/replay`
 `POST /api/v2/dlq/{pipeline}/{id}/replay`
 

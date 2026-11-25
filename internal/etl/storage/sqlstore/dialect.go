@@ -62,8 +62,8 @@ func (SQLiteDialect) SchemaContractUpsert() string {
 // DeadLetterUpsert deduplicates on (job_name, record_hash): a repeated capture
 // of the same failed record refreshes the existing row and bumps attempt.
 func (SQLiteDialect) DeadLetterUpsert() string {
-	return `INSERT INTO dead_letters (job_name, record_json, error, error_class, identity_context_json, attempt, record_hash, pipeline_version, dag_node, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO dead_letters (job_name, record_json, error, error_class, identity_context_json, attempt, record_hash, pipeline_version, dag_node, created_at, recovery_event_id, recovery_operation_id, recovery_context_json, recovery_tracking_error)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(job_name, record_hash) DO UPDATE SET
 		   record_json = excluded.record_json,
 		   error = excluded.error,
@@ -72,7 +72,11 @@ func (SQLiteDialect) DeadLetterUpsert() string {
 		   attempt = dead_letters.attempt + 1,
 		   pipeline_version = excluded.pipeline_version,
 		   dag_node = excluded.dag_node,
-		   created_at = excluded.created_at`
+		   created_at = excluded.created_at,
+           recovery_event_id = COALESCE(dead_letters.recovery_event_id, excluded.recovery_event_id),
+           recovery_operation_id = COALESCE(excluded.recovery_operation_id, dead_letters.recovery_operation_id),
+           recovery_context_json = CASE WHEN dead_letters.recovery_event_id IS NULL THEN COALESCE(excluded.recovery_context_json, dead_letters.recovery_context_json) ELSE dead_letters.recovery_context_json END,
+           recovery_tracking_error = excluded.recovery_tracking_error`
 }
 
 // InsertIgnore renders an insert that silently skips rows conflicting with an
@@ -149,8 +153,8 @@ func (MySQLDialect) InsertIgnore(table, columns, placeholders string) string {
 
 // DeadLetterUpsert mirrors the SQLite statement with MySQL upsert syntax.
 func (MySQLDialect) DeadLetterUpsert() string {
-	return `INSERT INTO dead_letters (job_name, record_json, error, error_class, identity_context_json, attempt, record_hash, pipeline_version, dag_node, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO dead_letters (job_name, record_json, error, error_class, identity_context_json, attempt, record_hash, pipeline_version, dag_node, created_at, recovery_event_id, recovery_operation_id, recovery_context_json, recovery_tracking_error)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE
 		   record_json = VALUES(record_json),
 		   error = VALUES(error),
@@ -159,7 +163,11 @@ func (MySQLDialect) DeadLetterUpsert() string {
 		   attempt = attempt + 1,
 		   pipeline_version = VALUES(pipeline_version),
 		   dag_node = VALUES(dag_node),
-		   created_at = VALUES(created_at)`
+		   created_at = VALUES(created_at),
+           recovery_context_json = CASE WHEN recovery_event_id IS NULL THEN COALESCE(VALUES(recovery_context_json), recovery_context_json) ELSE recovery_context_json END,
+           recovery_event_id = COALESCE(recovery_event_id, VALUES(recovery_event_id)),
+           recovery_operation_id = COALESCE(VALUES(recovery_operation_id), recovery_operation_id),
+           recovery_tracking_error = VALUES(recovery_tracking_error)`
 }
 
 type PostgresDialect struct{ SQLiteDialect }

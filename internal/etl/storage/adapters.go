@@ -151,6 +151,7 @@ func (a *DLQWriterAdapter) WriteEntry(ctx context.Context, entry pipeline.DLQEnt
 		PipelineVersion: entry.PipelineVersion,
 		DAGNode:         entry.DAGNode,
 		CreatedAt:       time.Now(),
+		RecoveryContext: entry.RecoveryContext,
 	}
 	if rec.IdentityContext.ReplayProvenance == "" {
 		rec.IdentityContext = core.NewDLQIdentityContext(entry.Record, entry.Error, entry.Record.Metadata.Database, entry.Record.Metadata.Table)

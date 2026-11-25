@@ -246,6 +246,30 @@ func (s *Store) runVersionedMigrations() error {
 		// EnsureDeadLetterHashUniqueness (backfill + dedup + unique index).
 		{24, "deduplicate dead_letters by record hash", "SELECT 1"},
 		{25, "coordinate current connection references", `CREATE TABLE IF NOT EXISTS connection_reference_guard (id INTEGER PRIMARY KEY, generation BIGINT NOT NULL DEFAULT 0)`},
+		{26, "link DLQ recovery identities", "ALTER TABLE dead_letters ADD COLUMN recovery_event_id VARCHAR(36)"},
+		{27, "freeze DLQ recovery context", "ALTER TABLE dead_letters ADD COLUMN recovery_context_json LONGTEXT"},
+		{28, "link DLQ recovery operations", "ALTER TABLE dead_letters ADD COLUMN recovery_operation_id VARCHAR(36)"},
+		{29, "expose DLQ recovery tracking errors", "ALTER TABLE dead_letters ADD COLUMN recovery_tracking_error LONGTEXT"},
+		{30, "persist recovery events", `CREATE TABLE IF NOT EXISTS recovery_events (
+ id VARCHAR(36) PRIMARY KEY, scope_key CHAR(64) NOT NULL,
+ pipeline_id VARCHAR(128) NOT NULL, pipeline_name TEXT NOT NULL,
+ endpoint VARCHAR(128) NOT NULL, node_id VARCHAR(255) NOT NULL DEFAULT '',
+ connection_name VARCHAR(128) NOT NULL DEFAULT '', connection_known INTEGER NOT NULL DEFAULT 0,
+ spec_version INTEGER NOT NULL DEFAULT 0, error_class VARCHAR(32) NOT NULL,
+ first_error TEXT NOT NULL, state VARCHAR(16) NOT NULL,
+ opened_at DATETIME(3) NOT NULL, closed_at DATETIME(3) NULL,
+ attempt_count BIGINT NOT NULL DEFAULT 0, record_count BIGINT NOT NULL DEFAULT 0,
+ replayed_rows BIGINT NOT NULL DEFAULT 0, abandoned_rows BIGINT NOT NULL DEFAULT 0,
+ tracking_incomplete INTEGER NOT NULL DEFAULT 0
+)`},
+		{31, "retain recovery outcomes", `CREATE TABLE IF NOT EXISTS recovery_operations (
+ id VARCHAR(36) PRIMARY KEY, event_id VARCHAR(36) NOT NULL DEFAULT '',
+ pipeline_id VARCHAR(128) NOT NULL, dlq_row_id BIGINT NOT NULL,
+ record_hash VARCHAR(64) NOT NULL, kind VARCHAR(32) NOT NULL, state VARCHAR(32) NOT NULL,
+ error TEXT NOT NULL, started_at DATETIME(3) NOT NULL,
+ finished_at DATETIME(3) NULL, acknowledged_at DATETIME(3) NULL
+)`},
+		{32, "index recovery identities", "SELECT 1"},
 	}
 
 	for _, m := range migrations {
@@ -270,6 +294,11 @@ func (s *Store) runVersionedMigrations() error {
 			}
 			_, _ = s.db.Exec(`CREATE UNIQUE INDEX idx_pipelines_id ON pipelines(id)`)
 			_, _ = s.db.Exec(`CREATE INDEX idx_pipelines_name ON pipelines(name)`)
+		}
+		if m.version == 32 {
+			if err := sqlstore.New(s.db, sqlstore.MySQLDialect{}).EnsureRecoveryIndexes(context.Background()); err != nil {
+				return err
+			}
 		}
 		if m.version == 24 {
 			if err := sqlstore.New(s.db, sqlstore.MySQLDialect{}).EnsureDeadLetterHashUniqueness(context.Background()); err != nil {

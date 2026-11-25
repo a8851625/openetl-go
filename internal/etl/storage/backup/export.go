@@ -16,7 +16,7 @@ import (
 
 const exportPageSize = 1000
 
-// ExportFile streams a v2 snapshot to a private temporary file. Read, encode,
+// ExportFile streams a v3 snapshot to a private temporary file. Read, encode,
 // inventory or write failures leave the previous destination untouched. Writers
 // sharing this metadata/state must be stopped for the whole maintenance window.
 func ExportFile(ctx context.Context, store storage.Storage, path string, opts Options) (storage.ObjectCounts, error) {
@@ -72,6 +72,7 @@ func ExportJSON(ctx context.Context, store storage.Storage, w io.Writer, opts Op
 		name  string
 		count *int
 	}{
+		{"recovery_events", &counts.RecoveryEvents}, {"recovery_operations", &counts.RecoveryOperations},
 		{"pipelines", &counts.Pipelines}, {"pipeline_versions", &counts.PipelineVersions},
 		{"checkpoints", &counts.Checkpoints}, {"dead_letters", &counts.DeadLetters},
 		{"audit_logs", &counts.AuditLogs}, {"run_history", &counts.RunHistory},

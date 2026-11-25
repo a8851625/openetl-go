@@ -69,6 +69,65 @@ func TestBackupRestoreConformance(t *testing.T) {
 				}
 			}
 
+			t.Run("recovery_v3_streaming_fidelity_and_failure_atomicity", func(t *testing.T) {
+				reset(t)
+				snap := fidelityFixture()
+				snap.FormatVersion = 3
+				start := snap.Pipelines[0].CreatedAt
+				end := snap.Pipelines[0].UpdatedAt
+				eventID := "a9c53bc1-d2e3-4c28-9716-c85ea039f08a"
+				opID := "b3799575-65aa-4f91-8c80-738b37e84511"
+				snap.DeadLetters[0].RecoveryEventID = eventID
+				snap.DeadLetters[0].RecoveryOperationID = opID
+				snap.DeadLetters[0].RecoveryContext = core.RecoveryCaptureContext{Endpoint: "dag_node", NodeID: "write-orders", ConnectionName: "warehouse", ConnectionKnown: true, SpecVersion: 7}
+				snap.RecoveryEvents = []*storage.RecoveryEvent{
+					{ID: eventID, ScopeKey: strings.Repeat("1", 64), PipelineID: "pipeline-42", PipelineName: "orders", Endpoint: "dag_node", NodeID: "write-orders", ConnectionName: "warehouse", ConnectionKnown: true, SpecVersion: 7, ErrorClass: "transient", FirstError: "sink unavailable", State: "replaying", OpenedAt: start, AttemptCount: 4, RecordCount: 2, ReplayedRows: 1},
+					{ID: "c76db805-e613-48fd-be7e-9d29293073e5", ScopeKey: strings.Repeat("2", 64), PipelineID: "deleted-pipeline", PipelineName: "removed display", Endpoint: "sink", State: "abandoned", OpenedAt: start, ClosedAt: &end, AttemptCount: 1, RecordCount: 1, AbandonedRows: 1},
+				}
+				snap.RecoveryOperations = []*storage.RecoveryOperation{
+					{ID: opID, EventID: eventID, PipelineID: "pipeline-42", DLQRowID: 71, RecordHash: "retained-hash", Kind: "replay", State: "acked", StartedAt: start, AcknowledgedAt: &end},
+					{ID: "c9ae947a-406b-490b-a517-a2c0aa8d06e2", EventID: eventID, PipelineID: "pipeline-42", DLQRowID: 70, RecordHash: "prior-row", Kind: "replay", State: "failed", Error: "historical outage", StartedAt: start, FinishedAt: &end},
+					{ID: "d8d414bd-e74d-4d06-967a-5ef3088c66e6", PipelineID: "deleted-pipeline", DLQRowID: 68, RecordHash: "unknown-row", Kind: "retention", State: "abandoned", StartedAt: start, FinishedAt: &end},
+				}
+				opts := backup.Options{ClearBeforeRestore: true, PluginsDir: t.TempDir()}
+				if err := backup.Restore(ctx, s, snap, opts); err != nil {
+					t.Fatal(err)
+				}
+				file := filepath.Join(t.TempDir(), "recovery-v3.json")
+				counts, err := backup.ExportFile(ctx, s, file, backup.Options{})
+				if err != nil || counts != backup.CountSnapshot(snap) {
+					t.Fatalf("streamed counts=%+v err=%v", counts, err)
+				}
+				streamed, err := backup.ReadFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertSnapshotPayload(t, snap, streamed)
+				if err := backup.Restore(ctx, s, streamed, opts); err != nil {
+					t.Fatal(err)
+				}
+				restored := exportForRestoreTest(t, s)
+				assertSnapshotPayload(t, streamed, restored)
+				record, err := s.(storage.RecoveryStore).GetRecoveryEvent(ctx, eventID)
+				if err != nil || record.DLQOpenRows != 1 || record.State != "replaying" {
+					t.Fatalf("restored live association=%+v err=%v", record, err)
+				}
+				for _, failAt := range []string{"backup.wipe.recovery_events", "backup.restore.recovery_operations"} {
+					s.SetFailureInjector(func(point string) error {
+						if point == failAt {
+							return errors.New("fixture recovery restore failure")
+						}
+						return nil
+					})
+					err := backup.Restore(ctx, s, streamed, opts)
+					s.SetFailureInjector(nil)
+					if err == nil {
+						t.Fatalf("%s did not fail", failAt)
+					}
+					assertSnapshotPayload(t, restored, exportForRestoreTest(t, s))
+				}
+			})
+
 			t.Run("encrypted_connection_references_after_restore", func(t *testing.T) {
 				reset(t)
 				cipher, err := storage.NewSpecCipher("refs", resolverKey(4), "")
@@ -293,7 +352,7 @@ func assertSnapshotPayload(t *testing.T, want, got *backup.Snapshot) {
 					// PostgreSQL timestamptz returns the same instant in the
 					// client's timezone. Compare actual timestamps, not offsets.
 					fields := row.(map[string]any)
-					for _, field := range []string{"created_at", "updated_at", "timestamp", "started_at", "finished_at", "registered_at", "last_heartbeat", "assigned_at", "lease_expires_at", "last_tested_at", "installed_at"} {
+					for _, field := range []string{"created_at", "updated_at", "timestamp", "started_at", "finished_at", "registered_at", "last_heartbeat", "assigned_at", "lease_expires_at", "last_tested_at", "installed_at", "opened_at", "closed_at", "sink_acknowledged_at"} {
 						if encoded, ok := fields[field].(string); ok {
 							instant, err := time.Parse(time.RFC3339Nano, encoded)
 							if err != nil {

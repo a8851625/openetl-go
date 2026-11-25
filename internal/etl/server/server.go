@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gogf/gf/v2/frame/g"
+	"github.com/google/uuid"
 
 	"github.com/a8851625/openetl-go/internal/etl/alert"
 	"github.com/a8851625/openetl-go/internal/etl/core"
@@ -1225,6 +1226,8 @@ func (s *Server) RegisterHTTPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/plugins/", s.handlePluginAction)
 	mux.HandleFunc("/api/v2/nodes/types", s.handleNodeTypes)
 	mux.HandleFunc("/api/v2/dlq/", s.handleDLQAction)
+	mux.HandleFunc("/api/v2/recovery-events", s.handleRecoveryEvents)
+	mux.HandleFunc("/api/v2/recovery-events/", s.handleRecoveryEvents)
 	mux.HandleFunc("/api/v2/settings", s.handleSettings)
 	mux.HandleFunc("/api/v2/ai/context", s.handleAIContext)
 	mux.HandleFunc("/api/v2/ai/generate", s.handleAIGenerate)
@@ -4636,6 +4639,31 @@ func pluginMetadataFromSchema(metadata, schema map[string]any) map[string]any {
 
 func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	for key, valid := range map[string]func(string) bool{
+		"node_id":         validRecoveryNodeID,
+		"connection_name": connectionNamePattern.MatchString,
+	} {
+		if values, present := r.URL.Query()[key]; present && (len(values) != 1 || !valid(r.URL.Query().Get(key))) {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid " + key})
+			return
+		}
+	}
+	if values, ok := r.URL.Query()["id"]; ok {
+		id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		if len(values) != 1 || err != nil || id <= 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid DLQ row id"})
+			return
+		}
+	}
+	if values, ok := r.URL.Query()["recovery_event_id"]; ok {
+		if _, err := uuid.Parse(r.URL.Query().Get("recovery_event_id")); len(values) != 1 || err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid recovery id"})
+			return
+		}
+	}
 	path := r.URL.Path[len("/api/v2/dlq/"):]
 	ref := path
 	action := ""
@@ -4664,6 +4692,7 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && action == "":
 		items, err := s.readFilteredDLQ(r.Context(), name, filter)
 		if err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
@@ -4671,6 +4700,7 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && action == "":
 		count, err := s.deleteFilteredDLQ(r.Context(), name, filter)
 		if err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
@@ -4691,6 +4721,7 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 		}
 		item, err := s.dlqWriter.ReadByID(r.Context(), name, id)
 		if err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
@@ -4699,6 +4730,7 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.dlqWriter.DeleteByID(r.Context(), name, id); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
@@ -4789,9 +4821,17 @@ func (s *Server) handleDLQAction(w http.ResponseWriter, r *http.Request) {
 func writeDLQReplayError(w http.ResponseWriter, err error, replayed int) {
 	status := http.StatusBadRequest
 	body := map[string]any{"error": err.Error(), "replayed": replayed}
+	trackingFailure := errors.Is(err, errRecoveryPersistence)
+	if trackingFailure {
+		status = http.StatusServiceUnavailable
+		body["recovery_tracking_known"] = false
+		body["code"] = "recovery_metadata_unavailable"
+	}
 	var gateErr *dlqReplayGateError
 	if errors.As(err, &gateErr) {
-		status = http.StatusConflict
+		if !trackingFailure {
+			status = http.StatusConflict
+		}
 		body["id"] = gateErr.ID
 		body["replay_state"] = gateErr.State
 		body["reason"] = gateErr.Reason
@@ -4839,13 +4879,17 @@ func parseDLQIdentityIDAction(action string) (int64, bool) {
 }
 
 type dlqFilter struct {
-	Limit         int
-	Offset        int
-	From          time.Time
-	Until         time.Time
-	Contains      string
-	ErrorContains string
-	ErrorClass    string
+	DAGNode         string
+	ConnectionName  string
+	ID              int64
+	RecoveryEventID string
+	Limit           int
+	Offset          int
+	From            time.Time
+	Until           time.Time
+	Contains        string
+	ErrorContains   string
+	ErrorClass      string
 	// Ascending is set by replay so a backlog drains oldest-first; listings
 	// keep the default newest-first order.
 	Ascending bool
@@ -4854,6 +4898,10 @@ type dlqFilter struct {
 func dlqFilterFromRequest(r *http.Request) dlqFilter {
 	q := r.URL.Query()
 	filter := dlqFilter{Limit: 100}
+	filter.DAGNode = q.Get("node_id")
+	filter.ConnectionName = q.Get("connection_name")
+	filter.ID, _ = strconv.ParseInt(q.Get("id"), 10, 64)
+	filter.RecoveryEventID = q.Get("recovery_event_id")
 	if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			filter.Limit = n
@@ -4878,6 +4926,8 @@ func dlqFilterFromRequest(r *http.Request) dlqFilter {
 
 func (s *Server) toStorageFilter(name string, f dlqFilter) storage.DLQFilter {
 	return storage.DLQFilter{
+		DAGNode: f.DAGNode, ConnectionName: f.ConnectionName,
+		ID: f.ID, RecoveryEventID: f.RecoveryEventID,
 		JobName:       name,
 		Limit:         f.Limit,
 		Offset:        f.Offset,
@@ -4895,20 +4945,12 @@ func (s *Server) readFilteredDLQ(ctx context.Context, name string, filter dlqFil
 }
 
 func (s *Server) deleteFilteredDLQ(ctx context.Context, name string, filter dlqFilter) (int, error) {
-	if !hasSelectiveDLQFilter(filter) {
-		// Count before deleting so the API can report how many rows were
-		// removed. A sentinel like -1 made the response lie and drove the
-		// dlq_delete_count counter negative.
-		count, err := s.dlqWriter.Count(ctx, name)
-		if err != nil {
-			return 0, err
-		}
-		if err := s.dlqWriter.DeleteAll(ctx, name); err != nil {
-			return 0, err
-		}
-		return count, nil
-	}
-	count, err := s.dlqWriter.DeleteFiltered(ctx, s.toStorageFilter(name, filter))
+	stored := s.toStorageFilter(name, filter)
+	// API purge deletes the full matching scope. Listing pagination must not
+	// silently cap a destructive operation or erase its identity constraints.
+	stored.Limit = 0
+	stored.Offset = 0
+	count, err := s.dlqWriter.DeleteFiltered(ctx, stored)
 	if err != nil {
 		return 0, err
 	}
@@ -4916,7 +4958,7 @@ func (s *Server) deleteFilteredDLQ(ctx context.Context, name string, filter dlqF
 }
 
 func hasSelectiveDLQFilter(filter dlqFilter) bool {
-	return !filter.From.IsZero() || !filter.Until.IsZero() || filter.Contains != "" || filter.ErrorContains != "" || filter.ErrorClass != ""
+	return filter.DAGNode != "" || filter.ConnectionName != "" || filter.ID > 0 || filter.RecoveryEventID != "" || !filter.From.IsZero() || !filter.Until.IsZero() || filter.Contains != "" || filter.ErrorContains != "" || filter.ErrorClass != ""
 }
 
 // dlqReplayLock returns the per-pipeline mutex that serialises DLQ replay.
@@ -4953,7 +4995,7 @@ func (s *Server) replayDLQ(ctx context.Context, name string, filter dlqFilter) (
 	}
 	replayCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replayTimeout)
 	defer cancel()
-	return s.replayDLQItems(replayCtx, name, items)
+	return s.trackedReplayItems(replayCtx, name, items)
 }
 
 func (s *Server) replayDLQByID(ctx context.Context, name string, id int64) (int, error) {
@@ -4972,7 +5014,7 @@ func (s *Server) replayDLQByID(ctx context.Context, name string, id int64) (int,
 	}
 	replayCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replayTimeout)
 	defer cancel()
-	return s.replayDLQItems(replayCtx, name, []storage.DeadLetter{*item})
+	return s.trackedReplayItems(replayCtx, name, []storage.DeadLetter{*item})
 }
 
 func (s *Server) replayDLQItems(ctx context.Context, name string, items []storage.DeadLetter) (int, error) {
@@ -5007,8 +5049,7 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 			continue
 		}
 		if err := s.deleteReplayedDLQItem(ctx, name, item); err != nil {
-			s.markDLQReplayFailure(ctx, item, err)
-			return replayed, err
+			return replayed, s.markDLQReplayFailure(ctx, item, err)
 		}
 		replayed++
 	}
@@ -5054,31 +5095,26 @@ func (s *Server) replayDLQItems(ctx context.Context, name string, items []storag
 			processed, pErr := processors.Apply(ctx, record)
 			if pErr != nil {
 				replayErr := fmt.Errorf("apply pipeline processors to dlq record: %w", pErr)
-				s.markDLQReplayFailure(ctx, prepared, replayErr)
-				return replayed, replayErr
+				return replayed, s.markDLQReplayFailure(ctx, prepared, replayErr)
 			}
 			record = processed
 		}
 		rec, err := transforms.Apply(ctx, record)
 		if err != nil {
 			replayErr := fmt.Errorf("transform dlq record: %w", err)
-			s.markDLQReplayFailure(ctx, prepared, replayErr)
-			return replayed, replayErr
+			return replayed, s.markDLQReplayFailure(ctx, prepared, replayErr)
 		}
 		if err := s.validateDLQReplayIdentity(ctx, spec, prepared, rec, true); err != nil {
 			return replayed, err
 		}
 		if err := retry.Do(ctx, cfg, core.IsRetryableError, func() error { return sink.Write(ctx, []core.Record{rec}) }); err != nil {
-			s.markDLQReplayFailure(ctx, prepared, err)
-			return replayed, err
+			return replayed, s.markDLQReplayFailure(ctx, prepared, err)
 		}
 		if err := s.checkpointDLQReplay(ctx, &prepared); err != nil {
-			s.markDLQReplayFailure(ctx, prepared, err)
-			return replayed, err
+			return replayed, s.markDLQReplayFailure(ctx, prepared, err)
 		}
 		if err := s.deleteReplayedDLQItem(ctx, name, prepared); err != nil {
-			s.markDLQReplayFailure(ctx, prepared, err)
-			return replayed, err
+			return replayed, s.markDLQReplayFailure(ctx, prepared, err)
 		}
 		replayed++
 	}
@@ -5101,8 +5137,7 @@ func (s *Server) replayDAGDLQItems(ctx context.Context, name string, dagSpec *or
 			continue
 		}
 		if err := s.deleteReplayedDLQItem(ctx, name, item); err != nil {
-			s.markDLQReplayFailure(ctx, item, err)
-			return replayed, err
+			return replayed, s.markDLQReplayFailure(ctx, item, err)
 		}
 		replayed++
 	}
@@ -5140,16 +5175,13 @@ func (s *Server) replayDAGDLQItems(ctx context.Context, name string, dagSpec *or
 		item = prepared
 		if err := replayer.Replay(ctx, nodeID, item.Record); err != nil {
 			replayErr := fmt.Errorf("replay dag dlq record %s from node %s: %w", dlqItemRef(item), nodeID, err)
-			s.markDLQReplayFailure(ctx, item, replayErr)
-			return replayed, replayErr
+			return replayed, s.markDLQReplayFailure(ctx, item, replayErr)
 		}
 		if err := s.checkpointDLQReplay(ctx, &item); err != nil {
-			s.markDLQReplayFailure(ctx, item, err)
-			return replayed, err
+			return replayed, s.markDLQReplayFailure(ctx, item, err)
 		}
 		if err := s.deleteReplayedDLQItem(ctx, name, item); err != nil {
-			s.markDLQReplayFailure(ctx, item, err)
-			return replayed, err
+			return replayed, s.markDLQReplayFailure(ctx, item, err)
 		}
 		replayed++
 	}
@@ -5161,7 +5193,7 @@ func (s *Server) deleteReplayedDLQItem(ctx context.Context, name string, item st
 	// (P4-10, SV-1). Timestamp-based deletion is imprecise when multiple
 	// DLQ entries share the same second.
 	if item.ID != 0 {
-		if err := s.dlqWriter.DeleteByID(ctx, name, item.ID); err != nil {
+		if err := s.finalizeRecoveryRow(ctx, item); err != nil {
 			return fmt.Errorf("delete replayed dlq id %d: %w", item.ID, err)
 		}
 		return nil

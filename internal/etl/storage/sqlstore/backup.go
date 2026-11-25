@@ -55,6 +55,10 @@ func (s *Store) WriteDeadLetterFidelity(ctx context.Context, r *storage.DLQRecor
 	if err != nil {
 		return fmt.Errorf("marshal restored DLQ identity: %w", err)
 	}
+	recovery, err := json.Marshal(r.RecoveryContext)
+	if err != nil {
+		return err
+	}
 	// dead_letters carries a unique (job_name, record_hash) key since
 	// PR-DLQ-2. A backup taken before that invariant can legitimately contain
 	// duplicate rows, so restore skips conflicts instead of failing the whole
@@ -67,9 +71,9 @@ func (s *Store) WriteDeadLetterFidelity(ctx context.Context, r *storage.DLQRecor
 		hash = storage.RecordHashJSON(record)
 	}
 	return s.insertBackupRowIgnoreConflict(ctx, "dead_letters",
-		"id,job_name,record_json,error,error_class,identity_context_json,attempt,record_hash,pipeline_version,dag_node,created_at",
+		"id,job_name,record_json,error,error_class,identity_context_json,attempt,record_hash,pipeline_version,dag_node,created_at,recovery_event_id,recovery_operation_id,recovery_context_json,recovery_tracking_error",
 		r.ID, r.JobName, string(record), r.Error, r.ErrorClass, string(identity), r.Attempt,
-		hash, r.PipelineVersion, r.DAGNode, r.CreatedAt)
+		hash, r.PipelineVersion, r.DAGNode, r.CreatedAt, recoveryNullable(r.RecoveryEventID), recoveryNullable(r.RecoveryOperationID), string(recovery), r.RecoveryTrackingError)
 }
 
 // insertBackupRowIgnoreConflict is insertBackupRow for tables whose unique

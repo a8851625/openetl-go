@@ -115,6 +115,12 @@ export type DLQIdentityContext = {
 };
 
 export type DLQItem = {
+	row_id?: string;
+	recovery_event_id?: string;
+	recovery_operation_id?: string;
+	recovery_association_known?: boolean;
+	recovery_tracking_error?: string;
+	recovery_context?: { endpoint?: string; node_id?: string; connection_name?: string; connection_known?: boolean };
   id?: number;
   job_name: string;
   record: { operation: string; data: Record<string, unknown> };
@@ -126,6 +132,21 @@ export type DLQItem = {
   dag_node?: string;
   attempt?: number;
   identity_context?: DLQIdentityContext;
+};
+
+export type RecoveryEvent = {
+  id: string; pipeline_id: string; pipeline_name: string;
+  endpoint: string; node_id?: string; connection_name?: string; connection_known: boolean;
+  spec_version?: number; error_class: string; first_error: string; state: string;
+  opened_at: string; closed_at?: string; attempt_count: number; record_count: number;
+  replayed_rows: number; abandoned_rows: number; dlq_open_rows: number; tracking_incomplete: boolean;
+};
+
+export type RecoveryOperation = {
+  id: string; recovery_event_id?: string; pipeline_id: string;
+  dlq_row_id: number; dlq_row_key?: string; record_hash: string;
+  kind: string; state: string; error?: string;
+  started_at: string; finished_at?: string; sink_acknowledged_at?: string;
 };
 
 export type AuditEvent = {

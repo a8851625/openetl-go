@@ -2,11 +2,11 @@
 
 | Round | Increment | Status | Evidence |
 | --- | --- | --- | --- |
-| 1/5 | EV-2 | done | Go 1.24.13 + 隔离 MySQL 8：3 个 targeted -race tests passed；1000 行字段对账通过；PR run 45652762125 / integration job 139341305228 success。 |
-| 2/5 | P5-H1 | done | API/Go race、9 个前端 contracts、真实容器 14/14：见 h1-evidence.md。 |
-| 3/5 | PR-0-C1 | done | 三 backend race/conformance/backup、完整 server -race、真实容器 9/9；见 c1-evidence.md。 |
-| 4/5 | UI-E-R1 | todo | 用户已授权技术修复；外部研究继续缺参与者。 |
-| 5/5 | GA-C1 | todo | 依赖最终运行时代码冻结。 |
+| 1/5 | EV-2 | delivered | Go 1.24.13 + 隔离 MySQL 8：3 个 targeted -race tests passed；1000 行字段对账通过；PR run 45652762125 / integration job 139341305228 success。 |
+| 2/5 | P5-H1 | delivered | API/Go race、9 个前端 contracts、真实容器 14/14：见 h1-evidence.md。 |
+| 3/5 | PR-0-C1 | delivered | 三 backend race/conformance/backup、完整 server -race、真实容器 9/9；见 c1-evidence.md。 |
+| 4/5 | UI-E-R1 | delivered | 三 backend migration/recovery/backup、完整 affected Go race、真实 UI 21/21；见 r1-evidence.md。 |
+| 5/5 | GA-C1 | queued | 依赖最终运行时代码冻结。 |
 
 ## Round 1 Claim
 
@@ -57,3 +57,19 @@ Acceptance: 1) source/transform/sink/DLQ/DAG current 引用可查询；2) 删除
 Evidence: [c1-evidence.md](./c1-evidence.md)；三 backend storage/sqlstore/backup -race 与完整 server -race exit 0；真实 API/YAML/UI 9/9 exit 0；typecheck/lint/build、OpenAPI YAML check、diff check exit 0。
 Result: delivered
 Residual/follow-up: UI-E-R1
+
+## Round 4 Claim
+
+Round: 4/5
+Roadmap item: UI-E-R1
+Profile/path: standalone recovery + three SQL metadata backends; DAG node capture only, no distributed maturity claim
+Objective: sink outage 的失败关联、dry-run/replay 结果在刷新、重启与 DLQ 删除后仍可复核
+Eligibility: PR-0-C1 delivered；用户明确授权先实现技术契约，研究不参与技术验收
+Scope: core/pipeline/DAG known capture context、storage/adapters/SQL recovery/migrations/backup、server recovery list/detail/replay/delete/dry-run、Issues/DLQ/Connections/detail routing、i18n、对应测试/API/runbook/evidence
+Non-goals: 根因推断、错误文本/时间聚类、跨 pipeline 合并、任意用户推进事件状态、用户研究、运行历史 P2、exactly-once 或 connector maturity 升级
+Data semantics: durable DLQ 捕获建立服务端 UUID，按明确的 pipeline/endpoint/node/connection scope 复用未关闭记录；context 未知不猜关联。捕获 metadata 事务失败回退到 durable DLQ 并持久化/暴露 tracking error，不影响 checkpoint 安全门。sink_acked 后的 DLQ 删除和 retained replay outcome 同事务；失败保留 DLQ。主动删除、TTL、pipeline delete 记 abandoned，混合丢弃不记 resolved。启动不按超时推断成功。
+Backup/rollback: v3 增加 recovery tables/关联/操作，保留 v1/v2 读取与 ID/计数/时间 fidelity；回退保留新表，不 drop。URL 仅接受 typed identity/filter allowlist，敏感参数/无效 ID 明确拒绝。
+Acceptance: 1) stable persisted failure/replay identity + known associations；2) failures/restart/replay/sink_ack/delete/TTL 三 backend；3) capture bookkeeping failure 不破坏 DLQ durability，result persistence failure 不误删；4) v1/v2 migration + v3 backup/restore fidelity；5) real outage/dry-run/replay + refresh/deep-link tests；6) UI-E parent research保持 blocked_external
+Evidence: r1-evidence.md；三 backend recovery/migration/backup 与 affected packages -race exit 0；server final -race exit 0；frontend 15/15 + typecheck/lint/build；最终 container UI 21/21 exit 0。
+Result: delivered
+Residual/follow-up: GA-C1

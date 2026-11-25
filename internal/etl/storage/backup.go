@@ -23,17 +23,19 @@ type BackupManifest struct {
 
 // BackupCounts tallies major control-plane tables.
 type BackupCounts struct {
-	Pipelines   int `json:"pipelines"`
-	Versions    int `json:"versions"`
-	Checkpoints int `json:"checkpoints"`
-	DLQ         int `json:"dlq"`
-	Audit       int `json:"audit"`
-	Runs        int `json:"runs"`
-	Workers     int `json:"workers"`
-	Tasks       int `json:"tasks"`
-	Plugins     int `json:"plugins"`
-	Connections int `json:"connections"`
-	Settings    int `json:"settings"`
+	RecoveryEvents     int `json:"recovery_events"`
+	RecoveryOperations int `json:"recovery_operations"`
+	Pipelines          int `json:"pipelines"`
+	Versions           int `json:"versions"`
+	Checkpoints        int `json:"checkpoints"`
+	DLQ                int `json:"dlq"`
+	Audit              int `json:"audit"`
+	Runs               int `json:"runs"`
+	Workers            int `json:"workers"`
+	Tasks              int `json:"tasks"`
+	Plugins            int `json:"plugins"`
+	Connections        int `json:"connections"`
+	Settings           int `json:"settings"`
 }
 
 // SecretScanResult reports whether raw dump text contained known plaintext secrets.
@@ -69,6 +71,8 @@ func BackupSQLStore(ctx context.Context, d SQLDumper, outDir string, knownPlaint
 		name  string
 		count *int
 	}{
+		{"recovery_events", &counts.RecoveryEvents},
+		{"recovery_operations", &counts.RecoveryOperations},
 		{"pipelines", &counts.Pipelines},
 		{"pipeline_versions", &counts.Versions},
 		{"checkpoints", &counts.Checkpoints},
@@ -196,6 +200,9 @@ func ApplyRetention(ctx context.Context, db *sql.DB, now time.Time, p RetentionP
 	if db == nil {
 		return nil, fmt.Errorf("retention: nil db")
 	}
+	if p.DLQ > 0 {
+		return nil, fmt.Errorf("raw DB DLQ retention cannot preserve recovery outcomes; use Storage.DeleteDeadLettersByFilter with DeletionReason=retention")
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -215,10 +222,6 @@ func ApplyRetention(ctx context.Context, db *sql.DB, now time.Time, p RetentionP
 	if p.AuditLogs > 0 {
 		c := now.Add(-p.AuditLogs).UTC().Format(time.RFC3339Nano)
 		rep.AuditDeleted = del(`DELETE FROM audit_logs WHERE created_at < ?`, c)
-	}
-	if p.DLQ > 0 {
-		c := now.Add(-p.DLQ).UTC().Format(time.RFC3339Nano)
-		rep.DLQDeleted = del(`DELETE FROM dead_letters WHERE created_at < ?`, c)
 	}
 	return rep, nil
 }

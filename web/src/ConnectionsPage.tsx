@@ -24,6 +24,8 @@ import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { ToneBadge } from '@/components/shared/status-badge';
 import { cn } from '@/lib/utils';
 import { getToken } from '@/lib/api';
+import { routeToHash, type TaskContext } from '@/lib/routing';
+import { RecoveryRecords } from '@/components/recovery-records';
 
 type ConnectorKind = 'source' | 'sink' | 'transform';
 
@@ -94,7 +96,7 @@ const starterConfig: Record<ConnectorKind, Record<string, unknown>> = {
   transform: {},
 };
 
-export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
+export function ConnectionsPage({ t, lang: _lang, context, refreshKey = 0 }: { t: TFunc; lang: Lang; context?: TaskContext; refreshKey?: number }) {
   const [connections, setConnections] = useState<ConnectionEntry[]>([]);
   const [descriptors, setDescriptors] = useState<ConnectorDescriptor[]>([]);
   const [loading, setLoading] = useState(true);
@@ -372,6 +374,14 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
         </div>
       </div>
 
+      {context && <div className="space-y-3" data-testid="connection-recovery-context">
+        {context.connectionName && <p className="text-sm">{t('recovery.connectionContext')}: <b>{context.connectionName}</b></p>}
+        {context.connectionName && !loading && !error && !connections.some((connection) => connection.name === context.connectionName)
+          && <ErrorBox message={t('recovery.connectionMissing')} />}
+        {context.recoveryId && <RecoveryRecords t={t} context={context} refreshKey={refreshKey} />}
+        <a className="text-sm text-primary underline" href={routeToHash({ page: 'issues', context })}>{t('recovery.return')}</a>
+      </div>}
+
       {actionNotice && (
         <div
           data-testid="connection-action-notice"
@@ -435,7 +445,8 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
                 </TableHeader>
                 <TableBody>
                   {connections.map((conn) => (
-                    <TableRow key={conn.name}>
+                    <TableRow key={conn.name} data-context-connection={conn.name === context?.connectionName ? conn.name : undefined}
+                      className={conn.name === context?.connectionName ? 'bg-accent/60' : undefined}>
                       <TableCell className="font-medium">{conn.name}</TableCell>
                       <TableCell>
                         <ToneBadge tone="slate">{conn.kind}</ToneBadge>

@@ -18,10 +18,15 @@
 | --- | --- | --- | --- | --- |
 | UI-E.1 | 进行五类目标用户任务走查并记录行为基线 | UI-D delivered、测试环境、3–5 名目标参与者 | `blocked`（2026-09-26 external） | `research-protocol.md`；待匿名研究汇总、决策记录、ROADMAP UI-E |
 | UI-E.2 | 将研究结论转为首条管道的渐进披露最小 slice | UI-E.1 | `todo` | `first-task-wizard.tsx`、i18n、wizard Playwright、spec round-trip 证据 |
-| UI-E.3 | 核对并冻结 issue 关联、connection references、推进事实的最小 API 契约 | UI-E.1 | `todo` | API/Go contract test、存储/connector 兼容矩阵、ROADMAP blocker 或 decision |
+| UI-E.3 | 核对并冻结 issue 关联、connection references、推进事实的最小 API 契约 | UI-E.1 | `done`（2026-11-09 只读完成，结论「不足」；产出 [contract-preflight.md](./contract-preflight.md)，最小提案待用户批准，未实现） | API/Go contract test、存储/connector 兼容矩阵、ROADMAP blocker 或 decision |
 | UI-E.4 | 建立可靠 recovery task 与 DLQ/Issue/Connection 稳定 URL 上下文 | UI-E.2、UI-E.3 | `todo` | routing/main/pages、UI E2E、故障注入 E2E |
 | UI-E.5 | 用真实指标分层总览的行动/推进/累计，并呈现连接删除影响 | UI-E.3 | `todo` | Dashboard/Pipelines/Connections、metrics/reference contract、任务测试 |
 | UI-E.6 | 执行容器级恢复回归、用户回访并回填证据 | UI-E.2–UI-E.5 | `todo` | `hack/e2e-ui.sh`、connector E2E、研究 follow-up、ROADMAP matrix |
+
+2026-11-26 用户授权先完成技术契约：PR-0-C1 和 UI-E-R1 已独立交付，三种
+SQL backend、备份/恢复及真实容器恢复深链 21 项检查通过，见
+[R1 evidence](../P1-technical-closure-20261126/r1-evidence.md)。
+这不替代 UI-E.1/首次任务走查或 UI-E.6 的用户回访；本迭代继续 blocked_external。
 
 ## 任务明细
 

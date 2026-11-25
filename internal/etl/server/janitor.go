@@ -254,7 +254,7 @@ func (s *Server) runRetentionJanitor(ctx context.Context) {
 	// DLQ TTL.
 	if cfg.DLQTTL > 0 {
 		cutoff := time.Now().Add(-cfg.DLQTTL)
-		n, err := s.store.DeleteDeadLettersByFilter(ctx, storage.DLQFilter{Until: cutoff, Limit: batch})
+		n, err := s.store.DeleteDeadLettersByFilter(ctx, storage.DLQFilter{Until: cutoff, Limit: batch, DeletionReason: "retention"})
 		recordErr(err)
 		if err == nil {
 			dlqN += n

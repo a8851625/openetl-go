@@ -1,7 +1,7 @@
 // Package backup provides control-plane metadata backup and restore for the
 // three public storage backends (SQLite / MySQL / PostgreSQL).
 //
-// Backup format (v2, readable with v1 compatibility) is a JSON document covering every table required by
+// Backup format (v3, readable with v1/v2 compatibility) is a JSON document covering every table required by
 // PR-1.3 acceptance: pipelines, versions, checkpoints, DLQ, audit, runs,
 // workers, tasks, plugins, connections and settings. Secrets remain as stored
 // (enc:v1 envelopes) — plaintext is never re-encoded into the backup.
@@ -20,12 +20,13 @@ import (
 	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
-const FormatVersion = 2
+const FormatVersion = 3
 
 // Snapshot is the on-disk / portable representation of a control-plane backup.
 type Snapshot struct {
 	// FormatVersion 2 adds PluginArtifacts (WASM bytes) and fidelity-preserved
-	// audit/run-history rows. Version 1 products remain readable.
+	// audit/run-history rows. Version 3 retains recovery events, operations and
+	// DLQ associations. Version 1 and 2 products remain readable.
 	FormatVersion   int                        `json:"format_version"`
 	CreatedAt       time.Time                  `json:"created_at"`
 	Backend         string                     `json:"backend,omitempty"`
@@ -33,17 +34,19 @@ type Snapshot struct {
 	Counts          storage.ObjectCounts       `json:"counts"`
 	PluginArtifacts map[string]string          `json:"plugin_artifacts,omitempty"` // name -> base64 WASM
 
-	Pipelines   []*storage.PipelineRow      `json:"pipelines"`
-	Versions    []*storage.PipelineVersion  `json:"pipeline_versions"`
-	Checkpoints []*storage.CheckpointRecord `json:"checkpoints"`
-	DeadLetters []*storage.DLQRecord        `json:"dead_letters"`
-	AuditLogs   []*storage.AuditEntry       `json:"audit_logs"`
-	RunHistory  []*storage.RunRecord        `json:"run_history"`
-	Workers     []*storage.WorkerInfo       `json:"workers"`
-	Tasks       []*storage.TaskAssignment   `json:"task_assignments"`
-	Plugins     []*storage.PluginEntry      `json:"plugins"`
-	Connections []*storage.ConnectionEntry  `json:"connections"`
-	Settings    map[string]string           `json:"settings"`
+	Pipelines          []*storage.PipelineRow       `json:"pipelines"`
+	Versions           []*storage.PipelineVersion   `json:"pipeline_versions"`
+	Checkpoints        []*storage.CheckpointRecord  `json:"checkpoints"`
+	DeadLetters        []*storage.DLQRecord         `json:"dead_letters"`
+	AuditLogs          []*storage.AuditEntry        `json:"audit_logs"`
+	RunHistory         []*storage.RunRecord         `json:"run_history"`
+	Workers            []*storage.WorkerInfo        `json:"workers"`
+	Tasks              []*storage.TaskAssignment    `json:"task_assignments"`
+	Plugins            []*storage.PluginEntry       `json:"plugins"`
+	Connections        []*storage.ConnectionEntry   `json:"connections"`
+	Settings           map[string]string            `json:"settings"`
+	RecoveryEvents     []*storage.RecoveryEvent     `json:"recovery_events"`
+	RecoveryOperations []*storage.RecoveryOperation `json:"recovery_operations"`
 }
 
 // Options control export/restore behaviour.
@@ -83,6 +86,8 @@ type fidelityWriter interface {
 	WriteTaskFidelity(context.Context, *storage.TaskAssignment) error
 	WritePluginFidelity(context.Context, *storage.PluginEntry) error
 	WriteConnectionFidelity(context.Context, *storage.ConnectionEntry) error
+	WriteRecoveryEventFidelity(context.Context, *storage.RecoveryEvent) error
+	WriteRecoveryOperationFidelity(context.Context, *storage.RecoveryOperation) error
 	AdvanceBackupSequences(context.Context) error
 }
 
@@ -103,17 +108,19 @@ func CountSnapshot(snap *Snapshot) storage.ObjectCounts {
 		return storage.ObjectCounts{}
 	}
 	return storage.ObjectCounts{
-		Pipelines:        len(snap.Pipelines),
-		PipelineVersions: len(snap.Versions),
-		Checkpoints:      len(snap.Checkpoints),
-		DeadLetters:      len(snap.DeadLetters),
-		AuditLogs:        len(snap.AuditLogs),
-		RunHistory:       len(snap.RunHistory),
-		Workers:          len(snap.Workers),
-		Tasks:            len(snap.Tasks),
-		Plugins:          len(snap.Plugins),
-		Connections:      len(snap.Connections),
-		Settings:         len(snap.Settings),
+		Pipelines:          len(snap.Pipelines),
+		PipelineVersions:   len(snap.Versions),
+		Checkpoints:        len(snap.Checkpoints),
+		DeadLetters:        len(snap.DeadLetters),
+		AuditLogs:          len(snap.AuditLogs),
+		RunHistory:         len(snap.RunHistory),
+		Workers:            len(snap.Workers),
+		Tasks:              len(snap.Tasks),
+		Plugins:            len(snap.Plugins),
+		Connections:        len(snap.Connections),
+		Settings:           len(snap.Settings),
+		RecoveryEvents:     len(snap.RecoveryEvents),
+		RecoveryOperations: len(snap.RecoveryOperations),
 	}
 }
 
@@ -166,7 +173,7 @@ func ReadJSON(r io.Reader) (*Snapshot, error) {
 	if snap.FormatVersion == 0 {
 		snap.FormatVersion = 1
 	}
-	if snap.FormatVersion != 1 && snap.FormatVersion != FormatVersion {
+	if snap.FormatVersion != 1 && snap.FormatVersion != 2 && snap.FormatVersion != FormatVersion {
 		return nil, fmt.Errorf("backup: unsupported format_version %d (want %d or legacy 1)", snap.FormatVersion, FormatVersion)
 	}
 	return &snap, nil
@@ -221,6 +228,8 @@ func Reconcile(ctx context.Context, store storage.Storage, snap *Snapshot) (repo
 		{"plugins", want.Plugins, got.Plugins, true},
 		{"connections", want.Connections, got.Connections, true},
 		{"settings", want.Settings, got.Settings, true},
+		{"recovery_events", want.RecoveryEvents, got.RecoveryEvents, true},
+		{"recovery_operations", want.RecoveryOperations, got.RecoveryOperations, true},
 	}
 	ok = true
 	var b []byte

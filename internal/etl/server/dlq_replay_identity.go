@@ -134,19 +134,28 @@ func (s *Server) blockDLQReplay(ctx context.Context, item storage.DeadLetter, st
 		if err := s.dlqWriter.Update(ctx, item); err != nil {
 			return fmt.Errorf("persist dlq replay block (%s): %w", reason, err)
 		}
+		if err := s.finishRowRecovery(ctx, item, "failed", reason); err != nil {
+			return err
+		}
 	}
 	return &dlqReplayGateError{ID: item.ID, State: state, Reason: reason}
 }
 
-func (s *Server) markDLQReplayFailure(ctx context.Context, item storage.DeadLetter, replayErr error) {
+func (s *Server) markDLQReplayFailure(ctx context.Context, item storage.DeadLetter, replayErr error) error {
 	if item.ID == 0 || replayErr == nil {
-		return
+		return replayErr
 	}
 	item.IdentityContext.ReplayAttempt++
 	item.IdentityContext.ReplayError = replayErr.Error()
 	// A persisted sink acknowledgement is a replay checkpoint. Preserve it on
 	// cleanup failure so a retry cannot write the same item to the sink again.
-	_ = s.dlqWriter.Update(ctx, item)
+	if err := s.dlqWriter.Update(ctx, item); err != nil {
+		return fmt.Errorf("%w: persist replay failure (%v): %v", errRecoveryPersistence, replayErr, err)
+	}
+	if err := s.finishRowRecovery(ctx, item, "failed", replayErr.Error()); err != nil {
+		return err
+	}
+	return replayErr
 }
 
 // checkpointDLQReplay durably records sink acknowledgement before the DLQ row
@@ -167,7 +176,7 @@ func (s *Server) checkpointDLQReplay(ctx context.Context, item *storage.DeadLett
 		return fmt.Errorf("persist dlq replay checkpoint after sink acknowledgement: %w", err)
 	}
 	*item = candidate
-	return nil
+	return s.acknowledgeRowRecovery(ctx, candidate, now)
 }
 
 // repairLegacyDLQIdentity promotes one historical row from legacy_unknown to

@@ -32,8 +32,9 @@ UI 删除确认读取 references API；允许 shared ConfirmDialog 增加可选 
 ## UI-E-R1
 
 允许修改 DLQ/恢复事实存储、adapters、pipeline/DAG 失败记录与 server replay/delete、backup/migrations、
-Issues/DLQ/routing 与 API/runbook 文档。
+Issues/DLQ/Connections/detail/routing、useApi 的显式禁用能力与 API/runbook 文档。
 依据已授权的 contract-preflight.md 提案，用已知字段记录稳定故障 identity。
+Preflight 确认 multi-shard checkpoint 仅改变 checkpoint namespace，runner 的 pipeline UUID 保持不变；但 transform clone 丢弃 connection/ref 值字段。允许在 shard_builder.go 保留这些字段并保留独立的顶层 config map，用于准确捕获连接身份；不改 shard/checkpoint 键或执行语义。
 持久化状态由捕获、sink acknowledgement、DLQ row 删除与恢复操作驱动，区分成功重放和主动丢弃。
 失败路径同时保留 DLQ 的 durable gate；事件记录失败应暴露缺失事实。
 旧 DLQ 不猜测关联，旧 API payload 继续可读。

@@ -64,9 +64,9 @@ select the destination artifact directory for restore. No encryption key is need
 for ciphertext passthrough, but the original key and any previous rotation keys are
 required before the restored runtime starts.
 
-The portable JSON v2 contains pipelines, all retained versions, checkpoints, DLQ,
+The portable JSON v3 contains pipelines, all retained versions, checkpoints, DLQ,
 audit, run history, workers, tasks, plugin metadata plus WASM bytes, connections and
-settings. Stored credential envelopes remain unchanged. The command checks stored
+settings, recovery events and retained operation outcomes. Stored credential envelopes remain unchanged. The command checks stored
 connections/settings using the runtime descriptor policy and refuses export if
 known secret fields still contain plaintext. Use section 1.1b to migrate them, then
 scan the resulting artifact. Export also fails when an installed plugin's recorded
@@ -312,8 +312,16 @@ RTO: container restart + restore time (target < 15 minutes for single-node metad
 1. `GET /api/v2/pipelines` → confirm `dlq_backlog` > 0 for the pipeline (`dlq_backlog_known=false` means the count failed, not that the backlog is empty).
 2. `GET /api/v2/dlq/{pipeline}?limit=50&offset=0` (page with `offset`; filter with `error_class` / `contains`). Inspect `identity_context.replay_state` for `repair_required` / `quarantined` rows.
 3. Preview: `POST /api/v2/dlq/{pipeline}/replay?dry_run=1` → `replayable` / `blocked` counts and per-row reasons. Nothing is written.
+   The preview result is retained in recovery operation history; sink data and
+   DLQ delivery state are unchanged.
 4. Fix sink/schema root cause (and repair or quarantine any blocked identity rows).
 5. `POST /api/v2/dlq/{pipeline}/replay` (drains oldest-first; a second concurrent replay is rejected).
+   Review `GET /api/v2/recovery-events?pipeline_id={uuid}` and the event detail
+   after replay or restart. A removed row alone is not proof of successful
+   replay. On `503 / recovery_metadata_unavailable`, retain the DLQ and repair
+   metadata availability; an acknowledged row needs cleanup only.
+   See [durable recovery records](./recovery-tracking.md) for abandonment,
+   unknown outcomes, exact task links and v1/v2 backup compatibility.
 6. Confirm `dlq_backlog` / `dlq_file_count` decline to 0. Do **not** expect `records_dlq` to decline — it is cumulative.
 
 A pipeline that keeps failing at the sink now advances its checkpoint once the failures are durably in the DLQ, so the replay window no longer grows with every restart. If the DLQ itself is unavailable the checkpoint stays blocked and queued records are retried automatically; watch for the "DLQ write failure" alert and `checkpoint blocked` health state.
