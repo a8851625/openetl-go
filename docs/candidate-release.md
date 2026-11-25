@@ -11,6 +11,10 @@ versions, binary/archive SHA256 values and the actual image config ID. The image
 `/app/openetl-go` hash must equal its Linux archive executable. Reports live outside
 the image, so adding a digest to a report cannot require another image build.
 
+The saved `checksums.txt` is also hashed and checked against every preserved
+archive. Tagged JSON and browser/API probe artifacts retain their own hashes;
+changing either the reported result or its raw evidence blocks promotion.
+
 Every candidate consumes the two primary path scripts, all seven tagged path
 artifacts, the complete 16-script connector matrix, the three P1 browser probes
 and the external-readiness binding probe. Tagged tests use `OPENETL_BIN`,

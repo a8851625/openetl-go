@@ -50,10 +50,12 @@ class CandidateGateTest(unittest.TestCase):
                 binaries.append({"variant": variant, "goos": goos, "goarch": arch,
                                  "archive": name, "member": member, "sha256": hashlib.sha256(body).hexdigest()})
         (self.base / "candidate-image.tar").write_bytes(b"isolated image fixture")
+        (self.base / "checksums.txt").write_text("".join(a["sha256"] + "  " + a["path"] + "\n" for a in archives))
         selected = next(b for b in binaries if (b["variant"], b["goos"], b["goarch"]) == ("default", "linux", "amd64"))
         build_end = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=5)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         self.data = {"format": "openetl-candidate/v1", "source": {"commit": "a" * 40, "dirty": False},
                      "build": {"finished_at": build_end}, "binaries": binaries, "archives": archives,
+                     "checksum_file": {"path": "checksums.txt", "sha256": rc.sha(self.base / "checksums.txt")},
                      "image": {"id": "sha256:" + "b" * 64, "architecture": "amd64", "archive": "candidate-image.tar",
                                "archive_sha256": rc.sha(self.base / "candidate-image.tar"), "binary_sha256": selected["sha256"]}}
         rc.save(self.base / "candidate.json", self.data)
@@ -88,6 +90,15 @@ class CandidateGateTest(unittest.TestCase):
         (self.base / self.data["archives"][0]["path"]).write_bytes(b"changed package")
         with self.assertRaisesRegex(ValueError, "archive hash"):
             rc.verify(self.base)
+
+    def test_changed_or_inconsistent_published_checksums_are_rejected(self):
+        (self.base / "checksums.txt").write_text("0" * 64 + "  unrelated.tar.gz\n")
+        with self.assertRaisesRegex(ValueError, "checksum file hash"):
+            rc.verify(self.base)
+        self.data["checksum_file"]["sha256"] = rc.sha(self.base / "checksums.txt")
+        rc.save(self.base / "candidate.json", self.data)
+        with self.assertRaisesRegex(ValueError, "checksum file does not match"):
+            rc.candidate(self.base)
 
     def test_missing_or_skipped_mandatory_case_blocks(self):
         for result in ("skipped", "failed"):

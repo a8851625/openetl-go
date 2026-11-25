@@ -204,6 +204,14 @@ def candidate(base, *, files=True):
         for asset in data["archives"]:
             if sha(owned_path(base, asset["path"])) != asset["sha256"]:
                 raise ValueError("archive hash changed")
+        checksum = owned_path(base, data["checksum_file"]["path"])
+        if sha(checksum) != data["checksum_file"]["sha256"]:
+            raise ValueError("checksum file hash changed")
+        rows = [line.split("  ", 1) for line in checksum.read_text().splitlines()]
+        expected_sums = {Path(a["path"]).name: a["sha256"] for a in data["archives"]}
+        if len(rows) != len(expected_sums) or any(len(row) != 2 for row in rows) \
+                or {row[1]: row[0] for row in rows} != expected_sums:
+            raise ValueError("checksum file does not match the preserved archives")
         if sha(owned_path(base, data["image"]["archive"])) != data["image"]["archive_sha256"]:
             raise ValueError("image archive hash changed")
         for binary in data["binaries"]:
@@ -303,7 +311,8 @@ def build(base, snapshot, arch):
             "version": metadata["version"], "build": {"started_at": started, "finished_at": utc(),
             "go": command(["go", "version"], env=env).stdout.strip(),
             "goreleaser": command([tool, "--version"]).stdout.strip()},
-            "image": image, "binaries": binaries, "archives": archives}
+            "image": image, "binaries": binaries, "archives": archives,
+            "checksum_file": {"path": "dist/checksums.txt", "sha256": sha(base / "dist/checksums.txt")}}
     save(base / "candidate.json", data)
     candidate(base)
     load(base, data)
