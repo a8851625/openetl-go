@@ -1,12 +1,18 @@
 package server
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/a8851625/openetl-go/internal/consts"
 )
 
 // ConnectorEvidenceManifest is the machine-readable source for connector
@@ -14,11 +20,12 @@ import (
 // metadata: a connector can remain production maturity while its latest
 // evidence requires operator review.
 type ConnectorEvidenceManifest struct {
-	Version         string                    `json:"version"`
-	Policy          ConnectorEvidencePolicy   `json:"policy"`
-	CertifiedCommit string                    `json:"certified_commit"`
-	CertifiedImage  string                    `json:"certified_image"`
-	Records         []ConnectorEvidenceRecord `json:"records"`
+	Version               string                    `json:"version"`
+	Policy                ConnectorEvidencePolicy   `json:"policy"`
+	CertifiedCommit       string                    `json:"certified_commit"`
+	CertifiedImage        string                    `json:"certified_image"`
+	CertifiedBinarySHA256 string                    `json:"certified_binary_sha256,omitempty"`
+	Records               []ConnectorEvidenceRecord `json:"records"`
 }
 
 type ConnectorEvidencePolicy struct {
@@ -30,6 +37,7 @@ type ConnectorEvidenceRecord struct {
 	Type         string            `json:"type"`
 	Commit       string            `json:"commit"`
 	Image        string            `json:"image"`
+	BinarySHA256 string            `json:"binary_sha256,omitempty"`
 	Dependencies map[string]string `json:"dependencies"`
 	StartedAt    string            `json:"started_at"`
 	FinishedAt   string            `json:"finished_at"`
@@ -45,6 +53,7 @@ type ConnectorEvidenceRecord struct {
 type ConnectorEvidenceMetadata struct {
 	Commit       string            `json:"commit"`
 	Image        string            `json:"image"`
+	BinarySHA256 string            `json:"binary_sha256,omitempty"`
 	Dependencies map[string]string `json:"dependencies"`
 	StartedAt    string            `json:"started_at"`
 	FinishedAt   string            `json:"finished_at"`
@@ -64,7 +73,77 @@ type connectorEvidenceFreshness struct {
 var embeddedConnectorEvidence []byte
 
 func LoadConnectorEvidenceManifest() (ConnectorEvidenceManifest, error) {
-	return parseConnectorEvidenceManifest(embeddedConnectorEvidence)
+	external := strings.TrimSpace(os.Getenv("ETL_CONNECTOR_EVIDENCE_FILE"))
+	var manifest ConnectorEvidenceManifest
+	var err error
+	if external != "" {
+		manifest, err = LoadConnectorEvidenceManifestFile(external)
+	} else {
+		manifest, err = parseConnectorEvidenceManifest(embeddedConnectorEvidence)
+	}
+	if err != nil || (consts.BuildCommit == "" && external == "") {
+		return manifest, err
+	}
+	if external == "" && manifest.CertifiedCommit != consts.BuildCommit {
+		return bindConnectorEvidence(manifest, consts.BuildCommit, "", false)
+	}
+	hash, err := runningExecutableSHA256()
+	if err != nil {
+		return ConnectorEvidenceManifest{}, err
+	}
+	return bindConnectorEvidence(manifest, consts.BuildCommit, hash, external != "")
+}
+
+var executableEvidenceHash struct {
+	sync.Once
+	hash string
+	err  error
+}
+
+func runningExecutableSHA256() (string, error) {
+	executableEvidenceHash.Do(func() {
+		path, err := os.Executable()
+		if err != nil {
+			executableEvidenceHash.err = err
+			return
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			executableEvidenceHash.err = err
+			return
+		}
+		defer file.Close()
+		hash := sha256.New()
+		if _, err := io.Copy(hash, file); err != nil {
+			executableEvidenceHash.err = err
+			return
+		}
+		executableEvidenceHash.hash = hex.EncodeToString(hash.Sum(nil))
+	})
+	return executableEvidenceHash.hash, executableEvidenceHash.err
+}
+
+func bindConnectorEvidence(manifest ConnectorEvidenceManifest, commit, binaryHash string, external bool) (ConnectorEvidenceManifest, error) {
+	reason := ""
+	if commit != "" && manifest.CertifiedCommit != commit {
+		reason = "evidence source does not match this candidate build"
+	} else if manifest.CertifiedBinarySHA256 == "" || manifest.CertifiedBinarySHA256 != binaryHash {
+		reason = "evidence does not bind the running executable SHA256"
+	}
+	if reason == "" {
+		return manifest, nil
+	}
+	if external {
+		return ConnectorEvidenceManifest{}, fmt.Errorf("candidate evidence unavailable: %s", reason)
+	}
+	// Embedded history cannot certify a later candidate. A report generated
+	// after certification is supplied read-only, without rebuilding the image.
+	manifest.Records = append([]ConnectorEvidenceRecord(nil), manifest.Records...)
+	for i := range manifest.Records {
+		manifest.Records[i].Verified = false
+		manifest.Records[i].Note += "; " + reason + "; supply ETL_CONNECTOR_EVIDENCE_FILE for this immutable candidate"
+	}
+	return manifest, nil
 }
 
 func LoadConnectorEvidenceManifestFile(path string) (ConnectorEvidenceManifest, error) {
@@ -90,6 +169,12 @@ func parseConnectorEvidenceManifest(body []byte) (ConnectorEvidenceManifest, err
 // applying the current-time freshness rule. This makes malformed manifests a
 // hard readiness failure while allowing callers to report expiry separately.
 func ValidateConnectorEvidenceManifest(manifest ConnectorEvidenceManifest) error {
+	if manifest.CertifiedBinarySHA256 != "" {
+		hash, err := hex.DecodeString(manifest.CertifiedBinarySHA256)
+		if err != nil || len(hash) != sha256.Size {
+			return fmt.Errorf("connector evidence certified_binary_sha256 must be a SHA256")
+		}
+	}
 	if strings.TrimSpace(manifest.Version) != "v1" {
 		return fmt.Errorf("connector evidence manifest version %q is unsupported", manifest.Version)
 	}
@@ -120,6 +205,9 @@ func ValidateConnectorEvidenceManifest(manifest ConnectorEvidenceManifest) error
 		}
 		if record.Commit != manifest.CertifiedCommit || record.Image != manifest.CertifiedImage {
 			return fmt.Errorf("connector evidence record %s does not match manifest certified commit/image", key)
+		}
+		if record.BinarySHA256 != manifest.CertifiedBinarySHA256 {
+			return fmt.Errorf("connector evidence record %s does not match manifest binary SHA256", key)
 		}
 		if len(record.Dependencies) == 0 {
 			return fmt.Errorf("connector evidence record %s requires dependency versions", key)
@@ -196,7 +284,7 @@ func (r ConnectorEvidenceRecord) Freshness(now time.Time) connectorEvidenceFresh
 
 func (r ConnectorEvidenceRecord) Metadata() ConnectorEvidenceMetadata {
 	return ConnectorEvidenceMetadata{
-		Commit: r.Commit, Image: r.Image,
+		Commit: r.Commit, Image: r.Image, BinarySHA256: r.BinarySHA256,
 		Dependencies: cloneStringMap(r.Dependencies),
 		StartedAt:    r.StartedAt, FinishedAt: r.FinishedAt, ExpiresAt: r.ExpiresAt,
 		Scripts: append([]string(nil), r.Scripts...), Cases: append([]string(nil), r.Cases...),

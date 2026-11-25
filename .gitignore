@@ -40,6 +40,11 @@ dzhcore
 # E2E test runtime output directories
 /data-*
 
+# bench-baseline CI job tees its log to the repo root (see _gate.yml). Without
+# this entry every bench run marks its own worktree dirty, which invalidates
+# the source.dirty provenance signal the baseline records.
+/baseline-run.log
+
 # ETL runtime state created by package-level tests and ad-hoc local runs.
 /internal/etl/**/data/
 /internal/etl/**/logs/
@@ -63,6 +68,9 @@ hack/__pycache__/
 # Local binary / accidental root build artifacts
 /openetl-go
 /main
+# `go build ./hack/cmd/<tool>` drops the tool binary in the cwd; that is a
+# build output, never a source file.
+/check-connector-evidence
 
 # Root-level package.json is only for local agent tooling, not the product
 /package.json

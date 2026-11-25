@@ -6,7 +6,7 @@
 | 2/5 | P5-H1 | delivered | API/Go race、9 个前端 contracts、真实容器 14/14：见 h1-evidence.md。 |
 | 3/5 | PR-0-C1 | delivered | 三 backend race/conformance/backup、完整 server -race、真实容器 9/9；见 c1-evidence.md。 |
 | 4/5 | UI-E-R1 | delivered | 三 backend migration/recovery/backup、完整 affected Go race、真实 UI 21/21；见 r1-evidence.md。 |
-| 5/5 | GA-C1 | queued | 依赖最终运行时代码冻结。 |
+| 5/5 | GA-C1 | active | 领取候选构建/认证/同字节发布；依赖 UI-E-R1 delivered。 |
 
 ## Round 1 Claim
 
@@ -73,3 +73,21 @@ Acceptance: 1) stable persisted failure/replay identity + known associations；2
 Evidence: r1-evidence.md；三 backend recovery/migration/backup 与 affected packages -race exit 0；server final -race exit 0；frontend 15/15 + typecheck/lint/build；最终 container UI 21/21 exit 0。
 Result: delivered
 Residual/follow-up: GA-C1
+
+
+## Round 5 Claim
+
+Round: 5/5
+Roadmap item: GA-C1
+Profile/path: release assets + standalone primary paths / connector certification; no distributed maturity upgrade
+Objective: certifier and publisher consume the exact candidate image/binaries/archives, with retained execution and promotion receipts
+Eligibility: UI-E-R1 delivered at 9924d50; all five P1 technical repairs explicitly authorized; pinned GoReleaser 1.26.2 CLI available, Go/container/GitHub CI available
+Scope: release/candidate workflows and helpers, .goreleaser.yml, Dockerfile.goreleaser, necessary IMAGE/binary selectors in certification scripts, tagged harness/evidence, evidence validator, build-source identity and externally bound readiness evidence, docs and generated evidence
+Bounded prerequisite: embedded certification currently requires an image rebuild to update its digest. Add a read-only external report bound to the actual executable SHA and compiled source identity; do not rebuild the candidate to change certification facts.
+Non-goals: public release/tag/merge, connector or distributed maturity upgrade, EV-3 benchmark changes, user research, checkpoint/DLQ execution changes
+Data semantics: candidates immutable after build; reports external and fail closed on missing/failed/skipped/stale/mismatched evidence. Publication loads/uploads the preserved assets, then checks registry digest/config ID and executable hash. Report failure changes readiness evidence only, not delivery state or secrets.
+Rollback: keep original assets and reports; reverting the workflow cannot certify rebuilt bytes using a previous report. Legacy manifests remain readable as historical evidence.
+Acceptance: 1) build once and hash all advertised assets; 2) two primary paths, seven tagged path files and full 16-script matrix use actual candidate selectors; 3) P1 regressions, freshness/provenance, incomplete/mutated artifact rejection; 4) same-byte load/promotion receipt using an isolated registry and future release workflows; 5) final PR aggregated gate success; 6) no public release, external research remains blocked
+Evidence: pending exact commands, CI run, candidate/report hashes, local registry receipt and acceptance matrix
+Result: active
+Residual/follow-up: no sixth increment in this window; external user research only

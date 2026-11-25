@@ -74,6 +74,10 @@ func main() {
 				issues++
 			}
 		}
+		if err := checkRecordProvenance(repoRoot, manifest, record); err != nil {
+			fmt.Printf("provenance %s/%s: %v\n", record.Kind, record.Type, err)
+			issues++
+		}
 		if freshness.Status != "pass" {
 			fmt.Printf("%s/%s: %s (%s)\n", record.Kind, record.Type, freshness.Status, freshness.Explanation)
 			if *strict {
@@ -188,6 +192,9 @@ func relatedSourceDirs(pathID string) []string {
 		"internal/etl/checkpoint",
 		"internal/etl/pipeline",
 		"internal/etl/server",
+		"internal/etl/storage",
+		"internal/etl/orchestrator",
+		"internal/consts",
 		"internal/etl/e2e",
 		"internal/logic",
 		"manifest/config",
@@ -244,6 +251,96 @@ func checkCommitBinding(repoRoot, certifiedCommit, currentCommit string) error {
 	return nil
 }
 
+// checkRecordProvenance verifies that a record's claimed certification window is
+// actually consistent with the revision history it points at.
+//
+// The 2026-11-09 audit found the manifest claiming "all 16 scripts re-run green
+// on the local build of commit fe8692d" for a window ending 2026-11-03, while
+// two of those scripts (hack/e2e-doris-source-order.sh, hack/e2e-postgres-cdc.sh)
+// only reached their current content on 2026-11-07 and one of them did not exist
+// at fe8692d at all. checkCommitBinding cannot catch that: it only asks whether
+// the certified commit is an ancestor of HEAD. Provenance needs a second,
+// independent question — "could the scripts that this record names have been
+// the ones that ran inside the window this record claims?" — and that is what
+// this function answers.
+func checkRecordProvenance(repoRoot string, manifest server.ConnectorEvidenceManifest, record server.ConnectorEvidenceRecord) error {
+	recordCommit, err := resolveCommit(repoRoot, record.Commit)
+	if err != nil {
+		return fmt.Errorf("record commit %q does not resolve: %w", record.Commit, err)
+	}
+	// The record's own commit must be reachable from the manifest's certified
+	// commit; otherwise the record describes a different revision than the
+	// manifest claims to certify.
+	certifiedCommit, err := resolveCommit(repoRoot, manifest.CertifiedCommit)
+	if err != nil {
+		return fmt.Errorf("certified commit %q does not resolve: %w", manifest.CertifiedCommit, err)
+	}
+	if recordCommit != certifiedCommit {
+		if err := runGit(repoRoot, "merge-base", "--is-ancestor", recordCommit, certifiedCommit); err != nil {
+			return fmt.Errorf("record commit %s is not an ancestor of certified commit %s", record.Commit, manifest.CertifiedCommit)
+		}
+	}
+
+	// Every script the record names must have existed at the record's commit.
+	// A script that first appeared later proves the record cannot describe a run
+	// on that commit, regardless of what its note says.
+	for _, script := range record.Scripts {
+		if err := runGit(repoRoot, "cat-file", "-e", recordCommit+":"+script); err != nil {
+			return fmt.Errorf("script %s did not exist at record commit %s", script, shortSHA(record.Commit))
+		}
+	}
+
+	// No script may have changed after the window it is claimed to have run in.
+	// Comparing against finished_at (not started_at) is deliberate: a script
+	// edited during the run would still be a different script than the one that
+	// produced the recorded cases.
+	finished, err := time.Parse(time.RFC3339, record.FinishedAt)
+	if err != nil {
+		return fmt.Errorf("finished_at %q is not RFC3339: %w", record.FinishedAt, err)
+	}
+	for _, script := range record.Scripts {
+		committedAt, err := newestCommitTimeForPath(repoRoot, script, recordCommit)
+		if err != nil {
+			return fmt.Errorf("script %s history: %w", script, err)
+		}
+		if committedAt.IsZero() {
+			continue
+		}
+		if committedAt.After(finished) {
+			return fmt.Errorf("script %s was last changed at %s, after the claimed certification window ended at %s",
+				script, committedAt.UTC().Format(time.RFC3339), finished.UTC().Format(time.RFC3339))
+		}
+	}
+	return nil
+}
+
+// newestCommitTimeForPath returns the committer time of the newest commit that
+// touched path at or before the given revision. Returns the zero time when the
+// path has no history reachable from that revision.
+func newestCommitTimeForPath(repoRoot, path, revision string) (time.Time, error) {
+	out, err := gitOutput(repoRoot, "log", "-1", "--format=%cI", revision, "--", path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, out)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse commit time %q: %w", out, err)
+	}
+	return parsed, nil
+}
+
+func shortSHA(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 8 {
+		return value[:8]
+	}
+	return value
+}
+
 func resolveCommit(repoRoot, value string) (string, error) {
 	return gitOutput(repoRoot, "rev-parse", "--verify", value+"^{commit}")
 }
@@ -295,9 +392,19 @@ func allowedEvidenceDescendantPath(path string) bool {
 		"docs/evidence/schema_contract_enforcement.json",
 		"CHANGELOG.md",
 		"CHANGELOG.zh.md",
-		"hack/e2e-production-profile.sh":
+		"docs/iterations/P1-technical-closure-20261126/ga-evidence.md",
+		"docs/iterations/P1-technical-closure-20261126/tasks.md",
+		"docs/iterations/P1-technical-closure-20261126/plan.md",
+		"docs/ga-assessment-2026-09-16.md":
 		return true
 	default:
+		clean := filepath.ToSlash(path)
+		if strings.HasPrefix(clean, "docs/iterations/P1-technical-closure-20261126/evidence/ga-") {
+			switch filepath.Ext(clean) {
+			case ".json", ".txt", ".png", ".gz":
+				return true
+			}
+		}
 		return false
 	}
 }

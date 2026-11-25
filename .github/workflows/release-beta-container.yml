@@ -1,97 +1,60 @@
 name: Release Beta Container
-
+# Tag pushes are built/certified/published once by release.yml.
+# This retry consumes the previously certified bundle.
 on:
-  push:
-    tags:
-      - 'v*-beta*'
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing beta tag to publish
+        description: Existing beta tag with a certified candidate bundle
         required: true
         type: string
-
 permissions:
   contents: read
   packages: write
-
 jobs:
-  # IT-1/T1.2 (roadmap RA-4): gate the requested tag, not the dispatch branch.
-  # Tag push -> github.ref_name is the tag; workflow_dispatch -> inputs.tag.
-  # Without `ref` the gate would certify the wrong commit on the dispatch path.
-  gate:
-    name: Test Gate
-    uses: ./.github/workflows/_gate.yml
-    with:
-      ref: ${{ inputs.tag || github.ref_name }}
-    secrets: inherit
-
   publish:
-    name: Publish beta container
-    needs: gate
+    name: Repromote preserved beta bytes
     runs-on: ubuntu-latest
-
+    env:
+      P1_CANDIDATE_DIR: ${{ runner.temp }}/candidate
+      REQUESTED_TAG: ${{ inputs.tag }}
     steps:
       - name: Resolve beta tag
-        id: release
-        env:
-          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           case "$REQUESTED_TAG" in
             v*-beta*) ;;
-            *) echo "expected a v*-beta* tag, got: $REQUESTED_TAG" >&2; exit 1 ;;
+            *) echo "an existing beta tag is required" >&2; exit 1 ;;
           esac
-          echo "tag=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
-          echo "version=${REQUESTED_TAG#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout release tag
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.release.outputs.tag }}
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-
-      - name: Strict connector evidence gate
-        run: bash ./hack/check-connector-evidence.sh -strict -commit "$(git rev-parse HEAD)"
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - name: Download immutable certified bundle
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$P1_CANDIDATE_DIR"
+          gh release download "$REQUESTED_TAG" --pattern candidate-bundle.tar.gz --pattern candidate-bundle.sha256 --dir "$P1_CANDIDATE_DIR"
+          cd "$P1_CANDIDATE_DIR"
+          sha256sum -c candidate-bundle.sha256
+          tar -xzf candidate-bundle.tar.gz
+      - name: Verify certification before mutation
+        run: python3 hack/release_candidate.py verify --dir "$P1_CANDIDATE_DIR"
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build release binary
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
+      - name: Repromote without rebuilding
         run: |
-          SKIP_UI=1 ./hack/pack.sh
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -trimpath \
-            -ldflags "-s -w -X github.com/a8851625/openetl-go/internal/consts.Version=$VERSION" \
-            -o openetl-go .
-
-      - name: Build and push versioned beta image
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          # Root .dockerignore intentionally excludes ./openetl-go so multi-stage
-          # production builds do not ship a host binary. Stage a clean context
-          # for Dockerfile.goreleaser instead of fighting dockerignore.
-          STAGE="$(mktemp -d)"
-          trap 'rm -rf "$STAGE"' EXIT
-          cp openetl-go "$STAGE/openetl-go"
-          cp Dockerfile.goreleaser "$STAGE/Dockerfile"
-          cp -R manifest "$STAGE/manifest"
-
-          # Publish both unprefixed (goreleaser-style) and v-prefixed tags so
-          # docs/compose pins and historical README examples keep working.
-          IMAGE="ghcr.io/a8851625/openetl-go:${VERSION}"
-          IMAGE_V="ghcr.io/a8851625/openetl-go:v${VERSION}"
-          docker build --platform=linux/amd64 -t "$IMAGE" -t "$IMAGE_V" "$STAGE"
-          docker push "$IMAGE"
-          docker push "$IMAGE_V"
+          P1_DESTINATION="ghcr.io/${GITHUB_REPOSITORY,,}:${REQUESTED_TAG#v}"
+          python3 hack/release_candidate.py promote --dir "$P1_CANDIDATE_DIR" --destination "$P1_DESTINATION" --release-tag "$REQUESTED_TAG" --image-only
+          P1_IMAGE_ID="$(python3 -c 'import json,os;print(json.load(open(os.environ["P1_CANDIDATE_DIR"]+"/candidate.json"))["image"]["id"])')"
+          docker tag "$P1_IMAGE_ID" "ghcr.io/${GITHUB_REPOSITORY,,}:$REQUESTED_TAG"
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:$REQUESTED_TAG"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: beta-promotion-${{ github.run_id }}
+          path: ${{ runner.temp }}/candidate/promotion.json
+          if-no-files-found: error

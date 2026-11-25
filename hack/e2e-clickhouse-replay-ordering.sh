@@ -20,7 +20,7 @@ cd "$ROOT_DIR"
 . "$ROOT_DIR/hack/container-cli.sh"
 detect_container_cli
 
-IMAGE="openetl-go-etl:dev"
+IMAGE="${IMAGE:-openetl-go-etl:dev}"
 REDPANDA_CONTAINER="etl-redpanda"
 CH_CONTAINER="etl-clickhouse"
 APP_CONTAINER="etl-openetl-clickhouse-replay-ordering"

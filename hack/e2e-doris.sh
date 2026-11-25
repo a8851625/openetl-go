@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 . "$ROOT_DIR/hack/container-cli.sh"
 
-IMAGE="openetl-go-etl:dev"
+IMAGE="${IMAGE:-openetl-go-etl:dev}"
 DORIS_FE_CONTAINER="etl-doris-fe"
 DORIS_BE_CONTAINER="etl-doris-be"
 DORIS_NETWORK="etl-doris-net"

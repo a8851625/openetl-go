@@ -130,3 +130,8 @@ each assessment.
 | Implementer | | | |
 | Reviewer | | | |
 | Release tag | | | |
+
+
+## Candidate bytes and post-build evidence
+
+New releases use [candidate build/certify/promote](./candidate-release.md). The publisher loads/uploads the certified image and archives and retains a registry receipt; it does not rebuild after the gate. External connector evidence is bound to the running executable SHA and source commit. PR acceptance includes the exact-candidate aggregate.

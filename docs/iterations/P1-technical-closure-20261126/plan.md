@@ -51,3 +51,11 @@ evidence validator 与认证/发布文档。
 所有 mandatory cases success 后才能消费该资产发布，skip/failure/cancel 阻断。
 发布后的 immutable digest 与测试资产 identity 核对并与报告一同保存。
 回滚 workflow 到旧构建流程时仍保留原有同步 gate；认证状态如实降级。
+
+
+### GA-C1 bounded delivery split
+
+1. Candidate capture: GoReleaser builds and archives once with publishing disabled; source, executable, archive and image identities are written after build. Allowed output is a task-owned directory; inputs are frozen before generation. Preserve default/extism platform matrix and existing image entry point.
+2. Candidate certification: existing shell and tagged tests accept an explicit immutable image/binary; report collectors retain real per-case results and windows. Missing services/credentials are recorded and block promotion. Current-source/checksum checks reject a wrong executable rather than building a substitute.
+3. Candidate promotion: a reusable build → certify → aggregate workflow exposes the same artifacts to publishing. Beta retry reads an already certified bundle. Upload/load/tag/push consume preserved bytes; an isolated registry proves content identity without publishing externally.
+4. Evidence closure: all mandatory results, strict provenance, API readiness and docs reconcile. Embedded history stays historical; a read-only external manifest binds source plus executable SHA after certification, avoiding digest self-reference. No runtime pipeline semantics change.

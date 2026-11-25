@@ -291,6 +291,13 @@ jobs:
         run: go vet -tags=e2e ./internal/etl/e2e/...
       - name: Run connector e2e paths
         run: go test -tags=e2e -count=1 -timeout 40m ./internal/etl/e2e/... -e2e.strict -v
+      - name: Retain generated tagged path evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tagged-path-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: docs/evidence/*.json
+          if-no-files-found: error
 
   # IT-3/T3.7: resource-baseline regression gate. WARNING MODE for the first
   # version cycle: valid measurements over budget warn. Failed/missing
