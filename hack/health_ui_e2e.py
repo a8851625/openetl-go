@@ -39,7 +39,18 @@ class Probe:
         return result.stdout.strip()
 
     def container(self, *args, **kwargs):
-        return self.run([self.cli, *args], **kwargs)
+        result = self.run([self.cli, *args], **kwargs)
+        # Docker can allocate new host ports when a container with ephemeral
+        # bindings starts again. Probe the actual mapping after every restart.
+        if args[0] in ("start", "restart") and self.app in args[1:]:
+            self.refresh_addresses()
+        return result
+
+    def refresh_addresses(self):
+        front = self.container("port", self.app, "8000/tcp").splitlines()[0].rsplit(":", 1)[1]
+        api = self.container("port", self.app, "8001/tcp").splitlines()[0].rsplit(":", 1)[1]
+        self.base = "http://127.0.0.1:" + front
+        self.api_url = "http://127.0.0.1:" + api
 
     def browser(self, *args):
         return self.run(["playwright-cli", "-s=" + self.session, "--raw", *args], timeout=90)
@@ -126,10 +137,7 @@ class Probe:
                        "-e", "ETL_SPEC_ENCRYPTION_KEY=",
                        *[part for key, value in self.app_env.items() for part in ("-e", key + "=" + value)],
                        self.image)
-        front = self.container("port", self.app, "8000/tcp").splitlines()[0].rsplit(":", 1)[1]
-        api = self.container("port", self.app, "8001/tcp").splitlines()[0].rsplit(":", 1)[1]
-        self.base = "http://127.0.0.1:" + front
-        self.api_url = "http://127.0.0.1:" + api
+        self.refresh_addresses()
         self.wait("API", lambda: self.api("GET", "/api/v2/pipelines"))
         self.container("run", "-d", "--name", self.sqlite, "--volumes-from", self.app,
                        "-v", str(self.pipes) + ":/fixture-pipes",

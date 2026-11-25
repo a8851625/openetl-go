@@ -59,3 +59,26 @@ evidence validator 与认证/发布文档。
 2. Candidate certification: existing shell and tagged tests accept an explicit immutable image/binary; report collectors retain real per-case results and windows. Missing services/credentials are recorded and block promotion. Current-source/checksum checks reject a wrong executable rather than building a substitute.
 3. Candidate promotion: a reusable build → certify → aggregate workflow exposes the same artifacts to publishing. Beta retry reads an already certified bundle. Upload/load/tag/push consume preserved bytes; an isolated registry proves content identity without publishing externally.
 4. Evidence closure: all mandatory results, strict provenance, API readiness and docs reconcile. Embedded history stays historical; a read-only external manifest binds source plus executable SHA after certification, avoiding digest self-reference. No runtime pipeline semantics change.
+
+### GA-C1 aggregate-gate prerequisite (2026-11-26)
+
+The actual PR run 45692007631 found raw DLQ SQL fidelity failures in SQLite and
+PostgreSQL volume backup/restore. R4's new nullable recovery context/tracking
+columns were coalesced during backup and restored as an empty context/string.
+Within Round 5/5, preserve their SQL NULL and original JSON representation in
+backup-only fields; do not relax the independent raw SQL fingerprint check.
+Allowed files: storage/storage.go, sqlstore/backup_reader.go and backup.go,
+backup/conformance_test.go, the existing backup-volume fixture, and backup docs.
+Acceptance: mixed legacy NULL/empty/known recovery context round-trips on all
+three backends; existing >100k-per-table volume checks pass; no runtime DLQ
+capture/replay or checkpoint behavior changes. Legacy v1/v2 backups remain
+readable. Rollback retains schema/data and only removes supplemental backup
+metadata support.
+
+The same candidate run also exposed cold-run fixture assumptions (ClickHouse and
+MinIO must be pulled before their scripts), a PostgreSQL assertion that observed
+source completion before sink acknowledgements, and cached ephemeral Docker host
+ports in all three browser probes. Correct these certification harness boundaries
+in _candidate.yml, e2e-mysql-postgres.sh and the shared health_ui_e2e.py probe, then
+rerun the actual candidate cases. Preserve their failed reports; do not reuse a
+success from another image or infer a pass from a harness edit.

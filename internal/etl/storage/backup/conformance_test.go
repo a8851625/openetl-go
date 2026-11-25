@@ -2,6 +2,7 @@ package backup_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/a8851625/openetl-go/internal/etl/storage/mysql"
 	"github.com/a8851625/openetl-go/internal/etl/storage/postgres"
 	"github.com/a8851625/openetl-go/internal/etl/storage/sqlite"
+	"github.com/a8851625/openetl-go/internal/etl/storage/sqlstore"
 )
 
 type restoreBackend interface {
@@ -68,6 +70,84 @@ func TestBackupRestoreConformance(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+
+			t.Run("recovery_sql_null_and_json_shape_fidelity", func(t *testing.T) {
+				reset(t)
+				db := s.(interface{ DB() *sql.DB }).DB()
+				var dialect sqlstore.Dialect = sqlstore.SQLiteDialect{}
+				if backend == "mysql" {
+					dialect = sqlstore.MySQLDialect{}
+				} else if backend == "postgres" {
+					dialect = sqlstore.PostgresDialect{}
+				}
+				cases := []struct {
+					context, tracking any
+				}{
+					{nil, nil}, // Pre-migration rows, with no invented association.
+					{`{}`, ""},
+					{`null`, ""}, // Stored JSON null is distinct from SQL NULL.
+					{`{"connection_known":false}`, nil},
+					{`{"endpoint":"sink","connection_known":true,"connection_name":"warehouse","legacy_extra":"retained"}`, "bookkeeping failure"},
+				}
+				for i, c := range cases {
+					job := fmt.Sprintf("recovery-sql-%d", i)
+					if err := s.WriteDeadLetter(ctx, &storage.DLQRecord{JobName: job, Record: core.Record{Data: map[string]any{"id": i}}}); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := db.ExecContext(ctx, dialect.Bind("UPDATE dead_letters SET recovery_context_json=?,recovery_tracking_error=? WHERE job_name=?"), c.context, c.tracking, job); err != nil {
+						t.Fatal(err)
+					}
+				}
+				type rawRecovery struct {
+					context, tracking sql.NullString
+				}
+				readRaw := func() []rawRecovery {
+					t.Helper()
+					var out []rawRecovery
+					for i := range cases {
+						var row rawRecovery
+						if err := db.QueryRowContext(ctx, dialect.Bind("SELECT recovery_context_json,recovery_tracking_error FROM dead_letters WHERE job_name=?"), fmt.Sprintf("recovery-sql-%d", i)).Scan(&row.context, &row.tracking); err != nil {
+							t.Fatal(err)
+						}
+						out = append(out, row)
+					}
+					return out
+				}
+				before := readRaw()
+				file := filepath.Join(t.TempDir(), "recovery-null-v3.json")
+				if _, err := backup.ExportFile(ctx, s, file, backup.Options{}); err != nil {
+					t.Fatal(err)
+				}
+				snap, err := backup.ReadFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := backup.Restore(ctx, s, snap, backup.Options{ClearBeforeRestore: true}); err != nil {
+					t.Fatal(err)
+				}
+				if got := readRaw(); !reflect.DeepEqual(before, got) {
+					t.Fatalf("raw recovery SQL changed: before=%+v after=%+v", before, got)
+				}
+				// Conflicting backup metadata must fail atomically, not erase a
+				// known recovery context or a retained tracking error.
+				for _, mutate := range []func(*storage.DLQRecord){
+					func(r *storage.DLQRecord) { r.BackupRecoveryContextNull = true },
+					func(r *storage.DLQRecord) { r.BackupRecoveryContextJSON = json.RawMessage(`{}`) },
+					func(r *storage.DLQRecord) { r.BackupRecoveryTrackingErrorNull = true },
+				} {
+					bad := *snap
+					bad.DeadLetters = append([]*storage.DLQRecord(nil), snap.DeadLetters...)
+					last := *bad.DeadLetters[len(bad.DeadLetters)-1]
+					mutate(&last)
+					bad.DeadLetters[len(bad.DeadLetters)-1] = &last
+					if err := backup.Restore(ctx, s, &bad, backup.Options{ClearBeforeRestore: true}); err == nil {
+						t.Fatal("conflicting recovery backup metadata accepted")
+					}
+					if got := readRaw(); !reflect.DeepEqual(before, got) {
+						t.Fatal("failed restore changed raw recovery SQL")
+					}
+				}
+			})
 
 			t.Run("recovery_v3_streaming_fidelity_and_failure_atomicity", func(t *testing.T) {
 				reset(t)

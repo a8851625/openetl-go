@@ -40,6 +40,12 @@ type DLQRecord struct {
 	RecoveryOperationID   string                      `json:"recovery_operation_id,omitempty"`
 	RecoveryContext       core.RecoveryCaptureContext `json:"recovery_context"`
 	RecoveryTrackingError string                      `json:"recovery_tracking_error,omitempty"`
+	// Maintenance-only fidelity metadata. Runtime DLQ readers never populate
+	// these fields. SQL NULL stays distinct from a stored JSON null/object;
+	// legacy JSON shape never invents a known recovery association.
+	BackupRecoveryContextJSON       json.RawMessage `json:"backup_recovery_context_json,omitempty"`
+	BackupRecoveryContextNull       bool            `json:"backup_recovery_context_null,omitempty"`
+	BackupRecoveryTrackingErrorNull bool            `json:"backup_recovery_tracking_error_null,omitempty"`
 }
 
 // DLQFilter provides SQL-style filtering for dead-letter queries.

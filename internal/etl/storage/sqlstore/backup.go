@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
@@ -59,6 +60,27 @@ func (s *Store) WriteDeadLetterFidelity(ctx context.Context, r *storage.DLQRecor
 	if err != nil {
 		return err
 	}
+	var recoveryValue any = string(recovery)
+	if len(r.BackupRecoveryContextJSON) != 0 {
+		var retained core.RecoveryCaptureContext
+		if err := json.Unmarshal(r.BackupRecoveryContextJSON, &retained); err != nil || retained != r.RecoveryContext {
+			return fmt.Errorf("restored DLQ backup recovery context disagrees with its typed context")
+		}
+		recoveryValue = string(r.BackupRecoveryContextJSON)
+	}
+	if r.BackupRecoveryContextNull {
+		if r.RecoveryContext != (core.RecoveryCaptureContext{}) || len(r.BackupRecoveryContextJSON) != 0 {
+			return fmt.Errorf("restored DLQ NULL recovery context contains a value")
+		}
+		recoveryValue = nil
+	}
+	var trackingValue any = r.RecoveryTrackingError
+	if r.BackupRecoveryTrackingErrorNull {
+		if r.RecoveryTrackingError != "" {
+			return fmt.Errorf("restored DLQ NULL tracking error contains a value")
+		}
+		trackingValue = nil
+	}
 	// dead_letters carries a unique (job_name, record_hash) key since
 	// PR-DLQ-2. A backup taken before that invariant can legitimately contain
 	// duplicate rows, so restore skips conflicts instead of failing the whole
@@ -73,7 +95,7 @@ func (s *Store) WriteDeadLetterFidelity(ctx context.Context, r *storage.DLQRecor
 	return s.insertBackupRowIgnoreConflict(ctx, "dead_letters",
 		"id,job_name,record_json,error,error_class,identity_context_json,attempt,record_hash,pipeline_version,dag_node,created_at,recovery_event_id,recovery_operation_id,recovery_context_json,recovery_tracking_error",
 		r.ID, r.JobName, string(record), r.Error, r.ErrorClass, string(identity), r.Attempt,
-		hash, r.PipelineVersion, r.DAGNode, r.CreatedAt, recoveryNullable(r.RecoveryEventID), recoveryNullable(r.RecoveryOperationID), string(recovery), r.RecoveryTrackingError)
+		hash, r.PipelineVersion, r.DAGNode, r.CreatedAt, recoveryNullable(r.RecoveryEventID), recoveryNullable(r.RecoveryOperationID), recoveryValue, trackingValue)
 }
 
 // insertBackupRowIgnoreConflict is insertBackupRow for tables whose unique

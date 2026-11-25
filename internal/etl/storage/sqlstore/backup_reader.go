@@ -1,6 +1,7 @@
 package sqlstore
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -29,7 +30,7 @@ func (s *Store) ReadBackupPage(ctx context.Context, table string, afterKey *stri
 	case "checkpoints":
 		columns, key = "job_name,source,position,generation,timestamp,updated_at", "job_name"
 	case "dead_letters":
-		columns, key, numericKey = "id,job_name,record_json,error,error_class,COALESCE(identity_context_json,'{}'),attempt,COALESCE(record_hash,''),COALESCE(pipeline_version,0),COALESCE(dag_node,''),created_at,COALESCE(recovery_event_id,''),COALESCE(recovery_operation_id,''),COALESCE(recovery_context_json,'{}'),COALESCE(recovery_tracking_error,'')", "id", true
+		columns, key, numericKey = "id,job_name,record_json,error,error_class,COALESCE(identity_context_json,'{}'),attempt,COALESCE(record_hash,''),COALESCE(pipeline_version,0),COALESCE(dag_node,''),created_at,COALESCE(recovery_event_id,''),COALESCE(recovery_operation_id,''),recovery_context_json,recovery_tracking_error", "id", true
 	case "audit_logs":
 		columns, key, numericKey = "id,action,method,path,target,remote,created_at", "id", true
 	case "run_history":
@@ -108,18 +109,29 @@ func scanBackupRow(table string, rows *sql.Rows) (storage.BackupRow, error) {
 		value, key = r, r.JobName
 	case "dead_letters":
 		r := new(storage.DLQRecord)
-		var record, identity, recovery string
-		var message, class sql.NullString
-		err = rows.Scan(&r.ID, &r.JobName, &record, &message, &class, &identity, &r.Attempt, &r.RecordHash, &r.PipelineVersion, &r.DAGNode, &r.CreatedAt, &r.RecoveryEventID, &r.RecoveryOperationID, &recovery, &r.RecoveryTrackingError)
+		var record, identity string
+		var message, class, recovery, tracking sql.NullString
+		err = rows.Scan(&r.ID, &r.JobName, &record, &message, &class, &identity, &r.Attempt, &r.RecordHash, &r.PipelineVersion, &r.DAGNode, &r.CreatedAt, &r.RecoveryEventID, &r.RecoveryOperationID, &recovery, &tracking)
 		r.Error, r.ErrorClass = message.String, class.String
+		r.RecoveryTrackingError = tracking.String
+		r.BackupRecoveryTrackingErrorNull = !tracking.Valid
 		if err == nil {
 			err = decodeBackupJSON(record, &r.Record)
 		}
 		if err == nil {
 			err = decodeBackupJSON(identity, &r.IdentityContext)
 		}
-		if err == nil {
-			err = decodeBackupJSON(recovery, &r.RecoveryContext)
+		if err == nil && recovery.Valid {
+			err = decodeBackupJSON(recovery.String, &r.RecoveryContext)
+			if err == nil {
+				canonical, marshalErr := json.Marshal(r.RecoveryContext)
+				err = marshalErr
+				if !bytes.Equal([]byte(recovery.String), canonical) {
+					r.BackupRecoveryContextJSON = json.RawMessage(recovery.String)
+				}
+			}
+		} else if err == nil {
+			r.BackupRecoveryContextNull = true
 		}
 		value, key = r, strconv.FormatInt(r.ID, 10)
 	case "recovery_events":

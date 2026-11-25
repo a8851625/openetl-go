@@ -314,6 +314,18 @@ def case_dir(base, name):
     return Path(base) / "results" / name.replace("/", "__")
 
 
+def case_artifact_hashes(folder, name):
+    folder = Path(folder)
+    paths = []
+    if name == "tagged":
+        paths = [folder / "paths" / (path_id + ".json") for path_id in PATHS]
+    elif name in P1 or name == "readiness":
+        paths = [folder / "probe/result.json"]
+        paths += [p for p in (folder / "probe").iterdir()
+                  if p.is_file() and p.suffix in (".json", ".log", ".js", ".png") and p not in paths]
+    return {str(p.relative_to(folder)): sha(p) for p in sorted(paths)}
+
+
 def test_env(base, data):
     env = {k: v for k, v in os.environ.items() if not k.startswith("ETL_")}
     for key in ("MYSQL_DSN", "POSTGRES_DSN", "MYSQL_HOST", "PGHOST", "POSTGRES_HOST"):
@@ -399,9 +411,11 @@ def run_case(base, name):
         # path evidence outside it. User checkouts are never reset or cleaned.
         command(["git", "worktree", "remove", "--force", str(source)], check=False)
     report = {"name": name, "source_commit": data["source"]["commit"], "image_id": data["image"]["id"],
-              "binary_sha256": expected, "started_at": started, "finished_at": utc(),
+              "binary_sha256": expected if name == "tagged" else data["image"]["binary_sha256"],
+              "started_at": started, "finished_at": utc(),
               "result": result, "exit_code": code, "error": error,
               "log_sha256": sha(folder / "command.log") if (folder / "command.log").exists() else None,
+              "artifact_sha256": case_artifact_hashes(folder, name) if result == "passed" else {},
               "container_runtime": command([cli(), "--version"]).stdout.strip(),
               "dependency_images": dependency_images()}
     save(folder / "result.json", report)
@@ -418,14 +432,18 @@ def reports(base, names):
         value = json.loads((folder / "result.json").read_text())
         if value["name"] != name or value["source_commit"] != data["source"]["commit"] \
                 or value["image_id"] != data["image"]["id"] or value["result"] != "passed" \
-                or value["binary_sha256"] not in {b["sha256"] for b in data["binaries"]} \
-                or value["exit_code"] != 0 or sha(folder / "command.log") != value["log_sha256"]:
+                or value["binary_sha256"] not in ({b["sha256"] for b in data["binaries"] if b["variant"] == "default"}
+                                                  if name == "tagged" else {data["image"]["binary_sha256"]}) \
+                or value["exit_code"] != 0 or sha(folder / "command.log") != value["log_sha256"] \
+                or value.get("artifact_sha256") != case_artifact_hashes(folder, name):
             raise ValueError("missing, failed or mismatched mandatory evidence: " + name)
         start = dt.datetime.fromisoformat(value["started_at"].replace("Z", "+00:00"))
         end = dt.datetime.fromisoformat(value["finished_at"].replace("Z", "+00:00"))
         if end < start or start < dt.datetime.fromisoformat(data["build"]["finished_at"].replace("Z", "+00:00")) \
                 or end > dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5):
             raise ValueError("invalid candidate evidence execution window")
+        if dt.datetime.now(dt.timezone.utc) - end > dt.timedelta(days=30):
+            raise ValueError("mandatory candidate evidence expired; rerun the case on the same bytes")
         out.append(value)
     return out
 

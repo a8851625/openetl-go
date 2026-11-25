@@ -161,7 +161,7 @@ echo "==> Wait pipeline complete"
 i=0
 while [ "$i" -lt 60 ]; do
   body="$(curl -fsS "http://127.0.0.1:$APP_PORT/api/v2/pipelines")"
-  echo "$body" | grep "\"name\":\"$PIPELINE\"" | grep '"status":"completed"' >/dev/null 2>&1 && break
+  echo "$body" | grep "\"name\":\"$PIPELINE\"" | grep '"status":"completed"' | grep '"records_written":9' >/dev/null 2>&1 && break
   i=$((i + 1))
   sleep 1
 done
@@ -231,7 +231,7 @@ curl -fsS -X POST "http://127.0.0.1:$APP_PORT/api/v2/pipelines/$PIPELINE/start" 
 i=0
 while [ "$i" -lt 60 ]; do
   body="$(curl -fsS "http://127.0.0.1:$APP_PORT/api/v2/pipelines")"
-  echo "$body" | grep "\"name\":\"$PIPELINE\"" | grep '"status":"completed"' >/dev/null 2>&1 && break
+  echo "$body" | grep "\"name\":\"$PIPELINE\"" | grep '"status":"completed"' | grep '"records_written":9' >/dev/null 2>&1 && break
   i=$((i + 1))
   sleep 1
 done

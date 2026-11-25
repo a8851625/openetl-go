@@ -63,9 +63,17 @@ class CandidateGateTest(unittest.TestCase):
             folder = rc.case_dir(self.base, name)
             folder.mkdir(parents=True)
             (folder / "command.log").write_text("synthetic test observation\n")
+            if name == "tagged":
+                (folder / "paths").mkdir()
+                for path_id in rc.PATHS:
+                    (folder / "paths" / (path_id + ".json")).write_text("{}")
+            elif name in rc.P1 or name == "readiness":
+                (folder / "probe").mkdir()
+                (folder / "probe/result.json").write_text("{}")
             value = {"name": name, "source_commit": "a" * 40, "image_id": self.data["image"]["id"],
                      "binary_sha256": selected["sha256"], "started_at": rc.utc(), "finished_at": rc.utc(),
-                     "result": "passed", "exit_code": 0, "log_sha256": rc.sha(folder / "command.log")}
+                     "result": "passed", "exit_code": 0, "log_sha256": rc.sha(folder / "command.log"),
+                     "artifact_sha256": rc.case_artifact_hashes(folder, name)}
             rc.save(folder / "result.json", value)
             values.append(value)
         self.report = {"format": "openetl-candidate-certification/v1", "result": "passed",
@@ -110,6 +118,28 @@ class CandidateGateTest(unittest.TestCase):
             t.addfile(item, io.BytesIO(b"x"))
         with self.assertRaisesRegex(ValueError, "unsafe"):
             rc.archive_binary(path, "openetl-go")
+
+    def test_changed_path_or_probe_artifact_blocks_promotion(self):
+        for name, relative in (("tagged", "paths/" + rc.PATHS[0] + ".json"),
+                               ("p1-recovery", "probe/result.json")):
+            with self.subTest(name=name):
+                path = rc.case_dir(self.base, name) / relative
+                original = path.read_bytes()
+                path.write_text('{"result":"replacement"}')
+                with self.assertRaisesRegex(ValueError, "mandatory evidence"):
+                    rc.verify(self.base)
+                path.write_bytes(original)
+
+    def test_collect_time_cannot_renew_expired_case_evidence(self):
+        name = rc.REQUIRED[0]
+        value = copy.deepcopy(self.report["cases"][0])
+        # A fresh aggregate timestamp cannot make an old execution current.
+        value["started_at"] = value["finished_at"] = "2025-01-01T00:00:00Z"
+        self.data["build"]["finished_at"] = "2024-12-31T00:00:00Z"
+        rc.save(self.base / "candidate.json", self.data)
+        rc.save(rc.case_dir(self.base, name) / "result.json", value)
+        with self.assertRaisesRegex(ValueError, "evidence expired"):
+            rc.reports(self.base, [name])
 
     def test_wrong_release_source_is_rejected_before_push(self):
         with patch.object(rc, "command") as command:

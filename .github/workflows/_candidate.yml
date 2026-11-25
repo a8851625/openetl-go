@@ -106,6 +106,16 @@ jobs:
         with:
           name: candidate-built-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.P1_CANDIDATE_DIR }}
+      - name: Pull fixtures required to be local by the certification scripts
+        env:
+          CASE_NAME: ${{ matrix.name }}
+        run: |
+          case "$CASE_NAME" in
+            hack/e2e-clickhouse.sh|hack/e2e-kafka-multitable-clickhouse.sh)
+              docker pull docker.io/clickhouse/clickhouse-server:24.3-alpine ;;
+            hack/e2e-s3-minio.sh)
+              docker pull quay.io/minio/minio:RELEASE.2024-07-16T23-46-41Z ;;
+          esac
       - name: Execute mandatory case on the preserved candidate
         env:
           CASE_NAME: ${{ matrix.name }}

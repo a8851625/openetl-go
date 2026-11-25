@@ -72,6 +72,11 @@ known secret fields still contain plaintext. Use section 1.1b to migrate them, t
 scan the resulting artifact. Export also fails when an installed plugin's recorded
 artifact is unreadable.
 
+DLQ recovery fields retain SQL NULL and legacy JSON shape during v3 export and
+restore. Supplemental `backup_recovery_*` fields are maintenance metadata; they
+do not add a recovery association to legacy rows. Conflicting metadata aborts
+restore atomically. Existing v1/v2 and earlier v3 files remain readable.
+
 The command uses `backup.ExportFile` from `internal/etl/storage/backup`: all tables
 are read in primary-key order in pages of 1,000 rows and streamed to a private
 temporary file. This includes DLQ/version history whose pipeline was deleted and
