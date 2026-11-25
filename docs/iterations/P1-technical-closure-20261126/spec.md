@@ -8,7 +8,7 @@
 
 | Increment | 可观察结果 | 验收 |
 | --- | --- | --- |
-| EV-2 | MySQL integration smoke 校验已提交数据，CI 对共享 runner 抖动稳定。 | 1000 行业务字段对账通过；真实 MySQL 执行；新的 CI integration 和 aggregated gate 为 success。 |
+| EV-2 | MySQL integration smoke 校验已提交数据，CI 对共享 runner 抖动稳定。 | 1000 行业务字段对账通过；真实 MySQL 执行；新的 CI integration job 为 success。最终 aggregated gate 由 GA-C1 验收。 |
 | P5-H1 | 故障与未知状态能从现有 UI 入口发现。 | open breaker 为 degraded；restore_failed 可行动；DLQ 未知不显示为已确认 healthy；API/UI 阈值同源；四个入口自动化覆盖。 |
 | PR-0-C1 | 连接删除保持持久化管道引用有效。 | source/transform/sink 与 DAG 引用来自当前 persisted spec；引用未解除时删除返回冲突并列出影响；并发写入与删除不会留下悬空引用；三 storage backend 和重启验证。 |
 | UI-E-R1 | 一次 sink outage 及其 replay 可通过持久化事实核对。 | 稳定 identity；已知 pipeline/node/connection 关联；失败/重放/结果持久化；重启可查；删除/驱逐具有准确结论；三 backend 与 backup/restore；真实 outage/dry-run/replay 和深链回归。 |

@@ -25,6 +25,7 @@ import {
   useApi,
 } from '@/lib/api';
 import { pipelineDLQBacklog } from '@/lib/dlq';
+import { findMetric } from '@/lib/pipeline-health';
 import { showToast, type ToastFn } from '@/lib/toast';
 import {
   navigate,
@@ -104,22 +105,14 @@ function App() {
     pipelinesList.find(
       (p) => pipelineKey(p) === selectedPipeline || p.name === selectedPipeline,
     ) || pipelinesList[0];
-  const selectedMetric = metricsList.find(
-    (p) => (p.id && p.id === selected?.id) || p.name === selected?.name,
-  );
+  const selectedMetric = selected ? findMetric(selected, metricsList) : undefined;
 
   // Detail routes have a separate, fail-closed identity resolution path.
   // `selected` remains list/dashboard state only and must never become a
   // fallback action target for an unmatched hash URL.
   const detailPipeline =
     route.page === 'pipeline-detail' ? resolvePipelineRoute(pipelinesList, route.id) : undefined;
-  const detailMetric = detailPipeline
-    ? metricsList.find(
-        (metric) =>
-          (Boolean(detailPipeline.id) && metric.id === detailPipeline.id) ||
-          metric.name === detailPipeline.name,
-      )
-    : undefined;
+  const detailMetric = detailPipeline ? findMetric(detailPipeline, metricsList) : undefined;
   const detailLoading = route.page === 'pipeline-detail' && pipelines.loading && !pipelines.data;
   const detailLoadError =
     route.page === 'pipeline-detail' && !pipelines.data ? pipelines.error : undefined;

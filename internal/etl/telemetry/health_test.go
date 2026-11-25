@@ -24,7 +24,8 @@ func TestDerivePipelineHealth(t *testing.T) {
 		// because it has not failed yet.
 		{"cumulative dlq counter ignored", PipelineHealthInput{Status: "running", RecordsDLQ: 5, RecordsFailed: 5}, PipelineHealthy},
 		{"sticky last error ignored", PipelineHealthInput{Status: "running", LastError: "transient boom"}, PipelineHealthy},
-		{"unknown backlog count not degraded", PipelineHealthInput{Status: "running", DLQFileCount: -1}, PipelineHealthy},
+		{"unknown backlog count", PipelineHealthInput{Status: "running", DLQFileCount: -1}, PipelineUnknown},
+		{"open breaker with unknown backlog", PipelineHealthInput{Status: "running", DLQFileCount: -1, CircuitBreakerState: 1}, PipelineDegraded},
 		{"running lag degraded", PipelineHealthInput{Status: "running", CDCLagMs: th.HighCDCLagMs + 1}, PipelineDegraded},
 		{"running checkpoint stale", PipelineHealthInput{Status: "running", CheckpointAgeSeconds: th.StaleCheckpointSec + 1}, PipelineDegraded},
 		{"running cb open", PipelineHealthInput{Status: "running", CircuitBreakerState: 1}, PipelineDegraded},
@@ -79,6 +80,13 @@ func TestRestoreFailedHealthIsVisibleAndDegraded(t *testing.T) {
 	overall, reasons := AggregateHealth(nil, map[string]PipelineHealth{"broken": health})
 	if overall != HealthDegraded {
 		t.Fatalf("overall=%q reasons=%v want degraded", overall, reasons)
+	}
+}
+
+func TestUnknownPipelineHealthPreventsConfirmedOverallHealth(t *testing.T) {
+	overall, reasons := AggregateHealth(nil, map[string]PipelineHealth{"orders": PipelineUnknown})
+	if overall != HealthDegraded || len(reasons) == 0 {
+		t.Fatalf("overall=%q reasons=%v, want degraded with a reason", overall, reasons)
 	}
 }
 

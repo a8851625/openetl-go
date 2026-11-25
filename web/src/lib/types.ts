@@ -21,6 +21,12 @@ export type MetricsPipeline = PipelineStats & {
   id?: string;
   name: string;
   status: string;
+  health?: string;
+  circuit_breaker_state?: number;
+  health_thresholds?: {
+    checkpoint_stale_seconds: number;
+    cdc_lag_ms: number;
+  };
   checkpoint_age_seconds: number;
   source_read_latency_ms: number;
   sink_write_latency_ms: number;

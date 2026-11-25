@@ -5,7 +5,8 @@
 允许修改 mysql_test.go、对应 CI 验证及证据文档。
 现有 smoke 在真实 MySQL 中读取已提交行数与字段值，写入耗时保留为测量输出。
 批量 SQL/事务的既有测试继续覆盖实现。
-运行真实 MySQL 的 targeted test，再在 PR 的 integration 与 aggregated gate 复验。
+运行真实 MySQL 的 targeted test，再在 PR 的 integration job 复验。
+整体聚合门禁在最终 GA-C1 的候选认证后核验。
 该增量只有测试与证据变化，回滚恢复前一个测试版本。
 
 ## P5-H1

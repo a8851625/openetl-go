@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/shared/empty-state';
 import { normalizePipelines } from '@/lib/api';
 import { pipelineDLQBacklog } from '@/lib/dlq';
-import { deriveIssues, type DerivedIssue , issueTitle } from '@/lib/pipeline-health';
+import { deriveIssues, type DerivedIssue, issueTitle, issueSummary } from '@/lib/pipeline-health';
 import type { ApiState, MetricsPipeline, Pipeline, TFunc } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { ArrowRight } from 'lucide-react';
@@ -104,7 +104,7 @@ export function IssuesPage({
                 <div className="mt-0.5 text-xs text-muted-foreground">
                   <span className="font-medium text-foreground/80">{issue.pipelineName}</span>
                   {' · '}
-                  {issue.summary}
+                  {issueSummary(issue, t)}
                   {issue.node ? ` · node ${issue.node}` : ''}
                   {issue.field ? `.${issue.field}` : ''}
                 </div>

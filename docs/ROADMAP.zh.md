@@ -1,7 +1,8 @@
 # OpenETL-Go Roadmap
 
 > 当前执行快照（2026-11-26，代码基线 `e28a740` / v0.2.12-beta.21）：
-> 唯一 `active` 是 EV-2。用户已授权本轮评估的全部 P1 技术修复，新增四个有界后续，
+> 唯一 `active` 是 P5-H1。EV-2 已由真实 MySQL 和 PR integration job 通过收口。
+> 用户已授权本轮评估的全部 P1 技术修复，新增四个有界后续，
 > 按依赖排为健康事实、连接引用保护、恢复事实契约、最终候选资产认证。
 > UI-E 的外部用户研究继续 `blocked_external`，用户明确要求先完成技术修复。
 > EV-3 保持原状态，MaxCompute P0 保持 `deferred`。
@@ -30,8 +31,8 @@
 
 | 顺序 / Round | Roadmap item | 状态 | 有界结果 |
 | --- | --- | --- | --- |
-| 1/5 | EV-2 | `active` | MySQL smoke 验证提交后的实际记录，真实 MySQL 的 CI integration job 和聚合门禁通过。 |
-| 2/5 | P5-H1（P5/UI-F 后续） | `queued` | 熔断器打开、恢复失败、DLQ 数量未知在 API、Dashboard、列表、详情与 Issues 中一致可见。 |
+| 1/5 | EV-2 | `delivered` | MySQL smoke 验证提交后的实际记录；PR run 45652762125 的 integration job 139341305228 success。最终聚合门禁归 GA-C1。 |
+| 2/5 | P5-H1（P5/UI-F 后续） | `active` | 熔断器打开、恢复失败、DLQ 数量未知在 API、Dashboard、列表、详情与 Issues 中一致可见。 |
 | 3/5 | PR-0-C1（PR-0/UI-E.5 后续） | `queued` | 服务端列出 connection 的线性/DAG 引用，拒绝破坏引用的删除，并覆盖并发创建/更新/删除和重启。 |
 | 4/5 | UI-E-R1（UI-E.3 已授权契约后续） | `queued` | 故障与 replay 结果具备可查询的持久化身份，深链在刷新/重启后恢复上下文；三 backend、备份/恢复与故障路径有证据。 |
 | 5/5 | GA-C1（GA 阻断项 #1 后续） | `queued` | 候选资产先构建、再认证、再发布同一资产；提交/镜像/二进制与实际测试结果绑定，旧证据看板同步。 |
@@ -2651,7 +2652,7 @@ connector evidence manifest OK: 16 record(s), certified_commit=e28a740d6e4c7c126
 
 ### EV-2：MySQL integration smoke 的 CI 耗时断言不稳定
 
-状态：`active`（根因已修复，等待下一次 CI run 复验）
+状态：`delivered`（2026-11-26，Round 1/5：真实 MySQL -race passed，PR integration job success）
 
 **发现**：`v0.2.12-beta.21` 的 tag commit `e28a740` 的 `test.yml` 运行
 （run `42542843252`，2026-11-09T00:56Z）结论为 **failure**：
@@ -2680,7 +2681,13 @@ smoke test，却断言绝对墙钟阈值 `elapsed > 100ms`。共享 CI runner �
 3 个 tests passed，1000 行字段对账通过，write=21.160856ms，exit 0。
 该记录明确包含真实数据库执行。
 
-**Residual**：需在下一个 tag/PR 的 CI run 上确认该 job 转绿。在那之前不得声称发布门禁全绿。
+**CI 复验**：PR #13 的 Test run `45652762125`，commit `93427a5`，
+integration job `139341305228` 的 Run integration tests 和 job conclusion 均为 success。
+该 job 配置真实 MySQL 8 与 ClickHouse，并执行全量 integration-tagged ETL 测试。
+
+**证据范围**：本条按原验收要求闭合 MySQL integration job。聚合门禁仍受旧路径证据影响：
+`ch_dedup_crash_window.json` 绑定 `d82ddc5`，本轮相关测试已在 `93427a5` 修改。
+最终路径/镜像认证与全量聚合门禁由 GA-C1 收口，当前不声明完整发布门禁通过。
 
 ### EV-3：resource-baseline 的 CI 阈值决策（数据已足，结论为「暂维持 warning」）
 

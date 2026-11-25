@@ -5184,6 +5184,7 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 
 	var metrics []telemetry.PipelineMetrics
 	ctx := context.Background()
+	thresholds := healthThresholdsFromEnv()
 	for _, id := range ids {
 		runner := runners[id]
 		stats := runner.Stats()
@@ -5199,8 +5200,9 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 			dlqFileCount = -1
 		}
 		cbState := runner.CircuitBreakerState()
+		status := string(runner.Status())
 		health := telemetry.DerivePipelineHealth(telemetry.PipelineHealthInput{
-			Status:               string(runner.Status()),
+			Status:               status,
 			RecordsFailed:        stats.RecordsFailed,
 			RecordsDLQ:           stats.RecordsDLQ,
 			DLQFileCount:         dlqFileCount,
@@ -5210,12 +5212,13 @@ func (s *Server) getPipelineMetrics() []telemetry.PipelineMetrics {
 			SourceReadLatencyMs:  pipelineMetrics.SourceReadLatencyMs,
 			SinkWriteLatencyMs:   pipelineMetrics.SinkWriteLatencyMs,
 			CircuitBreakerState:  cbState,
-		}, healthThresholdsFromEnv())
+		}, thresholds)
 		metrics = append(metrics, telemetry.PipelineMetrics{
 			ID:                    id,
 			Name:                  names[id],
-			Status:                string(runner.Status()),
+			Status:                status,
 			Health:                string(health),
+			HealthThresholds:      thresholds,
 			RecordsRead:           stats.RecordsRead,
 			RecordsWritten:        stats.RecordsWritten,
 			RecordsFailed:         stats.RecordsFailed,

@@ -33,6 +33,20 @@ Repair the stored spec or referenced connection and restart; restore-state
 updates never reset the checkpoint. See [runtime-modes.md](./runtime-modes.md)
 for strict/non-strict startup configuration and recovery procedure.
 
+## Current pipeline health
+
+`GET /api/v2/metrics` returns per-pipeline `health`, `circuit_breaker_state` and the
+`health_thresholds` used to compute that response (`checkpoint_stale_seconds` and
+`cdc_lag_ms`). Clients consume that health and threshold snapshot for their
+status and issue labels.
+
+An open circuit is degraded. An unreadable DLQ count is `dlq_file_count: -1`
+and health is unknown when no other current degradation is confirmed.
+Unknown health makes the overall health endpoint degraded (HTTP 503).
+Restoration failure remains `restore_failed` in API/metrics and appears as a
+failed, actionable pipeline in the UI. Historical error counters and the last
+observed error remain diagnostic after recovery.
+
 ## DLQ APIs
 
 Dead-letter records include `error_class` when the runtime can classify the failure. Current classes are `transient`, `data`, `schema`, `auth`, `config`, `programming`, and `unknown`. Retry policy uses the same classifier: transient and unknown errors are retried, while data/schema/auth/config/programming errors fail fast into DLQ or fail the operation.

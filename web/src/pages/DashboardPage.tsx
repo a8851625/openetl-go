@@ -16,6 +16,7 @@ import {
   formatLag,
   type DerivedIssue,
   issueTitle,
+  issueSummary,
 } from '@/lib/pipeline-health';
 import type { ApiState, MetricsPipeline, Pipeline, TFunc } from '@/lib/types';
 import type { Lang } from '@/i18n';
@@ -70,7 +71,7 @@ function IssueRow({
       />
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold">{issueTitle(issue, t)}</div>
-        <div className="mt-0.5 truncate text-xs text-muted-foreground">{issue.summary}</div>
+        <div className="mt-0.5 truncate text-xs text-muted-foreground">{issueSummary(issue, t)}</div>
       </div>
       <span className="flex items-center gap-1 text-xs font-semibold text-primary">
         {issue.action === 'dlq'
@@ -150,7 +151,7 @@ export function DashboardPage({
       const m = findMetric(p, mList);
       return { p, m, health: derivePipelineHealth(p, m) };
     })
-    .filter((x) => x.health === 'failed' || x.health === 'degraded')
+    .filter((x) => x.health === 'failed' || x.health === 'degraded' || x.health === 'unknown')
     .slice(0, 6);
 
   const openIssue = (issue: DerivedIssue) => {

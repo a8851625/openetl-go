@@ -26,7 +26,7 @@
 
 | 迭代 | 主题 | 归属 roadmap 条目 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
-| [P1 技术修复](./P1-technical-closure-20261126/) | 用户授权的五项 P1 技术闭环 | EV-2、P5-H1、PR-0-C1、UI-E-R1、GA-C1 | 按依赖顺序；外部用户研究另行保留 | active（Round 1/5：EV-2 真实 MySQL passed，CI 待复验） |
+| [P1 技术修复](./P1-technical-closure-20261126/) | 用户授权的五项 P1 技术闭环 | EV-2、P5-H1、PR-0-C1、UI-E-R1、GA-C1 | 按依赖顺序；外部用户研究另行保留 | active（Round 2/5：EV-2 真实 MySQL 与 CI integration job passed，P5-H1 开始） |
 | [IT-1](./IT-1-verification-substrate/) | 验证基座与存量收口 | RA-4、RA-7、BUG-1/2/6、GAP-1/3/4、P4 follow-up | 无 | `complete` |
 | [IT-2](./IT-2-correctness/) | 正确性（控制面真值 + 数据面身份与顺序） | RA-1、RA-2、RA-3、GAP-7.1/.2/.3 | IT-1 | `complete`（2026-09-05；T2.1–T2.8 全部 done，16 项验收 passed） |
 | [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `complete`（2026-09-16：T3.1–T3.7 全部 done，含 T3.6-B 路径吞吐与三 backend 并发曲线；证据 it3-baseline-20260916） |
