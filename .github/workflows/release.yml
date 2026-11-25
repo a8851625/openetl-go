@@ -22,7 +22,7 @@ jobs:
       contents: write
       packages: write
     env:
-      P1_CANDIDATE_DIR: ${{ runner.temp }}/candidate
+      P1_CANDIDATE_DIR: /tmp/openetl-candidate
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
       - name: Reject failed, skipped or cancelled prerequisites
@@ -41,7 +41,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ${{ needs.candidate.outputs.artifact }}
-          path: ${{ runner.temp }}/candidate
+          path: ${{ env.P1_CANDIDATE_DIR }}
       - name: Verify preserved assets before publication
         run: python3 hack/release_candidate.py verify --dir "$P1_CANDIDATE_DIR"
       - uses: docker/login-action@v3
@@ -62,5 +62,5 @@ jobs:
         if: always()
         with:
           name: promotion-${{ github.run_id }}
-          path: ${{ runner.temp }}/candidate/promotion.json
+          path: ${{ env.P1_CANDIDATE_DIR }}/promotion.json
           if-no-files-found: error

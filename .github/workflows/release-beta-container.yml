@@ -16,7 +16,7 @@ jobs:
     name: Repromote preserved beta bytes
     runs-on: ubuntu-latest
     env:
-      P1_CANDIDATE_DIR: ${{ runner.temp }}/candidate
+      P1_CANDIDATE_DIR: /tmp/openetl-candidate
       REQUESTED_TAG: ${{ inputs.tag }}
     steps:
       - name: Resolve beta tag
@@ -56,5 +56,5 @@ jobs:
         if: always()
         with:
           name: beta-promotion-${{ github.run_id }}
-          path: ${{ runner.temp }}/candidate/promotion.json
+          path: ${{ env.P1_CANDIDATE_DIR }}/promotion.json
           if-no-files-found: error

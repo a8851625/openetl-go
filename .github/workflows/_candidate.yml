@@ -24,8 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
-      P1_CANDIDATE_DIR: ${{ runner.temp }}/candidate
-      GORELEASER: ${{ runner.temp }}/goreleaser
+      P1_CANDIDATE_DIR: /tmp/openetl-candidate
+      GORELEASER: /tmp/goreleaser
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,7 +42,7 @@ jobs:
       - name: Install pinned GoReleaser
         run: |
           curl -fsSL --retry 3 https://github.com/goreleaser/goreleaser/releases/download/v1.26.2/goreleaser_Linux_x86_64.tar.gz -o "$RUNNER_TEMP/goreleaser.tar.gz"
-          tar -xzf "$RUNNER_TEMP/goreleaser.tar.gz" -C "$RUNNER_TEMP" goreleaser
+          tar -xzf "$RUNNER_TEMP/goreleaser.tar.gz" -C /tmp goreleaser
           "$GORELEASER" --version
       - name: Verify incomplete and mutated candidate rejection
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s hack -p test_release_candidate.py -v
@@ -58,7 +58,7 @@ jobs:
         if: always()
         with:
           name: candidate-built-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate/
+          path: ${{ env.P1_CANDIDATE_DIR }}/
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -91,7 +91,7 @@ jobs:
           - hack/e2e-clickhouse-replay-ordering.sh
           - tagged
     env:
-      P1_CANDIDATE_DIR: ${{ runner.temp }}/candidate
+      P1_CANDIDATE_DIR: /tmp/openetl-candidate
       CONTAINER_CLI: docker
       TESTCONTAINERS_RYUK_DISABLED: "true"
     steps:
@@ -105,7 +105,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: candidate-built-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate
+          path: ${{ env.P1_CANDIDATE_DIR }}
       - name: Execute mandatory case on the preserved candidate
         env:
           CASE_NAME: ${{ matrix.name }}
@@ -114,7 +114,7 @@ jobs:
         if: always()
         with:
           name: candidate-case-${{ strategy.job-index }}
-          path: ${{ runner.temp }}/candidate/results/
+          path: ${{ env.P1_CANDIDATE_DIR }}/results/
           if-no-files-found: error
           compression-level: 0
 
@@ -127,7 +127,7 @@ jobs:
       matrix:
         name: [p1-health, p1-references, p1-recovery]
     env:
-      P1_CANDIDATE_DIR: ${{ runner.temp }}/candidate
+      P1_CANDIDATE_DIR: /tmp/openetl-candidate
       CONTAINER_CLI: docker
     steps:
       - uses: actions/checkout@v4
@@ -140,7 +140,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: candidate-built-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate
+          path: ${{ env.P1_CANDIDATE_DIR }}
       - name: Install browser test CLI
         run: npm install --global @playwright/cli@0.1.22
       - name: Run P1 browser regression on the candidate image
@@ -151,7 +151,7 @@ jobs:
         if: always()
         with:
           name: candidate-case-${{ matrix.name }}
-          path: ${{ runner.temp }}/candidate/results/
+          path: ${{ env.P1_CANDIDATE_DIR }}/results/
           if-no-files-found: error
 
   certified:
@@ -162,7 +162,7 @@ jobs:
     outputs:
       artifact: candidate-certified-${{ github.run_id }}-${{ github.run_attempt }}
     env:
-      P1_CANDIDATE_DIR: ${{ runner.temp }}/candidate
+      P1_CANDIDATE_DIR: /tmp/openetl-candidate
       CONTAINER_CLI: docker
     steps:
       - name: Reject every failed, skipped or cancelled prerequisite
@@ -184,11 +184,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: candidate-built-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate
+          path: ${{ env.P1_CANDIDATE_DIR }}
       - uses: actions/download-artifact@v4
         with:
           pattern: candidate-case-*
-          path: ${{ runner.temp }}/candidate/results
+          path: ${{ env.P1_CANDIDATE_DIR }}/results
           merge-multiple: true
       - name: Generate post-build evidence, verify runtime binding, and close certification
         run: |
@@ -200,7 +200,7 @@ jobs:
         if: always()
         with:
           name: candidate-certified-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate/
+          path: ${{ env.P1_CANDIDATE_DIR }}/
           if-no-files-found: error
           compression-level: 0
           retention-days: 90
