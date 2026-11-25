@@ -162,6 +162,8 @@ def archive_binary(path, member, *, destination=None):
             if len(matches) != 1:
                 raise ValueError("archive must contain one matching executable")
             data = z.read(matches[0])
+            configs = [n for n in names if n.endswith("manifest/config/config.yaml")]
+            config_data = z.read(configs[0]) if destination and len(configs) == 1 else None
     else:
         with tarfile.open(path, "r:*") as t:
             members = t.getmembers()
@@ -173,13 +175,20 @@ def archive_binary(path, member, *, destination=None):
                 raise ValueError("archive must contain one matching executable")
             data = t.extractfile(matches[0]).read()
             names = [m.name for m in members]
-    if not any(n.endswith("manifest/config/config.yaml") for n in names) \
+            configs = [m for m in members if m.isfile() and m.name.endswith("manifest/config/config.yaml")]
+            config_data = t.extractfile(configs[0]).read() if destination and len(configs) == 1 else None
+    if len(configs) != 1 \
             or not any(PurePosixPath(n).name == "LICENSE" for n in names):
         raise ValueError("archive is missing its runtime config or license")
     if destination:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
         destination.chmod(0o755)
+        # The packed release executable still reads its distribution config.
+        # Preserve the config from this same archive, never from the checkout.
+        config_path = destination.parent / "manifest/config/config.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_bytes(config_data)
     return data
 
 

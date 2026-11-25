@@ -82,3 +82,9 @@ ports in all three browser probes. Correct these certification harness boundarie
 in _candidate.yml, e2e-mysql-postgres.sh and the shared health_ui_e2e.py probe, then
 rerun the actual candidate cases. Preserve their failed reports; do not reuse a
 success from another image or infer a pass from a harness edit.
+
+The completed failed tagged case in run 45692007631 showed that extracting only
+the release executable omitted the distribution's runtime config (all seven
+server-based paths failed startup). Extract that config from the same hashed
+platform archive next to the executable; never substitute checkout config or
+compile a different binary. Acceptance remains the full seven-path candidate run.

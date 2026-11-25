@@ -6,11 +6,11 @@ It binds CI evidence, resource baseline, storage matrix, and residual risks.
 ## 1. Code gates (pipeline-enforced — not manual checks)
 
 Since IT-1/T1.1 + T1.2 (roadmap RA-4) these gates run inside the reusable
-workflow `.github/workflows/_gate.yml`; the aggregated `gate-passed` job is the
-single verdict. `release.yml` and `release-beta-container.yml` both declare
-`needs: gate`, so a red **or skipped** gate job blocks GitHub Release / GHCR
-publishing. The table below documents what the pipeline runs — it must not be
-checked by hand.
+workflow `.github/workflows/_gate.yml`; its aggregated `gate-passed` job requires
+every source gate. `test.yml` also requires the exact-candidate gate in
+`delivery-passed`. `release.yml` requires both gates before publication. A beta
+retry verifies an existing certified bundle and its source tag without rebuilding.
+The table below documents the source gate — it must not be checked by hand.
 
 | Gate job | What the pipeline runs | Pass criteria |
 | --- | --- | --- |
@@ -27,9 +27,10 @@ checked by hand.
 `gate-passed` re-asserts `toJSON(needs)` with jq: **every** gate job must have
 `result == "success"`. GitHub Actions does not fail a `needs` chain when an
 upstream job is skipped, so skipped/cancelled jobs are counted as gate failures
-here (IT-1 spec 交付约束 1). Callers: `test.yml` (push/PR), `release.yml` and
-`release-beta-container.yml` (tag push; the beta workflow pins the gate to the
-requested tag via the `ref` input, so the verdict binds to the tag commit).
+here (IT-1 spec 交付约束 1). Callers: `test.yml` (push/PR) and `release.yml`
+(tag push, followed by build → exact-candidate certification → promotion).
+`release-beta-container.yml` is a manual retry of preserved, unexpired certified
+bytes for an existing beta tag; it does not rebuild or rerun source compilation.
 
 ### 1b. Exemption allowlist (empty by default)
 

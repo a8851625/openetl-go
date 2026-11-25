@@ -23,6 +23,9 @@ binary is an error, not permission to compile a substitute. Shell tests consume
 the explicit immutable `IMAGE` with `E2E_SKIP_BUILD=1`. Each test source checkout is
 isolated at the candidate commit.
 
+Subprocess tests extract the executable and its runtime configuration from the
+same preserved archive; no configuration is borrowed from the source checkout.
+
 The candidate ledger, command logs, per-case execution windows, fixture image
 identities, connector manifest and tagged JSON artifacts are retained as CI
 artifacts. Missing/failed/skipped/cancelled cases, expired evidence, changed
