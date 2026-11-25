@@ -1,0 +1,2 @@
+ok  	github.com/a8851625/openetl-go/internal/etl/server	142.532s
+ok  	github.com/a8851625/openetl-go/internal/etl/telemetry	1.012s

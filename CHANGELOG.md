@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Running health now follows the server thresholds and current signals: an open write circuit, an unreadable DLQ count, and failed spec restoration appear consistently across the existing UI. Circuit cooldown precedes the batch commit deadline, so the default 30-second cooldown can recover without exhausting it. Verified with Go race tests, nine frontend contracts and 14 real-container API/UI checks.
+
 - **DAG designer: the canvas could certify an unrunnable graph.** `validateAndCreate` only asked
   whether a node of kind `source` and one of kind `sink` existed anywhere, so a graph with two
   disconnected nodes produced `Validation passed` while the server preflight (which only inspects

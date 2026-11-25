@@ -70,6 +70,27 @@ func (cb *CircuitBreaker) Allow() bool {
 	return true
 }
 
+// wait allows the next probe after cooldown without spending a batch's
+// durability deadline. Cancellation leaves the source range uncommitted.
+func (cb *CircuitBreaker) wait(ctx context.Context) error {
+	for !cb.Allow() {
+		cb.mu.Lock()
+		delay := time.Until(cb.trippedAt.Add(time.Duration(cb.cfg.CooldownSec) * time.Second))
+		cb.mu.Unlock()
+		if delay <= 0 {
+			continue
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
 // RecordSuccess resets the breaker to closed.
 func (cb *CircuitBreaker) RecordSuccess() {
 	cb.mu.Lock()

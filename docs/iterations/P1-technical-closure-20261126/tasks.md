@@ -3,7 +3,7 @@
 | Round | Increment | Status | Evidence |
 | --- | --- | --- | --- |
 | 1/5 | EV-2 | done | Go 1.24.13 + 隔离 MySQL 8：3 个 targeted -race tests passed；1000 行字段对账通过；PR run 45652762125 / integration job 139341305228 success。 |
-| 2/5 | P5-H1 | active | 已核对 telemetry、metrics、UI health 和四个 UI 入口；开始实现。 |
+| 2/5 | P5-H1 | done | API/Go race、9 个前端 contracts、真实容器 14/14：见 h1-evidence.md。 |
 | 3/5 | PR-0-C1 | todo | 待领取。 |
 | 4/5 | UI-E-R1 | todo | 用户已授权技术修复；外部研究继续缺参与者。 |
 | 5/5 | GA-C1 | todo | 依赖最终运行时代码冻结。 |
@@ -32,9 +32,9 @@ Scope: telemetry/health.go 与测试、UI types/health consumers、i18n、UI reg
 Non-goals: 新 incident 模型、连接删除保护、全局 UI 重做、P2 基准/历史修复
 Dependencies: EV-2 delivered；现有 metrics 已提供服务端 health 与 circuit_breaker_state
 Acceptance: 1) 三个失败/未知场景的 API/UI 对齐；2) 恢复后回归 healthy；3) server -race 与 UI unit/typecheck/lint/build；4) 四入口真实容器 UI 回归
-Evidence: 待执行
-Result: active
-Residual/follow-up: PR-0-C1
+Evidence: [h1-evidence.md](./h1-evidence.md)；Go 1.24.13 container server/telemetry/pipeline -race exit 0；npm test 9/9、typecheck/lint/build exit 0；image 03c991b9a2cf… real UI 14/14 exit 0。
+Result: delivered
+Residual/follow-up: PR-0-C1；用户研究不在本增量。
 
 ## 证据规则
 

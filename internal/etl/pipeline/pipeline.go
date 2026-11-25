@@ -1192,6 +1192,20 @@ func (r *Runner) writeLoop(ctx context.Context, records <-chan core.Record) {
 }
 
 func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
+	r.inflightBatch.add()
+	defer r.inflightBatch.done()
+
+	// Cooldown is source backpressure, not a sink commit. In particular the
+	// default 30s cooldown must not exhaust the 30s durability deadline before
+	// the recovered sink gets its probe. Stop while waiting leaves this batch
+	// uncheckpointed, so its source range replays on restart.
+	if r.circuitBreaker != nil && !r.circuitBreaker.Allow() {
+		r.logInfo("Circuit breaker open, waiting for cooldown before sink write...")
+		if err := r.circuitBreaker.wait(ctx); err != nil {
+			return
+		}
+	}
+
 	// A batch commit (sink write + DLQ routing + checkpoint save) must
 	// survive Stop(): the loop ctx is cancelled by Stop() the instant the
 	// user requests shutdown, but abandoning a half-written batch would
@@ -1209,9 +1223,6 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			defer commitCancel()
 		}
 	}
-
-	r.inflightBatch.add()
-	defer r.inflightBatch.done()
 
 	// Use commitCtx for everything that must reach a durable store: the
 	// transform chain (state checkpoints), the sink write, single-row
@@ -1335,16 +1346,6 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			})
 		}
 		return
-	}
-
-	// Circuit breaker check: if tripped, wait for cooldown before attempting write.
-	if r.circuitBreaker != nil && !r.circuitBreaker.Allow() {
-		r.logInfo("Circuit breaker open, waiting for cooldown before sink write...")
-		select {
-		case <-time.After(time.Duration(r.circuitBreaker.cfg.CooldownSec) * time.Second):
-		case <-ctx.Done():
-			return
-		}
 	}
 
 	// Fire OnPreBatch hook before writing to sink.

@@ -15,6 +15,7 @@
 以服务端当前 health、阈值和未知标记作为事实，保留旧 API 客户端与旧 payload 的兼容 fallback。
 restore_failed 进入现有可行动入口，open breaker 与 unreadable backlog 有可解释状态。
 通过函数/契约测试和四个 UI 入口验证，恢复后健康状态应能回到正常。
+容器恢复验收发现必要前置：默认 30s breaker cooldown 消耗 30s batch commit deadline，恢复后仍触发 checkpoint timeout。允许在 pipeline/circuit_breaker.go、pipeline.go 和最近 runner tests 中把冷却等待移到提交期限之前；停止等待不推进 checkpoint，已有在途提交的 Stop 语义保持测试覆盖。
 回滚 UI 消费和新增响应字段，既有持久化格式不变。
 
 ## PR-0-C1

@@ -3,7 +3,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import sqlite3
 import subprocess
 import tempfile
 import time
@@ -26,6 +25,7 @@ class Probe:
         self.network = self.prefix + "-net"
         self.app = self.prefix + "-app"
         self.mysql = self.prefix + "-mysql"
+        self.sqlite = self.prefix + "-sqlite"
         self.session = self.prefix
         self.checks = []
         self.api_url = ""
@@ -74,6 +74,13 @@ class Probe:
         return self.container("exec", self.mysql, "mysql", "-uroot", "-phealth_fixture_only",
                               "openetl_health", "-e", statement)
 
+    def sqlite_sql(self, statement):
+        # Both database clients must run in the same container host kernel.
+        # Editing an active WAL from macOS across a VM bind mount bypasses its
+        # advisory locks and can overwrite concurrent application writes.
+        return self.container("exec", "--user", "1001", self.sqlite,
+                              "sqlite3", "/app/data/etl.db", statement)
+
     def record(self, name):
         self.checks.append({"name": name, "result": "passed"})
         print("PASS " + name, flush=True)
@@ -98,9 +105,10 @@ class Probe:
             code += "return true;\n}"
             filename = self.out / (state + "-" + view + ".js")
             filename.write_text(code)
-            self.browser("run-code", "--filename", str(filename))
+            result = self.browser("run-code", "--filename", str(filename))
+            if result != "true":
+                raise RuntimeError(f"{state} {view} browser assertion failed: {result}")
             self.record(state + " " + view)
-        self.browser("run-code", "async (page) => { await page.getByRole('tab', {name:'Issues', exact:true}).click().catch(()=>{}); return true; }")
 
     def start(self):
         self.container("network", "create", self.network)
@@ -120,6 +128,10 @@ class Probe:
         self.base = "http://127.0.0.1:" + front
         self.api_url = "http://127.0.0.1:" + api
         self.wait("API", lambda: self.api("GET", "/api/v2/pipelines"))
+        self.container("run", "-d", "--name", self.sqlite, "--volumes-from", self.app,
+                       "docker.io/library/alpine:3.19", "sh", "-c",
+                       "apk add --no-cache sqlite && tail -f /dev/null")
+        self.wait("SQLite fixture client", lambda: self.sqlite_sql("SELECT 1;"))
         self.browser("open", self.base)
         self.browser("localstorage-set", "etl_lang", "en")
         self.browser("reload")
@@ -133,6 +145,7 @@ class Probe:
                 "password": "health_fixture_only", "database": "openetl_health", "table": "health_probe",
                 "batch_mode": "upsert", "pk_columns": ["id"], "auto_create": True}},
             "retry": {"max_attempts": 1, "initial_interval_ms": 100, "max_interval_ms": 100},
+            "circuit_breaker": {"max_failures": 2, "window_sec": 60, "cooldown_sec": 30},
         }
         created = self.api("POST", "/api/v2/pipelines", {"spec": self.spec})
         self.pipeline_id = created["id"]
@@ -147,13 +160,10 @@ class Probe:
         self.wait("healthy after replay", lambda: self.metric()["health"] == "healthy")
         self.record("healthy after circuit recovery and replay")
 
-        database = self.data / "etl.db"
-        with sqlite3.connect(database, timeout=20) as connection:
-            connection.execute("ALTER TABLE dead_letters RENAME TO health_hidden_dlq")
+        self.sqlite_sql("ALTER TABLE dead_letters RENAME TO health_hidden_dlq;")
         self.wait("unknown backlog", lambda: self.metric()["health"] == "unknown")
         self.browser_views("unknown", "health unavailable")
-        with sqlite3.connect(database, timeout=20) as connection:
-            connection.execute("ALTER TABLE health_hidden_dlq RENAME TO dead_letters")
+        self.sqlite_sql("ALTER TABLE health_hidden_dlq RENAME TO dead_letters;")
         self.wait("known backlog recovery", lambda: self.metric()["health"] == "healthy")
         self.record("healthy after DLQ count recovery")
 
@@ -161,9 +171,9 @@ class Probe:
         self.container("stop", self.app)
         broken = dict(self.spec)
         broken["source"] = {**self.spec["source"], "connection": "deleted-health-fixture"}
-        with sqlite3.connect(database, timeout=20) as connection:
-            connection.execute("UPDATE pipelines SET spec_yaml=? WHERE id=?",
-                               (json.dumps(broken), self.pipeline_id))
+        stored = json.dumps(broken).replace("'", "''")
+        self.sqlite_sql("UPDATE pipelines SET spec_yaml='" + stored
+                        + "' WHERE id='" + self.pipeline_id + "';")
         self.container("start", self.app)
         self.wait("restoration failure", lambda: any(
             item["id"] == self.pipeline_id and item["status"] == "restore_failed"
@@ -173,7 +183,7 @@ class Probe:
 
     def close(self):
         self.run(["playwright-cli", "-s=" + self.session, "close"], check=False)
-        for name in (self.app, self.mysql):
+        for name in (self.app, self.mysql, self.sqlite):
             logs = self.container("logs", name, check=False)
             (self.out / (name + ".log")).write_text(logs)
             self.container("rm", "-f", name, check=False)
