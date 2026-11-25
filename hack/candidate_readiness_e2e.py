@@ -14,6 +14,26 @@ class EvidenceProbe(Probe):
         shutil.copy2(manifest, self.data / "connector-evidence.json")
         self.app_env = {"ETL_CONNECTOR_EVIDENCE_FILE": "/app/data/connector-evidence.json"}
 
+    def start(self):
+        # This is an API binding check; it needs neither a browser nor source,
+        # sink or SQLite-client fixtures in the certification aggregation job.
+        self.container("network", "create", self.network)
+        self.container("run", "-d", "--name", self.app, "--network", self.network,
+                       "-p", "127.0.0.1::8000", "-p", "127.0.0.1::8001",
+                       "-v", str(self.data) + ":/app/data", "-v", str(self.pipes) + ":/app/pipes:ro",
+                       "-e", "ETL_PROFILE=development", "-e", "ETL_INSECURE_DEV=true",
+                       "-e", "ETL_API_TOKEN=", "-e", "ETL_SPEC_ENCRYPTION_KEY=",
+                       "-e", "ETL_CONNECTOR_EVIDENCE_FILE=" + self.app_env["ETL_CONNECTOR_EVIDENCE_FILE"],
+                       self.image)
+        self.refresh_addresses()
+        self.wait("candidate API", lambda: self.api("GET", "/api/v2/pipelines"))
+
+    def close(self):
+        logs = self.container("logs", self.app, check=False)
+        (self.out / (self.app + ".log")).write_text(logs)
+        self.container("rm", "-f", self.app, check=False)
+        self.container("network", "rm", self.network, check=False)
+
     def gate(self):
         descriptors = self.api("GET", "/api/v2/connectors/descriptors")["descriptors"]
         mysql = next(d for d in descriptors if d["kind"] == "sink" and d["type"] == "mysql")
