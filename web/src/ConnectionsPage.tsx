@@ -39,6 +39,19 @@ type ConnectionEntry = {
   updated_at?: string;
 };
 
+type ReferenceReport = {
+  connection_name: string;
+  known: boolean;
+  references: { pipeline_id: string; pipeline_name: string; endpoint: string; node_id?: string }[];
+  unreadable_specs: { pipeline_id: string; pipeline_name: string; code: string }[];
+};
+
+class ConnectionAPIError extends Error {
+  constructor(message: string, readonly status: number, readonly body: unknown) {
+    super(message);
+  }
+}
+
 type ConnectorDescriptor = {
   kind: ConnectorKind;
   type: string;
@@ -64,7 +77,14 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   if (token) headers.set('X-API-Token', token);
   const res = await fetch(path, { ...init, headers });
-  if (!res.ok) throw new Error((await res.text()) || `${res.status}`);
+  if (!res.ok) {
+    const text = await res.text();
+    let body: unknown;
+    try { body = JSON.parse(text); } catch { body = undefined; }
+    const message = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
+      ? body.error : text || `${res.status}`;
+    throw new ConnectionAPIError(message, res.status, body);
+  }
   return res.json();
 }
 
@@ -99,6 +119,22 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
   const [deleting, setDeleting] = useState('');
   const [actionNotice, setActionNotice] = useState('');
   const [actionError, setActionError] = useState('');
+  const [referenceReport, setReferenceReport] = useState<ReferenceReport | null>(null);
+  const [referenceError, setReferenceError] = useState('');
+
+  useEffect(() => {
+    const connectionName = pendingDelete?.name;
+    setReferenceReport(null);
+    setReferenceError('');
+    if (!connectionName) return;
+    let cancelled = false;
+    api<ReferenceReport>(`/api/v2/connections/${encodeURIComponent(connectionName)}/references`)
+      .then((report) => { if (!cancelled) setReferenceReport(report); })
+      .catch((error) => { if (!cancelled) setReferenceError(error instanceof Error ? error.message : String(error)); });
+    return () => { cancelled = true; };
+  }, [pendingDelete?.name]);
+  const checkedReferences = referenceReport?.connection_name === pendingDelete?.name ? referenceReport : null;
+  const referenceBlocked = !checkedReferences?.known || checkedReferences.references.length > 0;
 
   const refresh = () => {
     setLoading(true);
@@ -247,6 +283,11 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       setActionError(`${t('conn.deleteFailed').replace('{name}', conn.name)}: ${detail}`);
+      if (e instanceof ConnectionAPIError && e.status === 409) {
+        // A spec can acquire a reference after the preview. Re-open the impact
+        // check; the SQL delete has already refused the mutation.
+        setPendingDelete(conn);
+      }
     } finally {
       setDeleting('');
     }
@@ -274,10 +315,34 @@ export function ConnectionsPage({ t, lang: _lang }: { t: TFunc; lang: Lang }) {
           if (!open) setPendingDelete(null);
         }}
         title={t('conn.confirmDeleteTitle').replace('{name}', pendingDelete?.name || '')}
-        description={t('conn.confirmDelete').replace('{name}', pendingDelete?.name || '')}
+        description={t('conn.confirmDeleteChecked').replace('{name}', pendingDelete?.name || '')}
         confirmLabel={t('common.delete')}
         cancelLabel={t('ui.cancel')}
         destructive
+        confirmDisabled={referenceBlocked || Boolean(referenceError) || Boolean(deleting)}
+        details={(
+          <div className="space-y-2 text-sm" data-testid="connection-reference-impact">
+            {referenceError ? <ErrorBox message={`${t('conn.referenceFailed')}: ${referenceError}`} />
+              : !checkedReferences ? <p>{t('conn.referenceChecking')}</p>
+              : <>
+                <p>{checkedReferences.known
+                  ? checkedReferences.references.length ? t('conn.referenceInUse') : t('conn.referenceClear')
+                  : t('conn.referenceUnknown')}</p>
+                {checkedReferences.references.map((ref) => (
+                  <a className="block text-primary underline" key={`${ref.pipeline_id}:${ref.endpoint}`}
+                    href={`#/pipelines/${encodeURIComponent(ref.pipeline_id)}/overview`}>
+                    {ref.pipeline_name} · {ref.node_id || ref.endpoint}
+                  </a>
+                ))}
+                {checkedReferences.unreadable_specs.map((spec) => (
+                  <a className="block text-primary underline" key={spec.pipeline_id}
+                    href={`#/pipelines/${encodeURIComponent(spec.pipeline_id)}/overview`}>
+                    {spec.pipeline_name} · {t('conn.referenceUnreadable')}
+                  </a>
+                ))}
+              </>}
+          </div>
+        )}
         onConfirm={() => {
           if (pendingDelete) void deleteConnection(pendingDelete);
         }}

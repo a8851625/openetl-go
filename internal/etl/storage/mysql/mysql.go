@@ -193,7 +193,10 @@ func (s *Store) migrate() error {
 	}
 
 	// Versioned incremental migrations (additive ALTERs)
-	return s.runVersionedMigrations()
+	if err := s.runVersionedMigrations(); err != nil {
+		return err
+	}
+	return sqlstore.New(s.db, sqlstore.MySQLDialect{}).EnsureReferenceGuard(context.Background())
 }
 
 // runVersionedMigrations applies incremental schema changes tracked by
@@ -242,6 +245,7 @@ func (s *Store) runVersionedMigrations() error {
 		// PR-DLQ-2: recorded here, executed by
 		// EnsureDeadLetterHashUniqueness (backfill + dedup + unique index).
 		{24, "deduplicate dead_letters by record hash", "SELECT 1"},
+		{25, "coordinate current connection references", `CREATE TABLE IF NOT EXISTS connection_reference_guard (id INTEGER PRIMARY KEY, generation BIGINT NOT NULL DEFAULT 0)`},
 	}
 
 	for _, m := range migrations {

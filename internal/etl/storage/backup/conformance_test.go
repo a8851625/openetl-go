@@ -69,6 +69,32 @@ func TestBackupRestoreConformance(t *testing.T) {
 				}
 			}
 
+			t.Run("encrypted_connection_references_after_restore", func(t *testing.T) {
+				reset(t)
+				cipher, err := storage.NewSpecCipher("refs", resolverKey(4), "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := s.SaveConnection(ctx, &storage.ConnectionEntry{Name: "restore-target", Kind: "sink", Type: "mysql"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := storage.NewPipelineSpecStore(s, cipher).SaveWithID(ctx, "restore-ref", "restore ref", "sink: {type: mysql, connection: restore-target}", "stopped"); err != nil {
+					t.Fatal(err)
+				}
+				snap := exportForRestoreTest(t, s)
+				if err := backup.Restore(ctx, s, snap, backup.Options{ClearBeforeRestore: true}); err != nil {
+					t.Fatal(err)
+				}
+				assertSnapshotPayload(t, snap, exportForRestoreTest(t, s))
+				report, err := s.(storage.ConnectionReferenceStore).ConnectionReferences(ctx, "restore-target")
+				if err != nil || !report.Known || len(report.References) != 1 || report.References[0].PipelineID != "restore-ref" {
+					t.Fatalf("restored reference = %+v, err=%v", report, err)
+				}
+				if err := s.DeleteConnection(ctx, "restore-target"); !errors.Is(err, storage.ErrConnectionReferenceConflict) {
+					t.Fatalf("restore lost deletion protection: %v", err)
+				}
+			})
+
 			t.Run("id_keyed_and_legacy_history_export", func(t *testing.T) {
 				reset(t)
 				p := &storage.PipelineRow{ID: "pipeline-42", Name: "orders", Status: "stopped", SpecYAML: "name: orders"}

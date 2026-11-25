@@ -30,6 +30,7 @@ class Probe:
         self.checks = []
         self.api_url = ""
         self.base = ""
+        self.app_env = {}
 
     def run(self, args, timeout=180, check=True):
         result = subprocess.run(args, cwd=self.out, capture_output=True, text=True, timeout=timeout)
@@ -122,13 +123,16 @@ class Probe:
                        "-v", str(self.data) + ":/app/data", "-v", str(self.pipes) + ":/app/pipes:ro",
                        "-e", "ETL_PROFILE=development", "-e", "ETL_INSECURE_DEV=true",
                        "-e", "ETL_RESTORE_STRICT=false", "-e", "ETL_API_TOKEN=",
-                       "-e", "ETL_SPEC_ENCRYPTION_KEY=", self.image)
+                       "-e", "ETL_SPEC_ENCRYPTION_KEY=",
+                       *[part for key, value in self.app_env.items() for part in ("-e", key + "=" + value)],
+                       self.image)
         front = self.container("port", self.app, "8000/tcp").splitlines()[0].rsplit(":", 1)[1]
         api = self.container("port", self.app, "8001/tcp").splitlines()[0].rsplit(":", 1)[1]
         self.base = "http://127.0.0.1:" + front
         self.api_url = "http://127.0.0.1:" + api
         self.wait("API", lambda: self.api("GET", "/api/v2/pipelines"))
         self.container("run", "-d", "--name", self.sqlite, "--volumes-from", self.app,
+                       "-v", str(self.pipes) + ":/fixture-pipes",
                        "docker.io/library/alpine:3.19", "sh", "-c",
                        "apk add --no-cache sqlite && tail -f /dev/null")
         self.wait("SQLite fixture client", lambda: self.sqlite_sql("SELECT 1;"))
@@ -190,13 +194,13 @@ class Probe:
         self.container("network", "rm", self.network, check=False)
 
 
-def main():
+def main(probe_type=Probe):
     parser = argparse.ArgumentParser()
     parser.add_argument("--cli", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--out", default="")
     args = parser.parse_args()
-    probe = Probe(args.cli, args.image, args.out)
+    probe = probe_type(args.cli, args.image, args.out)
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     result = "failed"
     try:

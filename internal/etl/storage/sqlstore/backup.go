@@ -25,6 +25,9 @@ func (s *Store) insertBackupRow(ctx context.Context, table, columns string, valu
 }
 
 func (s *Store) WritePipelineFidelity(ctx context.Context, p *storage.PipelineRow) error {
+	if err := s.withReferenceGuard(ctx, func(context.Context) error { return nil }); err != nil {
+		return err
+	}
 	row := *p
 	storage.NormalizePipelineLifecycle(&row) // v1 predates the split state columns.
 	return s.insertBackupRow(ctx, "pipelines",
@@ -111,6 +114,9 @@ func (s *Store) WritePluginFidelity(ctx context.Context, p *storage.PluginEntry)
 }
 
 func (s *Store) WriteConnectionFidelity(ctx context.Context, c *storage.ConnectionEntry) error {
+	if err := s.withReferenceGuard(ctx, func(context.Context) error { return nil }); err != nil {
+		return err
+	}
 	config, err := json.Marshal(c.Config)
 	if err != nil {
 		return err

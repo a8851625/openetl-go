@@ -77,6 +77,10 @@ func (s *Server) handleConnectionAction(w http.ResponseWriter, r *http.Request) 
 		s.connectionContext(w, r, name)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "references" {
+		s.connectionReferences(w, r, name)
+		return
+	}
 	if len(parts) != 1 {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]any{"error": "unknown connection action"})
@@ -101,6 +105,9 @@ func (s *Server) handleConnectionAction(w http.ResponseWriter, r *http.Request) 
 		s.saveConnection(w, r, name)
 	case http.MethodDelete:
 		if err := s.store.DeleteConnection(r.Context(), name); err != nil {
+			if writeConnectionReferenceConflict(w, err) {
+				return
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
@@ -146,6 +153,9 @@ func (s *Server) saveConnection(w http.ResponseWriter, r *http.Request, pathName
 		Config: req.Config,
 	}
 	if err := s.store.SaveConnection(r.Context(), conn); err != nil {
+		if writeConnectionReferenceConflict(w, err) {
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return

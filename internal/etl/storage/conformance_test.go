@@ -39,6 +39,7 @@ func runConformanceSuite(t *testing.T, newStore func(t *testing.T) (storage.Stor
 	t.Run("Tasks", func(t *testing.T) { testTasks(t, newStore) })
 	t.Run("Plugins", func(t *testing.T) { testPlugins(t, newStore) })
 	t.Run("Connections", func(t *testing.T) { testConnections(t, newStore) })
+	t.Run("ConnectionReferences", func(t *testing.T) { testConnectionReferences(t, newStore) })
 	t.Run("Settings", func(t *testing.T) { testSettings(t, newStore) })
 	t.Run("SecretFields", func(t *testing.T) { testSecretFields(t, newStore) })
 }

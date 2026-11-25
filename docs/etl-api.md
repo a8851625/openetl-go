@@ -440,6 +440,29 @@ Response:
 }
 ```
 
+## Saved Connection References and Deletion
+
+`GET /api/v2/connections/{name}/references` returns `connection_name`, `known`,
+`references`, and `unreadable_specs`. References identify the stable pipeline ID,
+display name, source/transform/sink endpoint, and DAG node ID when applicable.
+The current persisted spec is authoritative, including YAML hot loads, encrypted
+specs and the legacy DLQ sink reference. Historical versions are excluded.
+Connector config and secrets are never included in this response.
+
+The preview is a snapshot. `DELETE /api/v2/connections/{name}` checks again inside
+the same SQL coordination boundary used by current-spec writes and connection
+kind/type changes. Referenced connections return HTTP 409 with `code:
+connection_in_use` and the affected identities. New or updated specs that race
+with deletion fail with `connection_missing_or_incompatible`; the current spec,
+version and optional checkpoint reset are rolled back together.
+
+An unreadable or undecryptable legacy spec sets `known: false` and blocks deletion.
+Repair the listed spec or configure its decryption key, then repeat the preview.
+Inline overrides and compatible connection config changes remain supported.
+The offline backup fidelity path preserves legacy rows as they were; it does not
+silently remove unknown references. Coordination metadata itself is not user
+backup content. SQLite, MySQL and PostgreSQL enforce the same boundary.
+
 ## Saved Connection Context
 
 Fetch a saved connection together with its descriptor, health, recommended runtime parameters, and best-effort source/sink introspection.

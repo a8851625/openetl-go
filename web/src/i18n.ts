@@ -556,6 +556,13 @@ const dict: Dict = {
   'conn.noMatchingSaved': { en: 'No saved connections for this node kind', zh: '当前节点类型暂无可用保存连接' },
   'conn.noConfigFields': { en: 'No schema fields. Use advanced JSON if this connector still needs config.', zh: '暂无配置字段；如该连接器仍需配置，请使用高级 JSON。' },
   'conn.load': { en: 'Load', zh: '载入' },
+  'conn.referenceChecking': { en: 'Checking saved pipeline references…', zh: '正在检查持久化管道引用…' },
+  'conn.referenceFailed': { en: 'Reference check failed', zh: '引用检查失败' },
+  'conn.referenceInUse': { en: 'Remove these current pipeline references before deleting the connection.', zh: '请先解除以下当前管道引用，再删除连接。' },
+  'conn.referenceClear': { en: 'No current pipeline references. The server checks again when deleting.', zh: '当前没有管道引用，服务端将在删除时再次检查。' },
+  'conn.referenceUnknown': { en: 'Some saved specs cannot be read. Repair them before deleting the connection.', zh: '部分持久化配置无法读取，请先修复，再删除连接。' },
+  'conn.referenceUnreadable': { en: 'saved spec unreadable', zh: '持久化配置无法读取' },
+  'conn.confirmDeleteChecked': { en: 'Delete connection "{name}" after checking its saved references?', zh: '检查持久化引用后，删除连接“{name}”？' },
   'conn.confirmDeleteTitle': {
     en: 'Delete connection "{name}"?',
     zh: '删除连接“{name}”？',

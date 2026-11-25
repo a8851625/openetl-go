@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
@@ -51,6 +52,7 @@ type Store struct {
 	dialect         Dialect
 	failureMu       sync.RWMutex
 	failureInjector func(operation string) error
+	referenceCipher atomic.Pointer[storage.SpecCipher]
 }
 
 func New(db *sql.DB, dialect Dialect) *Store {
@@ -170,6 +172,9 @@ func (s *Store) txFromContext(ctx context.Context) *sql.Tx {
 func (s *Store) WipeControlPlane(ctx context.Context) error {
 	if s.txFromContext(ctx) == nil {
 		return fmt.Errorf("wiping the control plane requires a transaction")
+	}
+	if err := s.withReferenceGuard(ctx, func(context.Context) error { return nil }); err != nil {
+		return err
 	}
 	tables := []string{
 		"dead_letters", "audit_logs", "run_history", "task_assignments",
@@ -343,7 +348,7 @@ func (s *Store) migrateUnlocked() error {
 		return err
 	}
 
-	return nil
+	return s.EnsureReferenceGuard(context.Background())
 }
 
 // runVersionedMigrations applies incremental schema changes tracked by
@@ -410,6 +415,7 @@ func (s *Store) runVersionedMigrations() error {
 		// remove pre-existing duplicates first; this entry only records that
 		// the migration ran.
 		{24, "deduplicate dead_letters by record hash", "SELECT 1"},
+		{25, "coordinate current connection references", `CREATE TABLE IF NOT EXISTS connection_reference_guard (id INTEGER PRIMARY KEY, generation BIGINT NOT NULL DEFAULT 0)`},
 	}
 
 	for _, m := range migrations {
@@ -593,15 +599,23 @@ func firstLine(s string) string {
 // ── Pipeline definitions ─────────────────────────────────────────────
 
 func (s *Store) SavePipeline(ctx context.Context, row *storage.PipelineRow) error {
-	if row != nil && row.ID == "" {
-		if existing, err := s.GetPipeline(ctx, row.Name); err == nil && existing != nil {
-			row.ID = existing.ID
-		}
+	if row == nil {
+		return fmt.Errorf("pipeline row is required")
 	}
-	storage.EnsurePipelineID(row)
-	storage.NormalizePipelineLifecycle(row)
-	_, err := s.exec(ctx, s.dialect.PipelineUpsert(), row.ID, row.Name, row.SpecYAML, row.Status, row.DesiredState, row.ObservedState, row.Generation, row.RestoreError)
-	return err
+	return s.withReferenceGuard(ctx, func(txCtx context.Context) error {
+		if row.ID == "" {
+			if existing, err := s.GetPipeline(txCtx, row.Name); err == nil && existing != nil {
+				row.ID = existing.ID
+			}
+		}
+		storage.EnsurePipelineID(row)
+		storage.NormalizePipelineLifecycle(row)
+		if err := s.validateCurrentReferences(txCtx, row); err != nil {
+			return err
+		}
+		_, err := s.exec(txCtx, s.dialect.PipelineUpsert(), row.ID, row.Name, row.SpecYAML, row.Status, row.DesiredState, row.ObservedState, row.Generation, row.RestoreError)
+		return err
+	})
 }
 
 // SavePipelineWithVersion persists the current row and its historical version
@@ -650,59 +664,55 @@ func (s *Store) savePipelineWithVersion(ctx context.Context, row *storage.Pipeli
 }
 
 func (s *Store) savePipelineWithVersionOnce(ctx context.Context, row *storage.PipelineRow, specYAML string, resetCheckpoint bool) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin pipeline/version transaction: %w", err)
-	}
-	defer tx.Rollback()
+	return s.withReferenceGuard(ctx, func(txCtx context.Context) error {
+		if err := s.validateCurrentReferences(txCtx, row); err != nil {
+			return err
+		}
+		if err := s.injectFailure("pipeline.current"); err != nil {
+			return fmt.Errorf("save current pipeline: %w", err)
+		}
+		if _, err := s.exec(txCtx, s.dialect.PipelineUpsert(), row.ID, row.Name, row.SpecYAML, row.Status, row.DesiredState, row.ObservedState, row.Generation, row.RestoreError); err != nil {
+			return fmt.Errorf("save current pipeline: %w", err)
+		}
 
-	if err := s.injectFailure("pipeline.current"); err != nil {
-		return fmt.Errorf("save current pipeline: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, s.dialect.Bind(s.dialect.PipelineUpsert()), row.ID, row.Name, row.SpecYAML, row.Status, row.DesiredState, row.ObservedState, row.Generation, row.RestoreError); err != nil {
-		return fmt.Errorf("save current pipeline: %w", err)
-	}
-
-	if err := s.injectFailure("pipeline.version"); err != nil {
-		return fmt.Errorf("save pipeline version: %w", err)
-	}
-	var maxVer sql.NullInt64
-	if err := tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT MAX(version) FROM pipeline_versions WHERE pipeline=?`), row.ID).Scan(&maxVer); err != nil {
-		return fmt.Errorf("read next pipeline version: %w", err)
-	}
-	version := 1
-	if maxVer.Valid {
-		version = int(maxVer.Int64) + 1
-	}
-	if _, err := tx.ExecContext(ctx,
-		s.dialect.Bind(`INSERT INTO pipeline_versions (pipeline, version, spec_yaml) VALUES (?, ?, ?)`),
-		row.ID, version, specYAML); err != nil {
-		return fmt.Errorf("save pipeline version %d: %w", version, err)
-	}
-	if resetCheckpoint {
-		result, err := tx.ExecContext(ctx, s.dialect.Bind(
-			`UPDATE pipelines SET generation=generation+1, updated_at=CURRENT_TIMESTAMP WHERE id=? AND desired_state IN ('stopped','paused')`), row.ID)
-		if err != nil {
-			return fmt.Errorf("fence pipeline checkpoint reset: %w", err)
+		if err := s.injectFailure("pipeline.version"); err != nil {
+			return fmt.Errorf("save pipeline version: %w", err)
 		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("inspect pipeline checkpoint reset fence: %w", err)
+		var maxVer sql.NullInt64
+		if err := s.queryRow(txCtx, `SELECT MAX(version) FROM pipeline_versions WHERE pipeline=?`, row.ID).Scan(&maxVer); err != nil {
+			return fmt.Errorf("read next pipeline version: %w", err)
 		}
-		if affected == 0 {
-			return fmt.Errorf("%w: pipeline %s", storage.ErrPipelineNotQuiescent, row.ID)
+		version := 1
+		if maxVer.Valid {
+			version = int(maxVer.Int64) + 1
 		}
-		if err := s.injectFailure("checkpoint.delete"); err != nil {
-			return fmt.Errorf("reset pipeline checkpoint: %w", err)
+		if _, err := s.exec(txCtx,
+			`INSERT INTO pipeline_versions (pipeline, version, spec_yaml) VALUES (?, ?, ?)`,
+			row.ID, version, specYAML); err != nil {
+			return fmt.Errorf("save pipeline version %d: %w", version, err)
 		}
-		if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM checkpoints WHERE job_name=? OR job_name=?`), row.ID, row.Name); err != nil {
-			return fmt.Errorf("reset pipeline checkpoint: %w", err)
+		if resetCheckpoint {
+			result, err := s.exec(txCtx,
+				`UPDATE pipelines SET generation=generation+1, updated_at=CURRENT_TIMESTAMP WHERE id=? AND desired_state IN ('stopped','paused')`, row.ID)
+			if err != nil {
+				return fmt.Errorf("fence pipeline checkpoint reset: %w", err)
+			}
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("inspect pipeline checkpoint reset fence: %w", err)
+			}
+			if affected == 0 {
+				return fmt.Errorf("%w: pipeline %s", storage.ErrPipelineNotQuiescent, row.ID)
+			}
+			if err := s.injectFailure("checkpoint.delete"); err != nil {
+				return fmt.Errorf("reset pipeline checkpoint: %w", err)
+			}
+			if _, err := s.exec(txCtx, `DELETE FROM checkpoints WHERE job_name=? OR job_name=?`, row.ID, row.Name); err != nil {
+				return fmt.Errorf("reset pipeline checkpoint: %w", err)
+			}
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit pipeline/version transaction: %w", err)
-	}
-	return nil
+		return nil
+	})
 }
 
 func isUniqueVersionConflict(err error) bool {
@@ -766,44 +776,37 @@ func (s *Store) DeletePipeline(ctx context.Context, ref string) error {
 // would still consume the global ETL_DLQ_MAX_COUNT budget and stay invisible in
 // the UI (which lists DLQ per existing pipeline).
 func (s *Store) DeletePipelineWithCheckpoint(ctx context.Context, ref string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin pipeline delete transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	if err := s.injectFailure("pipeline.delete"); err != nil {
-		return fmt.Errorf("delete pipeline: %w", err)
-	}
-	var id, name string
-	err = tx.QueryRowContext(ctx,
-		s.dialect.Bind(`SELECT id, name FROM pipelines WHERE id=? OR name=? ORDER BY created_at LIMIT 1`),
-		ref, ref,
-	).Scan(&id, &name)
-	if err == sql.ErrNoRows {
-		id, name = ref, ref
-	} else if err != nil {
-		return fmt.Errorf("resolve pipeline for delete: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM pipeline_versions WHERE pipeline=? OR pipeline=?`), id, name); err != nil {
-		return fmt.Errorf("delete pipeline versions: %w", err)
-	}
-	if err := s.injectFailure("checkpoint.delete"); err != nil {
-		return fmt.Errorf("delete pipeline checkpoint: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM checkpoints WHERE job_name=? OR job_name=?`), id, name); err != nil {
-		return fmt.Errorf("delete pipeline checkpoint: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM dead_letters WHERE job_name=? OR job_name=?`), id, name); err != nil {
-		return fmt.Errorf("delete pipeline dead letters: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM pipelines WHERE id=? OR name=?`), ref, ref); err != nil {
-		return fmt.Errorf("delete pipeline row: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit pipeline delete transaction: %w", err)
-	}
-	return nil
+	return s.withReferenceGuard(ctx, func(txCtx context.Context) error {
+		if err := s.injectFailure("pipeline.delete"); err != nil {
+			return fmt.Errorf("delete pipeline: %w", err)
+		}
+		var id, name string
+		err := s.queryRow(txCtx,
+			`SELECT id, name FROM pipelines WHERE id=? OR name=? ORDER BY created_at LIMIT 1`,
+			ref, ref,
+		).Scan(&id, &name)
+		if err == sql.ErrNoRows {
+			id, name = ref, ref
+		} else if err != nil {
+			return fmt.Errorf("resolve pipeline for delete: %w", err)
+		}
+		if _, err := s.exec(txCtx, `DELETE FROM pipeline_versions WHERE pipeline=? OR pipeline=?`, id, name); err != nil {
+			return fmt.Errorf("delete pipeline versions: %w", err)
+		}
+		if err := s.injectFailure("checkpoint.delete"); err != nil {
+			return fmt.Errorf("delete pipeline checkpoint: %w", err)
+		}
+		if _, err := s.exec(txCtx, `DELETE FROM checkpoints WHERE job_name=? OR job_name=?`, id, name); err != nil {
+			return fmt.Errorf("delete pipeline checkpoint: %w", err)
+		}
+		if _, err := s.exec(txCtx, `DELETE FROM dead_letters WHERE job_name=? OR job_name=?`, id, name); err != nil {
+			return fmt.Errorf("delete pipeline dead letters: %w", err)
+		}
+		if _, err := s.exec(txCtx, `DELETE FROM pipelines WHERE id=? OR name=?`, ref, ref); err != nil {
+			return fmt.Errorf("delete pipeline row: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) UpdatePipelineStatus(ctx context.Context, ref string, status string) error {
@@ -2179,12 +2182,31 @@ func (s *Store) DeletePlugin(ctx context.Context, name string) error {
 // ── Connection catalog ───────────────────────────────────────────────
 
 func (s *Store) SaveConnection(ctx context.Context, c *storage.ConnectionEntry) error {
+	if c == nil {
+		return fmt.Errorf("connection is required")
+	}
 	cfg, err := json.Marshal(c.Config)
 	if err != nil {
 		return fmt.Errorf("marshal connection config: %w", err)
 	}
-	_, err = s.exec(ctx, s.dialect.ConnectionUpsert(), c.Name, c.Kind, c.Type, string(cfg), c.LastStatus, c.LastError, c.LastTestedAt)
-	return err
+	return s.withReferenceGuard(ctx, func(txCtx context.Context) error {
+		var oldKind, oldType string
+		err := s.queryRow(txCtx, "SELECT kind,type FROM connections WHERE name=?"+s.currentReadSuffix(), c.Name).Scan(&oldKind, &oldType)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if err == nil && (oldKind != c.Kind || oldType != c.Type) {
+			report, err := s.referenceReport(txCtx, c.Name)
+			if err != nil {
+				return err
+			}
+			if !report.Known || len(report.References) > 0 {
+				return referenceConflict("connection_in_use", "cannot change the kind or type of a referenced connection", report)
+			}
+		}
+		_, err = s.exec(txCtx, s.dialect.ConnectionUpsert(), c.Name, c.Kind, c.Type, string(cfg), c.LastStatus, c.LastError, c.LastTestedAt)
+		return err
+	})
 }
 
 func (s *Store) GetConnection(ctx context.Context, name string) (*storage.ConnectionEntry, error) {
@@ -2248,8 +2270,17 @@ func (s *Store) ListConnections(ctx context.Context) ([]*storage.ConnectionEntry
 }
 
 func (s *Store) DeleteConnection(ctx context.Context, name string) error {
-	_, err := s.exec(ctx, `DELETE FROM connections WHERE name=?`, name)
-	return err
+	return s.withReferenceGuard(ctx, func(txCtx context.Context) error {
+		report, err := s.referenceReport(txCtx, name)
+		if err != nil {
+			return err
+		}
+		if !report.Known || len(report.References) > 0 {
+			return referenceConflict("connection_in_use", "connection is referenced by current pipelines or unreadable saved specs", report)
+		}
+		_, err = s.exec(txCtx, `DELETE FROM connections WHERE name=?`, name)
+		return err
+	})
 }
 
 func (s *Store) UpdateConnectionHealth(ctx context.Context, name, status, lastError string, testedAt time.Time) error {

@@ -99,17 +99,7 @@ func (s *Server) resolveDAGConnections(ctx context.Context, spec *orchestrator.P
 }
 
 func connectionKindForNode(kind orchestrator.NodeKind) (string, bool) {
-	switch kind {
-	case orchestrator.KindSource:
-		return "source", true
-	case orchestrator.KindSink:
-		return "sink", true
-	case orchestrator.KindTransform, orchestrator.KindFanout, orchestrator.KindRouter, orchestrator.KindTap,
-		orchestrator.KindRateLimiter, orchestrator.KindEnricher, orchestrator.KindLookup:
-		return "transform", true
-	default:
-		return "", false
-	}
+	return storage.ConnectionKindForNodeKind(string(kind))
 }
 
 func (s *Server) resolveLinearEndpoint(ctx context.Context, kind string, typ *string, cfg *map[string]any, connection, connectionRef string) error {

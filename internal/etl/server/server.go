@@ -2018,6 +2018,9 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := s.specStore.SaveWithID(r.Context(), id, dagSpec.Name, string(yamlBytes), "created"); err != nil {
 				s.rollbackRuntimeSchedule(activation, runner)
+				if writeConnectionReferenceConflict(w, err) {
+					return
+				}
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist DAG pipeline: %v", err)})
 				return
@@ -2100,6 +2103,9 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "created"); err != nil {
 			s.rollbackRuntimeSchedule(activation, runner)
+			if writeConnectionReferenceConflict(w, err) {
+				return
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist pipeline: %v", err)})
 			return
@@ -2238,6 +2244,9 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := s.specStore.SaveWithIDAndCheckpointReset(r.Context(), id, dagSpec.Name, string(yamlBytes), "updated", req.ResetCheckpoint); err != nil {
 				s.rollbackRuntimeSchedule(activation, runner)
+				if writeConnectionReferenceConflict(w, err) {
+					return
+				}
 				if errors.Is(err, storage.ErrPipelineNotQuiescent) {
 					w.WriteHeader(http.StatusConflict)
 				} else {
@@ -2368,6 +2377,9 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.specStore.SaveWithIDAndCheckpointReset(r.Context(), id, spec.Name, string(yamlBytes), "updated", req.ResetCheckpoint); err != nil {
 			s.rollbackRuntimeSchedule(activation, runner)
+			if writeConnectionReferenceConflict(w, err) {
+				return
+			}
 			if errors.Is(err, storage.ErrPipelineNotQuiescent) {
 				w.WriteHeader(http.StatusConflict)
 			} else {
@@ -3258,6 +3270,9 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.specStore.SaveWithID(r.Context(), id, dagSpec.Name, string(yamlBytes), "imported"); err != nil {
 			s.rollbackRuntimeSchedule(activation, runner)
+			if writeConnectionReferenceConflict(w, err) {
+				return
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist imported DAG spec: %v", err)})
 			return
@@ -3339,6 +3354,9 @@ func (s *Server) handleSpecImport(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.specStore.SaveWithID(r.Context(), id, spec.Name, string(yamlBytes), "imported"); err != nil {
 			s.rollbackRuntimeSchedule(activation, runner)
+			if writeConnectionReferenceConflict(w, err) {
+				return
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("persist imported pipeline spec: %v", err)})
 			return

@@ -4,7 +4,7 @@
 | --- | --- | --- | --- |
 | 1/5 | EV-2 | done | Go 1.24.13 + 隔离 MySQL 8：3 个 targeted -race tests passed；1000 行字段对账通过；PR run 45652762125 / integration job 139341305228 success。 |
 | 2/5 | P5-H1 | done | API/Go race、9 个前端 contracts、真实容器 14/14：见 h1-evidence.md。 |
-| 3/5 | PR-0-C1 | todo | 待领取。 |
+| 3/5 | PR-0-C1 | done | 三 backend race/conformance/backup、完整 server -race、真实容器 9/9；见 c1-evidence.md。 |
 | 4/5 | UI-E-R1 | todo | 用户已授权技术修复；外部研究继续缺参与者。 |
 | 5/5 | GA-C1 | todo | 依赖最终运行时代码冻结。 |
 
@@ -41,3 +41,19 @@ Residual/follow-up: PR-0-C1；用户研究不在本增量。
 每轮记录 pass/fail/skip/block 与 exact command/run。
 没有目标用户研究记录时，UI-E 整体不置 delivered。
 到 Round 5/5 后只完成当轮安全收口，后续需要新的用户指令。
+
+## Round 3 Claim
+
+Round: 3/5
+Roadmap item: PR-0-C1
+Profile/path: standalone + shared SQL metadata (SQLite/MySQL/PostgreSQL)
+Objective: 删除连接不会破坏当前持久化管道引用，UI 可列出真实影响
+Eligibility: EV-2/P5-H1 delivered；用户已授权全部 P1 技术修复；无外部依赖缺口
+Scope: storage reference extraction/cipher policy/SQL transaction guard/migrations、spec adapters、connection API/UI、三 backend tests 与对应 API/runbook evidence
+Non-goals: 连接版本系统、自动重写管道、历史版本引用保护、用户研究、checkpoint/DLQ 语义改造
+Data semantics: 共享 SQL coordination row 序列化 current-spec write、connection mutation/delete；cipher 解密仅在进程内；当前 spec 为事实，历史版本不算引用。引用解除后才可删；未知/不可解密的 legacy spec 阻断删除并定位。备份 fidelity 原样恢复 legacy rows，不制造新版本。
+Rollback: additive guard table 保留；不删除 pipeline/checkpoint；独立回退 API/UI 后可撤回 guard。
+Acceptance: 1) source/transform/sink/DLQ/DAG current 引用可查询；2) 删除/类型修改冲突 409 包含稳定 pipeline/node IDs；3) API/YAML/current-spec 与删除并发不留可运行的悬空引用；4) 三 backend race/conformance、加密/restart/backup 和真实 UI evidence
+Evidence: [c1-evidence.md](./c1-evidence.md)；三 backend storage/sqlstore/backup -race 与完整 server -race exit 0；真实 API/YAML/UI 9/9 exit 0；typecheck/lint/build、OpenAPI YAML check、diff check exit 0。
+Result: delivered
+Residual/follow-up: UI-E-R1

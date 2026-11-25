@@ -1,7 +1,7 @@
 # OpenETL-Go Roadmap
 
 > 当前执行快照（2026-11-26，代码基线 `e28a740` / v0.2.12-beta.21）：
-> EV-2、P5-H1 已交付；下一 eligible 是 PR-0-C1。
+> EV-2、P5-H1、PR-0-C1 已交付；下一 eligible 是 UI-E-R1。
 > 用户已授权本轮评估的全部 P1 技术修复，新增四个有界后续，
 > 按依赖排为健康事实、连接引用保护、恢复事实契约、最终候选资产认证。
 > UI-E 的外部用户研究继续 `blocked_external`，用户明确要求先完成技术修复。
@@ -33,7 +33,7 @@
 | --- | --- | --- | --- |
 | 1/5 | EV-2 | `delivered` | MySQL smoke 验证提交后的实际记录；PR run 45652762125 的 integration job 139341305228 success。最终聚合门禁归 GA-C1。 |
 | 2/5 | P5-H1（P5/UI-F 后续） | `delivered` | API/Go race 与真实容器 UI 14/14；默认熔断冷却后恢复、DLQ unknown、restore_failed 四入口一致。见 [H1 evidence](./iterations/P1-technical-closure-20261126/h1-evidence.md)。 |
-| 3/5 | PR-0-C1（PR-0/UI-E.5 后续） | `queued` | 服务端列出 connection 的线性/DAG 引用，拒绝破坏引用的删除，并覆盖并发创建/更新/删除和重启。 |
+| 3/5 | PR-0-C1（PR-0/UI-E.5 后续） | `delivered` | 共享 SQL 事务保护当前引用；三 backend 竞争/备份/加密重启与真实 UI 9/9。见 [C1 evidence](./iterations/P1-technical-closure-20261126/c1-evidence.md)。 |
 | 4/5 | UI-E-R1（UI-E.3 已授权契约后续） | `queued` | 故障与 replay 结果具备可查询的持久化身份，深链在刷新/重启后恢复上下文；三 backend、备份/恢复与故障路径有证据。 |
 | 5/5 | GA-C1（GA 阻断项 #1 后续） | `queued` | 候选资产先构建、再认证、再发布同一资产；提交/镜像/二进制与实际测试结果绑定，旧证据看板同步。 |
 

@@ -26,6 +26,7 @@ restore_failed 进入现有可行动入口，open breaker 与 unreadable backlog
 删除和 current-spec 写入在存储一致性边界内校验，覆盖 API、YAML 导入/hot reload、restore 和多进程写入。
 无法读取/解析引用时阻断删除并给出可定位错误。
 兼容原有未引用连接删除与已有 inline overrides。
+UI 删除确认读取 references API；允许 shared ConfirmDialog 增加可选 details 与 confirmDisabled，默认调用行为不变。加载、查询失败、未知或仍被引用时不提供可执行删除；最终 DELETE 仍原子重验。
 回滚只读影响 API/UI，保护逻辑按独立增量撤回；当前定义与 checkpoint 不删除。
 
 ## UI-E-R1

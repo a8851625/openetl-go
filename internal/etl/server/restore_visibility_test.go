@@ -155,14 +155,12 @@ func TestRestoreFailuresPersistAndRemainVisible(t *testing.T) {
 	defer store.Close()
 	fixtures := restoreFailureFixtures(dir)
 	for _, fixture := range fixtures {
-		if err := store.SavePipeline(context.Background(), &storage.PipelineRow{
+		seedLegacyMetadataFixture(t, store, &storage.PipelineRow{
 			ID:       fixture.id,
 			Name:     fixture.name,
 			SpecYAML: fixture.spec,
 			Status:   "paused",
-		}); err != nil {
-			t.Fatalf("save %s: %v", fixture.name, err)
-		}
+		})
 	}
 
 	s := newRestoreTestServer(t, store, dir)
@@ -295,8 +293,17 @@ sink:
 `
 
 	first := newRestoreTestServer(t, store, dir)
-	if err := first.specStore.SaveWithID(ctx, id, name, spec, "paused"); err != nil {
-		t.Fatalf("save encrypted spec: %v", err)
+	fixtureCipher, err := storage.NewSpecCipherFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := fixtureCipher.Encrypt(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedLegacyMetadataFixture(t, store, &storage.PipelineRow{ID: id, Name: name, SpecYAML: stored, Status: "paused"})
+	if _, err := store.SavePipelineVersion(ctx, id, stored); err != nil {
+		t.Fatal(err)
 	}
 	rawBefore, err := store.GetPipeline(ctx, id)
 	if err != nil || rawBefore == nil || !strings.HasPrefix(rawBefore.SpecYAML, "enc:v1:") {

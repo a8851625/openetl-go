@@ -48,6 +48,7 @@ func mysqlTableWiper(t *testing.T, s *mysql.Store) func() {
 		`DELETE FROM pipeline_versions`,
 		`DELETE FROM workers`,
 		`DELETE FROM plugins`,
+		`DELETE FROM connections`,
 		`DELETE FROM settings`,
 		`DELETE FROM task_assignments`,
 	} {
@@ -91,6 +92,7 @@ func pgTableWiper(t *testing.T, s *postgres.Store) func() {
 		`DELETE FROM pipeline_versions`,
 		`DELETE FROM workers`,
 		`DELETE FROM plugins`,
+		`DELETE FROM connections`,
 		`DELETE FROM settings`,
 		`DELETE FROM task_assignments`,
 	} {

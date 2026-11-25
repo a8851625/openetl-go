@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Saved connection deletion and kind/type changes now protect references in current persisted linear/DAG specs under a shared SQL transaction guard. The reference API and deletion dialog show stable affected pipeline/node IDs; encrypted or unreadable legacy specs block deletion. Verified across SQLite/MySQL/PostgreSQL, backup/restore, concurrent spec mutation and a nine-check real-container API/YAML/UI run.
+
 - Running health now follows the server thresholds and current signals: an open write circuit, an unreadable DLQ count, and failed spec restoration appear consistently across the existing UI. Circuit cooldown precedes the batch commit deadline, so the default 30-second cooldown can recover without exhausting it. Verified with Go race tests, nine frontend contracts and 14 real-container API/UI checks.
 
 - **DAG designer: the canvas could certify an unrunnable graph.** `validateAndCreate` only asked

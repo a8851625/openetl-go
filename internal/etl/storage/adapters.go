@@ -264,6 +264,7 @@ func NewPipelineSpecStore(s Storage, ciphers ...*SpecCipher) *PipelineSpecStore 
 	if len(ciphers) > 0 {
 		cipher = ciphers[0]
 	}
+	configureReferenceCipher(s, cipher)
 	return &PipelineSpecStore{store: s, cipher: cipher}
 }
 
@@ -274,6 +275,7 @@ func (p *PipelineSpecStore) WithCipher(cipher *SpecCipher) *PipelineSpecStore {
 	if p == nil {
 		return nil
 	}
+	configureReferenceCipher(p.store, cipher)
 	return &PipelineSpecStore{store: p.store, cipher: cipher}
 }
 
@@ -580,6 +582,7 @@ type SecretFieldStore struct {
 // encryption. A nil or disabled cipher keeps development/legacy plaintext
 // writes, but encrypted rows still fail closed on read without a matching key.
 func NewSecretFieldStore(inner Storage, cipher *SpecCipher) Storage {
+	configureReferenceCipher(inner, cipher)
 	if inner == nil {
 		return nil
 	}
@@ -587,6 +590,22 @@ func NewSecretFieldStore(inner Storage, cipher *SpecCipher) Storage {
 		return inner
 	}
 	return &SecretFieldStore{Storage: inner, cipher: cipher}
+}
+
+func configureReferenceCipher(store Storage, cipher *SpecCipher) {
+	if store == nil || cipher == nil {
+		return
+	}
+	if guard, ok := UnwrapStorage(store).(interface{ ConfigureReferenceCipher(*SpecCipher) }); ok {
+		guard.ConfigureReferenceCipher(cipher)
+	}
+}
+
+func (s *SecretFieldStore) ConnectionReferences(ctx context.Context, name string) (*ConnectionReferenceReport, error) {
+	if guard, ok := s.Storage.(ConnectionReferenceStore); ok {
+		return guard.ConnectionReferences(ctx, name)
+	}
+	return nil, fmt.Errorf("connection reference protection is unavailable for this storage backend")
 }
 
 // WithSecretFieldResolver attaches a descriptor-backed secret field resolver.

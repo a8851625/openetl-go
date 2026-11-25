@@ -31,6 +31,33 @@ components:
       in: header
       name: X-API-Token
   schemas:
+    ConnectionReferenceReport:
+      type: object
+      required: [connection_name, known, references, unreadable_specs]
+      properties:
+        connection_name: { type: string }
+        known: { type: boolean, description: False if any current saved spec cannot be decoded. }
+        references:
+          type: array
+          items:
+            type: object
+            required: [connection_name, pipeline_id, pipeline_name, endpoint, kind]
+            properties:
+              connection_name: { type: string }
+              pipeline_id: { type: string }
+              pipeline_name: { type: string }
+              endpoint: { type: string }
+              node_id: { type: string }
+              kind: { type: string, enum: [source, transform, sink] }
+              type: { type: string }
+        unreadable_specs:
+          type: array
+          items:
+            type: object
+            properties:
+              pipeline_id: { type: string }
+              pipeline_name: { type: string }
+              code: { type: string, enum: [spec_unreadable] }
     OutputCompactResult:
       type: object
       properties:
@@ -917,6 +944,7 @@ paths:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Saved connection }
+        '409': { description: Kind/type change would break current references, or saved references are unreadable }
     delete:
       tags: [Connections]
       summary: Delete a saved connection
@@ -924,6 +952,22 @@ paths:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Deleted }
+        '409': { description: Connection is used by current specs, or references are unknown; response lists references and unreadable_specs }
+
+  /connections/{name}/references:
+    get:
+      tags: [Connections]
+      summary: Inspect references in current persisted linear and DAG specs
+      description: This is a point-in-time preview. DELETE and current spec writes recheck under the same SQL transaction guard. Historical versions are excluded. No connector config or secrets are returned.
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Current references, including explicit unknown saved specs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectionReferenceReport' }
+        '503': { description: Backend does not support reference protection }
 
   /connections/{name}/test:
     post:

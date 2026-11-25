@@ -31,6 +31,20 @@ Thresholds: `ETL_HEALTH_CHECKPOINT_STALE_SEC` (300), `ETL_HEALTH_CDC_LAG_MS` (60
 
 ## 1. Backup
 
+### 1.0 Connection deletion conflicts
+
+Inspect `GET /api/v2/connections/{name}/references` before deleting a saved
+connection. A 409 response lists current pipeline IDs and endpoint/node positions.
+Update those current specs to another connection or complete inline config, then
+repeat the check. The server rechecks atomically at deletion; a prior empty
+preview is not a deletion guarantee. Old historical versions do not block removal.
+
+When `known` is false, repair the listed unreadable spec or provide its original
+decryption key. Do not treat an unknown reference set as empty. Backup restore
+preserves legacy metadata, so the same conflict can remain after restoration.
+Compatible host/credentials/config updates are supported while a connection is
+referenced; changing its kind/type requires removing the references first.
+
 ### 1.1 Portable control-plane backup (all SQL backends)
 
 Stop every OpenETL process that writes this metadata database and its Redis state,
