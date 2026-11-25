@@ -384,6 +384,7 @@ func allowedEvidenceDescendantPath(path string) bool {
 	case "internal/etl/server/evidence/connector-evidence.json",
 		"docs/ROADMAP.zh.md",
 		"docs/connector-certification.md",
+		"docs/iterations/README.md",
 		// Path evidence regeneration (IT-1/T1.5) and release-cut bookkeeping
 		// are allowed after a certification run; no runtime, script, workflow,
 		// or connector code is allowed through this path.

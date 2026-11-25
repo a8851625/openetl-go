@@ -129,3 +129,10 @@ receipt to the digest returned by push (Podman digestfile / Docker push output),
 pull and verify that immutable reference, and rerun local promotion. Scope stays
 in release_candidate.py/tests and this evidence record; no registry publication
 outside the task-owned loopback service.
+
+Final closeout also found the iteration index still reporting Round 2/5. Permit
+only `docs/iterations/README.md` as an additional evidence bookkeeping path,
+exercise it in the existing ancestor-binding regression, and keep runtime,
+script and workflow changes rejected. Refresh the index alongside roadmap/task
+status after the full current candidate and PR aggregate pass. This remains
+Round 5/5 and does not add a roadmap increment or expand certification scope.

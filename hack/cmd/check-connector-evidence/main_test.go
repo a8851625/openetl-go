@@ -16,6 +16,7 @@ func TestCheckCommitBindingAllowsEvidenceOnlyDescendant(t *testing.T) {
 
 	writeEvidenceTestFile(t, root, "internal/etl/server/evidence/connector-evidence.json", "refreshed")
 	writeEvidenceTestFile(t, root, "docs/ROADMAP.zh.md", "refreshed")
+	writeEvidenceTestFile(t, root, "docs/iterations/README.md", "refreshed iteration status")
 	commitEvidenceTest(t, root, "refresh evidence")
 	current := mustGitOutput(t, root, "rev-parse", "HEAD")
 
