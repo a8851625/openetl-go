@@ -88,3 +88,28 @@ the release executable omitted the distribution's runtime config (all seven
 server-based paths failed startup). Extract that config from the same hashed
 platform archive next to the executable; never substitute checkout config or
 compile a different binary. Acceptance remains the full seven-path candidate run.
+
+The dcd5089 candidate run passed both primary paths, all seven tagged files and
+the three P1 browser probes. Its S3 job was blocked before execution: Quay returned
+401 for the pinned MinIO server image and Docker Hub also denied the same tag.
+The public source commits are available and match the cached fixture versions:
+MinIO 3535197f993dea840dcb96302ba4d883dc619097 and mc
+11034f9de1e9f993c36fbad961f76f876a753328. Add a test-only source-built fixture
+fallback in hack/ensure-minio-fixture.sh and hack/Dockerfile.minio-fixture,
+with pinned inputs, retained licenses and source-build labels; _candidate.yml
+uses it only for the existing S3 case. It does not build or retag the application
+candidate. Acceptance: forced fallback builds from those exact inputs, the full
+S3 failure/replay script executes on the preserved candidate, and the final
+complete candidate/PR gates pass. No new connector or certification claim.
+
+Loading the dcd5089 Docker 29 archive on Podman exposed another concrete
+identity prerequisite: Docker's inspect Id is the OCI index digest 5d12f718…,
+while the saved configuration digest is 8a2afbac… (the Podman image Id).
+Capture the actual configuration hash from the saved archive as the portable
+image identity, retain the provider execution ID separately, preserve the saved
+reference for load, and compare configuration plus executable after registry
+pull. Config contains the rootfs diff IDs, so it binds the filesystem as well.
+Allowed files remain the candidate helper/tests, workflow receipt consumers and
+candidate evidence docs. Do not change EV-3 resource metric semantics. Acceptance:
+real Docker→Podman load/promotion, wrong configuration rejection, and full current
+candidate/PR gates; no rewritten legacy source/date/hash claims.

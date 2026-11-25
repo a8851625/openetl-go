@@ -114,7 +114,7 @@ jobs:
             hack/e2e-clickhouse.sh|hack/e2e-kafka-multitable-clickhouse.sh)
               docker pull docker.io/clickhouse/clickhouse-server:24.3-alpine ;;
             hack/e2e-s3-minio.sh)
-              docker pull quay.io/minio/minio:RELEASE.2024-07-16T23-46-41Z ;;
+              bash hack/ensure-minio-fixture.sh ;;
           esac
       - name: Execute mandatory case on the preserved candidate
         env:

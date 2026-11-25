@@ -11,6 +11,13 @@ versions, binary/archive SHA256 values and the actual image config ID. The image
 `/app/openetl-go` hash must equal its Linux archive executable. Reports live outside
 the image, so adding a digest to a report cannot require another image build.
 
+The ledger's image ID is the SHA256 of the configuration saved in the image
+archive. Docker 29 can expose an OCI index as `inspect.Id`; that provider ID and
+the saved reference are retained separately for execution. Load and registry
+pull compare the actual configuration bytes and executable. The configuration
+also binds all uncompressed rootfs layer digests. Receipts retain provider IDs
+and immutable registry digests, including across Docker/Podman transport changes.
+
 The saved `checksums.txt` is also hashed and checked against every preserved
 archive. Tagged JSON and browser/API probe artifacts retain their own hashes;
 changing either the reported result or its raw evidence blocks promotion.
@@ -25,6 +32,13 @@ isolated at the candidate commit.
 
 Subprocess tests extract the executable and its runtime configuration from the
 same preserved archive; no configuration is borrowed from the source checkout.
+
+For the S3 case, `hack/ensure-minio-fixture.sh` validates the MinIO/mc source
+commits in a cached or pulled 2024 fixture. When public image access is unavailable,
+it builds those exact public commits with Go 1.24.13 using
+`hack/Dockerfile.minio-fixture`. Licenses and source-build labels remain in the
+fixture; its actual image identity is recorded with the case. This dependency
+build leaves the preserved application candidate unchanged.
 
 The candidate ledger, command logs, per-case execution windows, fixture image
 identities, connector manifest and tagged JSON artifacts are retained as CI

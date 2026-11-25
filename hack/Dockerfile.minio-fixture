@@ -1,0 +1,29 @@
+# Test dependency only. These commits match the formerly public 2024 images.
+FROM docker.io/library/golang:1.24.13-alpine AS build
+RUN apk add --no-cache git ca-certificates && mkdir -p /out
+ENV CGO_ENABLED=0 GOTOOLCHAIN=go1.24.13
+WORKDIR /src
+RUN git init minio && cd minio && \
+    git remote add origin https://github.com/minio/minio.git && \
+    git fetch --depth=1 origin 3535197f993dea840dcb96302ba4d883dc619097 && \
+    git checkout --detach FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = 3535197f993dea840dcb96302ba4d883dc619097
+RUN cd minio && go build -trimpath -ldflags '-s -w -X github.com/minio/minio/cmd.Version=2024-07-16T23:46:41Z -X github.com/minio/minio/cmd.ReleaseTag=OPENETL-FIXTURE.2024-07-16T23-46-41Z -X github.com/minio/minio/cmd.CommitID=3535197f993dea840dcb96302ba4d883dc619097 -X github.com/minio/minio/cmd.ShortCommitID=3535197f993d -X github.com/minio/minio/cmd.CopyrightYear=2024' -o /out/minio .
+RUN git init mc && cd mc && \
+    git remote add origin https://github.com/minio/mc.git && \
+    git fetch --depth=1 origin 11034f9de1e9f993c36fbad961f76f876a753328 && \
+    git checkout --detach FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = 11034f9de1e9f993c36fbad961f76f876a753328
+RUN cd mc && go build -trimpath -ldflags '-s -w -X github.com/minio/mc/cmd.Version=2024-07-15T17:46:06Z -X github.com/minio/mc/cmd.ReleaseTag=OPENETL-FIXTURE.2024-07-15T17-46-06Z -X github.com/minio/mc/cmd.CommitID=11034f9de1e9f993c36fbad961f76f876a753328 -X github.com/minio/mc/cmd.ShortCommitID=11034f9de1e9 -X github.com/minio/mc/cmd.CopyrightYear=2024' -o /out/mc .
+
+FROM docker.io/library/alpine:3.19
+RUN apk add --no-cache ca-certificates curl
+LABEL io.openetl.test-fixture="minio-source-build" \
+      io.openetl.minio.commit="3535197f993dea840dcb96302ba4d883dc619097" \
+      io.openetl.mc.commit="11034f9de1e9f993c36fbad961f76f876a753328"
+COPY --from=build /out/minio /out/mc /usr/bin/
+COPY --from=build /src/minio/LICENSE /licenses/minio/LICENSE
+COPY --from=build /src/mc/LICENSE /licenses/mc/LICENSE
+EXPOSE 9000 9001
+ENTRYPOINT ["/usr/bin/minio"]
+CMD ["server", "/data"]

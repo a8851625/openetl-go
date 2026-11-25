@@ -49,14 +49,22 @@ class CandidateGateTest(unittest.TestCase):
                 archives.append({"path": name, "sha256": rc.sha(self.base / name)})
                 binaries.append({"variant": variant, "goos": goos, "goarch": arch,
                                  "archive": name, "member": member, "sha256": hashlib.sha256(body).hexdigest()})
-        (self.base / "candidate-image.tar").write_bytes(b"isolated image fixture")
+        config = json.dumps({"architecture": "amd64", "config": {"Labels": {
+            "org.opencontainers.image.revision": "a" * 40}}, "rootfs": {"type": "layers", "diff_ids": []}}).encode()
+        with tarfile.open(self.base / "candidate-image.tar", "w") as t:
+            for filename, content in [("config.json", config),
+                                      ("manifest.json", json.dumps([{"Config": "config.json", "Layers": []}]).encode())]:
+                info = tarfile.TarInfo(filename)
+                info.size = len(content)
+                t.addfile(info, io.BytesIO(content))
         (self.base / "checksums.txt").write_text("".join(a["sha256"] + "  " + a["path"] + "\n" for a in archives))
         selected = next(b for b in binaries if (b["variant"], b["goos"], b["goarch"]) == ("default", "linux", "amd64"))
         build_end = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=5)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         self.data = {"format": "openetl-candidate/v1", "source": {"commit": "a" * 40, "dirty": False},
                      "build": {"finished_at": build_end}, "binaries": binaries, "archives": archives,
                      "checksum_file": {"path": "checksums.txt", "sha256": rc.sha(self.base / "checksums.txt")},
-                     "image": {"id": "sha256:" + "b" * 64, "architecture": "amd64", "archive": "candidate-image.tar",
+                     "image": {"id": "sha256:" + hashlib.sha256(config).hexdigest(), "engine_id": "sha256:" + "b" * 64,
+                               "architecture": "amd64", "archive": "candidate-image.tar",
                                "archive_sha256": rc.sha(self.base / "candidate-image.tar"), "binary_sha256": selected["sha256"]}}
         rc.save(self.base / "candidate.json", self.data)
         (self.base / "connector-evidence.json").write_text("{}")
@@ -73,6 +81,7 @@ class CandidateGateTest(unittest.TestCase):
                 (folder / "probe").mkdir()
                 (folder / "probe/result.json").write_text("{}")
             value = {"name": name, "source_commit": "a" * 40, "image_id": self.data["image"]["id"],
+                     "execution_image_id": self.data["image"]["engine_id"], "execution_config_id": self.data["image"]["id"],
                      "binary_sha256": selected["sha256"], "started_at": rc.utc(), "finished_at": rc.utc(),
                      "result": "passed", "exit_code": 0, "log_sha256": rc.sha(folder / "command.log"),
                      "artifact_sha256": rc.case_artifact_hashes(folder, name)}
@@ -159,6 +168,19 @@ class CandidateGateTest(unittest.TestCase):
                 rc.promote(self.base, "unused.example/fixture:v1", release_tag="v1")
             self.assertEqual(command.call_count, 1)
             self.assertEqual(command.call_args.args[0][:2], ["git", "rev-parse"])
+
+    def test_provider_index_is_distinct_from_portable_configuration(self):
+        observed = rc.image_archive_config(self.base / "candidate-image.tar")
+        self.assertEqual(observed["id"], self.data["image"]["id"])
+        self.assertNotEqual(observed["id"], self.data["image"]["engine_id"])
+
+    def test_registry_configuration_change_is_rejected(self):
+        with patch.object(rc, "load", return_value={"id": self.data["image"]["engine_id"]}), \
+                patch.object(rc, "command") as command, \
+                patch.object(rc, "config_of_image", return_value={"id": "sha256:" + "0" * 64}):
+            command.return_value.stdout = json.dumps([{"Id": "sha256:" + "c" * 64}])
+            with self.assertRaisesRegex(ValueError, "changed candidate image bytes"):
+                rc.promote(self.base, "unused.example/fixture:v1")
 
     def test_expired_certificate_does_not_refresh_itself(self):
         self.report["finished_at"] = "2025-01-01T00:00:00Z"

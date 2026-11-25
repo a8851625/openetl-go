@@ -14,6 +14,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import tempfile
 import uuid
 import zipfile
 
@@ -96,6 +97,39 @@ def inspect_image(image):
     info = json.loads(body)[0]
     return {"id": digest(info["Id"]), "architecture": info["Architecture"],
             "labels": info.get("Config", {}).get("Labels") or {}}
+
+
+def save_image(reference, path):
+    args = [cli(), "save", "-o", str(path)]
+    if Path(cli()).name == "podman":
+        args += ["--format", "docker-archive"]
+    command([*args, reference])
+
+
+def image_archive_config(path):
+    # Docker 29's inspect Id can name an OCI index, whereas Podman's Id names
+    # the configuration. The preserved configuration is portable and includes
+    # rootfs diff IDs, binding every uncompressed filesystem layer.
+    with tarfile.open(path, "r:*") as archive:
+        manifest = json.load(archive.extractfile("manifest.json"))
+        if len(manifest) != 1:
+            raise ValueError("candidate image archive must contain one execution image")
+        name = manifest[0]["Config"]
+        safe_members([name])
+        member = archive.getmember(name)
+        if not member.isfile():
+            raise ValueError("candidate image config is not a regular file")
+        body = archive.extractfile(member).read()
+    config = json.loads(body)
+    return {"id": "sha256:" + hashlib.sha256(body).hexdigest(),
+            "architecture": config["architecture"], "labels": config.get("config", {}).get("Labels") or {}}
+
+
+def config_of_image(reference):
+    with tempfile.TemporaryDirectory(prefix="openetl-image-config-") as folder:
+        path = Path(folder) / "image.tar"
+        save_image(reference, path)
+        return image_archive_config(path)
 
 
 def input_hash(root=ROOT):
@@ -223,6 +257,10 @@ def candidate(base, *, files=True):
             raise ValueError("checksum file does not match the preserved archives")
         if sha(owned_path(base, data["image"]["archive"])) != data["image"]["archive_sha256"]:
             raise ValueError("image archive hash changed")
+        config = image_archive_config(owned_path(base, data["image"]["archive"]))
+        if config["id"] != data["image"]["id"] or config["architecture"] != data["image"]["architecture"] \
+                or config["labels"].get("org.opencontainers.image.revision") != data["source"]["commit"]:
+            raise ValueError("saved image configuration/source identity mismatch")
         for binary in data["binaries"]:
             body = archive_binary(owned_path(base, binary["archive"]), binary["member"])
             if hashlib.sha256(body).hexdigest() != binary["sha256"] \
@@ -244,11 +282,22 @@ def runtime_binary(base, data, *, image=False):
 
 def load(base, data):
     command([cli(), "load", "-i", str(owned_path(base, data["image"]["archive"]))])
-    info = inspect_image(data["image"]["id"])
-    if info["id"] != data["image"]["id"] or info["architecture"] != data["image"]["architecture"] \
+    info = None
+    for reference in (data["image"].get("reference"), data["image"]["id"], data["image"].get("engine_id")):
+        if reference:
+            try:
+                info = inspect_image(reference)
+                break
+            except RuntimeError:
+                pass
+    if info is None:
+        raise ValueError("saved candidate image cannot be resolved after load")
+    if info["architecture"] != data["image"]["architecture"] \
             or info["labels"].get("org.opencontainers.image.revision") != data["source"]["commit"]:
         raise ValueError("loaded image source/identity mismatch")
-    r = command([cli(), "run", "--rm", "--entrypoint", "sha256sum", data["image"]["id"],
+    if config_of_image(info["id"])["id"] != data["image"]["id"]:
+        raise ValueError("loaded image configuration hash mismatch")
+    r = command([cli(), "run", "--rm", "--entrypoint", "sha256sum", info["id"],
                  data["image"]["binary_path"]])
     if r.stdout.split()[0] != data["image"]["binary_sha256"]:
         raise ValueError("image executable hash mismatch")
@@ -311,10 +360,9 @@ def build(base, snapshot, arch):
     image_binary = next(b for b in binaries if (b["variant"], b["goos"], b["goarch"]) == ("default", "linux", arch))
     image.update({"archive": "candidate-image.tar", "binary_path": "/app/openetl-go",
                   "binary_sha256": image_binary["sha256"]})
-    save_args = [cli(), "save", "-o", str(base / image["archive"])]
-    if Path(cli()).name == "podman":
-        save_args += ["--format", "docker-archive"]
-    command([*save_args, image["id"]])
+    image["engine_id"], image["reference"] = image["id"], image_record["name"]
+    save_image(image["reference"], base / image["archive"])
+    image["id"] = image_archive_config(base / image["archive"])["id"]
     image["archive_sha256"] = sha(base / image["archive"])
     data = {"format": "openetl-candidate/v1", "source": {"commit": revision, "dirty": False, "input_sha256": frozen},
             "version": metadata["version"], "build": {"started_at": started, "finished_at": utc(),
@@ -344,12 +392,12 @@ def case_artifact_hashes(folder, name):
     return {str(p.relative_to(folder)): sha(p) for p in sorted(paths)}
 
 
-def test_env(base, data):
+def test_env(base, data, execution_image=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith("ETL_")}
     for key in ("MYSQL_DSN", "POSTGRES_DSN", "MYSQL_HOST", "PGHOST", "POSTGRES_HOST"):
         env.pop(key, None)
     binary, expected = runtime_binary(base, data)
-    env.update({"IMAGE": data["image"]["id"], "E2E_SKIP_BUILD": "1",
+    env.update({"IMAGE": execution_image or data["image"]["id"], "E2E_SKIP_BUILD": "1",
                 "OPENETL_IMAGE_BINARY": data["image"]["binary_path"],
                 "OPENETL_BIN": str(binary), "E2E_EXPECTED_BINARY_SHA256": expected,
                 "E2E_CANDIDATE_REQUIRED": "1", "TESTCONTAINERS_RYUK_DISABLED": "true",
@@ -373,8 +421,8 @@ def run_case(base, name):
     if command(["git", "rev-parse", "HEAD"]).stdout.strip() != data["source"]["commit"] \
             or input_hash() != data["source"]["input_sha256"]:
         raise ValueError("test source differs from the candidate's frozen inputs")
-    load(base, data)
-    env, expected = test_env(base, data)
+    loaded = load(base, data)
+    env, expected = test_env(base, data, loaded["id"])
     folder = case_dir(base, name)
     if folder.exists():
         raise ValueError("case output already exists; preserve it and use a new run directory")
@@ -391,10 +439,10 @@ def run_case(base, name):
                     "./internal/etl/e2e/...", "-e2e.strict", "-v"]
         elif name in P1:
             args = [sys.executable, str(source / P1[name]), "--cli", cli(),
-                    "--image", data["image"]["id"], "--out", str(folder / "probe")]
+                    "--image", loaded["id"], "--out", str(folder / "probe")]
         else:
             args = [sys.executable, str(source / "hack/candidate_readiness_e2e.py"),
-                    "--cli", cli(), "--image", data["image"]["id"], "--out", str(folder / "probe"),
+                    "--cli", cli(), "--image", loaded["id"], "--out", str(folder / "probe"),
                     "--manifest", str(Path(base) / "connector-evidence.json")]
         completed = command(args, env=env, log=folder / "command.log", cwd=source, check=False)
         code = completed.returncode
@@ -416,9 +464,9 @@ def run_case(base, name):
             probe = json.loads((folder / "probe/result.json").read_text())
             if probe["result"] != "passed" or not probe["checks"] \
                     or any(c["result"] != "passed" for c in probe["checks"]) \
-                    or digest(probe["image_id"]) != data["image"]["id"]:
+                    or digest(probe["image_id"]) != loaded["id"]:
                 raise ValueError("browser/readiness evidence did not certify this image")
-        if inspect_image(data["image"]["id"])["id"] != data["image"]["id"]:
+        if config_of_image(loaded["id"])["id"] != data["image"]["id"]:
             raise ValueError("candidate image changed during certification")
         candidate(base)
         result = "passed"
@@ -429,6 +477,7 @@ def run_case(base, name):
         # path evidence outside it. User checkouts are never reset or cleaned.
         command(["git", "worktree", "remove", "--force", str(source)], check=False)
     report = {"name": name, "source_commit": data["source"]["commit"], "image_id": data["image"]["id"],
+              "execution_image_id": loaded["id"], "execution_config_id": data["image"]["id"],
               "binary_sha256": expected if name == "tagged" else data["image"]["binary_sha256"],
               "started_at": started, "finished_at": utc(),
               "result": result, "exit_code": code, "error": error,
@@ -448,8 +497,10 @@ def reports(base, names):
     for name in names:
         folder = case_dir(base, name)
         value = json.loads((folder / "result.json").read_text())
+        digest(value.get("execution_image_id", ""))
         if value["name"] != name or value["source_commit"] != data["source"]["commit"] \
                 or value["image_id"] != data["image"]["id"] or value["result"] != "passed" \
+                or value.get("execution_config_id") != data["image"]["id"] \
                 or value["binary_sha256"] not in ({b["sha256"] for b in data["binaries"] if b["variant"] == "default"}
                                                   if name == "tagged" else {data["image"]["binary_sha256"]}) \
                 or value["exit_code"] != 0 or sha(folder / "command.log") != value["log_sha256"] \
@@ -543,9 +594,9 @@ def promote(base, destination, *, release_tag=None, insecure=False, image_only=F
         tag_commit = command(["git", "rev-parse", release_tag + "^{commit}"]).stdout.strip()
         if tag_commit != data["source"]["commit"]:
             raise ValueError("release tag does not name the certified candidate source")
-    load(base, data)
+    loaded = load(base, data)
     before = data["image"]["id"]
-    command([cli(), "tag", before, destination])
+    command([cli(), "tag", loaded["id"], destination])
     args = [cli(), "push"]
     if insecure and Path(cli()).name == "podman":
         args += ["--tls-verify=false"]
@@ -555,7 +606,7 @@ def promote(base, destination, *, release_tag=None, insecure=False, image_only=F
         pull += ["--tls-verify=false"]
     command([*pull, destination])
     info = json.loads(command([cli(), "image", "inspect", destination]).stdout)[0]
-    if digest(info["Id"]) != before:
+    if config_of_image(destination)["id"] != before:
         raise ValueError("registry promotion changed candidate image bytes")
     actual = command([cli(), "run", "--rm", "--entrypoint", "sha256sum", destination,
                       data["image"]["binary_path"]]).stdout.split()[0]
@@ -563,6 +614,8 @@ def promote(base, destination, *, release_tag=None, insecure=False, image_only=F
         raise ValueError("promoted executable hash mismatch")
     receipt = {"source_commit": data["source"]["commit"], "candidate_sha256": sha(Path(base) / "candidate.json"),
                "image_id": before, "destination": destination, "registry_digests": info.get("RepoDigests", []),
+               "source_engine_id": data["image"].get("engine_id"), "loaded_image_id": loaded["id"],
+               "promoted_image_id": digest(info["Id"]),
                "binary_sha256": actual, "promoted_at": utc(), "result": "passed"}
     if not receipt["registry_digests"]:
         raise ValueError("registry did not return an immutable digest")

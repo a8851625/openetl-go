@@ -55,7 +55,7 @@ jobs:
         run: |
           P1_DESTINATION="ghcr.io/${GITHUB_REPOSITORY,,}:${RELEASE_TAG#v}"
           python3 hack/release_candidate.py promote --dir "$P1_CANDIDATE_DIR" --destination "$P1_DESTINATION" --release-tag "$RELEASE_TAG"
-          P1_IMAGE_ID="$(python3 -c 'import json,os;print(json.load(open(os.environ["P1_CANDIDATE_DIR"]+"/candidate.json"))["image"]["id"])')"
+          P1_IMAGE_ID="$(python3 -c 'import json,os;print(json.load(open(os.environ["P1_CANDIDATE_DIR"]+"/promotion.json"))["loaded_image_id"])')"
           docker tag "$P1_IMAGE_ID" "ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_TAG"
           docker push "ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_TAG"
       - uses: actions/upload-artifact@v4
