@@ -1,0 +1,1277 @@
+=== RUN   TestAIContextPackUsesRuntimeFacts
+--- PASS: TestAIContextPackUsesRuntimeFacts (0.16s)
+=== RUN   TestCoreComponentDocsCoverAIContextComponents
+--- PASS: TestCoreComponentDocsCoverAIContextComponents (0.01s)
+=== RUN   TestReviewGeneratedSpecFlagsMissingFieldsAndRisks
+--- PASS: TestReviewGeneratedSpecFlagsMissingFieldsAndRisks (0.29s)
+=== RUN   TestPipelineAPIAndHealthExposeCheckpointRemediation
+2026-11-25T19:09:01.436Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineAPIAndHealthExposeCheckpointRemediation (0.38s)
+=== RUN   TestPipelineStartReturnsConflictWhilePreviousRunStops
+2026-11-25T19:09:01.776Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineStartReturnsConflictWhilePreviousRunStops (0.34s)
+=== RUN   TestPipelineStartReturnsNon2xxWithCheckpointRemediation
+2026-11-25T19:09:02.093Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineStartReturnsNon2xxWithCheckpointRemediation (0.32s)
+=== RUN   TestPipelineCheckpointSetKeepsRawPositionCompatibility
+2026-11-25T19:09:02.413Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineCheckpointSetKeepsRawPositionCompatibility (0.33s)
+=== RUN   TestPipelineCheckpointSetKafkaReplayFromOffset
+2026-11-25T19:09:02.740Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineCheckpointSetKafkaReplayFromOffset (0.32s)
+=== RUN   TestPipelineCheckpointSetKafkaOffsetsInferTopicFromSpec
+2026-11-25T19:09:03.062Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineCheckpointSetKafkaOffsetsInferTopicFromSpec (0.32s)
+=== RUN   TestRunPreflightTreatsTargetContractFailureAsBlocking
+2026-11-25T19:09:03.371Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightTreatsTargetContractFailureAsBlocking (0.59s)
+=== RUN   TestClickHousePreflightRejectsSourceOrderWithoutCapability
+=== RUN   TestClickHousePreflightRejectsSourceOrderWithoutCapability/file
+=== RUN   TestClickHousePreflightRejectsSourceOrderWithoutCapability/http
+=== RUN   TestClickHousePreflightRejectsSourceOrderWithoutCapability/rest_source
+=== RUN   TestClickHousePreflightRejectsSourceOrderWithoutCapability/redis
+=== RUN   TestClickHousePreflightRejectsSourceOrderWithoutCapability/demo
+=== RUN   TestClickHousePreflightRejectsSourceOrderWithoutCapability/custom_source
+--- PASS: TestClickHousePreflightRejectsSourceOrderWithoutCapability (0.00s)
+    --- PASS: TestClickHousePreflightRejectsSourceOrderWithoutCapability/file (0.00s)
+    --- PASS: TestClickHousePreflightRejectsSourceOrderWithoutCapability/http (0.00s)
+    --- PASS: TestClickHousePreflightRejectsSourceOrderWithoutCapability/rest_source (0.00s)
+    --- PASS: TestClickHousePreflightRejectsSourceOrderWithoutCapability/redis (0.00s)
+    --- PASS: TestClickHousePreflightRejectsSourceOrderWithoutCapability/demo (0.00s)
+    --- PASS: TestClickHousePreflightRejectsSourceOrderWithoutCapability/custom_source (0.00s)
+=== RUN   TestClickHousePreflightRejectsDerivedWindowSourceOrder
+--- PASS: TestClickHousePreflightRejectsDerivedWindowSourceOrder (0.00s)
+=== RUN   TestClickHousePreflightAppendIsExplicitlyInsertOnly
+=== RUN   TestClickHousePreflightAppendIsExplicitlyInsertOnly/mysql_cdc
+=== RUN   TestClickHousePreflightAppendIsExplicitlyInsertOnly/snapshot_cdc
+=== RUN   TestClickHousePreflightAppendIsExplicitlyInsertOnly/postgres_cdc
+=== RUN   TestClickHousePreflightAppendIsExplicitlyInsertOnly/kafka_envelope
+=== RUN   TestClickHousePreflightAppendIsExplicitlyInsertOnly/kafka_canal
+--- PASS: TestClickHousePreflightAppendIsExplicitlyInsertOnly (0.00s)
+    --- PASS: TestClickHousePreflightAppendIsExplicitlyInsertOnly/mysql_cdc (0.00s)
+    --- PASS: TestClickHousePreflightAppendIsExplicitlyInsertOnly/snapshot_cdc (0.00s)
+    --- PASS: TestClickHousePreflightAppendIsExplicitlyInsertOnly/postgres_cdc (0.00s)
+    --- PASS: TestClickHousePreflightAppendIsExplicitlyInsertOnly/kafka_envelope (0.00s)
+    --- PASS: TestClickHousePreflightAppendIsExplicitlyInsertOnly/kafka_canal (0.00s)
+=== RUN   TestClickHousePreflightRejectsPostgresSnapshotWithoutOrder
+--- PASS: TestClickHousePreflightRejectsPostgresSnapshotWithoutOrder (0.00s)
+=== RUN   TestClickHousePreflightRejectsOrderedTextCursor
+--- PASS: TestClickHousePreflightRejectsOrderedTextCursor (0.00s)
+=== RUN   TestClickHousePreflightAcceptsSnapshotTextCursorWithBinlogHandoff
+--- PASS: TestClickHousePreflightAcceptsSnapshotTextCursorWithBinlogHandoff (0.00s)
+=== RUN   TestClickHousePreflightAcceptsIntegerCursor
+--- PASS: TestClickHousePreflightAcceptsIntegerCursor (0.00s)
+=== RUN   TestClickHouseDDLPreviewMatchesVersionMode
+--- PASS: TestClickHouseDDLPreviewMatchesVersionMode (0.00s)
+=== RUN   TestClickHousePreflightRejectsInvalidVersionColumns
+=== RUN   TestClickHousePreflightRejectsInvalidVersionColumns/mode
+=== RUN   TestClickHousePreflightRejectsInvalidVersionColumns/delete_empty
+=== RUN   TestClickHousePreflightRejectsInvalidVersionColumns/same_columns
+--- PASS: TestClickHousePreflightRejectsInvalidVersionColumns (0.00s)
+    --- PASS: TestClickHousePreflightRejectsInvalidVersionColumns/mode (0.00s)
+    --- PASS: TestClickHousePreflightRejectsInvalidVersionColumns/delete_empty (0.00s)
+    --- PASS: TestClickHousePreflightRejectsInvalidVersionColumns/same_columns (0.00s)
+=== RUN   TestConnectionCatalogCRUDAndHealth
+2026-11-25T19:09:03.966Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:04.115Z [WARN] Secret field uses legacy name fallback; add a descriptor: kind="transform" type="identity" field="api_token"
+2026-11-25T19:09:04.116Z [WARN] Secret field uses legacy name fallback; add a descriptor: kind="transform" type="identity" field="password"
+--- PASS: TestConnectionCatalogCRUDAndHealth (0.76s)
+=== RUN   TestPipelineUsesSavedConnections
+2026-11-25T19:09:04.751Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineUsesSavedConnections (1.50s)
+=== RUN   TestDAGValidateResolvesSavedConnections
+2026-11-25T19:09:06.221Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDAGValidateResolvesSavedConnections (1.15s)
+=== RUN   TestConnectionContextIncludesRecommendationsAndDescriptor
+2026-11-25T19:09:07.377Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionContextIncludesRecommendationsAndDescriptor (0.87s)
+=== RUN   TestConnectionContextIntrospectsFileSource
+2026-11-25T19:09:08.251Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionContextIntrospectsFileSource (0.89s)
+=== RUN   TestConnectionContextIntrospectsFileSinkTarget
+2026-11-25T19:09:09.146Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionContextIntrospectsFileSinkTarget (0.88s)
+=== RUN   TestConnectionContextIntrospectsS3LocalFallback
+2026-11-25T19:09:10.009Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionContextIntrospectsS3LocalFallback (0.86s)
+=== RUN   TestConnectionContextIntrospectsElasticsearchSink
+2026-11-25T19:09:10.874Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionContextIntrospectsElasticsearchSink (0.86s)
+=== RUN   TestConnectionContextIntrospectsClickHouseHTTPSink
+2026-11-25T19:09:11.731Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionContextIntrospectsClickHouseHTTPSink (0.86s)
+=== RUN   TestConnectionContextIntrospectsKafkaSink
+2026-11-25T19:09:12.593Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionContextIntrospectsKafkaSink (0.86s)
+=== RUN   TestKafkaTargetTopicWarning
+--- PASS: TestKafkaTargetTopicWarning (0.00s)
+=== RUN   TestConnectionSavePreservesMaskedSecrets
+2026-11-25T19:09:13.451Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionSavePreservesMaskedSecrets (0.86s)
+=== RUN   TestPipelineUpdatePreservesMaskedSecrets
+2026-11-25T19:09:14.307Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:14.730Z [WARN] Secret field uses legacy name fallback; add a descriptor: kind="source" type="file" field="password"
+2026-11-25T19:09:14.869Z [WARN] Secret field uses legacy name fallback; add a descriptor: kind="sink" type="file_sink" field="password"
+--- PASS: TestPipelineUpdatePreservesMaskedSecrets (1.42s)
+=== RUN   TestConnectionReferenceAPIUsesCurrentPersistedSpecs
+2026-11-25T19:09:15.723Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionReferenceAPIUsesCurrentPersistedSpecs (0.30s)
+=== RUN   TestConnectionBehaviorFieldDeprecation
+2026-11-25T19:09:16.027Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+[mysql] 2026/11/25 19:09:19 packets.go:58 unexpected EOF
+--- PASS: TestConnectionBehaviorFieldDeprecation (3.78s)
+=== RUN   TestConnectionPureScopeNoDeprecation
+2026-11-25T19:09:19.803Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+[mysql] 2026/11/25 19:09:22 packets.go:58 unexpected EOF
+--- PASS: TestConnectionPureScopeNoDeprecation (3.76s)
+=== RUN   TestConnectionBackwardCompatMergeStillWorks
+2026-11-25T19:09:23.563Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectionBackwardCompatMergeStillWorks (0.43s)
+=== RUN   TestFieldScopeAnnotationOnDescriptors
+--- PASS: TestFieldScopeAnnotationOnDescriptors (1.39s)
+=== RUN   TestConnectorCertificationKitProductionSet
+=== RUN   TestConnectorCertificationKitProductionSet/source/http
+=== RUN   TestConnectorCertificationKitProductionSet/source/mysql_batch
+=== RUN   TestConnectorCertificationKitProductionSet/source/mysql_cdc
+=== RUN   TestConnectorCertificationKitProductionSet/source/postgres_cdc
+=== RUN   TestConnectorCertificationKitProductionSet/source/mysql_snapshot_cdc
+=== RUN   TestConnectorCertificationKitProductionSet/sink/mysql
+=== RUN   TestConnectorCertificationKitProductionSet/sink/postgres
+=== RUN   TestConnectorCertificationKitProductionSet/sink/postgresql
+=== RUN   TestConnectorCertificationKitProductionSet/sink/doris
+=== RUN   TestConnectorCertificationKitProductionSet/sink/clickhouse
+=== RUN   TestConnectorCertificationKitProductionSet/source/kafka
+=== RUN   TestConnectorCertificationKitProductionSet/sink/kafka
+=== RUN   TestConnectorCertificationKitProductionSet/source/file
+=== RUN   TestConnectorCertificationKitProductionSet/sink/file_sink
+=== RUN   TestConnectorCertificationKitProductionSet/sink/s3
+--- PASS: TestConnectorCertificationKitProductionSet (0.15s)
+    --- PASS: TestConnectorCertificationKitProductionSet/source/http (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/source/mysql_batch (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/source/mysql_cdc (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/source/postgres_cdc (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/source/mysql_snapshot_cdc (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/sink/mysql (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/sink/postgres (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/sink/postgresql (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/sink/doris (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/sink/clickhouse (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/source/kafka (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/sink/kafka (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/source/file (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/sink/file_sink (0.00s)
+    --- PASS: TestConnectorCertificationKitProductionSet/sink/s3 (0.00s)
+=== RUN   TestPluginABIV1CertificationDocs
+--- PASS: TestPluginABIV1CertificationDocs (0.00s)
+=== RUN   TestWASMPluginCertificationFixture
+--- PASS: TestWASMPluginCertificationFixture (0.00s)
+=== RUN   TestFeishuSheetSourcePluginSampleCertification
+--- PASS: TestFeishuSheetSourcePluginSampleCertification (0.00s)
+=== RUN   TestDAGValidationRejectsConnectorBuilderErrors
+2026-11-25T19:09:25.538Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDAGValidationRejectsConnectorBuilderErrors (0.29s)
+=== RUN   TestDAGCreateAndUpdateRejectConnectorBuilderErrorsWithNon2xx
+2026-11-25T19:09:25.830Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDAGCreateAndUpdateRejectConnectorBuilderErrorsWithNon2xx (0.29s)
+=== RUN   TestLoadSpecsDAGFile
+2026-11-25T19:09:26.136Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:26.139Z [INFO] Loaded DAG pipeline: dag-file-demo (76386359-9718-44de-8d48-1f7c420ddf4a)
+--- PASS: TestLoadSpecsDAGFile (0.31s)
+=== RUN   TestDAGSpecYAMLDetectionUsesTopLevelKey
+--- PASS: TestDAGSpecYAMLDetectionUsesTopLevelKey (0.00s)
+=== RUN   TestRestoreFromDBLoadsDAGSpec
+2026-11-25T19:09:26.450Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:26.457Z [INFO] Restored DAG pipeline from DB: dag-file-demo (dag-db-id)
+--- PASS: TestRestoreFromDBLoadsDAGSpec (0.32s)
+=== RUN   TestLoadSpecsLinearFile
+2026-11-25T19:09:26.771Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:26.775Z [INFO] Loaded pipeline: linear-file-demo (269ca7bc-14eb-44a7-8572-c40c360f2ea2)
+--- PASS: TestLoadSpecsLinearFile (0.32s)
+=== RUN   TestLoadSpecsDAGAndLinearCoexist
+2026-11-25T19:09:27.093Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:27.097Z [INFO] Loaded DAG pipeline: dag-file-demo (4a1c0f7b-c250-473c-85dc-e92e2124ddde)
+2026-11-25T19:09:27.100Z [INFO] Loaded pipeline: linear-file-demo (b0f4bf2b-556a-4a98-aeee-ee7b960025f0)
+--- PASS: TestLoadSpecsDAGAndLinearCoexist (0.33s)
+=== RUN   TestLoadSpecsDuplicateDAGSkipped
+2026-11-25T19:09:27.416Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:27.420Z [INFO] Loaded DAG pipeline: dag-file-demo (1ded04f0-2634-4436-8606-27b8413ab1da)
+2026-11-25T19:09:27.421Z [WARN] Skip duplicate pipeline dag-file-demo in dag2.yaml; first defined in dag1.yaml
+--- PASS: TestLoadSpecsDuplicateDAGSkipped (0.32s)
+=== RUN   TestReloadSpecsPicksUpNewDAGFile
+2026-11-25T19:09:27.733Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:27.737Z [INFO] Loaded DAG pipeline: dag-file-demo (3d74ec33-5ff7-4560-8c6a-01266b0fa943)
+2026-11-25T19:09:27.740Z [INFO] Loaded DAG pipeline: dag-file-3 (6c6f5462-a0b6-4991-8342-e9be71bd0db0)
+--- PASS: TestReloadSpecsPicksUpNewDAGFile (0.32s)
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/clickhouse
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/doris
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/elasticsearch
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/es
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/jdbc
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/kafka
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/maxcompute
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/mysql
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/odps
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/postgres
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/postgresql
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/redis
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/s3
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/feishu_sheet
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/github
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/http
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/hubspot
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/kafka
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/mysql_batch
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/mysql_cdc
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/mysql_snapshot_cdc
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/notion
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/postgres_cdc
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/redis
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/rest_source
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/salesforce
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/stripe
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/transform/dbt
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/transform/enricher
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/transform/lookup
+=== RUN   TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/transform/tap
+=== NAME  TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved
+    descriptor_secret_api_test.go:94: encrypted, masked and preserved 78 descriptor secret fields
+--- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved (18.90s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/clickhouse (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/doris (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/elasticsearch (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/es (0.60s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/jdbc (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/kafka (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/maxcompute (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/mysql (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/odps (0.60s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/postgres (0.60s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/postgresql (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/redis (0.61s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/sink/s3 (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/feishu_sheet (0.61s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/github (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/http (0.60s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/hubspot (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/kafka (0.61s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/mysql_batch (0.60s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/mysql_cdc (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/mysql_snapshot_cdc (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/notion (0.61s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/postgres_cdc (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/redis (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/rest_source (0.60s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/salesforce (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/source/stripe (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/transform/dbt (0.58s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/transform/enricher (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/transform/lookup (0.59s)
+    --- PASS: TestEveryDescriptorSecretIsEncryptedMaskedAndPreserved/transform/tap (0.59s)
+=== RUN   TestDescriptorDSNMaskedInLinearAndDAGSpecs
+--- PASS: TestDescriptorDSNMaskedInLinearAndDAGSpecs (1.19s)
+=== RUN   TestDLQReplayReconstructsFrozenCompositeIdentityAndPreservesAPIContext
+2026-11-25T19:09:48.156Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayReconstructsFrozenCompositeIdentityAndPreservesAPIContext (0.35s)
+=== RUN   TestDLQReplayUnknownContractIsQuarantinedWithStructuredConflict
+2026-11-25T19:09:48.480Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayUnknownContractIsQuarantinedWithStructuredConflict (0.32s)
+=== RUN   TestDLQLegacyIdentityRepairAPIRequiresExactFrozenDeclaration
+2026-11-25T19:09:48.795Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQLegacyIdentityRepairAPIRequiresExactFrozenDeclaration (0.32s)
+=== RUN   TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange
+=== RUN   TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/confirmed_declaration_mismatch
+2026-11-25T19:09:49.116Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/static_target_mismatch
+2026-11-25T19:09:49.433Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/partial_composite_key
+2026-11-25T19:09:49.755Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/legacy_primary_key_change
+2026-11-25T19:09:50.071Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/missing_original_declaration
+2026-11-25T19:09:50.393Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange (1.59s)
+    --- PASS: TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/confirmed_declaration_mismatch (0.31s)
+    --- PASS: TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/static_target_mismatch (0.32s)
+    --- PASS: TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/partial_composite_key (0.32s)
+    --- PASS: TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/legacy_primary_key_change (0.32s)
+    --- PASS: TestDLQLegacyIdentityRepairRejectsMismatchPartialAndKeyChange/missing_original_declaration (0.32s)
+=== RUN   TestDLQReplayRechecksStaticSafetySetAfterLegacyRepair
+2026-11-25T19:09:50.707Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayRechecksStaticSafetySetAfterLegacyRepair (0.32s)
+=== RUN   TestDLQReplayRevalidatesIdentityAfterTransforms
+2026-11-25T19:09:51.031Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayRevalidatesIdentityAfterTransforms (0.33s)
+=== RUN   TestDLQReplayRestartAfterDeleteFailureDoesNotWriteSinkTwice
+2026-11-25T19:09:51.368Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:51.552Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayRestartAfterDeleteFailureDoesNotWriteSinkTwice (0.51s)
+=== RUN   TestDLQReplayCheckpointFailureRetainsRowAndAllowsAtLeastOnceRetry
+2026-11-25T19:09:51.862Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:09:52.046Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayCheckpointFailureRetainsRowAndAllowsAtLeastOnceRetry (0.49s)
+=== RUN   TestDLQDeleteAllReportsRealCount
+2026-11-25T19:09:52.361Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQDeleteAllReportsRealCount (0.32s)
+=== RUN   TestDLQListSupportsOffsetAndErrorClassFilter
+2026-11-25T19:09:52.695Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQListSupportsOffsetAndErrorClassFilter (0.36s)
+=== RUN   TestDLQReplaySerializesConcurrentRequests
+2026-11-25T19:09:53.045Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplaySerializesConcurrentRequests (0.32s)
+=== RUN   TestDLQReplayRefusesUnsafeDuplicateBoundary
+2026-11-25T19:09:53.373Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayRefusesUnsafeDuplicateBoundary (0.33s)
+=== RUN   TestDAGDLQReplayEnforcesMetadataIdentityGate
+2026-11-25T19:09:53.691Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDAGDLQReplayEnforcesMetadataIdentityGate (0.32s)
+=== RUN   TestDAGDLQIdentityRepairIsSupported
+2026-11-25T19:09:54.005Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDAGDLQIdentityRepairIsSupported (0.31s)
+=== RUN   TestPipelinesListExposesCurrentDLQBacklog
+2026-11-25T19:09:54.324Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelinesListExposesCurrentDLQBacklog (0.32s)
+=== RUN   TestDLQFilterParsesReplayAndListOptions
+--- PASS: TestDLQFilterParsesReplayAndListOptions (0.00s)
+=== RUN   TestDLQReplayDrainsOldestFirst
+2026-11-25T19:09:54.637Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayDrainsOldestFirst (0.32s)
+=== RUN   TestDLQReplayDryRunReportsIdentityGate
+2026-11-25T19:09:54.961Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayDryRunReportsIdentityGate (0.32s)
+=== RUN   TestDLQReplayAppliesTableMapping
+2026-11-25T19:09:55.279Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQReplayAppliesTableMapping (0.32s)
+=== RUN   TestDLQDeleteByStableID
+2026-11-25T19:09:55.604Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDLQDeleteByStableID (0.33s)
+=== RUN   TestDAGDLQReplayRoutesByNodeContext
+2026-11-25T19:09:55.927Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDAGDLQReplayRoutesByNodeContext (0.33s)
+=== RUN   TestDAGDLQReplayRequiresNodeContext
+2026-11-25T19:09:56.273Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDAGDLQReplayRequiresNodeContext (0.33s)
+=== RUN   TestPreflightDorisSourceOrderGate
+2026-11-25T19:09:56.598Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPreflightDorisSourceOrderGate/cdc_source_is_accepted
+=== RUN   TestPreflightDorisSourceOrderGate/source_without_durable_order_is_rejected
+=== RUN   TestPreflightDorisSourceOrderGate/window_transform_is_rejected
+=== RUN   TestPreflightDorisSourceOrderGate/insert_write_mode_is_rejected
+=== RUN   TestPreflightDorisSourceOrderGate/insert_batch_mode_is_rejected
+=== RUN   TestPreflightDorisSourceOrderGate/sequence_column_colliding_with_the_key_is_rejected
+=== RUN   TestPreflightDorisSourceOrderGate/reserved_delete-sign_column_is_rejected
+=== RUN   TestPreflightDorisSourceOrderGate/unsupported_version_mode_is_rejected
+=== RUN   TestPreflightDorisSourceOrderGate/clickhouse_gate_still_fires
+--- PASS: TestPreflightDorisSourceOrderGate (2.97s)
+    --- PASS: TestPreflightDorisSourceOrderGate/cdc_source_is_accepted (0.30s)
+    --- PASS: TestPreflightDorisSourceOrderGate/source_without_durable_order_is_rejected (0.30s)
+    --- PASS: TestPreflightDorisSourceOrderGate/window_transform_is_rejected (0.30s)
+    --- PASS: TestPreflightDorisSourceOrderGate/insert_write_mode_is_rejected (0.29s)
+    --- PASS: TestPreflightDorisSourceOrderGate/insert_batch_mode_is_rejected (0.29s)
+    --- PASS: TestPreflightDorisSourceOrderGate/sequence_column_colliding_with_the_key_is_rejected (0.29s)
+    --- PASS: TestPreflightDorisSourceOrderGate/reserved_delete-sign_column_is_rejected (0.30s)
+    --- PASS: TestPreflightDorisSourceOrderGate/unsupported_version_mode_is_rejected (0.29s)
+    --- PASS: TestPreflightDorisSourceOrderGate/clickhouse_gate_still_fires (0.29s)
+=== RUN   TestConnectorEvidenceManifestLoadsAndCoversProductionConnectors
+--- PASS: TestConnectorEvidenceManifestLoadsAndCoversProductionConnectors (0.30s)
+=== RUN   TestConnectorEvidenceManifestDocsAndCheckerArePresent
+--- PASS: TestConnectorEvidenceManifestDocsAndCheckerArePresent (0.00s)
+=== RUN   TestValidateConnectorEvidenceManifestRejectsStructuralDrift
+--- PASS: TestValidateConnectorEvidenceManifestRejectsStructuralDrift (0.00s)
+=== RUN   TestConnectorEvidenceFreshnessControlsReadinessGate
+--- PASS: TestConnectorEvidenceFreshnessControlsReadinessGate (0.00s)
+=== RUN   TestMetricsAndHealthExposeCurrentFailureSignals
+=== RUN   TestMetricsAndHealthExposeCurrentFailureSignals/open
+2026-11-25T19:09:59.870Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestMetricsAndHealthExposeCurrentFailureSignals/unknown
+2026-11-25T19:10:00.180Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:00.186Z [WARN] DLQ backlog count failed for pipeline unknown: injected DLQ count failure
+2026-11-25T19:10:00.189Z [WARN] DLQ backlog count failed for pipeline unknown: injected DLQ count failure
+=== RUN   TestMetricsAndHealthExposeCurrentFailureSignals/restore
+2026-11-25T19:10:00.493Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestMetricsAndHealthExposeCurrentFailureSignals (0.95s)
+    --- PASS: TestMetricsAndHealthExposeCurrentFailureSignals/open (0.32s)
+    --- PASS: TestMetricsAndHealthExposeCurrentFailureSignals/unknown (0.31s)
+    --- PASS: TestMetricsAndHealthExposeCurrentFailureSignals/restore (0.31s)
+=== RUN   TestHealthEndpointIncludesBusinessComponents
+2026-11-25T19:10:00.803Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestHealthEndpointIncludesBusinessComponents (0.31s)
+=== RUN   TestRetentionJanitorPurgesDLQAndAudit
+2026-11-25T19:10:00.974Z [INFO] DLQ janitor: purged 3 entries older than 2026-11-25T19:10:00Z
+2026-11-25T19:10:00.976Z [INFO] audit janitor: purged 1 entries older than 2026-11-25T19:10:00Z
+--- PASS: TestRetentionJanitorPurgesDLQAndAudit (0.17s)
+=== RUN   TestRetentionConfigHardCaps
+2026-11-25T19:10:00.984Z [WARN] ETL_JANITOR_BATCH_LIMIT=99999999 exceeds hard cap 100000; clamping
+2026-11-25T19:10:00.986Z [WARN] ETL_DLQ_MAX_COUNT=99999999 exceeds hard cap 1000000; clamping
+--- PASS: TestRetentionConfigHardCaps (0.01s)
+=== RUN   TestEmptyJobNameDLQPurge
+--- PASS: TestEmptyJobNameDLQPurge (0.17s)
+=== RUN   TestRetentionJanitorMaxCountEvictsOldest
+2026-11-25T19:10:01.329Z [WARN] DLQ janitor: evicted 2 oldest entries to enforce max_count=4
+--- PASS: TestRetentionJanitorMaxCountEvictsOldest (0.18s)
+=== RUN   TestDesiredStoppedAndPausedSurviveRestoreWithoutIO
+=== RUN   TestDesiredStoppedAndPausedSurviveRestoreWithoutIO/stopped
+2026-11-25T19:10:01.668Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:01.674Z [INFO] Restored pipeline from DB: restore-stopped (restore-stopped)
+2026-11-25T19:10:01.675Z [INFO] Pipeline restore-stopped (restore-stopped) not started because desired_state=stopped
+2026-11-25T19:10:01.675Z [INFO] Scheduler started
+2026-11-25T19:10:01.752Z [INFO] Scheduler stopped
+=== RUN   TestDesiredStoppedAndPausedSurviveRestoreWithoutIO/paused
+2026-11-25T19:10:02.097Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:02.104Z [INFO] Restored pipeline from DB: restore-paused (restore-paused)
+2026-11-25T19:10:02.105Z [INFO] Pipeline restore-paused (restore-paused) not started because desired_state=paused
+2026-11-25T19:10:02.106Z [INFO] Scheduler started
+2026-11-25T19:10:02.183Z [INFO] Scheduler stopped
+--- PASS: TestDesiredStoppedAndPausedSurviveRestoreWithoutIO (0.85s)
+    --- PASS: TestDesiredStoppedAndPausedSurviveRestoreWithoutIO/stopped (0.42s)
+    --- PASS: TestDesiredStoppedAndPausedSurviveRestoreWithoutIO/paused (0.43s)
+=== RUN   TestDesiredStatePersistenceFailureDoesNotChangeRuntime
+=== RUN   TestDesiredStatePersistenceFailureDoesNotChangeRuntime/start
+2026-11-25T19:10:02.512Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestDesiredStatePersistenceFailureDoesNotChangeRuntime/stop
+2026-11-25T19:10:02.832Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestDesiredStatePersistenceFailureDoesNotChangeRuntime/pause
+2026-11-25T19:10:03.152Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDesiredStatePersistenceFailureDoesNotChangeRuntime (0.97s)
+    --- PASS: TestDesiredStatePersistenceFailureDoesNotChangeRuntime/start (0.33s)
+    --- PASS: TestDesiredStatePersistenceFailureDoesNotChangeRuntime/stop (0.32s)
+    --- PASS: TestDesiredStatePersistenceFailureDoesNotChangeRuntime/pause (0.32s)
+=== RUN   TestRunningPipelineRejectsCheckpointResetAndSet
+2026-11-25T19:10:03.461Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestRunningPipelineRejectsCheckpointResetAndSet/reset
+=== RUN   TestRunningPipelineRejectsCheckpointResetAndSet/set
+--- PASS: TestRunningPipelineRejectsCheckpointResetAndSet (0.31s)
+    --- PASS: TestRunningPipelineRejectsCheckpointResetAndSet/reset (0.00s)
+    --- PASS: TestRunningPipelineRejectsCheckpointResetAndSet/set (0.00s)
+=== RUN   TestCheckpointResetResponseDocumentsSourceBoundary
+=== RUN   TestCheckpointResetResponseDocumentsSourceBoundary/kafka
+2026-11-25T19:10:03.776Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestCheckpointResetResponseDocumentsSourceBoundary/mysql_cdc
+2026-11-25T19:10:04.097Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestCheckpointResetResponseDocumentsSourceBoundary/mysql_snapshot_cdc
+2026-11-25T19:10:04.410Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestCheckpointResetResponseDocumentsSourceBoundary/postgres_cdc
+2026-11-25T19:10:04.729Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestCheckpointResetResponseDocumentsSourceBoundary (1.27s)
+    --- PASS: TestCheckpointResetResponseDocumentsSourceBoundary/kafka (0.31s)
+    --- PASS: TestCheckpointResetResponseDocumentsSourceBoundary/mysql_cdc (0.32s)
+    --- PASS: TestCheckpointResetResponseDocumentsSourceBoundary/mysql_snapshot_cdc (0.32s)
+    --- PASS: TestCheckpointResetResponseDocumentsSourceBoundary/postgres_cdc (0.32s)
+=== RUN   TestMetadataIdentityPreflightRejectsIncapableSourceWithFieldIssue
+2026-11-25T19:10:05.054Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestMetadataIdentityPreflightRejectsIncapableSourceWithFieldIssue (0.61s)
+=== RUN   TestMetadataIdentityPreflightAcceptsCanalCapability
+--- PASS: TestMetadataIdentityPreflightAcceptsCanalCapability (0.00s)
+=== RUN   TestSinkDerivesPKFromMetadataIncludesAdvertisedSinks
+--- PASS: TestSinkDerivesPKFromMetadataIncludesAdvertisedSinks (0.00s)
+=== RUN   TestMetadataPKTargetPreflightRequiresResolvableTableAndDatabaseTemplate
+=== RUN   TestMetadataPKTargetPreflightRequiresResolvableTableAndDatabaseTemplate/unknown_source_has_no_dynamic_table
+=== RUN   TestMetadataPKTargetPreflightRequiresResolvableTableAndDatabaseTemplate/legacy_envelope_database_placeholder_is_not_provable
+--- PASS: TestMetadataPKTargetPreflightRequiresResolvableTableAndDatabaseTemplate (0.00s)
+    --- PASS: TestMetadataPKTargetPreflightRequiresResolvableTableAndDatabaseTemplate/unknown_source_has_no_dynamic_table (0.00s)
+    --- PASS: TestMetadataPKTargetPreflightRequiresResolvableTableAndDatabaseTemplate/legacy_envelope_database_placeholder_is_not_provable (0.00s)
+=== RUN   TestMetadataPKTargetPreflightAcceptsDynamicCDCAndFixedTarget
+--- PASS: TestMetadataPKTargetPreflightAcceptsDynamicCDCAndFixedTarget (0.00s)
+=== RUN   TestMutableSinkPreflightRequiresExplicitTargetKey
+=== RUN   TestMutableSinkPreflightRequiresExplicitTargetKey/mysql
+=== RUN   TestMutableSinkPreflightRequiresExplicitTargetKey/postgres
+=== RUN   TestMutableSinkPreflightRequiresExplicitTargetKey/doris
+=== RUN   TestMutableSinkPreflightRequiresExplicitTargetKey/clickhouse
+--- PASS: TestMutableSinkPreflightRequiresExplicitTargetKey (0.00s)
+    --- PASS: TestMutableSinkPreflightRequiresExplicitTargetKey/mysql (0.00s)
+    --- PASS: TestMutableSinkPreflightRequiresExplicitTargetKey/postgres (0.00s)
+    --- PASS: TestMutableSinkPreflightRequiresExplicitTargetKey/doris (0.00s)
+    --- PASS: TestMutableSinkPreflightRequiresExplicitTargetKey/clickhouse (0.00s)
+=== RUN   TestNewRunnerNotRecursive
+2026-11-25T19:10:05.536Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestNewRunnerNotRecursive (0.18s)
+=== RUN   TestNewRunnerDistributedPlacesSingleShard
+2026-11-25T19:10:05.715Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestNewRunnerDistributedPlacesSingleShard (0.18s)
+=== RUN   TestDispatchIfParallelSkipsDistributedRunnerStartPath
+2026-11-25T19:10:05.900Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDispatchIfParallelSkipsDistributedRunnerStartPath (0.19s)
+=== RUN   TestPipelineOutputCompactMergesDayObjects
+2026-11-25T19:10:06.213Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineOutputCompactMergesDayObjects (0.32s)
+=== RUN   TestPipelineOutputCompactRejectsNonManifestSink
+2026-11-25T19:10:06.535Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineOutputCompactRejectsNonManifestSink (0.31s)
+=== RUN   TestPipelineOutputCompactRejectsOtherSinks
+2026-11-25T19:10:06.847Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineOutputCompactRejectsOtherSinks (0.31s)
+=== RUN   TestProductionPathContractsForcedPrimary
+--- PASS: TestProductionPathContractsForcedPrimary (0.00s)
+=== RUN   TestPathContractDocsAndEvidenceExist
+--- PASS: TestPathContractDocsAndEvidenceExist (0.00s)
+=== RUN   TestHandlePathContracts
+--- PASS: TestHandlePathContracts (0.01s)
+=== RUN   TestPathContractByID
+--- PASS: TestPathContractByID (0.00s)
+=== RUN   TestApplyPathEvidenceLastCertified
+--- PASS: TestApplyPathEvidenceLastCertified (0.00s)
+=== RUN   TestDAGValidationContractRejectsUnknownConnector
+2026-11-25T19:10:07.167Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDAGValidationContractRejectsUnknownConnector (0.32s)
+=== RUN   TestDAGCreateAndUpdateContractDoNotPersistInvalidPipeline
+2026-11-25T19:10:07.484Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDAGCreateAndUpdateContractDoNotPersistInvalidPipeline (0.31s)
+=== RUN   TestLinearValidationContractProvidesFieldIssue
+2026-11-25T19:10:07.792Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestLinearValidationContractProvidesFieldIssue (0.31s)
+=== RUN   TestValidateContractRetainsPreflightFieldRemediation
+2026-11-25T19:10:08.102Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestValidateContractRetainsPreflightFieldRemediation (0.62s)
+=== RUN   TestRunPreflightChecksMySQLBatchTableAndColumns
+2026-11-25T19:10:08.735Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightChecksMySQLBatchTableAndColumns (0.62s)
+=== RUN   TestRunPreflightBlocksMySQLBatchQueryMissingCursorColumn
+2026-11-25T19:10:09.336Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksMySQLBatchQueryMissingCursorColumn (0.60s)
+=== RUN   TestRunPreflightChecksPostgresCDCPrerequisites
+2026-11-25T19:10:09.939Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightChecksPostgresCDCPrerequisites (0.61s)
+=== RUN   TestRunPreflightBlocksPostgresCDCNonLogicalWalLevel
+2026-11-25T19:10:10.542Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksPostgresCDCNonLogicalWalLevel (0.60s)
+=== RUN   TestRunPreflightBlocksInvalidPostgresCDCSourceConfig
+2026-11-25T19:10:11.140Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidPostgresCDCSourceConfig (0.60s)
+=== RUN   TestRunPreflightBlocksPostgresCDCSnapshotWithoutTables
+2026-11-25T19:10:11.736Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksPostgresCDCSnapshotWithoutTables (0.60s)
+=== RUN   TestRunPreflightBlocksInvalidMySQLCDCSourceConfig
+2026-11-25T19:10:12.335Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidMySQLCDCSourceConfig (0.61s)
+=== RUN   TestRunPreflightBlocksInvalidMySQLSnapshotCDCSourceConfig
+2026-11-25T19:10:12.943Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidMySQLSnapshotCDCSourceConfig (0.59s)
+=== RUN   TestMultiTableSchemaContractReturnsPartialWarningForDynamicSink
+--- PASS: TestMultiTableSchemaContractReturnsPartialWarningForDynamicSink (0.00s)
+=== RUN   TestMultiTableSchemaContractBlocksUnnormalizedFixedSink
+--- PASS: TestMultiTableSchemaContractBlocksUnnormalizedFixedSink (0.00s)
+=== RUN   TestMultiTableSchemaContractAllowsExplicitNormalizationWithWarning
+--- PASS: TestMultiTableSchemaContractAllowsExplicitNormalizationWithWarning (0.00s)
+=== RUN   TestMultiTableSchemaContractReturnsStructuredDescribeError
+--- PASS: TestMultiTableSchemaContractReturnsStructuredDescribeError (0.00s)
+=== RUN   TestMultiTableSchemaContractReportsSnapshotSkippedTables
+--- PASS: TestMultiTableSchemaContractReportsSnapshotSkippedTables (0.00s)
+=== RUN   TestReadMySQLMultiTableSchemasInspectsEveryHeterogeneousTable
+--- PASS: TestReadMySQLMultiTableSchemasInspectsEveryHeterogeneousTable (0.00s)
+=== RUN   TestReadMySQLMultiTableSchemasFailsWhenAnyConfiguredTableIsMissing
+--- PASS: TestReadMySQLMultiTableSchemasFailsWhenAnyConfiguredTableIsMissing (0.00s)
+=== RUN   TestReadMySQLMultiTableSchemasFailsExplicitSnapshotWithoutUsableKey
+--- PASS: TestReadMySQLMultiTableSchemasFailsExplicitSnapshotWithoutUsableKey (0.00s)
+=== RUN   TestReadMySQLMultiTableSchemasExpandsWildcardAndReportsCDCOnlyTable
+--- PASS: TestReadMySQLMultiTableSchemasExpandsWildcardAndReportsCDCOnlyTable (0.00s)
+=== RUN   TestMySQLSingleTableSourceKeepsFlatSchemaContract
+--- PASS: TestMySQLSingleTableSourceKeepsFlatSchemaContract (0.00s)
+=== RUN   TestMultiTableMySQLSourceAllowsDynamicRelationalSinkTable
+--- PASS: TestMultiTableMySQLSourceAllowsDynamicRelationalSinkTable (0.00s)
+=== RUN   TestRunPreflightBlocksMissingFileSourcePath
+2026-11-25T19:10:13.541Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksMissingFileSourcePath (0.60s)
+=== RUN   TestRunPreflightBlocksMalformedJSONFileSource
+2026-11-25T19:10:14.140Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksMalformedJSONFileSource (0.60s)
+=== RUN   TestRunPreflightChecksHTTPSourceSampleRequest
+2026-11-25T19:10:14.744Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightChecksHTTPSourceSampleRequest (0.61s)
+=== RUN   TestRunPreflightBlocksHTTPSourceNonJSONResponse
+2026-11-25T19:10:15.370Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksHTTPSourceNonJSONResponse (0.62s)
+=== RUN   TestRunPreflightChecksKafkaSourceTopic
+2026-11-25T19:10:15.965Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:15.969Z [DEBU] Kafka source preflight passed: brokers=[127.0.0.1:42139] topic=orders.events partitions=2 logical_shards=1
+--- PASS: TestRunPreflightChecksKafkaSourceTopic (0.60s)
+=== RUN   TestRunPreflightParsesJSONStringKafkaBrokers
+2026-11-25T19:10:16.563Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:16.568Z [DEBU] Kafka source preflight passed: brokers=[127.0.0.1:42005] topic=orders.events partitions=1 logical_shards=1
+--- PASS: TestRunPreflightParsesJSONStringKafkaBrokers (0.61s)
+=== RUN   TestStringSliceFieldPreservesBracketedScalarBroker
+--- PASS: TestStringSliceFieldPreservesBracketedScalarBroker (0.00s)
+=== RUN   TestStringSliceFieldFlattensNestedJSON
+--- PASS: TestStringSliceFieldFlattensNestedJSON (0.00s)
+=== RUN   TestRunPreflightBlocksMissingKafkaSourceTopic
+2026-11-25T19:10:17.172Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksMissingKafkaSourceTopic (0.60s)
+=== RUN   TestRunPreflightReportsSinkReachabilityWarning
+2026-11-25T19:10:17.775Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightReportsSinkReachabilityWarning (0.60s)
+=== RUN   TestRunPreflightGuidesAppendOnlyReplayRisk
+2026-11-25T19:10:18.377Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightGuidesAppendOnlyReplayRisk (1.37s)
+=== RUN   TestRunPreflightRecommendsS3OutputPrefix
+2026-11-25T19:10:19.740Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightRecommendsS3OutputPrefix (1.36s)
+=== RUN   TestRunPreflightBlocksS3WithoutEndpoint
+2026-11-25T19:10:21.107Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksS3WithoutEndpoint (0.60s)
+=== RUN   TestRunPreflightBlocksUnsupportedFileSinkFormat
+2026-11-25T19:10:21.712Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksUnsupportedFileSinkFormat (0.61s)
+=== RUN   TestRunPreflightRecommendsKafkaSinkReplayConfig
+2026-11-25T19:10:22.314Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightRecommendsKafkaSinkReplayConfig (1.35s)
+=== RUN   TestRunPreflightChecksKafkaSinkTopic
+2026-11-25T19:10:23.673Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:23.678Z [DEBU] Kafka sink preflight passed: brokers=[127.0.0.1:33249] topic=ods.orders partitions=2
+--- PASS: TestRunPreflightChecksKafkaSinkTopic (0.61s)
+=== RUN   TestRunPreflightBlocksMissingKafkaSinkTopic
+2026-11-25T19:10:24.272Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksMissingKafkaSinkTopic (0.60s)
+=== RUN   TestRunPreflightBlocksInvalidKafkaSinkConfig
+2026-11-25T19:10:24.872Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidKafkaSinkConfig (0.60s)
+=== RUN   TestRunPreflightBlocksInvalidElasticsearchSinkConfig
+2026-11-25T19:10:25.469Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidElasticsearchSinkConfig (0.60s)
+=== RUN   TestRunPreflightBlocksInvalidMySQLSinkConfig
+2026-11-25T19:10:26.077Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidMySQLSinkConfig (0.61s)
+=== RUN   TestRunPreflightBlocksInvalidPostgresSinkConfig
+2026-11-25T19:10:26.671Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidPostgresSinkConfig (0.59s)
+=== RUN   TestRunPreflightBlocksInvalidClickHouseSinkConfig
+2026-11-25T19:10:27.258Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidClickHouseSinkConfig (0.59s)
+=== RUN   TestRunPreflightBlocksInvalidDorisSinkConfig
+2026-11-25T19:10:27.850Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidDorisSinkConfig (0.61s)
+=== RUN   TestRunPreflightDorisTableTemplateRelaxesStaticTableRequirement
+2026-11-25T19:10:28.474Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightDorisTableTemplateRelaxesStaticTableRequirement (0.60s)
+=== RUN   TestRunPreflightDorisCDCRequiresExplicitMetadataPKFlag
+2026-11-25T19:10:29.061Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightDorisCDCRequiresExplicitMetadataPKFlag (0.59s)
+=== RUN   TestRunPreflightBlocksInvalidMaxComputeSinkConfig
+2026-11-25T19:10:29.652Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidMaxComputeSinkConfig (0.59s)
+=== RUN   TestRunPreflightRecommendsRelationalReplaySafeSinkConfig
+2026-11-25T19:10:30.241Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightRecommendsRelationalReplaySafeSinkConfig (0.59s)
+=== RUN   TestRunPreflightInfersSchemaFromKafkaSampleHint
+2026-11-25T19:10:30.827Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightInfersSchemaFromKafkaSampleHint (1.34s)
+=== RUN   TestRunPreflightRejectsInvalidExplicitSchemaHint
+2026-11-25T19:10:32.165Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightRejectsInvalidExplicitSchemaHint (0.59s)
+=== RUN   TestRunPreflightInfersFileSchemaForDDLPreview
+2026-11-25T19:10:32.754Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightInfersFileSchemaForDDLPreview (0.59s)
+=== RUN   TestRunPreflightBlocksRuntimeStateWithoutRedis
+2026-11-25T19:10:33.345Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksRuntimeStateWithoutRedis (0.59s)
+=== RUN   TestRunPreflightBlocksInvalidLookupQueryConfig
+2026-11-25T19:10:33.931Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightBlocksInvalidLookupQueryConfig (0.72s)
+=== RUN   TestCreatePipelineReturnsPreflightWarningsWithoutBlocking
+2026-11-25T19:10:34.655Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestCreatePipelineReturnsPreflightWarningsWithoutBlocking (0.61s)
+=== RUN   TestCreatePipelineRejectsPreflightErrors
+2026-11-25T19:10:35.263Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestCreatePipelineRejectsPreflightErrors (0.60s)
+=== RUN   TestCreatePipelineRejectsSchemaPreflightErrors
+2026-11-25T19:10:35.873Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestCreatePipelineRejectsSchemaPreflightErrors (0.61s)
+=== RUN   TestRunPreflightSkipsSchemaCompatibilityWhenUnsupported
+2026-11-25T19:10:36.478Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightSkipsSchemaCompatibilityWhenUnsupported (0.60s)
+=== RUN   TestRunPreflightReturnsFieldIssuesForSchemaCompatibility
+2026-11-25T19:10:37.077Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightReturnsFieldIssuesForSchemaCompatibility (0.60s)
+=== RUN   TestSchemaFieldRecommendationsSuggestSchemaDriftForSupportedSinks
+--- PASS: TestSchemaFieldRecommendationsSuggestSchemaDriftForSupportedSinks (0.00s)
+=== RUN   TestRunPreflightReturnsElasticsearchMappingFieldIssues
+2026-11-25T19:10:37.676Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightReturnsElasticsearchMappingFieldIssues (1.35s)
+=== RUN   TestRunPreflightRejectsElasticsearchNonCoercibleMapping
+2026-11-25T19:10:39.032Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightRejectsElasticsearchNonCoercibleMapping (1.36s)
+=== RUN   TestRunPreflightRejectsFailedMaxComputeRemotePreflight
+2026-11-25T19:10:40.402Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightRejectsFailedMaxComputeRemotePreflight (0.61s)
+=== RUN   TestRunPreflightReturnsMaxComputeDDLPreviewAndPartitionFieldIssue
+2026-11-25T19:10:41.013Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightReturnsMaxComputeDDLPreviewAndPartitionFieldIssue (0.63s)
+=== RUN   TestUpdatePipelineRejectsPreflightErrorsWithoutReplacingRunner
+2026-11-25T19:10:41.640Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestUpdatePipelineRejectsPreflightErrorsWithoutReplacingRunner (0.97s)
+=== RUN   TestRunPreflightSkipsTableAndPKForDebeziumCDC
+2026-11-25T19:10:42.584Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightSkipsTableAndPKForDebeziumCDC (0.57s)
+=== RUN   TestRunPreflightStillRequiresTableWithoutDebeziumCDC
+2026-11-25T19:10:43.154Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRunPreflightStillRequiresTableWithoutDebeziumCDC (0.57s)
+=== RUN   TestPluginCompileRejectsSourceAndSinkKinds
+2026-11-25T19:10:43.726Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPluginCompileRejectsSourceAndSinkKinds/source
+=== RUN   TestPluginCompileRejectsSourceAndSinkKinds/sink
+--- PASS: TestPluginCompileRejectsSourceAndSinkKinds (0.30s)
+    --- PASS: TestPluginCompileRejectsSourceAndSinkKinds/source (0.00s)
+    --- PASS: TestPluginCompileRejectsSourceAndSinkKinds/sink (0.00s)
+=== RUN   TestPluginsEndpointExposesABIContract
+2026-11-25T19:10:44.023Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPluginsEndpointExposesABIContract (0.32s)
+=== RUN   TestPluginInstallRejectsInvalidManifestBeforeWASMLoad
+2026-11-25T19:10:44.345Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPluginInstallRejectsInvalidManifestBeforeWASMLoad (0.30s)
+=== RUN   TestValidPluginName
+=== RUN   TestValidPluginName/empty
+=== RUN   TestValidPluginName/simple
+=== RUN   TestValidPluginName/alnum_underscore_dot
+=== RUN   TestValidPluginName/traversal_slash
+=== RUN   TestValidPluginName/leading_dotdot
+=== RUN   TestValidPluginName/absolute_unix
+=== RUN   TestValidPluginName/absolute_windows
+=== RUN   TestValidPluginName/dotdot_literal
+=== RUN   TestValidPluginName/dotdot_mid
+=== RUN   TestValidPluginName/space
+=== RUN   TestValidPluginName/shell_meta
+=== RUN   TestValidPluginName/backtick
+=== RUN   TestValidPluginName/too_long
+--- PASS: TestValidPluginName (0.00s)
+    --- PASS: TestValidPluginName/empty (0.00s)
+    --- PASS: TestValidPluginName/simple (0.00s)
+    --- PASS: TestValidPluginName/alnum_underscore_dot (0.00s)
+    --- PASS: TestValidPluginName/traversal_slash (0.00s)
+    --- PASS: TestValidPluginName/leading_dotdot (0.00s)
+    --- PASS: TestValidPluginName/absolute_unix (0.00s)
+    --- PASS: TestValidPluginName/absolute_windows (0.00s)
+    --- PASS: TestValidPluginName/dotdot_literal (0.00s)
+    --- PASS: TestValidPluginName/dotdot_mid (0.00s)
+    --- PASS: TestValidPluginName/space (0.00s)
+    --- PASS: TestValidPluginName/shell_meta (0.00s)
+    --- PASS: TestValidPluginName/backtick (0.00s)
+    --- PASS: TestValidPluginName/too_long (0.00s)
+=== RUN   TestPreflightPreWriteDeleteRequiresCondition
+2026-11-25T19:10:44.657Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPreflightPreWriteDeleteRequiresCondition (0.61s)
+=== RUN   TestPreflightPreWriteTruncateBatchOK
+2026-11-25T19:10:45.270Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+[mysql] 2026/11/25 19:10:48 packets.go:58 unexpected EOF
+--- PASS: TestPreflightPreWriteTruncateBatchOK (3.67s)
+=== RUN   TestPreflightPreWriteTruncateCDCStreamingError
+2026-11-25T19:10:48.921Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+[mysql] 2026/11/25 19:10:51 packets.go:58 unexpected EOF
+--- PASS: TestPreflightPreWriteTruncateCDCStreamingError (3.61s)
+=== RUN   TestPreflightMySQLSchemaHasPreWrite
+--- PASS: TestPreflightMySQLSchemaHasPreWrite (0.00s)
+=== RUN   TestReconcileSQLGeneration
+=== RUN   TestReconcileSQLGeneration/mysql
+=== RUN   TestReconcileSQLGeneration/doris
+=== RUN   TestReconcileSQLGeneration/postgres
+=== RUN   TestReconcileSQLGeneration/clickhouse
+--- PASS: TestReconcileSQLGeneration (0.00s)
+    --- PASS: TestReconcileSQLGeneration/mysql (0.00s)
+    --- PASS: TestReconcileSQLGeneration/doris (0.00s)
+    --- PASS: TestReconcileSQLGeneration/postgres (0.00s)
+    --- PASS: TestReconcileSQLGeneration/clickhouse (0.00s)
+=== RUN   TestReconcileQuoteIdentEscapes
+--- PASS: TestReconcileQuoteIdentEscapes (0.00s)
+=== RUN   TestReconcileSourceTablesAndTargetMapping
+--- PASS: TestReconcileSourceTablesAndTargetMapping (0.00s)
+=== RUN   TestReconcileVerdictsAndBucketLocalisation
+=== RUN   TestReconcileVerdictsAndBucketLocalisation/match
+=== RUN   TestReconcileVerdictsAndBucketLocalisation/count_mismatch_localises_bucket
+=== RUN   TestReconcileVerdictsAndBucketLocalisation/content_mismatch
+=== RUN   TestReconcileVerdictsAndBucketLocalisation/deep=false_is_count_only
+=== RUN   TestReconcileVerdictsAndBucketLocalisation/missing_target_columns_is_schema_mismatch
+=== RUN   TestReconcileVerdictsAndBucketLocalisation/missing_target_table
+=== RUN   TestReconcileVerdictsAndBucketLocalisation/error_is_reported_per_table
+--- PASS: TestReconcileVerdictsAndBucketLocalisation (0.00s)
+    --- PASS: TestReconcileVerdictsAndBucketLocalisation/match (0.00s)
+    --- PASS: TestReconcileVerdictsAndBucketLocalisation/count_mismatch_localises_bucket (0.00s)
+    --- PASS: TestReconcileVerdictsAndBucketLocalisation/content_mismatch (0.00s)
+    --- PASS: TestReconcileVerdictsAndBucketLocalisation/deep=false_is_count_only (0.00s)
+    --- PASS: TestReconcileVerdictsAndBucketLocalisation/missing_target_columns_is_schema_mismatch (0.00s)
+    --- PASS: TestReconcileVerdictsAndBucketLocalisation/missing_target_table (0.00s)
+    --- PASS: TestReconcileVerdictsAndBucketLocalisation/error_is_reported_per_table (0.00s)
+=== RUN   TestReconcileRejectsUnsupportedShapes
+=== RUN   TestReconcileRejectsUnsupportedShapes/kafka_source
+=== RUN   TestReconcileRejectsUnsupportedShapes/file_sink
+=== RUN   TestReconcileRejectsUnsupportedShapes/transforms
+--- PASS: TestReconcileRejectsUnsupportedShapes (0.00s)
+    --- PASS: TestReconcileRejectsUnsupportedShapes/kafka_source (0.00s)
+    --- PASS: TestReconcileRejectsUnsupportedShapes/file_sink (0.00s)
+    --- PASS: TestReconcileRejectsUnsupportedShapes/transforms (0.00s)
+=== RUN   TestReconcileHTTPHandler
+2026-11-25T19:10:52.537Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestReconcileHTTPHandler (0.30s)
+=== RUN   TestReconcileHTTPMethodNotAllowed
+2026-11-25T19:10:52.833Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestReconcileHTTPMethodNotAllowed (0.29s)
+=== RUN   TestReconcileRowLevelDiffSamplesKeys
+--- PASS: TestReconcileRowLevelDiffSamplesKeys (0.00s)
+=== RUN   TestReconcileRowDiffDisabledByDefault
+--- PASS: TestReconcileRowDiffDisabledByDefault (0.00s)
+=== RUN   TestReconcileRowSQLShapes
+--- PASS: TestReconcileRowSQLShapes (0.00s)
+=== RUN   TestReconcileUnknownPipelineIs404
+2026-11-25T19:10:53.125Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestReconcileUnknownPipelineIs404 (0.29s)
+=== RUN   TestRecoveryAPIAndScopedDLQDeletion
+2026-11-25T19:10:53.417Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRecoveryAPIAndScopedDLQDeletion (0.33s)
+=== RUN   TestRecoveryReplayResultFailureRestartPreservesSinkAck
+=== RUN   TestRecoveryReplayResultFailureRestartPreservesSinkAck/all_results
+2026-11-25T19:10:53.749Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:53.934Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestRecoveryReplayResultFailureRestartPreservesSinkAck/ack_and_results
+2026-11-25T19:10:54.230Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:54.414Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestRecoveryReplayResultFailureRestartPreservesSinkAck/completed_result_only
+2026-11-25T19:10:54.710Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:54.901Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRecoveryReplayResultFailureRestartPreservesSinkAck (1.45s)
+    --- PASS: TestRecoveryReplayResultFailureRestartPreservesSinkAck/all_results (0.48s)
+    --- PASS: TestRecoveryReplayResultFailureRestartPreservesSinkAck/ack_and_results (0.48s)
+    --- PASS: TestRecoveryReplayResultFailureRestartPreservesSinkAck/completed_result_only (0.49s)
+=== RUN   TestRecoveryAPIRowIdentityIsExact
+2026-11-25T19:10:55.205Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestRecoveryAPIRowIdentityIsExact (0.31s)
+=== RUN   TestRestoreFailuresPersistAndRemainVisible
+2026-11-25T19:10:55.517Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:55.530Z [WARN] Pipeline restore-dag-connection (restore-dag-connection) restore failed at dag_connection_resolve: node source1 connection: "missing-dag-source" not found
+2026-11-25T19:10:55.531Z [WARN] Pipeline restore-dag-yaml (restore-dag-yaml) restore failed at dag_yaml_parse: yaml: unmarshal errors:
+  line 2: cannot unmarshal !!str `invalid` into orchestrator.DAG
+2026-11-25T19:10:55.533Z [WARN] Pipeline restore-linear-connection (restore-linear-connection) restore failed at linear_connection_resolve: source connection: "missing-linear-source" not found
+2026-11-25T19:10:55.534Z [WARN] Pipeline restore-linear-yaml (restore-linear-yaml) restore failed at linear_yaml_parse: yaml: line 2: did not find expected node content
+2026-11-25T19:10:55.536Z [WARN] Pipeline restore-runner-build (restore-runner-build) restore failed at runner_build: build sink: file_sink sink format "xml" is not supported; use json, jsonl, csv, or parquet
+2026-11-25T19:10:55.537Z [WARN] Pipeline restore-spec-validate (restore-spec-validate) restore failed at spec_validate: invalid pipeline "restore-spec-validate": unknown source.type "restore_unknown_source"
+2026-11-25T19:10:55.557Z [WARN] ETL_PROFILE=production is running with ETL_INSECURE_DEV=true; production secret/TLS gates are bypassed for explicit development use only
+2026-11-25T19:10:55.697Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:10:55.711Z [WARN] Pipeline restore-dag-connection (restore-dag-connection) restore failed at dag_connection_resolve: node source1 connection: "missing-dag-source" not found
+2026-11-25T19:10:55.712Z [WARN] Pipeline restore-dag-yaml (restore-dag-yaml) restore failed at dag_yaml_parse: yaml: unmarshal errors:
+  line 2: cannot unmarshal !!str `invalid` into orchestrator.DAG
+2026-11-25T19:10:55.714Z [WARN] Pipeline restore-linear-connection (restore-linear-connection) restore failed at linear_connection_resolve: source connection: "missing-linear-source" not found
+2026-11-25T19:10:55.715Z [WARN] Pipeline restore-linear-yaml (restore-linear-yaml) restore failed at linear_yaml_parse: yaml: line 2: did not find expected node content
+2026-11-25T19:10:55.717Z [WARN] Pipeline restore-runner-build (restore-runner-build) restore failed at runner_build: build sink: file_sink sink format "xml" is not supported; use json, jsonl, csv, or parquet
+2026-11-25T19:10:55.718Z [WARN] Pipeline restore-spec-validate (restore-spec-validate) restore failed at spec_validate: invalid pipeline "restore-spec-validate": unknown source.type "restore_unknown_source"
+--- PASS: TestRestoreFailuresPersistAndRemainVisible (0.50s)
+=== RUN   TestRestoreFailureRepairPreservesCheckpointAndEncryptedSpec
+2026-11-25T19:10:56.015Z [WARN] Pipeline restore-repair (restore-repair-id) restore failed at linear_connection_resolve: source connection: "restore-repair-source" not found
+2026-11-25T19:10:56.304Z [INFO] Restored pipeline from DB: restore-repair (restore-repair-id)
+--- PASS: TestRestoreFailureRepairPreservesCheckpointAndEncryptedSpec (0.59s)
+=== RUN   TestResyncSnapshotTablesClearsOnlyRequestedCursors
+--- PASS: TestResyncSnapshotTablesClearsOnlyRequestedCursors (0.00s)
+=== RUN   TestResyncSnapshotTablesDropsEmptyCursorMaps
+--- PASS: TestResyncSnapshotTablesDropsEmptyCursorMaps (0.00s)
+=== RUN   TestResyncSnapshotTablesPreservesEnvelope
+--- PASS: TestResyncSnapshotTablesPreservesEnvelope (0.00s)
+=== RUN   TestResyncSnapshotTablesRejectsUnusablePositions
+=== RUN   TestResyncSnapshotTablesRejectsUnusablePositions/empty_position
+=== RUN   TestResyncSnapshotTablesRejectsUnusablePositions/not_json
+=== RUN   TestResyncSnapshotTablesRejectsUnusablePositions/no_tables
+=== RUN   TestResyncSnapshotTablesRejectsUnusablePositions/missing_anchor
+=== RUN   TestResyncSnapshotTablesRejectsUnusablePositions/not_a_snapshot_position
+--- PASS: TestResyncSnapshotTablesRejectsUnusablePositions (0.00s)
+    --- PASS: TestResyncSnapshotTablesRejectsUnusablePositions/empty_position (0.00s)
+    --- PASS: TestResyncSnapshotTablesRejectsUnusablePositions/not_json (0.00s)
+    --- PASS: TestResyncSnapshotTablesRejectsUnusablePositions/no_tables (0.00s)
+    --- PASS: TestResyncSnapshotTablesRejectsUnusablePositions/missing_anchor (0.00s)
+    --- PASS: TestResyncSnapshotTablesRejectsUnusablePositions/not_a_snapshot_position (0.00s)
+=== RUN   TestResyncConfiguredTables
+--- PASS: TestResyncConfiguredTables (0.00s)
+=== RUN   TestResyncHTTPSurface
+2026-11-25T19:10:56.597Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestResyncHTTPSurface (0.29s)
+=== RUN   TestResyncRewritesPersistedCheckpoint
+2026-11-25T19:10:56.889Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestResyncRewritesPersistedCheckpoint (0.30s)
+=== RUN   TestDevelopmentProfileRemainsCompatibleWithoutProductionSecrets
+2026-11-25T19:10:57.189Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestDevelopmentProfileRemainsCompatibleWithoutProductionSecrets (0.29s)
+=== RUN   TestProductionProfileFailsClosedWithoutRequiredSecrets
+--- PASS: TestProductionProfileFailsClosedWithoutRequiredSecrets (0.15s)
+=== RUN   TestProductionProfileExplicitInsecureDevelopmentBypassIsDiagnosable
+2026-11-25T19:10:57.488Z [WARN] ETL_PROFILE=production is running with ETL_INSECURE_DEV=true; production secret/TLS gates are bypassed for explicit development use only
+2026-11-25T19:10:57.489Z [WARN] ETL_PROFILE=production is running with ETL_INSECURE_DEV=true; production secret/TLS gates are bypassed for explicit development use only
+2026-11-25T19:10:57.628Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestProductionProfileExplicitInsecureDevelopmentBypassIsDiagnosable (0.29s)
+=== RUN   TestProductionProfileAcceptsCompletePinnedRuntimeSecrets
+--- PASS: TestProductionProfileAcceptsCompletePinnedRuntimeSecrets (0.68s)
+=== RUN   TestRestoreStrictProfileDefaultsAndOverrides
+=== RUN   TestRestoreStrictProfileDefaultsAndOverrides/development_default
+=== RUN   TestRestoreStrictProfileDefaultsAndOverrides/production_default
+2026-11-25T19:10:58.317Z [WARN] ETL_PROFILE=production is running with ETL_INSECURE_DEV=true; production secret/TLS gates are bypassed for explicit development use only
+=== RUN   TestRestoreStrictProfileDefaultsAndOverrides/development_explicit_strict
+=== RUN   TestRestoreStrictProfileDefaultsAndOverrides/production_explicit_non-strict
+2026-11-25T19:10:58.317Z [WARN] ETL_PROFILE=production is running with ETL_INSECURE_DEV=true; production secret/TLS gates are bypassed for explicit development use only
+--- PASS: TestRestoreStrictProfileDefaultsAndOverrides (0.00s)
+    --- PASS: TestRestoreStrictProfileDefaultsAndOverrides/development_default (0.00s)
+    --- PASS: TestRestoreStrictProfileDefaultsAndOverrides/production_default (0.00s)
+    --- PASS: TestRestoreStrictProfileDefaultsAndOverrides/development_explicit_strict (0.00s)
+    --- PASS: TestRestoreStrictProfileDefaultsAndOverrides/production_explicit_non-strict (0.00s)
+=== RUN   TestPipelineScheduleAPI
+2026-11-25T19:10:58.605Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineScheduleAPI (0.58s)
+=== RUN   TestPipelineScheduleAPIDependency
+2026-11-25T19:10:59.186Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineScheduleAPIDependency (0.58s)
+=== RUN   TestSpecValidateRejectsUnsupportedSourceSchedule
+2026-11-25T19:10:59.764Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestSpecValidateRejectsUnsupportedSourceSchedule (0.29s)
+=== RUN   TestValidatePipelineScheduleDependency
+--- PASS: TestValidatePipelineScheduleDependency (0.00s)
+=== RUN   TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows
+=== RUN   TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/linear/cron
+2026-11-25T19:11:00.057Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/linear/periodic
+2026-11-25T19:11:00.627Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/linear/dependency
+2026-11-25T19:11:01.204Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/dag/cron
+2026-11-25T19:11:01.773Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/dag/periodic
+2026-11-25T19:11:02.065Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/dag/dependency
+2026-11-25T19:11:02.363Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows (2.60s)
+    --- PASS: TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/linear/cron (0.57s)
+    --- PASS: TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/linear/periodic (0.57s)
+    --- PASS: TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/linear/dependency (0.57s)
+    --- PASS: TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/dag/cron (0.29s)
+    --- PASS: TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/dag/periodic (0.29s)
+    --- PASS: TestPipelineCreateSchedulerFailureLeavesNoRuntimeOrRows/dag/dependency (0.30s)
+=== RUN   TestPipelineUpdateSchedulerFailureKeepsLastSuccessfulBoundary
+=== RUN   TestPipelineUpdateSchedulerFailureKeepsLastSuccessfulBoundary/linear
+2026-11-25T19:11:02.656Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:02.940Z [INFO] Pipeline f2b2a994-9ae7-49b1-942d-3f5b644e2776 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:02.942Z [INFO] Pipeline f2b2a994-9ae7-49b1-942d-3f5b644e2776 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:03.090Z [WARN] Secret field uses legacy name fallback; add a descriptor: kind="source" type="file" field="api_token"
+2026-11-25T19:11:03.508Z [INFO] Dependency trigger: scheduler-fault-upstream -> f2b2a994-9ae7-49b1-942d-3f5b644e2776
+2026-11-25T19:11:03.509Z [INFO] Triggering pipeline f2b2a994-9ae7-49b1-942d-3f5b644e2776
+=== RUN   TestPipelineUpdateSchedulerFailureKeepsLastSuccessfulBoundary/dag
+2026-11-25T19:11:03.833Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:03.837Z [INFO] Pipeline ab7dceda-abd6-4094-a0a3-9db50a2641b5 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:03.839Z [INFO] Pipeline ab7dceda-abd6-4094-a0a3-9db50a2641b5 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:04.121Z [INFO] Dependency trigger: scheduler-fault-upstream -> ab7dceda-abd6-4094-a0a3-9db50a2641b5
+2026-11-25T19:11:04.122Z [INFO] Triggering pipeline ab7dceda-abd6-4094-a0a3-9db50a2641b5
+--- PASS: TestPipelineUpdateSchedulerFailureKeepsLastSuccessfulBoundary (1.79s)
+    --- PASS: TestPipelineUpdateSchedulerFailureKeepsLastSuccessfulBoundary/linear (1.18s)
+    --- PASS: TestPipelineUpdateSchedulerFailureKeepsLastSuccessfulBoundary/dag (0.61s)
+=== RUN   TestSpecImportSchedulerFailureKeepsLastSuccessfulBoundary
+=== RUN   TestSpecImportSchedulerFailureKeepsLastSuccessfulBoundary/linear
+2026-11-25T19:11:04.445Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:04.726Z [INFO] Pipeline 59691757-e4ac-449f-93d2-3d333af03120 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:04.729Z [INFO] Pipeline 59691757-e4ac-449f-93d2-3d333af03120 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:05.011Z [INFO] Dependency trigger: scheduler-fault-upstream -> 59691757-e4ac-449f-93d2-3d333af03120
+2026-11-25T19:11:05.012Z [INFO] Triggering pipeline 59691757-e4ac-449f-93d2-3d333af03120
+=== RUN   TestSpecImportSchedulerFailureKeepsLastSuccessfulBoundary/dag
+2026-11-25T19:11:05.338Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:05.343Z [INFO] Pipeline f21fae22-1239-42d4-9b4e-33543901c07f waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:05.345Z [INFO] Pipeline f21fae22-1239-42d4-9b4e-33543901c07f waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:05.626Z [INFO] Dependency trigger: scheduler-fault-upstream -> f21fae22-1239-42d4-9b4e-33543901c07f
+2026-11-25T19:11:05.627Z [INFO] Triggering pipeline f21fae22-1239-42d4-9b4e-33543901c07f
+--- PASS: TestSpecImportSchedulerFailureKeepsLastSuccessfulBoundary (1.51s)
+    --- PASS: TestSpecImportSchedulerFailureKeepsLastSuccessfulBoundary/linear (0.89s)
+    --- PASS: TestSpecImportSchedulerFailureKeepsLastSuccessfulBoundary/dag (0.62s)
+=== RUN   TestPipelineRollbackSchedulerFailureKeepsLastSuccessfulBoundary
+=== RUN   TestPipelineRollbackSchedulerFailureKeepsLastSuccessfulBoundary/linear
+2026-11-25T19:11:05.956Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:06.238Z [INFO] Scheduled pipeline 9f184bd9-e84a-4859-ae04-4c68f7042525 every 1m0s
+2026-11-25T19:11:06.800Z [INFO] Pipeline 9f184bd9-e84a-4859-ae04-4c68f7042525 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:06.802Z [INFO] Pipeline 9f184bd9-e84a-4859-ae04-4c68f7042525 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:06.807Z [INFO] Dependency trigger: scheduler-fault-upstream -> 9f184bd9-e84a-4859-ae04-4c68f7042525
+2026-11-25T19:11:06.807Z [INFO] Triggering pipeline 9f184bd9-e84a-4859-ae04-4c68f7042525
+=== RUN   TestPipelineRollbackSchedulerFailureKeepsLastSuccessfulBoundary/dag
+2026-11-25T19:11:07.137Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:07.142Z [INFO] Scheduled pipeline 82715118-2c09-44fb-89a5-245300583a7b every 1m0s
+2026-11-25T19:11:07.424Z [INFO] Pipeline 82715118-2c09-44fb-89a5-245300583a7b waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:07.426Z [INFO] Pipeline 82715118-2c09-44fb-89a5-245300583a7b waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:07.431Z [INFO] Dependency trigger: scheduler-fault-upstream -> 82715118-2c09-44fb-89a5-245300583a7b
+2026-11-25T19:11:07.432Z [INFO] Triggering pipeline 82715118-2c09-44fb-89a5-245300583a7b
+--- PASS: TestPipelineRollbackSchedulerFailureKeepsLastSuccessfulBoundary (1.81s)
+    --- PASS: TestPipelineRollbackSchedulerFailureKeepsLastSuccessfulBoundary/linear (1.18s)
+    --- PASS: TestPipelineRollbackSchedulerFailureKeepsLastSuccessfulBoundary/dag (0.63s)
+=== RUN   TestStorageFailureAfterSchedulerStagingRestoresOldRegistration
+=== RUN   TestStorageFailureAfterSchedulerStagingRestoresOldRegistration/update
+2026-11-25T19:11:07.763Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:08.042Z [INFO] Pipeline 60a21f5f-09a1-4a7d-b3e8-92d2249b2230 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:08.045Z [INFO] Pipeline 60a21f5f-09a1-4a7d-b3e8-92d2249b2230 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:08.606Z [INFO] Dependency trigger: scheduler-fault-upstream -> 60a21f5f-09a1-4a7d-b3e8-92d2249b2230
+2026-11-25T19:11:08.607Z [INFO] Triggering pipeline 60a21f5f-09a1-4a7d-b3e8-92d2249b2230
+=== RUN   TestStorageFailureAfterSchedulerStagingRestoresOldRegistration/import
+2026-11-25T19:11:08.934Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:09.217Z [INFO] Pipeline 1ccc9295-e2d4-4493-bf8a-7a8eaeab2b7f waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:09.220Z [INFO] Pipeline 1ccc9295-e2d4-4493-bf8a-7a8eaeab2b7f waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:09.502Z [INFO] Dependency trigger: scheduler-fault-upstream -> 1ccc9295-e2d4-4493-bf8a-7a8eaeab2b7f
+2026-11-25T19:11:09.502Z [INFO] Triggering pipeline 1ccc9295-e2d4-4493-bf8a-7a8eaeab2b7f
+=== RUN   TestStorageFailureAfterSchedulerStagingRestoresOldRegistration/rollback
+2026-11-25T19:11:09.834Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:10.117Z [INFO] Scheduled pipeline 8769c816-e95c-44a4-9c41-630c3819ea91 every 1m0s
+2026-11-25T19:11:10.685Z [INFO] Pipeline 8769c816-e95c-44a4-9c41-630c3819ea91 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:10.687Z [INFO] Pipeline 8769c816-e95c-44a4-9c41-630c3819ea91 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:10.694Z [INFO] Dependency trigger: scheduler-fault-upstream -> 8769c816-e95c-44a4-9c41-630c3819ea91
+2026-11-25T19:11:10.694Z [INFO] Triggering pipeline 8769c816-e95c-44a4-9c41-630c3819ea91
+--- PASS: TestStorageFailureAfterSchedulerStagingRestoresOldRegistration (3.26s)
+    --- PASS: TestStorageFailureAfterSchedulerStagingRestoresOldRegistration/update (1.17s)
+    --- PASS: TestStorageFailureAfterSchedulerStagingRestoresOldRegistration/import (0.90s)
+    --- PASS: TestStorageFailureAfterSchedulerStagingRestoresOldRegistration/rollback (1.19s)
+=== RUN   TestScheduleEnableStorageFailureRemovesStagedRegistration
+2026-11-25T19:11:11.023Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestScheduleEnableStorageFailureRemovesStagedRegistration (0.57s)
+=== RUN   TestScheduleDisableStorageFailureRestoresOldRegistration
+2026-11-25T19:11:11.594Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:11.876Z [INFO] Pipeline c45a5ca2-9e51-4b79-b01f-c84e62edf724 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:11.879Z [INFO] Pipeline c45a5ca2-9e51-4b79-b01f-c84e62edf724 waiting for dependencies: [scheduler-fault-upstream]
+2026-11-25T19:11:11.883Z [INFO] Dependency trigger: scheduler-fault-upstream -> c45a5ca2-9e51-4b79-b01f-c84e62edf724
+2026-11-25T19:11:11.883Z [INFO] Triggering pipeline c45a5ca2-9e51-4b79-b01f-c84e62edf724
+--- PASS: TestScheduleDisableStorageFailureRestoresOldRegistration (0.61s)
+=== RUN   TestStartAllRegistersCronScheduleWithoutImmediateStart
+2026-11-25T19:11:12.213Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:12.216Z [INFO] Scheduled pipeline pipe-cron with cron "0 0 0 1 1 *" (entry 1)
+2026-11-25T19:11:12.216Z [INFO] Registered pipeline cron-batch (pipe-cron) with scheduler (type=cron)
+2026-11-25T19:11:12.217Z [INFO] Scheduler started
+2026-11-25T19:11:12.270Z [INFO] Scheduler stopped
+--- PASS: TestStartAllRegistersCronScheduleWithoutImmediateStart (0.35s)
+=== RUN   TestStartAllPeriodicScheduleTriggersRunner
+2026-11-25T19:11:12.563Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:12.565Z [INFO] Scheduled pipeline pipe-periodic every 1s
+2026-11-25T19:11:12.566Z [INFO] Registered pipeline periodic-batch (pipe-periodic) with scheduler (type=periodic)
+2026-11-25T19:11:12.566Z [INFO] Scheduler started
+2026-11-25T19:11:13.567Z [INFO] Triggering pipeline pipe-periodic
+2026-11-25T19:11:13.581Z [INFO] Scheduler stopped
+--- PASS: TestStartAllPeriodicScheduleTriggersRunner (1.32s)
+=== RUN   TestStartAllDependencyTriggerFiresDownstream
+2026-11-25T19:11:13.908Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:13.914Z [INFO] Started pipeline: dep-upstream (pipe-upstream)
+2026-11-25T19:11:13.914Z [INFO] Pipeline pipe-downstream waiting for dependencies: [pipe-upstream]
+2026-11-25T19:11:13.914Z [INFO] Registered pipeline dep-downstream (pipe-downstream) with scheduler (type=dependency)
+2026-11-25T19:11:13.915Z [INFO] Scheduler started
+2026-11-25T19:11:13.926Z [INFO] Dependency trigger: pipe-upstream -> pipe-downstream
+2026-11-25T19:11:13.926Z [INFO] Triggering pipeline pipe-downstream
+2026-11-25T19:11:13.937Z [INFO] Scheduler stopped
+--- PASS: TestStartAllDependencyTriggerFiresDownstream (0.35s)
+=== RUN   TestKafkaSourceSchemaRegistryCapability
+--- PASS: TestKafkaSourceSchemaRegistryCapability (0.14s)
+=== RUN   TestKafkaSchemaRegistryGuidanceWarnsNotConsumed
+--- PASS: TestKafkaSchemaRegistryGuidanceWarnsNotConsumed (0.00s)
+=== RUN   TestAllCredentialBearingFieldsAreMarkedSecret
+    schema_secret_conformance_test.go:113: credential-bearing fields verified secret: 65
+--- PASS: TestAllCredentialBearingFieldsAreMarkedSecret (0.00s)
+=== RUN   TestFourDSNPathsAreSecret
+--- PASS: TestFourDSNPathsAreSecret (0.00s)
+=== RUN   TestDescriptorResolverCoversAllDeclaredSecrets
+--- PASS: TestDescriptorResolverCoversAllDeclaredSecrets (0.28s)
+=== RUN   TestPluginSchemaIncludesImplementedConfigFields
+--- PASS: TestPluginSchemaIncludesImplementedConfigFields (0.00s)
+=== RUN   TestWindowSchemaOnlyExposesImplementedWindowTypes
+--- PASS: TestWindowSchemaOnlyExposesImplementedWindowTypes (0.00s)
+=== RUN   TestStatefulTransformSchemaOnlyExposesRedisStateBackend
+--- PASS: TestStatefulTransformSchemaOnlyExposesRedisStateBackend (0.00s)
+=== RUN   TestPluginMetadataUsesEvidenceDrivenMaturity
+--- PASS: TestPluginMetadataUsesEvidenceDrivenMaturity (0.00s)
+=== RUN   TestConnectorMaturityLevelsAreExplicit
+--- PASS: TestConnectorMaturityLevelsAreExplicit (0.00s)
+=== RUN   TestPublicDocsDoNotUseLegacyStableMaturity
+--- PASS: TestPublicDocsDoNotUseLegacyStableMaturity (0.00s)
+=== RUN   TestConnectorDescriptorsMergeRegistrySchemaAndMetadata
+--- PASS: TestConnectorDescriptorsMergeRegistrySchemaAndMetadata (0.14s)
+=== RUN   TestConnectorDescriptorConfigContractMatchesSchemaExactly
+--- PASS: TestConnectorDescriptorConfigContractMatchesSchemaExactly (0.14s)
+=== RUN   TestPluginMetadataRequiredFieldsAreDerivedFromSchema
+--- PASS: TestPluginMetadataRequiredFieldsAreDerivedFromSchema (0.00s)
+=== RUN   TestConnectorSchemaMarksSensitiveDSNAndClickHouseDefault
+--- PASS: TestConnectorSchemaMarksSensitiveDSNAndClickHouseDefault (0.00s)
+=== RUN   TestConnectorDescriptorsEndpointIncludesMaturityLevels
+2026-11-25T19:11:14.935Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestConnectorDescriptorsEndpointIncludesMaturityLevels (0.49s)
+=== RUN   TestCompileWithExtismJSDisablesNpxFallbackByDefault
+--- PASS: TestCompileWithExtismJSDisablesNpxFallbackByDefault (0.00s)
+=== RUN   TestCompileWithExtismJSRequiresExplicitNpxPackage
+--- PASS: TestCompileWithExtismJSRequiresExplicitNpxPackage (0.00s)
+=== RUN   TestCompileWithExtismJSUsesBundledJavaScriptAndCurrentCLI
+--- PASS: TestCompileWithExtismJSUsesBundledJavaScriptAndCurrentCLI (0.00s)
+=== RUN   TestKafkaSourceFormatContractIsUniqueAndComplete
+--- PASS: TestKafkaSourceFormatContractIsUniqueAndComplete (0.00s)
+=== RUN   TestConnectionAndSettingsSecretEnvelopeAPI
+2026-11-25T19:11:15.562Z [WARN] Secret field uses legacy name fallback; add a descriptor: kind="source" type="identity" field="password"
+--- PASS: TestConnectionAndSettingsSecretEnvelopeAPI (1.03s)
+=== RUN   TestSecretEnvelopeWrongKeyFailsClosed
+--- PASS: TestSecretEnvelopeWrongKeyFailsClosed (0.46s)
+=== RUN   TestHealthSurfacesPlaintextSecrets
+2026-11-25T19:11:16.912Z [WARN] Startup detected plaintext secrets: connections=1 settings=0; stop writers and run --remediate-secrets with the encryption key configured
+--- PASS: TestHealthSurfacesPlaintextSecrets (0.30s)
+=== RUN   TestPreserveSecretConfigKeepsMaskedPassword
+--- PASS: TestPreserveSecretConfigKeepsMaskedPassword (0.00s)
+=== RUN   TestPreserveSecretConfigAllowsExplicitChange
+--- PASS: TestPreserveSecretConfigAllowsExplicitChange (0.00s)
+=== RUN   TestPreserveSecretConfigDropsPlaceholderWithoutExisting
+--- PASS: TestPreserveSecretConfigDropsPlaceholderWithoutExisting (0.00s)
+=== RUN   TestPreserveLinearSpecSecrets
+--- PASS: TestPreserveLinearSpecSecrets (0.28s)
+=== RUN   TestPreserveDAGSpecSecretsByNodeID
+--- PASS: TestPreserveDAGSpecSecretsByNodeID (0.28s)
+=== RUN   TestIsSecretPlaceholder
+--- PASS: TestIsSecretPlaceholder (0.00s)
+=== RUN   TestMergeConnectionConfigPreservesMaskedSecrets
+--- PASS: TestMergeConnectionConfigPreservesMaskedSecrets (0.14s)
+=== RUN   TestMaskConfigSecretsNested
+--- PASS: TestMaskConfigSecretsNested (0.00s)
+=== RUN   TestParseCORSOriginsProfileDefaults
+--- PASS: TestParseCORSOriginsProfileDefaults (0.00s)
+=== RUN   TestCORSAllowListAndSecurityHeaders
+--- PASS: TestCORSAllowListAndSecurityHeaders (0.00s)
+=== RUN   TestCORSRejectsDisallowedPreflight
+--- PASS: TestCORSRejectsDisallowedPreflight (0.00s)
+=== RUN   TestSameHostOriginRemainsAllowedWithExplicitCrossOriginList
+--- PASS: TestSameHostOriginRemainsAllowedWithExplicitCrossOriginList (0.00s)
+=== RUN   TestClientIPOnlyTrustsForwardedHeadersFromConfiguredProxy
+--- PASS: TestClientIPOnlyTrustsForwardedHeadersFromConfiguredProxy (0.00s)
+=== RUN   TestAuthFailureHasChallengeAndSecurityHeaders
+--- PASS: TestAuthFailureHasChallengeAndSecurityHeaders (0.00s)
+=== RUN   TestRunPreflightSnapshotCoverageReportsCompositeCursor
+2026-11-25T19:11:17.901Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:17.904Z [INFO] MySQL preflight passed: binlog_format=ROW, binlog_row_image=FULL, grants OK
+2026-11-25T19:11:17.905Z [DEBU] mysql_snapshot_cdc coverage probe: 1 tables, 1 snapshotted, 0 skipped (no usable key)
+--- PASS: TestRunPreflightSnapshotCoverageReportsCompositeCursor (0.57s)
+=== RUN   TestRunPreflightSnapshotCoverageWarnsOnNoPKTable
+2026-11-25T19:11:18.473Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:18.475Z [INFO] MySQL preflight passed: binlog_format=ROW, binlog_row_image=FULL, grants OK
+2026-11-25T19:11:18.476Z [DEBU] mysql_snapshot_cdc coverage probe: 1 tables, 0 snapshotted, 1 skipped (no usable key)
+--- PASS: TestRunPreflightSnapshotCoverageWarnsOnNoPKTable (0.57s)
+=== RUN   TestRunPreflightSnapshotCoverageSingleColumnNumeric
+2026-11-25T19:11:19.043Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:19.046Z [INFO] MySQL preflight passed: binlog_format=ROW, binlog_row_image=FULL, grants OK
+2026-11-25T19:11:19.046Z [DEBU] mysql_snapshot_cdc coverage probe: 1 tables, 1 snapshotted, 0 skipped (no usable key)
+--- PASS: TestRunPreflightSnapshotCoverageSingleColumnNumeric (0.57s)
+=== RUN   TestNewServerRejectsInvalidSpecEncryptionKey
+--- PASS: TestNewServerRejectsInvalidSpecEncryptionKey (0.15s)
+=== RUN   TestRestoreFromDBFailsClosedOnSpecCryptoErrors
+=== RUN   TestRestoreFromDBFailsClosedOnSpecCryptoErrors/missing_key
+2026-11-25T19:11:19.767Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestRestoreFromDBFailsClosedOnSpecCryptoErrors/wrong_key
+=== RUN   TestRestoreFromDBFailsClosedOnSpecCryptoErrors/corrupt_ciphertext
+=== RUN   TestRestoreFromDBFailsClosedOnSpecCryptoErrors/unsupported_envelope_version
+--- PASS: TestRestoreFromDBFailsClosedOnSpecCryptoErrors (1.17s)
+    --- PASS: TestRestoreFromDBFailsClosedOnSpecCryptoErrors/missing_key (0.29s)
+    --- PASS: TestRestoreFromDBFailsClosedOnSpecCryptoErrors/wrong_key (0.29s)
+    --- PASS: TestRestoreFromDBFailsClosedOnSpecCryptoErrors/corrupt_ciphertext (0.29s)
+    --- PASS: TestRestoreFromDBFailsClosedOnSpecCryptoErrors/unsupported_envelope_version (0.29s)
+=== RUN   TestSpecEncryptionRotationKeepsOldVersionsReadable
+2026-11-25T19:11:20.942Z [INFO] Restored pipeline from DB: linear-file-demo (rotate-id)
+--- PASS: TestSpecEncryptionRotationKeepsOldVersionsReadable (0.30s)
+=== RUN   TestLegacySpecCiphertextRemainsReadable
+2026-11-25T19:11:21.243Z [INFO] Restored pipeline from DB: linear-file-demo (legacy-id)
+--- PASS: TestLegacySpecCiphertextRemainsReadable (0.30s)
+=== RUN   TestLegacyPlaintextSpecRecoveryFlow
+2026-11-25T19:11:21.537Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:21.541Z [INFO] Restored pipeline from DB: linear-file-demo (legacy-plain-id)
+2026-11-25T19:11:22.383Z [INFO] Pipeline rolled back to version 1: legacy-plain-id
+2026-11-25T19:11:22.552Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+2026-11-25T19:11:22.557Z [INFO] Restored pipeline from DB: linear-file-demo (legacy-plain-id)
+--- PASS: TestLegacyPlaintextSpecRecoveryFlow (1.31s)
+=== RUN   TestEncryptedSpecRecoveryFlowLinearAndDAG
+=== RUN   TestEncryptedSpecRecoveryFlowLinearAndDAG/linear
+2026-11-25T19:11:23.858Z [INFO] Restored pipeline from DB: crypto-linear (18f7e078-f73c-435b-9313-8e72f4b24fc9)
+2026-11-25T19:11:25.825Z [INFO] Pipeline rolled back to version 1: 18f7e078-f73c-435b-9313-8e72f4b24fc9
+2026-11-25T19:11:25.997Z [INFO] Restored pipeline from DB: crypto-linear (18f7e078-f73c-435b-9313-8e72f4b24fc9)
+=== RUN   TestEncryptedSpecRecoveryFlowLinearAndDAG/dag
+2026-11-25T19:11:26.746Z [INFO] Restored DAG pipeline from DB: crypto-dag (ac891a31-68b3-4878-89ca-72b566178d60)
+2026-11-25T19:11:28.998Z [INFO] Pipeline rolled back to version 1: ac891a31-68b3-4878-89ca-72b566178d60
+2026-11-25T19:11:29.172Z [INFO] Restored DAG pipeline from DB: crypto-dag (ac891a31-68b3-4878-89ca-72b566178d60)
+--- PASS: TestEncryptedSpecRecoveryFlowLinearAndDAG (6.61s)
+    --- PASS: TestEncryptedSpecRecoveryFlowLinearAndDAG/linear (3.44s)
+    --- PASS: TestEncryptedSpecRecoveryFlowLinearAndDAG/dag (3.18s)
+=== RUN   TestBuildSpecSummaryLinearCDC
+--- PASS: TestBuildSpecSummaryLinearCDC (0.00s)
+=== RUN   TestBuildSpecSummaryBatchAndSchedule
+--- PASS: TestBuildSpecSummaryBatchAndSchedule (0.00s)
+=== RUN   TestBuildSpecSummaryDAG
+--- PASS: TestBuildSpecSummaryDAG (0.00s)
+=== RUN   TestBuildSpecSummaryNilAndUnsafe
+--- PASS: TestBuildSpecSummaryNilAndUnsafe (0.00s)
+=== RUN   TestBuildSpecSummaryNoConfigLeak
+--- PASS: TestBuildSpecSummaryNoConfigLeak (0.00s)
+=== RUN   TestPipelineCreateStorageFailureLeavesNoRuntimeOrRows
+=== RUN   TestPipelineCreateStorageFailureLeavesNoRuntimeOrRows/linear
+2026-11-25T19:11:29.462Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPipelineCreateStorageFailureLeavesNoRuntimeOrRows/dag
+2026-11-25T19:11:30.031Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineCreateStorageFailureLeavesNoRuntimeOrRows (0.87s)
+    --- PASS: TestPipelineCreateStorageFailureLeavesNoRuntimeOrRows/linear (0.57s)
+    --- PASS: TestPipelineCreateStorageFailureLeavesNoRuntimeOrRows/dag (0.29s)
+=== RUN   TestPipelineUpdateStorageFailureKeepsLastSuccessfulRuntimeAndDB
+=== RUN   TestPipelineUpdateStorageFailureKeepsLastSuccessfulRuntimeAndDB/linear
+2026-11-25T19:11:30.324Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPipelineUpdateStorageFailureKeepsLastSuccessfulRuntimeAndDB/dag
+2026-11-25T19:11:31.457Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineUpdateStorageFailureKeepsLastSuccessfulRuntimeAndDB (1.71s)
+    --- PASS: TestPipelineUpdateStorageFailureKeepsLastSuccessfulRuntimeAndDB/linear (1.13s)
+    --- PASS: TestPipelineUpdateStorageFailureKeepsLastSuccessfulRuntimeAndDB/dag (0.58s)
+=== RUN   TestPipelineUpdateCheckpointFailureRollsBackSpecAndCheckpoint
+2026-11-25T19:11:32.033Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineUpdateCheckpointFailureRollsBackSpecAndCheckpoint (1.13s)
+=== RUN   TestPipelineRollbackStorageFailureKeepsCurrentVersion
+=== RUN   TestPipelineRollbackStorageFailureKeepsCurrentVersion/linear
+2026-11-25T19:11:33.166Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestPipelineRollbackStorageFailureKeepsCurrentVersion/dag
+2026-11-25T19:11:34.304Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineRollbackStorageFailureKeepsCurrentVersion (1.72s)
+    --- PASS: TestPipelineRollbackStorageFailureKeepsCurrentVersion/linear (1.13s)
+    --- PASS: TestPipelineRollbackStorageFailureKeepsCurrentVersion/dag (0.58s)
+=== RUN   TestPipelineDeleteStorageFailureKeepsRuntimeRowsVersionsAndCheckpoint
+2026-11-25T19:11:34.882Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestPipelineDeleteStorageFailureKeepsRuntimeRowsVersionsAndCheckpoint (0.57s)
+=== RUN   TestCheckpointResetFailureReturnsNon2xxAndKeepsCheckpoint
+2026-11-25T19:11:35.456Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestCheckpointResetFailureReturnsNon2xxAndKeepsCheckpoint (0.58s)
+=== RUN   TestSpecImportStorageFailureKeepsExistingRuntimeAndDB
+=== RUN   TestSpecImportStorageFailureKeepsExistingRuntimeAndDB/linear
+2026-11-25T19:11:36.031Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+=== RUN   TestSpecImportStorageFailureKeepsExistingRuntimeAndDB/dag
+2026-11-25T19:11:36.886Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestSpecImportStorageFailureKeepsExistingRuntimeAndDB (1.43s)
+    --- PASS: TestSpecImportStorageFailureKeepsExistingRuntimeAndDB/linear (0.85s)
+    --- PASS: TestSpecImportStorageFailureKeepsExistingRuntimeAndDB/dag (0.58s)
+=== RUN   TestScheduleStorageFailureKeepsInMemoryScheduleUnchanged
+2026-11-25T19:11:37.464Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestScheduleStorageFailureKeepsInMemoryScheduleUnchanged (0.57s)
+=== RUN   TestTapSchemaMarksLegacyAlertFieldsUnimplemented
+--- PASS: TestTapSchemaMarksLegacyAlertFieldsUnimplemented (0.00s)
+=== RUN   TestTapDescriptorDoesNotAdvertiseUnimplementedAlertsOrMetrics
+--- PASS: TestTapDescriptorDoesNotAdvertiseUnimplementedAlertsOrMetrics (0.14s)
+=== RUN   TestSpecValidateWarnsForTapUnimplementedAlertFields
+2026-11-25T19:11:38.177Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestSpecValidateWarnsForTapUnimplementedAlertFields (0.57s)
+=== RUN   TestSpecValidateWarnsForDAGTapUnimplementedAlertFields
+2026-11-25T19:11:38.745Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestSpecValidateWarnsForDAGTapUnimplementedAlertFields (0.29s)
+=== RUN   TestTransformDryRunSupportsFlatMapOutputs
+2026-11-25T19:11:39.041Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestTransformDryRunSupportsFlatMapOutputs (0.30s)
+=== RUN   TestTransformDryRunReportsFlatMapPartialErrors
+2026-11-25T19:11:39.337Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestTransformDryRunReportsFlatMapPartialErrors (0.29s)
+=== RUN   TestTransformDryRunSupportsJavaScriptArrayOutputs
+2026-11-25T19:11:39.628Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestTransformDryRunSupportsJavaScriptArrayOutputs (0.29s)
+=== RUN   TestReadWorkerLabels
+=== RUN   TestReadWorkerLabels/unset
+=== RUN   TestReadWorkerLabels/empty
+=== RUN   TestReadWorkerLabels/single_kv
+=== RUN   TestReadWorkerLabels/multi_kv
+=== RUN   TestReadWorkerLabels/json_object
+=== RUN   TestReadWorkerLabels/spaces_trimmed
+--- PASS: TestReadWorkerLabels (0.00s)
+    --- PASS: TestReadWorkerLabels/unset (0.00s)
+    --- PASS: TestReadWorkerLabels/empty (0.00s)
+    --- PASS: TestReadWorkerLabels/single_kv (0.00s)
+    --- PASS: TestReadWorkerLabels/multi_kv (0.00s)
+    --- PASS: TestReadWorkerLabels/json_object (0.00s)
+    --- PASS: TestReadWorkerLabels/spaces_trimmed (0.00s)
+=== RUN   TestReadWorkerLabelsInvalidJSONFallsBackToNil
+2026-11-25T19:11:39.636Z [WARN] invalid ETL_WORKER_LABELS JSON "{not-json": invalid character 'n' looking for beginning of object key string
+--- PASS: TestReadWorkerLabelsInvalidJSONFallsBackToNil (0.00s)
+=== RUN   TestReadWorkerLabelsIgnoresBadPairs
+2026-11-25T19:11:39.637Z [WARN] invalid ETL_WORKER_LABELS pair "badpair" (expected key=value)
+--- PASS: TestReadWorkerLabelsIgnoresBadPairs (0.00s)
+=== RUN   TestReadWorkerLabelsEmptyValueAllowed
+--- PASS: TestReadWorkerLabelsEmptyValueAllowed (0.00s)
+=== RUN   TestSpecValidateWarnsOnWorkerSelector
+2026-11-25T19:11:39.923Z [WARN] ETL_SPEC_ENCRYPTION_KEY is not set — new pipeline specs and connection/settings secrets will be stored in plaintext; encrypted rows will fail to load until their key is configured
+--- PASS: TestSpecValidateWarnsOnWorkerSelector (0.58s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/etl/server	160.684s

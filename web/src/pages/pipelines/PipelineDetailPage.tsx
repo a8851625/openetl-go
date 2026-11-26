@@ -15,6 +15,9 @@ import { fmtTime, ratio } from '@/lib/format';
 import {
   deriveModeLabel,
   derivePipelineHealth,
+  deriveIssues,
+  issueTitle,
+  issueSummary,
   formatLag,
 } from '@/lib/pipeline-health';
 import type { DetailTab } from '@/lib/routing';
@@ -199,6 +202,7 @@ export function PipelineDetailPage({
   }
 
   const health = derivePipelineHealth(pipeline, metric);
+  const currentIssues = deriveIssues([pipeline], metric ? [metric] : []);
   // Primary-action hierarchy: "Handle issues" is only the primary CTA when
   // there is actually something to handle. With a clean pipeline the everyday
   // action (Start) takes the primary slot and issue handling stays available
@@ -206,7 +210,7 @@ export function PipelineDetailPage({
   const sourceMode = pipeline?.spec_summary?.source_mode;
   const showUptime = sourceMode === undefined || sourceMode === 'cdc' || sourceMode === 'streaming';
   const needsAction =
-    health === 'failed' || health === 'degraded' || (pipeline?.dlq_backlog ?? 0) > 0;
+    currentIssues.length > 0;
   const ref = pipelineRef(pipeline);
   const key = pipelineKey(pipeline);
   const checkpointFailure = Boolean(
@@ -545,28 +549,25 @@ export function PipelineDetailPage({
                           </div>
                         </div>
                       )}
-                      {pipeline.stats.last_error ? (
-                        <div data-testid="detail-issue-last-error" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
-                          {pipeline.stats.last_error}
-                          {pipeline.stats.last_error_remediation && (
-                            <div className="mt-1 text-xs text-rose-700/80 dark:text-rose-300/80">
-                              {pipeline.stats.last_error_remediation}
-                            </div>
-                          )}
+                      {currentIssues.length > 0 ? currentIssues.map((issue) => (
+                        <div
+                          key={issue.id}
+                          data-testid={issue.titleKey === 'issue.pipelineFailed' && !pipeline.stats.last_error
+                            ? 'detail-issue-startup-failure'
+                            : issue.summary === pipeline.stats.last_error
+                              ? 'detail-issue-last-error' : 'detail-issue-current'}
+                          className={cn('rounded-lg border p-3',
+                            issue.health === 'failed'
+                              ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200'
+                              : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200')}
+                        >
+                          <div className="text-sm font-semibold">
+                            {issue.titleKey === 'issue.pipelineFailed' && !pipeline.stats.last_error
+                              ? t('pipe.startupFailureTitle') : issueTitle(issue, t)}
+                          </div>
+                          <div className="mt-1 text-xs">{issueSummary(issue, t)}</div>
                         </div>
-                      ) : pipeline.status === 'failed' ? (
-                        // UI-A.3 (P0-2): a failed pipeline always has an issue even when
-                        // counters are zero and stats.last_error is absent (startup
-                        // failure) — never render "No open issues" for failed runs.
-                        <div data-testid="detail-issue-startup-failure" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
-                          <div className="text-sm font-semibold">{t('pipe.startupFailureTitle')}</div>
-                          <div className="mt-1 text-xs">{t('pipe.startupFailureHint')}</div>
-                        </div>
-                      ) : pipelineDLQBacklog(pipeline) > 0 ? (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-                          DLQ backlog {pipelineDLQBacklog(pipeline).toLocaleString()}
-                        </div>
-                      ) : (
+                      )) : (
                         <EmptyState text={t('issues.empty')} />
                       )}
                       <Button variant="link" className="h-auto p-0" onClick={() => onOpenDLQ(key)}>
@@ -633,10 +634,7 @@ export function PipelineDetailPage({
             </TabsContent>
 
             <TabsContent value="issues" className="mt-4 space-y-3">
-              {(pipeline.stats.records_failed || 0) > 0 ||
-              pipelineDLQBacklog(pipeline) > 0 ||
-              pipeline.stats.last_error ||
-              pipeline.status === 'failed' ? (
+              {currentIssues.length > 0 ? (
                 <>
                   {checkpointFailure && (
                     <div
@@ -671,37 +669,24 @@ export function PipelineDetailPage({
                       </div>
                     </div>
                   )}
-                  {pipeline.stats.last_error && (
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-900 dark:bg-rose-950/40">
-                      <div>
-                        <div className="text-sm font-semibold text-rose-800 dark:text-rose-200">
-                          {pipeline.stats.last_error}
+                  {currentIssues.map((issue) => (
+                    <div key={issue.id} data-testid="detail-issue-current"
+                      className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border p-4">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold">{issueTitle(issue, t)}</div>
+                        <div className="mt-1 break-words text-xs text-muted-foreground">
+                          {issueSummary(issue, t)}
                         </div>
-                        <div className="mt-1 text-xs text-rose-700/80 dark:text-rose-300/80">
-                          {t('dash.failedRecords')}:{' '}
-                          {(pipeline.stats.records_failed || 0).toLocaleString()}
-                        </div>
+                        {issue.health === 'failed' && pipeline.stats.last_error_remediation && (
+                          <div className="mt-1 text-xs">{pipeline.stats.last_error_remediation}</div>
+                        )}
                       </div>
-                      <Button size="sm" onClick={() => onOpenDLQ(key)}>
-                        {t('issues.repair')}
+                      <Button size="sm" onClick={() => issue.action === 'dlq'
+                        ? onOpenDLQ(key) : onTabChange('logs')}>
+                        {issue.action === 'dlq' ? t('pipe.goDlq') : t('issue.inspectLogs')}
                       </Button>
                     </div>
-                  )}
-                  {pipelineDLQBacklog(pipeline) > 0 && (
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/40">
-                      <div>
-                        <div className="text-sm font-semibold">
-                          DLQ backlog {pipelineDLQBacklog(pipeline).toLocaleString()}
-                        </div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {t('pipe.dlqHint')}
-                        </div>
-                      </div>
-                      <Button size="sm" onClick={() => onOpenDLQ(key)}>
-                        {t('pipe.goDlq')}
-                      </Button>
-                    </div>
-                  )}
+                  ))}
                 </>
               ) : (
                 <EmptyState text={t('issues.empty')} />

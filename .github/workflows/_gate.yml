@@ -71,6 +71,25 @@ jobs:
       - name: Plaintext-secret scanner escaping and failure cases
         run: python3 hack/test-plaintext-secrets.py
 
+  frontend-test:
+    name: Frontend Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+      - name: Verify frontend contracts, types, lint and packaging
+        working-directory: web
+        run: npm test && npm run typecheck && npm run lint && npm run build
+
   # P5: production checklist gate — release assets, profile smoke, health unit
   # coverage, and storage matrix with explicit SKIP (never silent green).
   production-gate:
@@ -272,6 +291,13 @@ jobs:
         run: go vet -tags=e2e ./internal/etl/e2e/...
       - name: Run connector e2e paths
         run: go test -tags=e2e -count=1 -timeout 40m ./internal/etl/e2e/... -e2e.strict -v
+      - name: Retain generated tagged path evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tagged-path-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: docs/evidence/*.json
+          if-no-files-found: error
 
   # IT-3/T3.7: resource-baseline regression gate. WARNING MODE for the first
   # version cycle: valid measurements over budget warn. Failed/missing
@@ -313,6 +339,7 @@ jobs:
       - lint
       - connector-evidence
       - unit-test
+      - frontend-test
       - production-gate
       - storage-mysql
       - storage-postgres

@@ -149,9 +149,7 @@ func TestRestoreFromDBFailsClosedOnSpecCryptoErrors(t *testing.T) {
 					t.Fatal(err)
 				}
 				row.SpecYAML = row.SpecYAML[:len(row.SpecYAML)-1] + "!"
-				if err := store.SavePipeline(context.Background(), row); err != nil {
-					t.Fatal(err)
-				}
+				corruptSavedSpecFixture(t, store, row.ID, row.SpecYAML)
 			},
 			key:         specCryptoTestKey(4),
 			keyID:       "primary",
@@ -161,9 +159,7 @@ func TestRestoreFromDBFailsClosedOnSpecCryptoErrors(t *testing.T) {
 		{
 			name: "unsupported envelope version",
 			prepare: func(t *testing.T, store storage.Storage) {
-				if err := store.SavePipeline(context.Background(), &storage.PipelineRow{ID: "p4", Name: "p4", SpecYAML: "enc:v99:primary:AAAA", Status: "created"}); err != nil {
-					t.Fatal(err)
-				}
+				seedLegacyMetadataFixture(t, store, &storage.PipelineRow{ID: "p4", Name: "p4", SpecYAML: "enc:v99:primary:AAAA", Status: "created"})
 			},
 			key:         specCryptoTestKey(5),
 			keyID:       "primary",
@@ -250,9 +246,7 @@ func TestLegacySpecCiphertextRemainsReadable(t *testing.T) {
 	key := bytes.Repeat([]byte{8}, 32)
 	legacy := legacyEncryptedSpec(t, key, linearSpecYAML)
 	ctx := context.Background()
-	if err := store.SavePipeline(ctx, &storage.PipelineRow{ID: "legacy-id", Name: "linear-file-demo", SpecYAML: legacy, Status: "created"}); err != nil {
-		t.Fatal(err)
-	}
+	seedLegacyMetadataFixture(t, store, &storage.PipelineRow{ID: "legacy-id", Name: "linear-file-demo", SpecYAML: legacy, Status: "created"})
 	if _, err := store.SavePipelineVersion(ctx, "legacy-id", legacy); err != nil {
 		t.Fatal(err)
 	}

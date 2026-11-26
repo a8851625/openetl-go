@@ -4,7 +4,6 @@ version: 1
 
 before:
   hooks:
-    - go mod tidy
     # Pack the frontend (resource/) into internal/packed/packed.go so the
     # resulting binary embeds the UI via gres and can run standalone without
     # a sibling resource/ directory. Matches `make build` (gf build -ew).
@@ -33,6 +32,7 @@ builds:
     ldflags:
       - -s -w
       - -X github.com/a8851625/openetl-go/internal/consts.Version={{.Version}}
+      - -X github.com/a8851625/openetl-go/internal/consts.BuildCommit={{.FullCommit}}
     flags:
       - -trimpath
 
@@ -55,6 +55,7 @@ builds:
     ldflags:
       - -s -w
       - -X github.com/a8851625/openetl-go/internal/consts.Version={{.Version}}
+      - -X github.com/a8851625/openetl-go/internal/consts.BuildCommit={{.FullCommit}}
     flags:
       - -trimpath
       - -tags=extism

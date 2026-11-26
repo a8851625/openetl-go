@@ -8,7 +8,7 @@ cd "$ROOT_DIR"
 . "$ROOT_DIR/hack/container-cli.sh"
 detect_container_cli
 
-IMAGE="openetl-go-etl:dev"
+IMAGE="${IMAGE:-openetl-go-etl:dev}"
 FIXTURE_CONTAINER="etl-http-fixture"
 APP_CONTAINER="etl-openetl-go-http"
 

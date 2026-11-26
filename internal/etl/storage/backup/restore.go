@@ -21,7 +21,7 @@ func Restore(ctx context.Context, store storage.Storage, snap *Snapshot, opts Op
 	if store == nil || snap == nil {
 		return fmt.Errorf("backup: store and snapshot are required")
 	}
-	if snap.FormatVersion != 0 && snap.FormatVersion != 1 && snap.FormatVersion != FormatVersion {
+	if snap.FormatVersion != 0 && snap.FormatVersion != 1 && snap.FormatVersion != 2 && snap.FormatVersion != FormatVersion {
 		return fmt.Errorf("backup: unsupported format_version %d", snap.FormatVersion)
 	}
 	raw := storage.UnwrapStorage(store)
@@ -52,6 +52,12 @@ func Restore(ctx context.Context, store storage.Storage, snap *Snapshot, opts Op
 
 func restoreRows(ctx context.Context, w restoreStore, snap *Snapshot, plugins []*storage.PluginEntry) error {
 	steps := []func() error{
+		func() error {
+			return restoreTable(ctx, "recovery_events", snap.RecoveryEvents, w.WriteRecoveryEventFidelity)
+		},
+		func() error {
+			return restoreTable(ctx, "recovery_operations", snap.RecoveryOperations, w.WriteRecoveryOperationFidelity)
+		},
 		func() error { return restoreTable(ctx, "pipelines", snap.Pipelines, w.WritePipelineFidelity) },
 		func() error {
 			return restoreTable(ctx, "pipeline_versions", snap.Versions, w.WritePipelineVersionFidelity)

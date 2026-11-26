@@ -1,0 +1,19 @@
+{
+  "name": "hack/e2e-s3-minio.sh",
+  "source_commit": "898af75d1f90a954154d74eb53c3737f38e51b8f",
+  "image_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+  "execution_image_id": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
+  "execution_config_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+  "binary_sha256": "992c42142c64eb83ff3b65e8f220185dd7a3e3e4b8cf8668b2ce4971be3bb6ab",
+  "started_at": "2026-11-25T22:23:16Z",
+  "finished_at": "2026-11-25T22:23:59Z",
+  "result": "passed",
+  "exit_code": 0,
+  "error": "",
+  "log_sha256": "cd13af4a28f127916b99740875fa259f01d32acd0cbf2dbd22c53e90d98742e3",
+  "artifact_sha256": {},
+  "container_runtime": "Docker version 29.4.2, build 055a478",
+  "dependency_images": {
+    "quay.io/minio/minio:RELEASE.2024-07-16T23-46-41Z": "sha256:552e9778f5a4690de36233a8040780d3d4ba42d7ea995c5e45e590a4d67b9db7"
+  }
+}

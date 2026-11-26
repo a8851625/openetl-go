@@ -1,0 +1,93 @@
+{
+  "image": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
+  "started_at": "2026-11-25T22:21:43Z",
+  "image_id": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
+  "finished_at": "2026-11-25T22:22:42Z",
+  "checks": [
+    {
+      "name": "real MySQL service outage creates a stable recovery identity",
+      "result": "passed"
+    },
+    {
+      "name": "identity dry-run persists preview without changing DLQ or delivery",
+      "result": "passed"
+    },
+    {
+      "name": "failed replay persists its error while retaining the backlog",
+      "result": "passed"
+    },
+    {
+      "name": "open-issues-recovery-context",
+      "result": "passed"
+    },
+    {
+      "name": "open-dlq-recovery-context",
+      "result": "passed"
+    },
+    {
+      "name": "open-connections-recovery-context",
+      "result": "passed"
+    },
+    {
+      "name": "detail-tabs-preserve-context",
+      "result": "passed"
+    },
+    {
+      "name": "result persistence failure and restart finalize without a second sink write",
+      "result": "passed"
+    },
+    {
+      "name": "retained-result-after-restart-and-row-removal",
+      "result": "passed"
+    },
+    {
+      "name": "missing-recovery-does-not-select-another-record",
+      "result": "passed"
+    },
+    {
+      "name": "missing-pipeline-disables-DLQ-actions",
+      "result": "passed"
+    },
+    {
+      "name": "mismatched-node-is-explicit",
+      "result": "passed"
+    },
+    {
+      "name": "sensitive-link-cleared",
+      "result": "passed"
+    },
+    {
+      "name": "capture metadata failure retains DLQ and permits a safe file checkpoint",
+      "result": "passed"
+    },
+    {
+      "name": "unassociated capture fallback retains its replay result",
+      "result": "passed"
+    },
+    {
+      "name": "pipeline-switch-clears-previous-task-scope",
+      "result": "passed"
+    },
+    {
+      "name": "missing-connection-is-explicit",
+      "result": "passed"
+    },
+    {
+      "name": "legacy rows remain explicitly unassociated",
+      "result": "passed"
+    },
+    {
+      "name": "legacy-association-visible",
+      "result": "passed"
+    },
+    {
+      "name": "purge-keeps-exact-row-scope",
+      "result": "passed"
+    },
+    {
+      "name": "deleted-pipeline-keeps-recovery-facts",
+      "result": "passed"
+    }
+  ],
+  "result": "passed"
+}

@@ -41,6 +41,7 @@ type DLQEntry struct {
 	// key columns, before-image state) is the drift signal instead.
 	PipelineVersion int
 	DAGNode         string
+	RecoveryContext core.RecoveryCaptureContext
 }
 
 // maxPendingDLQ bounds the in-memory retry queue for DLQ entries whose initial
@@ -1192,6 +1193,20 @@ func (r *Runner) writeLoop(ctx context.Context, records <-chan core.Record) {
 }
 
 func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
+	r.inflightBatch.add()
+	defer r.inflightBatch.done()
+
+	// Cooldown is source backpressure, not a sink commit. In particular the
+	// default 30s cooldown must not exhaust the 30s durability deadline before
+	// the recovered sink gets its probe. Stop while waiting leaves this batch
+	// uncheckpointed, so its source range replays on restart.
+	if r.circuitBreaker != nil && !r.circuitBreaker.Allow() {
+		r.logInfo("Circuit breaker open, waiting for cooldown before sink write...")
+		if err := r.circuitBreaker.wait(ctx); err != nil {
+			return
+		}
+	}
+
 	// A batch commit (sink write + DLQ routing + checkpoint save) must
 	// survive Stop(): the loop ctx is cancelled by Stop() the instant the
 	// user requests shutdown, but abandoning a half-written batch would
@@ -1209,9 +1224,6 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			defer commitCancel()
 		}
 	}
-
-	r.inflightBatch.add()
-	defer r.inflightBatch.done()
 
 	// Use commitCtx for everything that must reach a durable store: the
 	// transform chain (state checkpoints), the sink write, single-row
@@ -1250,7 +1262,7 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			continue
 		}
 		sourceFailureCount++
-		if !r.handleFailedRecord(ctx, rec, sourceRecordRejectionError(rec.Rejection)) {
+		if !r.handleFailedRecordAt(ctx, rec, sourceRecordRejectionError(rec.Rejection), "source") {
 			checkpointBoundarySafe = false
 		}
 	}
@@ -1300,7 +1312,7 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 				continue
 			}
 			identityFailureCount++
-			if !r.handleFailedRecord(ctx, rec, incompleteRecordIdentityError(identity)) {
+			if !r.handleFailedRecordAt(ctx, rec, incompleteRecordIdentityError(identity), "identity") {
 				checkpointBoundarySafe = false
 			}
 		}
@@ -1335,16 +1347,6 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 			})
 		}
 		return
-	}
-
-	// Circuit breaker check: if tripped, wait for cooldown before attempting write.
-	if r.circuitBreaker != nil && !r.circuitBreaker.Allow() {
-		r.logInfo("Circuit breaker open, waiting for cooldown before sink write...")
-		select {
-		case <-time.After(time.Duration(r.circuitBreaker.cfg.CooldownSec) * time.Second):
-		case <-ctx.Done():
-			return
-		}
 	}
 
 	// Fire OnPreBatch hook before writing to sink.
@@ -1398,7 +1400,7 @@ func (r *Runner) writeBatch(ctx context.Context, batch []core.Record) {
 		}
 
 		for _, f := range failures {
-			if !r.handleFailedRecord(ctx, transformed[f.idx], f.err) {
+			if !r.handleFailedRecordAt(ctx, transformed[f.idx], f.err, "sink") {
 				checkpointBoundarySafe = false
 			}
 		}
@@ -1719,6 +1721,10 @@ type failedIndexErr struct {
 }
 
 func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err error) bool {
+	return r.handleFailedRecordAt(ctx, rec, err, "transform")
+}
+
+func (r *Runner) handleFailedRecordAt(ctx context.Context, rec core.Record, err error, endpoint string) bool {
 	r.addRecordsFailed(1)
 
 	// Fire OnError hook.
@@ -1737,6 +1743,7 @@ func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err er
 			ErrorClass:      string(core.ClassifyError(err)),
 			IdentityContext: dlqIdentityContext(r.spec, rec, err),
 			Attempt:         1,
+			RecoveryContext: r.recoveryCaptureContext(endpoint),
 		}
 		// A DLQ backend that already failed for this batch is known-bad: queue
 		// the entry instead of paying another per-record timeout. This keeps a
@@ -1788,6 +1795,29 @@ func (r *Runner) handleFailedRecord(ctx context.Context, rec core.Record, err er
 		r.blockCheckpoint("record failure occurred without a configured DLQ writer")
 		return false
 	}
+}
+
+func (r *Runner) recoveryCaptureContext(endpoint string) core.RecoveryCaptureContext {
+	context := core.RecoveryCaptureContext{Endpoint: endpoint}
+	var connection, ref string
+	switch endpoint {
+	case "source":
+		connection, ref = r.spec.Source.Connection, r.spec.Source.ConnectionRef
+		context.ConnectionKnown = true
+	case "sink", "identity":
+		connection, ref = r.spec.Sink.Connection, r.spec.Sink.ConnectionRef
+		context.ConnectionKnown = true
+	case "transform":
+		if len(r.spec.Transforms) == 1 {
+			connection, ref = r.spec.Transforms[0].Connection, r.spec.Transforms[0].ConnectionRef
+			context.ConnectionKnown = true
+		}
+	}
+	context.ConnectionName = strings.TrimSpace(connection)
+	if context.ConnectionName == "" {
+		context.ConnectionName = strings.TrimSpace(ref)
+	}
+	return context
 }
 
 func (r *Runner) blockCheckpoint(reason string) {

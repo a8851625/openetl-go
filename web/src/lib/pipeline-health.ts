@@ -25,6 +25,7 @@ export type DerivedIssue = {
   /** i18n key suffix for the issue kind; display layers translate it. */
   titleKey?: string;
   summary: string;
+  summaryKey?: string;
   node?: string;
   field?: string;
   metricLabel?: string;
@@ -49,23 +50,45 @@ export type HealthCounts = {
 const STALE_CHECKPOINT_SEC = 300;
 const HIGH_CDC_LAG_MS = 60_000;
 
+function healthThresholds(m?: MetricsPipeline) {
+  return {
+    checkpoint: m?.health_thresholds?.checkpoint_stale_seconds ?? STALE_CHECKPOINT_SEC,
+    lag: m?.health_thresholds?.cdc_lag_ms ?? HIGH_CDC_LAG_MS,
+  };
+}
+
 export function derivePipelineHealth(p: Pipeline, m?: MetricsPipeline): PipelineHealth {
-  const s = (p.status || '').toLowerCase();
-  if (s === 'failed' || s === 'error') return 'failed';
+  const s = (p.status || '').trim().toLowerCase();
+  if (s === 'failed' || s === 'error' || s === 'restore_failed') return 'failed';
   if (s === 'paused') return 'paused';
   if (s === 'scheduled') return 'scheduled';
   if (s === 'completed') return 'completed';
   if (s === 'starting') return 'starting';
   if (s === 'stopped') return 'stopped';
   if (s === 'running') {
+    if (
+      m &&
+      ((p.id && m.id ? p.id !== m.id : p.name !== m.name) ||
+        (m.status && m.status.trim().toLowerCase() !== s))
+    ) {
+      m = undefined;
+    }
     // Only CURRENT signals degrade a running pipeline. Cumulative counters
     // (records_failed / records_dlq) and the sticky last_error string used to be
     // included, which pinned a recovered pipeline to "degraded" forever and made
     // a restarted pipeline with real DLQ rows look healthy. Backlog comes from
     // the server's current row count.
-    if (pipelineDLQBacklog(p) > 0) return 'degraded';
-    if (m && m.cdc_lag_ms > HIGH_CDC_LAG_MS) return 'degraded';
-    if (m && m.checkpoint_age_seconds > STALE_CHECKPOINT_SEC) return 'degraded';
+    if (pipelineDLQBacklog(p) > 0 || m?.circuit_breaker_state === 1 || m?.health === 'degraded') {
+      return 'degraded';
+    }
+    if (p.dlq_backlog_known === false || (m && m.dlq_file_count < 0)) return 'unknown';
+    // The server applies configured thresholds. Older payloads use the
+    // documented defaults after current metrics have been matched by identity.
+    if (m?.health === 'healthy') return 'healthy';
+    if (m?.health || !m) return 'unknown';
+    const thresholds = healthThresholds(m);
+    if (m.cdc_lag_ms > thresholds.lag) return 'degraded';
+    if (m.checkpoint_age_seconds > thresholds.checkpoint) return 'degraded';
     return 'healthy';
   }
   return 'unknown';
@@ -88,7 +111,7 @@ export function countHealth(
     total: pipelines.length,
   };
   for (const p of pipelines) {
-    const m = metrics.find((x) => (x.id && x.id === p.id) || x.name === p.name);
+    const m = findMetric(p, metrics);
     const h = derivePipelineHealth(p, m);
     counts[h] = (counts[h] || 0) + 1;
   }
@@ -126,7 +149,10 @@ export function findMetric(
   p: Pipeline,
   metrics: MetricsPipeline[] = [],
 ): MetricsPipeline | undefined {
-  return metrics.find((x) => (x.id && x.id === p.id) || x.name === p.name);
+  const exact = p.id ? metrics.find((x) => x.id === p.id) : undefined;
+  if (exact) return exact;
+  const legacy = metrics.filter((x) => (!p.id || !x.id) && x.name === p.name);
+  return legacy.length === 1 ? legacy[0] : undefined;
 }
 
 /** Derive a short Source → Transform → Sink path from spec_summary (UI-B.1), falling back to tags. */
@@ -174,10 +200,12 @@ export function deriveIssues(
   for (const p of pipelines) {
     const m = findMetric(p, metrics);
     const health = derivePipelineHealth(p, m);
+    const status = (p.status || '').trim().toLowerCase();
+    const thresholds = healthThresholds(m);
     const key = (p.id || p.name || '').trim();
     if (!key) continue;
 
-    if (health === 'failed' || p.status === 'failed' || p.status === 'error') {
+    if (health === 'failed' || status === 'failed' || status === 'error') {
       issues.push({
         id: `${key}:failed`,
         severity: 'blocking',
@@ -185,13 +213,32 @@ export function deriveIssues(
         pipelineKey: key,
         pipelineName: p.name,
         title: `${p.name} · ${p.stats?.last_error ? 'run failed' : 'pipeline failed'}`,
-        titleKey: p.stats?.last_error ? 'issue.runFailed' : 'issue.pipelineFailed',
+        titleKey: status === 'restore_failed'
+          ? 'issue.restoreFailed'
+          : p.stats?.last_error ? 'issue.runFailed' : 'issue.pipelineFailed',
         summary: p.stats?.last_error || `status=${p.status}`,
+        summaryKey: p.stats?.last_error
+          ? undefined
+          : status === 'restore_failed' ? 'issue.restoreFailedSummary' : 'pipe.startupFailureHint',
         metricLabel: 'failed records',
         metricValue: p.stats?.records_failed || 0,
         action: 'detail',
       });
     } else if (health === 'degraded') {
+      if (m?.circuit_breaker_state === 1) {
+        issues.push({
+          id: `${key}:breaker`,
+          severity: 'blocking',
+          health,
+          pipelineKey: key,
+          pipelineName: p.name,
+          title: `${p.name} · write circuit open`,
+          titleKey: 'issue.circuitOpen',
+          summary: p.stats?.last_error || '',
+          summaryKey: p.stats?.last_error ? undefined : 'issue.circuitOpenSummary',
+          action: 'detail',
+        });
+      }
       const backlog = pipelineDLQBacklog(p);
       if (backlog > 0) {
         issues.push({
@@ -223,7 +270,7 @@ export function deriveIssues(
           action: 'issues',
         });
       }
-      if (m && m.cdc_lag_ms > HIGH_CDC_LAG_MS) {
+      if (m && m.cdc_lag_ms > thresholds.lag) {
         issues.push({
           id: `${key}:lag`,
           severity: 'warning',
@@ -236,7 +283,7 @@ export function deriveIssues(
           metricValue: formatLag(m.cdc_lag_ms),
           action: 'detail',
         });
-      } else if (m && m.checkpoint_age_seconds > STALE_CHECKPOINT_SEC) {
+      } else if (m && m.checkpoint_age_seconds > thresholds.checkpoint) {
         issues.push({
           id: `${key}:cp`,
           severity: 'warning',
@@ -263,6 +310,20 @@ export function deriveIssues(
           action: 'detail',
         });
       }
+    } else if (health === 'unknown' && status === 'running') {
+      const dlqUnknown = p.dlq_backlog_known === false || Boolean(m && m.dlq_file_count < 0);
+      issues.push({
+        id: `${key}:health-unknown`,
+        severity: 'warning',
+        health,
+        pipelineKey: key,
+        pipelineName: p.name,
+        title: `${p.name} · health unavailable`,
+        titleKey: 'issue.healthUnknown',
+        summary: '',
+        summaryKey: dlqUnknown ? 'issue.dlqUnknownSummary' : 'issue.metricsUnknownSummary',
+        action: dlqUnknown ? 'dlq' : 'detail',
+      });
     }
   }
 
@@ -322,4 +383,8 @@ export function issueTitle(issue: DerivedIssue, t: (key: string) => string): str
   if (!translated || translated === issue.titleKey) return issue.title;
   const name = issue.pipelineName || '';
   return name ? `${name} · ${translated}` : translated;
+}
+
+export function issueSummary(issue: DerivedIssue, t: (key: string) => string): string {
+  return issue.summaryKey ? t(issue.summaryKey) : issue.summary;
 }

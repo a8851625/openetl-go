@@ -56,17 +56,15 @@ func BuildShardRunner(spec *Spec, cpStore core.CheckpointStore, dlqW DLQWriter, 
 	}
 	shardSpec.Parallelism.Count = total
 
-	// Deep-copy all config maps to prevent cross-shard / cross-worker mutation.
+	// Copy top-level config maps to isolate each shard's injected fields.
 	// For total==1, still inject shard_index/shard_total for source adapters
 	// that read them, but keep checkpoint key unscoped (see below).
 	shardSpec.Source.Config = InjectShardConfig(spec.Source.Config, idx, total, strategy, shardKey)
 	shardSpec.Sink.Config = cloneConfig(spec.Sink.Config)
 	shardSpec.Transforms = make([]TransformSpec, len(spec.Transforms))
 	for j, tf := range spec.Transforms {
-		shardSpec.Transforms[j] = TransformSpec{
-			Type:   tf.Type,
-			Config: cloneConfig(tf.Config),
-		}
+		shardSpec.Transforms[j] = tf
+		shardSpec.Transforms[j].Config = cloneConfig(tf.Config)
 	}
 
 	runCPStore := cpStore

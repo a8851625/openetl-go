@@ -1,0 +1,17 @@
+test_changed_archive_cannot_be_promoted (test_release_candidate.CandidateGateTest.test_changed_archive_cannot_be_promoted) ... ok
+test_changed_logs_and_wrong_binary_fail_closed (test_release_candidate.CandidateGateTest.test_changed_logs_and_wrong_binary_fail_closed) ... ok
+test_changed_or_inconsistent_published_checksums_are_rejected (test_release_candidate.CandidateGateTest.test_changed_or_inconsistent_published_checksums_are_rejected) ... ok
+test_changed_path_or_probe_artifact_blocks_promotion (test_release_candidate.CandidateGateTest.test_changed_path_or_probe_artifact_blocks_promotion) ... ok
+test_collect_time_cannot_renew_expired_case_evidence (test_release_candidate.CandidateGateTest.test_collect_time_cannot_renew_expired_case_evidence) ... ok
+test_expired_certificate_does_not_refresh_itself (test_release_candidate.CandidateGateTest.test_expired_certificate_does_not_refresh_itself) ... ok
+test_missing_or_skipped_mandatory_case_blocks (test_release_candidate.CandidateGateTest.test_missing_or_skipped_mandatory_case_blocks) ... ok
+test_provider_index_is_distinct_from_portable_configuration (test_release_candidate.CandidateGateTest.test_provider_index_is_distinct_from_portable_configuration) ... ok
+test_push_without_authoritative_digest_is_rejected (test_release_candidate.CandidateGateTest.test_push_without_authoritative_digest_is_rejected) ... ok
+test_registry_configuration_change_is_rejected (test_release_candidate.CandidateGateTest.test_registry_configuration_change_is_rejected) ... ok
+test_unsafe_archive_member_is_rejected (test_release_candidate.CandidateGateTest.test_unsafe_archive_member_is_rejected) ... ok
+test_wrong_release_source_is_rejected_before_push (test_release_candidate.CandidateGateTest.test_wrong_release_source_is_rejected_before_push) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.288s
+
+OK

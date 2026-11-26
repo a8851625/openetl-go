@@ -24,6 +24,7 @@ import { PipelineRowMeta } from '@/lib/uptime';
 import {
   deriveModeLabel,
   derivePipelineHealth,
+  findMetric,
   formatLag,
 } from '@/lib/pipeline-health';
 import { cn } from '@/lib/utils';
@@ -135,8 +136,9 @@ const PipelineRow = React.memo(
   }) {
     const ref = pipelineRef(p);
     const health = derivePipelineHealth(p, m);
+    const needsAttention = health === 'failed' || health === 'degraded' || health === 'unknown';
     const primaryLabel =
-      health === 'failed' || health === 'degraded'
+      needsAttention
         ? t('dash.actionView')
         : t('pipe.openDetail');
     return (
@@ -249,11 +251,11 @@ const PipelineRow = React.memo(
         >
           <Button
             size="sm"
-            variant={health === 'failed' || health === 'degraded' ? 'default' : 'secondary'}
+            variant={needsAttention ? 'default' : 'secondary'}
             onClick={() => {
               onSelect(pipelineKey(p));
               // UI-A.3 (P1-2): "View issues" must land on the Issues tab, not Overview.
-              onOpenDetail?.(pipelineKey(p), health === 'failed' || health === 'degraded' ? 'issues' : undefined);
+              onOpenDetail?.(pipelineKey(p), needsAttention ? 'issues' : undefined);
             }}
           >
             {primaryLabel}
@@ -426,28 +428,20 @@ export function PipelinesPage({
     }
     if (statusFilter) {
       list = list.filter((p) => {
-        const m = (metrics.data?.pipelines || []).find(
-          (x) => (x.id && x.id === p.id) || x.name === p.name,
-        );
+        const m = findMetric(p, metrics.data?.pipelines || []);
         const h = derivePipelineHealth(p, m);
         return h === statusFilter || p.status === statusFilter;
       });
     }
     if (modeFilter) {
       list = list.filter((p) => {
-        const m = (metrics.data?.pipelines || []).find(
-          (x) => (x.id && x.id === p.id) || x.name === p.name,
-        );
+        const m = findMetric(p, metrics.data?.pipelines || []);
         return deriveModeLabel(p, m).toLowerCase() === modeFilter.toLowerCase();
       });
     }
     list = [...list].sort((a, b) => {
-      const mA = (metrics.data?.pipelines || []).find(
-        (x) => (x.id && x.id === a.id) || x.name === a.name,
-      );
-      const mB = (metrics.data?.pipelines || []).find(
-        (x) => (x.id && x.id === b.id) || x.name === b.name,
-      );
+      const mA = findMetric(a, metrics.data?.pipelines || []);
+      const mB = findMetric(b, metrics.data?.pipelines || []);
       switch (sortKey) {
         case 'name':
           return a.name.localeCompare(b.name);
@@ -553,6 +547,7 @@ export function PipelinesPage({
     { value: 'healthy', label: t('health.healthy') },
     { value: 'degraded', label: t('health.degraded') },
     { value: 'failed', label: t('health.failed') },
+    { value: 'unknown', label: t('health.unknown') },
     { value: 'running', label: t('pipe.running') },
     { value: 'stopped', label: t('pipe.stopped') },
     { value: 'scheduled', label: t('health.scheduled') },
@@ -854,9 +849,7 @@ export function PipelinesPage({
 
             <CardContent className="space-y-1.5 pt-4">
               {filteredPipelines.map((p) => {
-                const m = (metrics.data?.pipelines || []).find(
-                  (x) => (x.id && x.id === p.id) || x.name === p.name,
-                );
+                const m = findMetric(p, metrics.data?.pipelines || []);
                 const key = pipelineKey(p);
                 return (
                   <PipelineRow

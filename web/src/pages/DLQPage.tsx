@@ -11,6 +11,9 @@ import { fmtTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { ApiState, DLQItem, Pipeline, TFunc } from '@/lib/types';
 import type { Lang } from '@/i18n';
+import { RecoveryRecords } from '@/components/recovery-records';
+import { dlqRowId } from '@/lib/recovery';
+import { routeToHash, type TaskContext } from '@/lib/routing';
 import {
   ChevronDown,
   ChevronRight,
@@ -21,6 +24,8 @@ import {
 } from 'lucide-react';
 
 type Props = {
+  context?: TaskContext;
+  parentRefreshKey?: number;
   t: TFunc;
   lang: Lang;
   pipelines: ApiState<{ pipelines: Pipeline[] }>;
@@ -56,11 +61,17 @@ function SampleRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const replayState = item.identity_context?.replay_state;
+  const rowId = dlqRowId(item);
   return (
     <div className="rounded-lg border border-border bg-card p-3">
       <div className="flex flex-wrap items-center gap-2">
         <ToneBadge tone="slate">{item.record.operation}</ToneBadge>
-        {item.id ? <ToneBadge tone="slate">#{item.id}</ToneBadge> : null}
+        {rowId ? <ToneBadge tone="slate">#{rowId}</ToneBadge> : null}
+        {item.recovery_event_id && item.recovery_association_known ? (
+          <a className="text-xs text-primary underline" href={routeToHash({ page: 'issues', context: {
+            pipelineId: item.job_name, recoveryId: item.recovery_event_id,
+          } })}>{t('recovery.record')}</a>
+        ) : <ToneBadge tone="amber">{t('recovery.unassociatedRow')}</ToneBadge>}
         <span className="text-xs text-muted-foreground">{fmtTime(item.timestamp)}</span>
         {replayState ? (
           <ToneBadge tone={replayState === 'sink_acked' ? 'emerald' : 'amber'}>
@@ -141,7 +152,7 @@ function SampleRow({
   );
 }
 
-export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
+export function DLQPage({ t, pipelines, selected, onSelect, onAction, context, parentRefreshKey = 0 }: Props) {
 
   // UI-B.3: pending confirmation for destructive DLQ purge.
   const [pendingPurge, setPendingPurge] = useState(false);
@@ -172,13 +183,22 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
   if (offset > 0) queryParams.set('offset', String(offset));
   if (appliedFilter) queryParams.set('contains', appliedFilter);
   if (errorClass) queryParams.set('error_class', errorClass);
+  if (context?.recoveryId) queryParams.set('recovery_event_id', context.recoveryId);
+  if (context?.rowId) queryParams.set('id', context.rowId);
+  if (context?.nodeId) queryParams.set('node_id', context.nodeId);
+  if (context?.connectionName) queryParams.set('connection_name', context.connectionName);
   const query = queryParams.toString();
   const selectedRef = pipelineRef(selected);
   const dlq = useApi<{ items: DLQItem[] }>(
     selected ? `/api/v2/dlq/${selectedRef}?${query}` : '/api/v2/dlq/_missing',
-    selected ? refreshKey : -1,
+    refreshKey + parentRefreshKey, Boolean(selected),
   );
-  const dlqItems = useMemo(() => dlq.data?.items || [], [dlq.data]);
+  const dlqItems = useMemo(() => selected ? (dlq.data?.items || []).filter((item) => item.job_name === selectedRef
+    && (!context?.rowId || dlqRowId(item) === context.rowId)
+    && (!context?.recoveryId || item.recovery_event_id === context.recoveryId)
+    && (!context?.nodeId || item.dag_node === context.nodeId)
+    && (!context?.connectionName || (item.recovery_context?.connection_known && item.recovery_context.connection_name === context.connectionName))) : [],
+    [dlq.data, selected, selectedRef, context?.rowId, context?.recoveryId, context?.nodeId, context?.connectionName]);
   // error_class options are derived from the loaded page; the server-side filter
   // still applies to the whole backlog.
   const errorClasses = useMemo(
@@ -221,7 +241,7 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
     setLastReplayResult(null);
     setShowConfirm(false);
     setOffset(0);
-  }, [selectedRef, appliedFilter, errorClass]);
+  }, [selectedRef, appliedFilter, errorClass, context?.recoveryId, context?.rowId, context?.nodeId, context?.connectionName]);
 
   useEffect(() => {
     setOffset(0);
@@ -239,26 +259,24 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
     return { toastMessage: `${label} · ${t('dlq.replayed')}: ${replayed}` };
   };
 
-  const deleteOne = async (item: DLQItem) => {
-    try {
-      if (item.id) {
-        await api(`/api/v2/dlq/${selectedRef}/${item.id}`, { method: 'DELETE' });
-      } else {
-        await api(
-          `/api/v2/dlq/${selectedRef}?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`,
-          { method: 'DELETE' },
-        );
-      }
-      setRefreshKey((n) => n + 1);
-    } catch {
-      /* ignore */
+  const deleteOne = (item: DLQItem) => onAction(t('dlq.deleteRecord'), async () => {
+    const id = dlqRowId(item);
+    if (id) {
+      await api(`/api/v2/dlq/${selectedRef}/${id}`, { method: 'DELETE' });
+    } else {
+      throw new Error(t('recovery.rowIdentityUnavailable'));
     }
-  };
+    setRefreshKey((n) => n + 1);
+  });
 
   const replayQuery = (() => {
     const params = new URLSearchParams();
     if (appliedFilter) params.set('contains', appliedFilter);
     if (errorClass) params.set('error_class', errorClass);
+    if (context?.recoveryId) params.set('recovery_event_id', context.recoveryId);
+    if (context?.rowId) params.set('id', context.rowId);
+    if (context?.nodeId) params.set('node_id', context.nodeId);
+    if (context?.connectionName) params.set('connection_name', context.connectionName);
     const qs = params.toString();
     return qs ? `?${qs}` : '';
   })();
@@ -395,6 +413,8 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
         </CardContent>
       </Card>
 
+      <div className="min-w-0 space-y-4">
+      <RecoveryRecords t={t} context={context} pipelineId={selected?.id} refreshKey={refreshKey + parentRefreshKey} />
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-4 space-y-0 pb-3">
           <CardTitle className="text-sm">
@@ -511,7 +531,9 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
           <div className="mb-2 text-xs font-semibold text-muted-foreground">
             {t('dlq.aggregate')}
           </div>
-          {dlq.error ? (
+          {!selected ? (
+            context?.pipelineId ? <ErrorBox message={t('recovery.pipelineMissing')} /> : <EmptyState text={t('dash.selectPipeline')} />
+          ) : dlq.error ? (
             <ErrorBox message={dlq.error} />
           ) : aggregates.length ? (
             <div className="space-y-2">
@@ -554,29 +576,29 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
                               : stateReason;
                           return (
                             <SampleRow
-                              key={item.id || `${g.key}-${i}`}
+                              key={dlqRowId(item) || `${g.key}-${i}`}
                               t={t}
                               item={item}
                               onDelete={() => deleteOne(item)}
                               onReplay={() =>
                                 onAction(
-                                  `${t('toast.replayDlq')}: ${selected!.name}${item.id ? ` #${item.id}` : ''}`,
+                                  `${t('toast.replayDlq')}: ${selected!.name}${dlqRowId(item) ? ` #${dlqRowId(item)}` : ''}`,
                                   async () => {
-                                    const url = item.id
-                                      ? `/api/v2/dlq/${selectedRef}/${item.id}/replay`
-                                      : `/api/v2/dlq/${selectedRef}/replay?from=${encodeURIComponent(item.timestamp)}&until=${encodeURIComponent(new Date(new Date(item.timestamp).getTime() + 2000).toISOString())}`;
+                                    const rowId = dlqRowId(item);
+                                    if (!rowId) throw new Error(t('recovery.rowIdentityUnavailable'));
+                                    const url = `/api/v2/dlq/${selectedRef}/${rowId}/replay`;
                                     const result = await api<{ replayed?: number }>(url, {
                                       method: 'POST',
                                     });
                                     setRefreshKey((n) => n + 1);
                                     return replayResultToast(
-                                      `${t('toast.replayDlq')}: ${selected!.name}${item.id ? ` #${item.id}` : ''}`,
+                                      `${t('toast.replayDlq')}: ${selected!.name}${dlqRowId(item) ? ` #${dlqRowId(item)}` : ''}`,
                                       result,
                                     );
                                   },
                                 )
                               }
-                              replayDisabled={Boolean(replayDisabledReason)}
+                              replayDisabled={Boolean(replayDisabledReason) || !dlqRowId(item)}
                               replayDisabledReason={replayDisabledReason}
                             />
                           );
@@ -587,6 +609,8 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
                 );
               })}
             </div>
+          ) : context?.rowId && !dlq.loading && !dlq.refreshing ? (
+            <EmptyState text={t('recovery.rowRemoved')} hint={t('recovery.rowRemovedHint')} />
           ) : (
             <EmptyState
               text={t('dlq.noRecords')}
@@ -625,6 +649,7 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
           )}
         </CardContent>
       </Card>
+      </div>
 
       {/* Replay confirm panel */}
       <Card data-testid="dlq-replay-panel">
@@ -718,8 +743,7 @@ export function DLQPage({ t, pipelines, selected, onSelect, onAction }: Props) {
         onConfirm={() => {
           if (!selected) return;
           onAction(`${t('toast.deleteDlq')}: ${selected.name}`, () => {
-            const q = filter ? `?contains=${encodeURIComponent(filter)}` : '';
-            return api(`/api/v2/dlq/${selectedRef}${q}`, { method: 'DELETE' }).then(() =>
+            return api(`/api/v2/dlq/${selectedRef}${replayQuery}`, { method: 'DELETE' }).then(() =>
               setRefreshKey((n) => n + 1),
             );
           });

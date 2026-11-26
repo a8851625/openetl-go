@@ -1,0 +1,2 @@
+path evidence OK: 7 file(s) under /tmp/openetl-candidate/results/tagged/paths, bound to 898af75d1f90a954154d74eb53c3737f38e51b8f
+connector evidence manifest OK: 16 record(s), certified_commit=898af75d1f90a954154d74eb53c3737f38e51b8f, certified_image=sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e

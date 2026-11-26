@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
@@ -11,17 +12,23 @@ import (
 // DeadLetter mirrors dlq.DeadLetter for the adapter interface.
 // Keeping this as a structural alias avoids a circular import.
 type DeadLetter struct {
-	ID              int64                   `json:"id"`
-	JobName         string                  `json:"job_name"`
-	Record          core.Record             `json:"record"`
-	Error           string                  `json:"error"`
-	ErrorClass      string                  `json:"error_class,omitempty"`
-	IdentityContext core.DLQIdentityContext `json:"identity_context"`
-	Timestamp       time.Time               `json:"timestamp"`
-	Attempt         int                     `json:"attempt"`
-	RecordHash      string                  `json:"record_hash,omitempty"`
-	PipelineVersion int                     `json:"pipeline_version,omitempty"`
-	DAGNode         string                  `json:"dag_node,omitempty"`
+	RowID                    string                      `json:"row_id,omitempty"`
+	ID                       int64                       `json:"id"`
+	JobName                  string                      `json:"job_name"`
+	Record                   core.Record                 `json:"record"`
+	Error                    string                      `json:"error"`
+	ErrorClass               string                      `json:"error_class,omitempty"`
+	IdentityContext          core.DLQIdentityContext     `json:"identity_context"`
+	Timestamp                time.Time                   `json:"timestamp"`
+	Attempt                  int                         `json:"attempt"`
+	RecordHash               string                      `json:"record_hash,omitempty"`
+	PipelineVersion          int                         `json:"pipeline_version,omitempty"`
+	DAGNode                  string                      `json:"dag_node,omitempty"`
+	RecoveryEventID          string                      `json:"recovery_event_id,omitempty"`
+	RecoveryOperationID      string                      `json:"recovery_operation_id,omitempty"`
+	RecoveryContext          core.RecoveryCaptureContext `json:"recovery_context"`
+	RecoveryTrackingError    string                      `json:"recovery_tracking_error,omitempty"`
+	RecoveryAssociationKnown bool                        `json:"recovery_association_known"`
 }
 
 // DLQCompatWriter implements pipeline.DLQWriter (WriteDLQ) and also provides
@@ -121,13 +128,16 @@ func (w *DLQCompatWriter) Update(ctx context.Context, item DeadLetter) error {
 		IdentityContext: item.IdentityContext,
 		Attempt:         item.Attempt, RecordHash: item.RecordHash,
 		PipelineVersion: item.PipelineVersion, DAGNode: item.DAGNode,
-		CreatedAt: item.Timestamp,
+		CreatedAt:       item.Timestamp,
+		RecoveryEventID: item.RecoveryEventID, RecoveryOperationID: item.RecoveryOperationID,
+		RecoveryContext: item.RecoveryContext, RecoveryTrackingError: item.RecoveryTrackingError,
 	})
 }
 
 func deadLetterFromRecord(rec DLQRecord) DeadLetter {
 	return DeadLetter{
 		ID:              rec.ID,
+		RowID:           strconv.FormatInt(rec.ID, 10),
 		JobName:         rec.JobName,
 		Record:          rec.Record,
 		Error:           rec.Error,
@@ -138,5 +148,15 @@ func deadLetterFromRecord(rec DLQRecord) DeadLetter {
 		RecordHash:      rec.RecordHash,
 		PipelineVersion: rec.PipelineVersion,
 		DAGNode:         rec.DAGNode,
+		RecoveryEventID: rec.RecoveryEventID, RecoveryOperationID: rec.RecoveryOperationID,
+		RecoveryContext: rec.RecoveryContext, RecoveryTrackingError: rec.RecoveryTrackingError,
+		RecoveryAssociationKnown: rec.RecoveryEventID != "" && rec.RecoveryTrackingError == "",
 	}
+}
+
+func (w *DLQCompatWriter) DeleteAfterReplay(ctx context.Context, job string, id int64, operation string) error {
+	if recovery, ok := UnwrapStorage(w.adapter.store).(RecoveryStore); ok {
+		return recovery.DeleteDeadLetterAfterReplay(ctx, job, id, operation)
+	}
+	return w.DeleteByID(ctx, job, id)
 }

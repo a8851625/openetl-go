@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { getLang, translate } from '@/i18n';
+import type { ReactNode } from 'react';
 
 export function ConfirmDialog({
   open,
@@ -18,6 +19,8 @@ export function ConfirmDialog({
   cancelLabel,
   destructive,
   onConfirm,
+  details,
+  confirmDisabled,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -27,6 +30,8 @@ export function ConfirmDialog({
   cancelLabel?: string;
   destructive?: boolean;
   onConfirm: () => void;
+  details?: ReactNode;
+  confirmDisabled?: boolean;
 }) {
   // UI-D.1: fallbacks are localized (a bare 'OK'/'Cancel' leaked English in
   // ZH dialogs); callers may still override either label.
@@ -39,6 +44,7 @@ export function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
+        {details}
         <DialogFooter>
           <Button
             variant="outline"
@@ -50,6 +56,7 @@ export function ConfirmDialog({
           <Button
             variant={destructive ? 'destructive' : 'default'}
             data-testid="confirm-dialog-confirm"
+            disabled={confirmDisabled}
             onClick={() => {
               onOpenChange(false);
               onConfirm();

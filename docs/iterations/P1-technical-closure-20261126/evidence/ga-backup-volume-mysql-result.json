@@ -1,0 +1,79 @@
+{
+  "backend": "mysql",
+  "result": "passed",
+  "rows_per_history_table": 100037,
+  "small_rows_per_history_table": 10003,
+  "export_small": {
+    "operation": "--backup-file",
+    "elapsed_seconds": 0.379512,
+    "peak_rss_bytes": 54665216,
+    "measurement": "child process getrusage ru_maxrss (not Go heap)",
+    "exit_code": 0
+  },
+  "export_large": {
+    "operation": "--backup-file",
+    "elapsed_seconds": 3.160506,
+    "peak_rss_bytes": 55934976,
+    "measurement": "child process getrusage ru_maxrss (not Go heap)",
+    "exit_code": 0
+  },
+  "restore_large": {
+    "operation": "--restore-file",
+    "elapsed_seconds": 100.912423,
+    "peak_rss_bytes": 755146752,
+    "measurement": "child process getrusage ru_maxrss (not Go heap)",
+    "exit_code": 0
+  },
+  "backup_bytes": 159787071,
+  "content_verification": "every DLQ/audit/run field versus generated input; independent raw SQL hashes before/after restore; 2003 terminal/orphan tasks",
+  "sql_inventory": {
+    "audit_logs": {
+      "rows": 100037,
+      "sha256": "03330b0654429bb709d24e63fd7995e798126dd62dbcb058ea9c4ba08a2e8e0a"
+    },
+    "checkpoints": {
+      "rows": 1,
+      "sha256": "65e7a6a83c78be53d786e95c9368fefb484d759ebe3a209e82801940378159d6"
+    },
+    "counts": {
+      "recovery_events": 0,
+      "recovery_operations": 0,
+      "pipelines": 1,
+      "pipeline_versions": 1,
+      "checkpoints": 1,
+      "dead_letters": 100037,
+      "audit_logs": 100037,
+      "run_history": 100037,
+      "workers": 0,
+      "task_assignments": 2003,
+      "plugins": 0,
+      "connections": 0,
+      "settings": 1
+    },
+    "dead_letters": {
+      "rows": 100037,
+      "sha256": "cecee3b8a49a118abae4c5780fc5fefe833fb99ca39d84e8da66bceb88af63f2"
+    },
+    "pipeline_versions": {
+      "rows": 1,
+      "sha256": "2e6f77038b37ccd75e6e6d9687e0be240b50a25cdcdfe04addf496a67d42491b"
+    },
+    "pipelines": {
+      "rows": 1,
+      "sha256": "492c7e538c5f8c576a318c7b058bd75770363d3d892c9830aefe65b9cbd836f3"
+    },
+    "run_history": {
+      "rows": 100037,
+      "sha256": "1978da0da645b677cea11f5331722ec471f62562895345a7858770db308dbded"
+    },
+    "settings": {
+      "rows": 1,
+      "sha256": "0b00390463da88536900ae02ada8a1903f1463f9f9be87db1fc0d890c29e98a9"
+    },
+    "task_assignments": {
+      "rows": 2003,
+      "sha256": "2b4b7626814327ef1552ce8c1409c7a8ccda77e572be077c46ea24b8c3bba815"
+    }
+  },
+  "backup_sha256": "6a93b061744d7475df282fb32a95462cf2a3f7dad9a16d7412c68377112ecad2"
+}

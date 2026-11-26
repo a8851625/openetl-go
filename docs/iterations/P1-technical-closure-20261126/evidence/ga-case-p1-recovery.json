@@ -1,0 +1,39 @@
+{
+  "name": "p1-recovery",
+  "source_commit": "898af75d1f90a954154d74eb53c3737f38e51b8f",
+  "image_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+  "execution_image_id": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
+  "execution_config_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+  "binary_sha256": "992c42142c64eb83ff3b65e8f220185dd7a3e3e4b8cf8668b2ce4971be3bb6ab",
+  "started_at": "2026-11-25T22:21:43Z",
+  "finished_at": "2026-11-25T22:22:47Z",
+  "result": "passed",
+  "exit_code": 0,
+  "error": "",
+  "log_sha256": "4ba23692e82c8643e3cf5dcf12af2e0170bd21f25fb5317cc34f0786abbad444",
+  "artifact_sha256": {
+    "probe/deleted-pipeline-keeps-recovery-facts.js": "ca9348c448227f4b5d3c783aa54461a9be39ed1b17a54861161014f5c4565608",
+    "probe/detail-tabs-preserve-context.js": "fabbb4e4a67e62719481acbea07bfecd4c528d382cf935bdf95c8f31f0d0acff",
+    "probe/legacy-association-visible.js": "1c8c74e21347331d8427e5348d46253fba5d005abcfc214e77de9833f1713ad5",
+    "probe/mismatched-node-is-explicit.js": "1a2aedcde19909f4dae26a523007de59403bcf8917b830a3e6e6f8a0e616323d",
+    "probe/missing-connection-is-explicit.js": "210020d63f9d9f897b8c04967f1e9a3862ca30adb7c4c0e586df0d55adce5913",
+    "probe/missing-pipeline-disables-DLQ-actions.js": "01583428f568265024e0b632a31bb4b025bb53876104cd7cb4d6641d5e903881",
+    "probe/missing-recovery-does-not-select-another-record.js": "5fa05eea75d3432f497cde9d3bf08f46e7da7e34102cb61f4407a851f9cf6324",
+    "probe/open-connections-recovery-context.js": "64d59c5ce1498388af239efb2421475e14eb31e13282c2057654451e6360646d",
+    "probe/open-dlq-recovery-context.js": "1e296f5ec75f40b332d7928aa0adf0fbccf9fc24a4fb5aa70b66041b0e9a6444",
+    "probe/open-issues-recovery-context.js": "f8d4dbb9c8a6dea7ab2399080a63884e3707f881bbbd8dcf331a3a0840575c58",
+    "probe/openetl-health-2458-app.log": "3d8ef7e39fc6bb8bc1c6312e007ab7b56ba9ddd0bdfe526ddcdced791cadaaab",
+    "probe/openetl-health-2458-mysql.log": "8886a2e3171fd64d41e0392b382759f717d11bca5de12ad0f5f9cad7a9d59060",
+    "probe/openetl-health-2458-sqlite.log": "e6a885a90602332f2f575f16f98d9e9093ebf0b73b75f09f5c9eafc0304efe53",
+    "probe/pipeline-switch-clears-previous-task-scope.js": "d0d71ab90effa2f45d530d9d5b2aee507c60ba5a2455ea2e9ca8222fa061c3fd",
+    "probe/purge-keeps-exact-row-scope.js": "b906ad46e525c488fba2627cb5daf88ab88e177f116b24131489c79fa99c8a1c",
+    "probe/result.json": "7f53f5d94ead8dcf8e984603f16b6dc0caa3a142bfc9cd83bb8bf0956975e00a",
+    "probe/retained-recovery.png": "19fa67caf6643f173cc8e2e7ac1a33f648a973f520c24e0c07edbc6ac61afe89",
+    "probe/retained-result-after-restart-and-row-removal.js": "73fa3181d17b343c20c0d09cd3f2befc2559b76aaf78e965e55f7534094f5455",
+    "probe/sensitive-link-cleared.js": "cb590230fd0b33b359fc09a84467cee1c4ea77c4bb589a034adb01ebcf72a42d"
+  },
+  "container_runtime": "Docker version 29.4.2, build 055a478",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+  }
+}

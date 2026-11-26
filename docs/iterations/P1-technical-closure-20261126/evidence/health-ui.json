@@ -1,0 +1,65 @@
+{
+  "image": "03c991b9a2cf2ebc731e870ba7b490e5437ce3110cae852216af819c491691c5",
+  "started_at": "2026-11-25T17:31:41Z",
+  "image_id": "03c991b9a2cf2ebc731e870ba7b490e5437ce3110cae852216af819c491691c5",
+  "finished_at": "2026-11-25T17:32:48Z",
+  "checks": [
+    {
+      "name": "degraded overview",
+      "result": "passed"
+    },
+    {
+      "name": "degraded list",
+      "result": "passed"
+    },
+    {
+      "name": "degraded detail",
+      "result": "passed"
+    },
+    {
+      "name": "degraded issues",
+      "result": "passed"
+    },
+    {
+      "name": "healthy after circuit recovery and replay",
+      "result": "passed"
+    },
+    {
+      "name": "unknown overview",
+      "result": "passed"
+    },
+    {
+      "name": "unknown list",
+      "result": "passed"
+    },
+    {
+      "name": "unknown detail",
+      "result": "passed"
+    },
+    {
+      "name": "unknown issues",
+      "result": "passed"
+    },
+    {
+      "name": "healthy after DLQ count recovery",
+      "result": "passed"
+    },
+    {
+      "name": "failed overview",
+      "result": "passed"
+    },
+    {
+      "name": "failed list",
+      "result": "passed"
+    },
+    {
+      "name": "failed detail",
+      "result": "passed"
+    },
+    {
+      "name": "failed issues",
+      "result": "passed"
+    }
+  ],
+  "result": "passed"
+}

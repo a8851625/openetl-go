@@ -40,6 +40,8 @@ func mysqlTableWiper(t *testing.T, s *mysql.Store) func() {
 	t.Helper()
 	ctx := context.Background()
 	for _, q := range []string{
+		`DELETE FROM recovery_operations`,
+		`DELETE FROM recovery_events`,
 		`DELETE FROM dead_letters`,
 		`DELETE FROM audit_logs`,
 		`DELETE FROM run_history`,
@@ -48,6 +50,7 @@ func mysqlTableWiper(t *testing.T, s *mysql.Store) func() {
 		`DELETE FROM pipeline_versions`,
 		`DELETE FROM workers`,
 		`DELETE FROM plugins`,
+		`DELETE FROM connections`,
 		`DELETE FROM settings`,
 		`DELETE FROM task_assignments`,
 	} {
@@ -83,6 +86,8 @@ func pgTableWiper(t *testing.T, s *postgres.Store) func() {
 	t.Helper()
 	ctx := context.Background()
 	for _, q := range []string{
+		`DELETE FROM recovery_operations`,
+		`DELETE FROM recovery_events`,
 		`DELETE FROM dead_letters`,
 		`DELETE FROM audit_logs`,
 		`DELETE FROM run_history`,
@@ -91,6 +96,7 @@ func pgTableWiper(t *testing.T, s *postgres.Store) func() {
 		`DELETE FROM pipeline_versions`,
 		`DELETE FROM workers`,
 		`DELETE FROM plugins`,
+		`DELETE FROM connections`,
 		`DELETE FROM settings`,
 		`DELETE FROM task_assignments`,
 	} {

@@ -25,29 +25,44 @@ type CheckpointRecord struct {
 
 // DLQRecord is the storage-layer representation of a dead-letter entry.
 type DLQRecord struct {
-	ID              int64                   `json:"id"`
-	JobName         string                  `json:"job_name"`
-	Record          core.Record             `json:"record"`
-	Error           string                  `json:"error"`
-	ErrorClass      string                  `json:"error_class,omitempty"`
-	IdentityContext core.DLQIdentityContext `json:"identity_context"`
-	Attempt         int                     `json:"attempt"`
-	RecordHash      string                  `json:"record_hash,omitempty"`
-	PipelineVersion int                     `json:"pipeline_version,omitempty"`
-	DAGNode         string                  `json:"dag_node,omitempty"`
-	CreatedAt       time.Time               `json:"created_at"`
+	ID                    int64                       `json:"id"`
+	JobName               string                      `json:"job_name"`
+	Record                core.Record                 `json:"record"`
+	Error                 string                      `json:"error"`
+	ErrorClass            string                      `json:"error_class,omitempty"`
+	IdentityContext       core.DLQIdentityContext     `json:"identity_context"`
+	Attempt               int                         `json:"attempt"`
+	RecordHash            string                      `json:"record_hash,omitempty"`
+	PipelineVersion       int                         `json:"pipeline_version,omitempty"`
+	DAGNode               string                      `json:"dag_node,omitempty"`
+	CreatedAt             time.Time                   `json:"created_at"`
+	RecoveryEventID       string                      `json:"recovery_event_id,omitempty"`
+	RecoveryOperationID   string                      `json:"recovery_operation_id,omitempty"`
+	RecoveryContext       core.RecoveryCaptureContext `json:"recovery_context"`
+	RecoveryTrackingError string                      `json:"recovery_tracking_error,omitempty"`
+	// Maintenance-only fidelity metadata. Runtime DLQ readers never populate
+	// these fields. SQL NULL stays distinct from a stored JSON null/object;
+	// legacy JSON shape never invents a known recovery association.
+	BackupRecoveryContextJSON       json.RawMessage `json:"backup_recovery_context_json,omitempty"`
+	BackupRecoveryContextNull       bool            `json:"backup_recovery_context_null,omitempty"`
+	BackupRecoveryTrackingErrorNull bool            `json:"backup_recovery_tracking_error_null,omitempty"`
 }
 
 // DLQFilter provides SQL-style filtering for dead-letter queries.
 type DLQFilter struct {
-	JobName       string
-	Limit         int
-	Offset        int
-	From          time.Time
-	Until         time.Time
-	Contains      string
-	ErrorContains string
-	ErrorClass    string
+	DAGNode         string
+	ConnectionName  string
+	ID              int64
+	JobName         string
+	Limit           int
+	Offset          int
+	From            time.Time
+	Until           time.Time
+	Contains        string
+	ErrorContains   string
+	ErrorClass      string
+	RecoveryEventID string
+	DeletionReason  string
 	// Ascending orders by created_at ASC instead of the default DESC. Replay
 	// uses it so a backlog is drained oldest-first; listings keep DESC so the
 	// newest failures are visible first.
@@ -375,17 +390,19 @@ type PipelineLifecycleStore interface {
 // ObjectCounts is a point-in-time inventory of control-plane tables used by
 // backup/restore reconciliation and upgrade smoke checks (PR-1.3).
 type ObjectCounts struct {
-	Pipelines        int `json:"pipelines"`
-	PipelineVersions int `json:"pipeline_versions"`
-	Checkpoints      int `json:"checkpoints"`
-	DeadLetters      int `json:"dead_letters"`
-	AuditLogs        int `json:"audit_logs"`
-	RunHistory       int `json:"run_history"`
-	Workers          int `json:"workers"`
-	Tasks            int `json:"task_assignments"`
-	Plugins          int `json:"plugins"`
-	Connections      int `json:"connections"`
-	Settings         int `json:"settings"`
+	RecoveryEvents     int `json:"recovery_events"`
+	RecoveryOperations int `json:"recovery_operations"`
+	Pipelines          int `json:"pipelines"`
+	PipelineVersions   int `json:"pipeline_versions"`
+	Checkpoints        int `json:"checkpoints"`
+	DeadLetters        int `json:"dead_letters"`
+	AuditLogs          int `json:"audit_logs"`
+	RunHistory         int `json:"run_history"`
+	Workers            int `json:"workers"`
+	Tasks              int `json:"task_assignments"`
+	Plugins            int `json:"plugins"`
+	Connections        int `json:"connections"`
+	Settings           int `json:"settings"`
 }
 
 // RetentionPurger is an optional storage capability for janitor retention.
