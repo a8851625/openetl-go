@@ -6,7 +6,7 @@
 | 2/5 | P5-H1 | delivered | API/Go race、9 个前端 contracts、真实容器 14/14：见 h1-evidence.md。 |
 | 3/5 | PR-0-C1 | delivered | 三 backend race/conformance/backup、完整 server -race、真实容器 9/9；见 c1-evidence.md。 |
 | 4/5 | UI-E-R1 | delivered | 三 backend migration/recovery/backup、完整 affected Go race、真实 UI 21/21；见 r1-evidence.md。 |
-| 5/5 | GA-C1 | active | 1388b5d 候选 23/23、七个 tagged path、44 UI checks 与本地 immutable-registry promotion passed；最后的 validator/evidence 更新待 PR aggregate。 |
+| 5/5 | GA-C1 | delivered | 898af75 候选 23/23、七个 tagged path（28 checks）、44 UI checks、3 readiness checks；保存资产本地 registry 同字节晋升与 run 45711062461 的 36/36 CI jobs 全部 passed。 |
 
 ## Round 1 Claim
 
@@ -88,6 +88,6 @@ Non-goals: public release/tag/merge, connector or distributed maturity upgrade, 
 Data semantics: candidates immutable after build; reports external and fail closed on missing/failed/skipped/stale/mismatched evidence. Publication loads/uploads the preserved assets, then checks registry digest/config ID and executable hash. Report failure changes readiness evidence only, not delivery state or secrets.
 Rollback: keep original assets and reports; reverting the workflow cannot certify rebuilt bytes using a previous report. Legacy manifests remain readable as historical evidence.
 Acceptance: 1) build once and hash all advertised assets; 2) two primary paths, seven tagged path files and full 16-script matrix use actual candidate selectors; 3) P1 regressions, freshness/provenance, incomplete/mutated artifact rejection; 4) same-byte load/promotion receipt using an isolated registry and future release workflows; 5) final PR aggregated gate success; 6) no public release, external research remains blocked
-Evidence: ga-evidence.md；run 45702765271 Candidate / certified success；23-case certificate、十个 archive/checksum hashes、config 708cacb9…/binary 98c36fd7…、local push/pull digest a22ea6c1…；12 Python rejection tests + checker -race，strict 7 paths / 16 records exit 0。最后 PR aggregate 待证据/validator commit 复验。
-Result: active
+Evidence: ga-evidence.md；run 45711062461 source + exact-candidate + Delivery Passed success（36/36 jobs）；23-case certificate、十个 archive/checksum hashes、config sha256:5ce9794ad47c434b…/binary 992c4214…、local push/pull digest af6c9f35…；12 Python rejection tests + checker -race，strict 7 paths / 16 records exit 0。实际 source/date/hash/receipt 原样保存。
+Result: delivered
 Residual/follow-up: no sixth increment in this window; external user research only

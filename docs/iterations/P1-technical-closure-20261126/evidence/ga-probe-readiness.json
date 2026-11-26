@@ -1,6 +1,6 @@
 {
-  "image": "sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33",
-  "image_id": "sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33",
+  "image": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
+  "image_id": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
   "checks": [
     {
       "name": "source/executable-bound external certification becomes visible without a rebuild",

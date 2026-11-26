@@ -5,26 +5,26 @@
   "small_rows_per_history_table": 10003,
   "export_small": {
     "operation": "--backup-file",
-    "elapsed_seconds": 1.090842,
-    "peak_rss_bytes": 59424768,
+    "elapsed_seconds": 0.524413,
+    "peak_rss_bytes": 56381440,
     "measurement": "child process getrusage ru_maxrss (not Go heap)",
     "exit_code": 0
   },
   "export_large": {
     "operation": "--backup-file",
-    "elapsed_seconds": 2.672135,
-    "peak_rss_bytes": 59801600,
+    "elapsed_seconds": 3.366012,
+    "peak_rss_bytes": 57982976,
     "measurement": "child process getrusage ru_maxrss (not Go heap)",
     "exit_code": 0
   },
   "restore_large": {
     "operation": "--restore-file",
-    "elapsed_seconds": 68.956309,
-    "peak_rss_bytes": 763559936,
+    "elapsed_seconds": 67.645409,
+    "peak_rss_bytes": 758505472,
     "measurement": "child process getrusage ru_maxrss (not Go heap)",
     "exit_code": 0
   },
-  "backup_bytes": 161661555,
+  "backup_bytes": 159787301,
   "content_verification": "every DLQ/audit/run field versus generated input; independent raw SQL hashes before/after restore; 2003 terminal/orphan tasks",
   "sql_inventory": {
     "audit_logs": {
@@ -33,7 +33,7 @@
     },
     "checkpoints": {
       "rows": 1,
-      "sha256": "33345c3271c86699870ad43ff913de7659268154ef621f1225b69eb4e5e7797e"
+      "sha256": "266ff556c421f434c2920f531fb035891dfd381c1c452210726feb6db1f7ca82"
     },
     "counts": {
       "recovery_events": 0,
@@ -56,11 +56,11 @@
     },
     "pipeline_versions": {
       "rows": 1,
-      "sha256": "b90359bd86fcc76fa1484fd5683c4170a9cfb17f07a054cc5fcf30709ec13c5e"
+      "sha256": "e72f1a40d3415b4208ef62e788179bc239f07d2bc0791e7c271585cf7c69ce5b"
     },
     "pipelines": {
       "rows": 1,
-      "sha256": "e1a28239d2ae17b702499302134eba88dcab38c5b56df4ebf9459ab8da507efa"
+      "sha256": "ec65d7101397bb8d2b6d222bcee62939e0bfa4ba59046b6878d31f5925e580ad"
     },
     "run_history": {
       "rows": 100037,
@@ -75,5 +75,5 @@
       "sha256": "2b4b7626814327ef1552ce8c1409c7a8ccda77e572be077c46ea24b8c3bba815"
     }
   },
-  "backup_sha256": "0b8f10d2bd3c2f7973ef4de3d3b839f5408a76f8913fc00d7510498925bcdddc"
+  "backup_sha256": "b966185218815e95689a3591569da023e32f304055f79f8f0a4f9116457f5c76"
 }

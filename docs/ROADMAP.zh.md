@@ -1,7 +1,7 @@
 # OpenETL-Go Roadmap
 
 > 当前执行快照（2026-11-26，代码基线 `e28a740` / v0.2.12-beta.21）：
-> 唯一 `active` 是 GA-C1；EV-2、P5-H1、PR-0-C1、UI-E-R1 已交付。
+> 本次 P1 技术窗口五项全部 `delivered`，Round 5/5 已收口；无新增 active 主任务。
 > 用户已授权本轮评估的全部 P1 技术修复，新增四个有界后续，
 > 按依赖排为健康事实、连接引用保护、恢复事实契约、最终候选资产认证。
 > UI-E 的外部用户研究继续 `blocked_external`，用户明确要求先完成技术修复。
@@ -35,7 +35,7 @@
 | 2/5 | P5-H1（P5/UI-F 后续） | `delivered` | API/Go race 与真实容器 UI 14/14；默认熔断冷却后恢复、DLQ unknown、restore_failed 四入口一致。见 [H1 evidence](./iterations/P1-technical-closure-20261126/h1-evidence.md)。 |
 | 3/5 | PR-0-C1（PR-0/UI-E.5 后续） | `delivered` | 共享 SQL 事务保护当前引用；三 backend 竞争/备份/加密重启与真实 UI 9/9。见 [C1 evidence](./iterations/P1-technical-closure-20261126/c1-evidence.md)。 |
 | 4/5 | UI-E-R1（UI-E.3 已授权契约后续） | `delivered` | 故障与 replay 结果保留稳定身份；三 backend recovery/migration/backup、完整 Go race 与真实 UI 21/21，见 [R1 evidence](./iterations/P1-technical-closure-20261126/r1-evidence.md)。 |
-| 5/5 | GA-C1（GA 阻断项 #1 后续） | `active` | 1388b5d 候选 23/23、七个 path、44 UI checks 和本地 registry 同字节晋升通过；最后 validator/evidence 更新后复验 PR aggregate。见 [GA evidence](./iterations/P1-technical-closure-20261126/ga-evidence.md)。 |
+| 5/5 | GA-C1（GA 阻断项 #1 后续） | `delivered` | 898af75 候选 23/23、七个 path（28 checks）、44 UI checks、3 readiness checks 与本地 registry 同字节晋升通过；run 45711062461 的 36/36 jobs 和 Delivery Passed 聚合 success。见 [GA evidence](./iterations/P1-technical-closure-20261126/ga-evidence.md)。 |
 
 UI-E 的 3–5 人首次任务/恢复任务研究仍按原验收标准另行记录，技术修复不将该研究置为
 delivered。EV-3 与运行历史遗留行是本窗口之外的 P2。
@@ -2685,9 +2685,9 @@ smoke test，却断言绝对墙钟阈值 `elapsed > 100ms`。共享 CI runner �
 integration job `139341305228` 的 Run integration tests 和 job conclusion 均为 success。
 该 job 配置真实 MySQL 8 与 ClickHouse，并执行全量 integration-tagged ETL 测试。
 
-**证据范围**：本条按原验收要求闭合 MySQL integration job。聚合门禁仍受旧路径证据影响：
+**证据范围**：本条按原验收要求闭合 MySQL integration job。当轮聚合门禁曾受旧路径证据影响：
 `ch_dedup_crash_window.json` 绑定 `d82ddc5`，本轮相关测试已在 `93427a5` 修改。
-最终路径/镜像认证与全量聚合门禁由 GA-C1 收口，当前不声明完整发布门禁通过。
+最终路径/镜像认证与全量聚合门禁已由 GA-C1 收口：冻结实现 run 45711062461 的 source + exact-candidate + Delivery Passed 全部 success。此记录不替代实际 tag 发布验收。
 
 ### EV-3：resource-baseline 的 CI 阈值决策（数据已足，结论为「暂维持 warning」）
 

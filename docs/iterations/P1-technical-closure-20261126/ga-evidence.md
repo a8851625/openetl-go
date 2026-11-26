@@ -3,32 +3,33 @@
 Round: 5/5
 Roadmap item: GA-C1
 Profile/path: release assets / standalone connector paths
-Result: active
+Result: delivered
 
-当前冻结的实现提交：`1388b5d892c818bb31b9d0dfc30d128990916222`。
-最新实际候选 run：[45702765271](https://github.com/a8851625/openetl-go/actions/runs/45702765271)。
-1388b5d 的候选认证已通过（23/23），本地 registry receipt 已保存。独立 checker 的绝对路径/零文件拒绝及 push 摘要回执修正仍需在更新后的 PR aggregate 复验，GA-C1 保持 active。
+当前冻结的实现提交：`898af75d1f90a954154d74eb53c3737f38e51b8f`。
+最新实际候选 run：[45711062461](https://github.com/a8851625/openetl-go/actions/runs/45711062461)。
+冻结实现的 36 个 CI jobs 全部 success，含 source、exact-candidate 与 Delivery Passed 聚合门禁。23/23 mandatory cases、七个 tagged files（28 checks）、44 个 P1 UI checks 和 3 个 readiness checks 全部通过。本地 registry 的保存/载入/推送/不可变拉取回执已对账。
 
 ## 验收矩阵
 
 | Criterion | Evidence | Result | Residual |
 | --- | --- | --- | --- |
-| 构建一次，保留 default/extism 十个归档、镜像配置/executable/checksums | ga-candidate.json；CI build 139516859118 success | passed | 5 OS/arch × 2 variants；无发布后重建 |
+| 构建一次，保留 default/extism 十个归档、镜像配置/executable/checksums | ga-candidate.json；CI build 139545291879 success | passed | 5 OS/arch × 2 variants；无发布后重建 |
 | 16-script matrix、两条 primary、七个 tagged JSON 消费候选 | ga-certification.json、ga-case-*.json、docs/evidence/*.json | passed | 完整 23-case report（含 probes） |
 | 三个 P1 UI probes、external-readiness binding 与拒绝边界 | 14+9+21 UI checks、3 readiness checks；12 Python rejection tests + checker race | passed | strict 现在明确读取绝对路径七个文件，零文件阻断 |
 | 同字节 load/tag/push/immutable pull，registry digest 对账 | ga-promotion.json / ga-promotion.txt | passed | config + executable + rootfs diff IDs；实际 push digest 单独保存 |
-| 最终 PR source + exact-candidate aggregate success | PR #13；新的 evidence/validator commit 待 run | active | 原 run 45702765271 仅旧 checked-in evidence source gate failed；候选认证 success |
+| 最终 PR source + exact-candidate aggregate success | PR #13；run 45711062461，36/36 jobs success；ga-ci.json | passed | 后续只提交允许的 evidence/bookkeeping 文档；最终 PR HEAD 检查见 PR |
 | 技术与研究验收分离 | ROADMAP / 本迭代 spec | passed | UI-E 外部研究继续 blocked_external；无 distributed/maturity 升级 |
 
 ## 候选与晋升身份
 
-- Source: `1388b5d892c818bb31b9d0dfc30d128990916222`；builder Go 1.24.13 / GoReleaser 1.26.2。
-- Image configuration: `sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31`。
-- Docker execution index: `sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33`。
-- Executable: `98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2`。
-- Actual pushed registry reference: `127.0.0.1:41625/openetl-p1@sha256:a22ea6c19e88069827ab32683da348ed7747c22d759a35b85edcafba2aee2105`。
-- Test-only promotion: 2026-11-25T21:44:15Z，配置与 executable SHA 均一致，exit 0。
+- Source: `898af75d1f90a954154d74eb53c3737f38e51b8f`；builder Go 1.24.13 / GoReleaser 1.26.2。
+- Image configuration: `sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e`。
+- Docker execution index: `sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8`。
+- Executable: `992c42142c64eb83ff3b65e8f220185dd7a3e3e4b8cf8668b2ce4971be3bb6ab`。
+- Actual pushed registry reference: `127.0.0.1:41625/openetl-p1@sha256:af6c9f35e665c38b9b18f60fbdfcf252f31168cc851464b6b2cc70d656efc268`。
+- Test-only promotion: 2026-11-26T00:24:51Z，配置与 executable SHA 均一致，exit 0。
 - 原始 candidate ledger SHA、十个 archive/checksum SHA、每项实际窗口与 raw artifact SHA 见 ga-candidate.json / ga-certification.json。
+- 原 1388b5d 的候选、证书与晋升回执保存在 ga-*-1388.json / ga-promotion-1388.txt，保留实际历史身份。
 
 ## 已取得的技术验证
 
@@ -42,6 +43,7 @@ Result: active
   fidelity、v1/v2 compatibility、known recovery state、故障原子回滚、加密引用与独立 CLI。
 - 三 backend `hack/e2e-backup-volume.sh` 各自 exit 0：每个 backend 的 DLQ/audit/run 各
   100037 行，2003 条 terminal/orphan task，逐字段校验与独立 raw SQL before/after hash 相同。
+- 最新 CI volume 原始结果逐字段与 raw SQL 哈希再次一致：每个 backend 的 DLQ/audit/run 各 100037 行、2003 tasks，export/restore 全部 exit 0。源码门禁在真实 PR merge `1e8a1d83237fbb69cb03c059f0d4ec298a42075e` 执行，其父提交包含冻结实现 `898af75d1f90a954154d74eb53c3737f38e51b8f`；原始 source.txt 与 API parent/tree 证据原样保存，不改写成候选提交。
 - actionlint v1.7.7 对五个修改的 workflows exit 0；GoReleaser 1.26.2 config check exit 0。
 - 保存归档里的配置后，`8c43c8c` 的既有 release-style Darwin/arm64 executable 在隔离目录
   启动返回 HTTP 200。该项仅验证 extraction/startup，不替代最新候选的完整 path certification。
@@ -55,6 +57,8 @@ Result: active
 | 45694597383 | cancelled after replacement | 修改后的三 backend source gates、Go race/integration、前端和三个真实 P1 UI probes 已 success；旧 candidate tagged extraction 不再继续冒充最终候选 |
 | 45696570080 | failed | 同一候选 17 个 shell/primary、七个 tagged path 与三个 P1 UI probes success；S3 的固定公共服务端镜像也返回 401。固定 MinIO/mc 源码 fallback 已在本机构建，配置身份规范化解决 Docker 29 index / Podman config 差异。 |
 | 45695202813 / 45695689947 | cancelled after replacement | 实现变化后停止重复候选；保留其已上传结果，不计为新候选验收 |
+| 45708601396 | passed | d36682a 的 36/36 jobs、23/23 candidate cases 与严格七路径检查通过；随后只补交付索引白名单与相邻测试。 |
+| 45711062461 | passed | 898af75 冻结实现的 36/36 jobs；最终保存资产在本地 registry 同字节晋升通过。 |
 
 原始输出在对应 GitHub run artifacts；本机调试输出位于 `/private/tmp/openetl-p1-r5-*`。
 修复原始 SQL fidelity 时保留旧 fingerprint 检查；修复测试配置时从同一 hashed archive 提取，
@@ -87,6 +91,9 @@ backup fields。冲突 metadata 使 restore 原子失败；原数据、已知 as
 | `.gitignore` | 隔离真实验证输出，避免输入自污染（#1/#5） |
 | `.goreleaser.yml` | 只构建一次，保留平台/variant，stamp source（#1） |
 | `docs/ROADMAP.zh.md` | 交付契约、运行要求、claim/close 与残余证据（#1–6） |
+| `docs/iterations/README.md` | 索引与 Roadmap/tasks 交付状态一致，严格门禁仅增加该文档路径（#5） |
+| `docs/connector-certification.md`、`docs/ga-assessment-2026-09-16.md` | 当前证据与历史声明分开，保持 profile/maturity 边界（#2–6） |
+| `CHANGELOG.md`、`CHANGELOG.zh.md` | 五项 P1 修复列于 Unreleased，保留用户其他编辑（#6） |
 | `docs/candidate-release.md` | 交付契约、运行要求、claim/close 与残余证据（#1–6） |
 | `docs/iterations/P1-technical-closure-20261126/plan.md` | 交付契约、运行要求、claim/close 与残余证据（#1–6） |
 | `docs/iterations/P1-technical-closure-20261126/tasks.md` | 交付契约、运行要求、claim/close 与残余证据（#1–6） |
@@ -135,4 +142,16 @@ backup fields。冲突 metadata 使 restore 原子失败；原数据、已知 as
 本轮不能领取第六个 increment。外部研究的缺失输入仍为 3–5 名目标用户参与者；技术证据不能
 替代研究。EV-3 与运行历史 P2 不在本窗口。公共 tag/release/merge 不属于本次验证范围。
 
-VERDICT: REWORK — 所有候选与晋升验收已通过；最后的 validator/evidence 更新需要新的 PR aggregate success。
+最终命令证据：
+
+```text
+python3 hack/release_candidate.py promote --dir /private/tmp/openetl-p1-ga-candidate-898 --destination 127.0.0.1:41625/openetl-p1:898af75 --insecure
+Promoted preserved bytes: sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e ['127.0.0.1:41625/openetl-p1@sha256:af6c9f35e665c38b9b18f60fbdfcf252f31168cc851464b6b2cc70d656efc268']
+[exit code: 0]
+```
+
+Round: 5/5
+Result: delivered
+Residual/follow-up: UI-E 外部研究仍 blocked_external；产品 owner / 研究协调人安排 3–5 名目标参与者并完成协议规定的任务走查后解除。无第六个 increment。
+
+VERDICT: DELIVERABLE

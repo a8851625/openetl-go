@@ -38,16 +38,16 @@ an expired verified record is `partial`.
 ### Current candidate evidence — 2026-11-26
 
 [GA-C1 evidence](./iterations/P1-technical-closure-20261126/ga-evidence.md) records
-candidate `1388b5d892c818bb31b9d0dfc30d128990916222` from
-[run 45702765271](https://github.com/a8851625/openetl-go/actions/runs/45702765271):
+candidate `898af75d1f90a954154d74eb53c3737f38e51b8f` from
+[run 45711062461](https://github.com/a8851625/openetl-go/actions/runs/45711062461):
 all 16 connector scripts, two primary scripts, seven tagged path artifacts,
 three P1 browser probes and the external-readiness probe passed (23 case reports).
 The ten preserved default/extism archives retain their original checksums.
 
 The actual image configuration SHA is
-`sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31`;
+`sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e`;
 its executable SHA is
-`98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2`.
+`992c42142c64eb83ff3b65e8f220185dd7a3e3e4b8cf8668b2ce4971be3bb6ab`.
 These are measured from preserved bytes. Provider image IDs and registry manifest
 digests are separate identities; see [candidate release](./candidate-release.md).
 An externally mounted certificate must also match the running source and binary.
@@ -55,8 +55,10 @@ An externally mounted certificate must also match the running source and binary.
 The S3 fixture was built on the cold runner from pinned MinIO/mc public commits
 when both public image repositories denied access. Its source-build labels and
 actual image ID remain in the report. Runtime connector maturity is unchanged.
-The PR aggregate remains pending the documentation/validator evidence update;
-the research and distributed profiles are outside this certification.
+All 36 jobs, including the source and exact-candidate aggregates, passed on the
+frozen implementation. The preserved assets also passed a local-registry
+push/immutable-pull comparison. Research and distributed profiles remain outside
+this certification; final bookkeeping HEAD checks are linked in PR #13.
 
 ### Historical first attempt — 2026-11-09 (13 of 16 scripts passed)
 
