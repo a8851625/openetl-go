@@ -310,8 +310,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-      - name: Install ripgrep
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+      - name: Install measurement tools and a second actual image engine
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep podman
       - name: Verify measurement failure boundaries
         run: PYTHONDONTWRITEBYTECODE=1 python3 hack/test_bench_baseline.py -v
       - name: Measure packaged images, health-ready startup, RSS and offline restore
@@ -320,6 +320,17 @@ jobs:
           CONTAINER_CLI=docker ./hack/bench-baseline.sh --out .bench-out/current 2>&1 | tee baseline-run.log
       - name: Validate complete measurements and apply observation budgets
         run: python3 hack/bench_baseline.py --check .bench-out/current/result.json
+      - name: Verify identical image content on actual Docker and Podman engines
+        run: |
+          set -euo pipefail
+          IMAGE_CONFIG_DIGEST="$(python3 -c 'import json; print(json.load(open(".bench-out/current/result.json"))["images"]["default"]["image_config_sha256"])')"
+          CONTAINER_CLI=docker ./hack/e2e-bench-image-metrics.sh --image-archive .bench-out/current/image-default.tar \
+            --image-config-digest "$IMAGE_CONFIG_DIGEST" --out .bench-out/current/docker-probe
+          CONTAINER_CLI=podman ./hack/e2e-bench-image-metrics.sh --image-archive .bench-out/current/image-default.tar \
+            --image-config-digest "$IMAGE_CONFIG_DIGEST" --out .bench-out/current/podman-probe
+          python3 hack/bench_baseline.py --compare-image-probes \
+            .bench-out/current/docker-probe/result.json .bench-out/current/podman-probe/result.json \
+            --out .bench-out/current/conformance
       - name: Upload baseline provenance and raw measurement logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -327,11 +338,14 @@ jobs:
           name: resource-baseline-${{ github.run_id }}
           if-no-files-found: error
           include-hidden-files: true
+          compression-level: 0
+          retention-days: 14
           path: |
             baseline-run.log
-            .bench-out/current/*.json
-            .bench-out/current/*.jsonl
-            .bench-out/current/*.log
+            .bench-out/current/**/*.json
+            .bench-out/current/**/*.jsonl
+            .bench-out/current/**/*.log
+            .bench-out/current/**/*.tar
 
   gate-passed:
     name: Gate Passed (aggregated)

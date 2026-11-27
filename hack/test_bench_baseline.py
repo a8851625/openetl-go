@@ -15,8 +15,10 @@ import unittest
 from unittest import mock
 
 import bench_baseline as baseline_module
-from bench_baseline import (Baseline, IMAGE_METHOD, MeasurementError, VARIANTS, image_identity,
+from bench_baseline import (Baseline, ImageProbe, IMAGE_METHOD, MeasurementError, VARIANTS, canonical_image_content,
+                            compare_image_probes, image_identity, prepare_owned_image_archive, provider_identity,
                             measure_image_archive, parse_proc_status, sanitize_image_inspect,
+                            sanitize_engine_info, sanitize_engine_version,
                             validate_image_metrics, validate_result, wait_ready)
 
 
@@ -503,6 +505,126 @@ class V3EvidenceTests(unittest.TestCase):
                     mock.patch.object(sys, "argv", ["bench", "--out", str(out)]):
                 self.assertEqual(baseline_module.main(), 1)
             self.assertEqual(json.loads((out / "result.json").read_text())["status"], "failed")
+
+
+class EngineProbeTests(unittest.TestCase):
+    def test_only_unreferenced_safe_podman_legacy_aliases_are_ignored(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "archive.tar"
+            image = image_fixture()
+            name = "a" * 64 + "/layer.tar"
+            target = sha(image["raw"][0]) + ".tar"
+            alias = tarfile.TarInfo(name); alias.type = tarfile.SYMTYPE; alias.linkname = "../" + target
+            fixture_archive(path, [image], extra=[(target, image["raw"][0]), (name, alias)])
+            actual = measure_image_archive(path, image["config_sha"])
+            self.assertEqual(actual["ignored_legacy_layer_aliases"], 1)
+            referenced = copy.deepcopy(image); referenced["manifest"]["Layers"][0] = name
+            fixture_archive(path, [referenced], extra=[(target, image["raw"][0]), (name, alias)])
+            with self.assertRaisesRegex(MeasurementError, "missing a layer"):
+                measure_image_archive(path, image["config_sha"])
+            for linkname in ("../../" + target, "/" + target, "../" + "f" * 64 + ".tar"):
+                alias.linkname = linkname
+                fixture_archive(path, [image], extra=[(target, image["raw"][0]), (name, alias)])
+                with self.subTest(linkname=linkname), self.assertRaises(MeasurementError):
+                    measure_image_archive(path, image["config_sha"])
+
+    def test_provider_comes_from_server_and_info_logs_exclude_private_fields(self):
+        info = {"ServerVersion": "29.fixture", "ID": "fixture-docker", "HTTPProxy": "private-engine-sentinel"}
+        version = {"Client": {"Version": "29.client"},
+                   "Server": {"Version": "29.fixture", "Components": [{"Name": "Engine", "Version": "29.fixture",
+                                                                         "Details": {"private": "private-engine-sentinel"}}]}}
+        self.assertEqual(provider_identity(info, version)["id"], "docker")
+        self.assertNotIn("private-engine-sentinel", sanitize_engine_info(json.dumps(info)))
+        self.assertNotIn("private-engine-sentinel", sanitize_engine_version(json.dumps(version)))
+        podman_info = {"host": {"os": "linux", "hostname": "fixture-podman"}, "version": {"Version": "5.fixture"}}
+        podman_version = {"Client": {"Version": "5.client"}, "Server": {"Version": "5.fixture"}}
+        self.assertEqual(provider_identity(podman_info, podman_version)["id"], "podman")
+        with self.assertRaisesRegex(MeasurementError, "versions disagree"):
+            provider_identity(info, {**version, "Server": {**version["Server"], "Version": "different"}})
+        with self.assertRaisesRegex(MeasurementError, "unrecognized"):
+            provider_identity(info, {**version, "Server": {**version["Server"], "Platform": {"Name": "Podman Engine"}}})
+
+    def test_owned_transport_changes_only_tags_and_selects_one_image(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for oci in (False, True):
+                for compressed in (False, True):
+                    image = image_fixture(oci=oci, compressed=compressed)
+                    original = root / "original.tar"
+                    fixture_archive(original, [image, image_fixture("amd64", oci=oci, payload=b"other-platform")], oci=oci)
+                    before = original.read_bytes()
+                    metrics = measure_image_archive(original, image["config_sha"])
+                    owned = root / "owned.tar"
+                    actual = prepare_owned_image_archive(original, owned, metrics, "localhost/owned-fixture:selected")
+                    self.assertEqual(canonical_image_content(actual), canonical_image_content(metrics))
+                    self.assertEqual(original.read_bytes(), before)
+                    with tarfile.open(owned) as archive:
+                        manifest = json.load(archive.extractfile("manifest.json"))
+                    self.assertEqual(len(manifest), 1)
+                    self.assertEqual(manifest[0]["RepoTags"], ["localhost/owned-fixture:selected"])
+
+    def test_conformance_recomputes_archives_and_rejects_alias_or_content_change(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = root / "input.tar"; image = image_fixture()
+            fixture_archive(original, [image])
+            metrics = measure_image_archive(original, image["config_sha"])
+            reports, directories = [], []
+            for provider in ("docker", "podman"):
+                directory = root / provider; directory.mkdir(); directories.append(directory)
+                fixture_archive(directory / "image.tar", [image])
+                report = {"format": "openetl-image-engine-probe/v1", "scope": "image-only", "status": "passed",
+                          "cleanup": {"passed": True, "errors": []}, "image_archive_path": "image.tar",
+                          "provider": {"id": provider, "server_version": provider + "-fixture",
+                                       "server": {"Version": provider + "-fixture"}}, "harness_sha256": "1" * 64,
+                          "input_metrics": metrics, "metrics": metrics, "engine_diagnostics": {}}
+                reports.append(report)
+            self.assertEqual(compare_image_probes(*reports, artifact_roots=directories)["status"], "passed")
+            alias = copy.deepcopy(reports[1]); alias["provider"] = reports[0]["provider"]
+            with self.assertRaisesRegex(MeasurementError, "aliases"):
+                compare_image_probes(reports[0], alias)
+            bad = copy.deepcopy(reports[1]); bad["input_metrics"]["image_archive_sha256"] = "0" * 64
+            with self.assertRaisesRegex(MeasurementError, "same saved"):
+                compare_image_probes(reports[0], bad)
+            bad = copy.deepcopy(reports[1]); bad["cleanup"] = {"passed": False, "errors": ["failed"]}
+            with self.assertRaisesRegex(MeasurementError, "not passed"):
+                compare_image_probes(reports[0], bad)
+            (directories[1] / "image.tar").write_bytes(b"lost archive")
+            with self.assertRaises(MeasurementError):
+                compare_image_probes(*reports, artifact_roots=directories)
+
+    def test_probe_never_starts_image_and_cleans_only_unique_owned_tag(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); out = root / "out"; out.mkdir(); private = root / "private"; private.mkdir()
+            original = root / "input.tar"; image = image_fixture(); fixture_archive(original, [image])
+            args = SimpleNamespace(root=Path(__file__).resolve().parent.parent, out=out, container_cli="fixture-cli",
+                                   image_archive=original, image_config_digest=image["config_sha"], image_architecture=None)
+            with mock.patch.object(baseline_module.subprocess, "check_output", return_value="e" * 40):
+                probe = ImageProbe(args, private)
+            commands = []
+            def command(*argv, **options):
+                commands.append(argv)
+                if argv[0] == "info":
+                    return json.dumps({"host": {"hostname": "podman-fixture"}, "version": {"Version": "5.fixture"}}), 0
+                if argv[0] == "version":
+                    return json.dumps({"Client": {"Version": "5.client"}, "Server": {"Version": "5.fixture"}}), 0
+                if argv[:2] == ("image", "inspect") and "--format" not in argv:
+                    return json.dumps([{"Id": "sha256:" + image["config_sha"], "Size": 1, "Os": "linux", "Architecture": "arm64",
+                                        "RootFS": {"Layers": ["sha256:" + sha(b) for b in image["raw"]]}}]), 0
+                if argv[0] == "save":
+                    (out / "image.tar").write_bytes((private / "owned-image.tar").read_bytes())
+                return "", 0
+            with mock.patch.object(probe, "command", side_effect=command):
+                probe.measure(); probe.cleanup()
+            self.assertEqual(probe.report["status"], "passed")
+            self.assertFalse(any(argv[0] in ("run", "start", "create") for argv in commands))
+            self.assertIn(("image", "rm", probe.tag), commands)
+            self.assertFalse(any(argv[0] == "image" and argv[1] == "rm" and argv[2] != probe.tag for argv in commands))
+            probe.load_attempted = True
+            with mock.patch.object(probe, "command", side_effect=[("id", 0), MeasurementError("owned rm failed")]), \
+                    self.assertRaisesRegex(MeasurementError, "cleanup failed"):
+                probe.cleanup()
+            self.assertFalse(probe.report["cleanup"]["passed"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,6 @@
+{
+  "error": "two actual different Docker/Podman engines are required; CLI aliases do not count",
+  "format": "openetl-image-conformance/v1",
+  "scope": "image-only",
+  "status": "failed"
+}

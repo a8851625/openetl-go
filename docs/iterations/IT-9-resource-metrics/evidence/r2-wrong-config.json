@@ -1,0 +1,17 @@
+{
+  "cleanup": {
+    "errors": [],
+    "owned_tag": "localhost/openetl-image-probe-55c6d2a0e9864632952523a5c1612cea:selected",
+    "passed": true,
+    "scope": "owned tag and private transport only; shared images are retained"
+  },
+  "error": "image selection is missing or ambiguous",
+  "finished_at": "2026-11-27T14:34:29Z",
+  "format": "openetl-image-engine-probe/v1",
+  "harness_sha256": "166428036b99a2f347a109277066fa0e89a64ea594464c31a782760360963f31",
+  "image_archive_path": "image.tar",
+  "scope": "image-only",
+  "source_commit": "1bcfd40c009bb21b89b70190045e585f23eaecb2",
+  "started_at": "2026-11-27T14:34:29Z",
+  "status": "failed"
+}

@@ -63,6 +63,16 @@ v2 不补造 v3 configuration／layer 指标，不作为新强制预算依据；
 
 ## 2. 真实双引擎对账
 
+Round 2 实测前置：本机 Podman 5.8.4 的 `save --format docker-archive` 附带 legacy
+`<layer>/layer.tar -> ../<diff-id>.tar` 符号链接，严格 parser 按既定规则拒绝，原始失败报告保留。
+继续实测发现 `oci-archive` 会把 Docker config 转换为 OCI config，摘要从 `5ce9794a…` 变为
+`a95852cc…`；该 probe 按期望摘要拒绝，不能接受为 conformance。保留两次失败报告。
+最终使用 Podman 原生 `docker-archive`，parser 只允许忽略未被 manifest 引用的严格 legacy alias：
+`<64 hex>/layer.tar`、size 0、目标必须为已存在的 regular `../<64 hex>.tar`。
+不跟随链接；manifest 引用 alias、越界目标、任意 symlink/hardlink、重复路径仍拒绝。
+报告记录忽略 alias 数量，完整原始 archive hash 保留。此为真实保存格式的必要兼容前置，
+不扩展 codec，不改变 config/layer 身份，也不改变 build 的 Docker format/HEALTHCHECK 契约。
+
 拟增加 `hack/e2e-bench-image-metrics.sh`，通过现有 CONTAINER_CLI selector 执行一个 provider 的 probe。
 输入为任务拥有的同一保存归档、期望配置摘要和输出目录。仅 load／save／inspect 与归档度量，
 不需要运行该镜像内 Go 程序。

@@ -161,3 +161,11 @@ Evidence: Pending actual two-provider JSON, archives and conformance; source bas
 Result: active
 Residual/follow-up: EV-3.3 after actual conformance and trusted native v3 baseline
 ```
+
+### Round 2 local preflight
+
+- Linux Python 3.12: 30 tests, OK, exit 0 (`evidence/r2-python312-tests.log`).
+- Podman 5.8.4 on ARM host loads/saves AMD64 image without starting it: passed (`r2-local-podman.json`); six layers, original config and 147,790,336 expanded bytes retained; owned tag cleanup passed.
+- Actual CLI alias comparison and wrong-config probes returned the required exit 1 (`r2-alias-negative.json`, `r2-wrong-config.json`).
+- Two earlier real format failures are retained; the exact prerequisite and safe legacy alias rules are in plan.md.
+- Actual Docker+Podman CI and current native full v3 calibration are still pending; EV-3.2 remains active.
