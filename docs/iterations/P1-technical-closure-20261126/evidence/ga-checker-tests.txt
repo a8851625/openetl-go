@@ -1,0 +1,1 @@
+ok  	github.com/a8851625/openetl-go/hack/cmd/check-connector-evidence	3.670s

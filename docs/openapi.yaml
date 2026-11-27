@@ -25,12 +25,98 @@ security:
   - ApiToken: []
 
 components:
+  parameters:
+    RecoveryEventQuery:
+      name: recovery_event_id
+      in: query
+      schema: { type: string, format: uuid }
+      description: Exact stored recovery identity, combined with the pipeline and other constraints.
+    DLQRowQuery:
+      name: id
+      in: query
+      schema: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+      description: Exact positive int64 DLQ row ID as a decimal string.
+    RecoveryNodeQuery:
+      name: node_id
+      in: query
+      schema: { type: string, minLength: 1, maxLength: 255 }
+    RecoveryConnectionQuery:
+      name: connection_name
+      in: query
+      schema: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' }
   securitySchemes:
     ApiToken:
       type: apiKey
       in: header
       name: X-API-Token
   schemas:
+    RecoveryEvent:
+      type: object
+      required: [id, pipeline_id, pipeline_name, endpoint, connection_known, state, opened_at, attempt_count, record_count, replayed_rows, abandoned_rows, dlq_open_rows, tracking_incomplete]
+      properties:
+        id: { type: string, format: uuid }
+        scope_key: { type: string }
+        pipeline_id: { type: string, format: uuid }
+        pipeline_name: { type: string }
+        endpoint: { type: string }
+        node_id: { type: string }
+        connection_name: { type: string }
+        connection_known: { type: boolean }
+        spec_version: { type: integer, description: Omitted or zero when runtime version is unknown. }
+        error_class: { type: string }
+        first_error: { type: string }
+        state: { type: string, enum: [open, replaying, resolved, abandoned, unknown] }
+        opened_at: { type: string, format: date-time }
+        closed_at: { type: string, format: date-time }
+        attempt_count: { type: integer, format: int64 }
+        record_count: { type: integer, format: int64 }
+        replayed_rows: { type: integer, format: int64 }
+        abandoned_rows: { type: integer, format: int64 }
+        dlq_open_rows: { type: integer, format: int64 }
+        tracking_incomplete: { type: boolean }
+    RecoveryOperation:
+      type: object
+      required: [id, pipeline_id, dlq_row_id, dlq_row_key, record_hash, kind, state, started_at]
+      properties:
+        id: { type: string, format: uuid }
+        recovery_event_id: { type: string, format: uuid }
+        pipeline_id: { type: string }
+        dlq_row_id: { type: integer, format: int64 }
+        dlq_row_key: { type: string, description: Exact decimal row ID for JavaScript navigation. }
+        record_hash: { type: string }
+        kind: { type: string, enum: [replay, finalize, dry_run, delete, retention, eviction, pipeline_delete] }
+        state: { type: string, enum: [started, acked, completed, failed, not_attempted, preview_passed, preview_blocked, abandoned] }
+        error: { type: string }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        sink_acknowledged_at: { type: string, format: date-time }
+    ConnectionReferenceReport:
+      type: object
+      required: [connection_name, known, references, unreadable_specs]
+      properties:
+        connection_name: { type: string }
+        known: { type: boolean, description: False if any current saved spec cannot be decoded. }
+        references:
+          type: array
+          items:
+            type: object
+            required: [connection_name, pipeline_id, pipeline_name, endpoint, kind]
+            properties:
+              connection_name: { type: string }
+              pipeline_id: { type: string }
+              pipeline_name: { type: string }
+              endpoint: { type: string }
+              node_id: { type: string }
+              kind: { type: string, enum: [source, transform, sink] }
+              type: { type: string }
+        unreadable_specs:
+          type: array
+          items:
+            type: object
+            properties:
+              pipeline_id: { type: string }
+              pipeline_name: { type: string }
+              code: { type: string, enum: [spec_unreadable] }
     OutputCompactResult:
       type: object
       properties:
@@ -755,6 +841,50 @@ paths:
               schema:
                 $ref: '#/components/schemas/MetricsResponse'
 
+  /recovery-events:
+    get:
+      tags: [DLQ]
+      summary: List durable recovery records and unassociated operation results
+      parameters:
+        - { name: pipeline_id, in: query, schema: { type: string, format: uuid } }
+        - { name: state, in: query, schema: { type: string, enum: [open, replaying, resolved, abandoned, unknown] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Persisted recovery scope, including results for removed DLQ rows and pipelines. Operations are limited to the latest 500 in the requested scope.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events: { type: array, items: { $ref: '#/components/schemas/RecoveryEvent' } }
+                  unassociated_operations: { type: array, items: { $ref: '#/components/schemas/RecoveryOperation' } }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        '400': { description: Invalid or duplicate query constraint }
+        '503': { description: Recovery metadata unavailable }
+
+  /recovery-events/{id}:
+    get:
+      tags: [DLQ]
+      summary: Read a durable recovery record and its retained operation outcomes
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Stored event and the latest 500 operation results; started does not prove a process is still running.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event: { $ref: '#/components/schemas/RecoveryEvent' }
+                  operations: { type: array, items: { $ref: '#/components/schemas/RecoveryOperation' } }
+        '400': { description: Invalid recovery ID }
+        '404': { description: Recovery record not found; no alternate record is selected }
+        '503': { description: Recovery metadata unavailable }
+
   /health:
     get:
       tags: [Monitoring]
@@ -769,6 +899,10 @@ paths:
       tags: [DLQ]
       summary: List dead-letter records
       parameters:
+        - { $ref: '#/components/parameters/RecoveryEventQuery' }
+        - { $ref: '#/components/parameters/DLQRowQuery' }
+        - { $ref: '#/components/parameters/RecoveryNodeQuery' }
+        - { $ref: '#/components/parameters/RecoveryConnectionQuery' }
         - { name: id, in: path, required: true, schema: { type: string }, description: Pipeline instance UUID; a unique legacy display name is accepted for compatibility. }
         - { name: limit, in: query, schema: { type: integer }, description: Page size (default 100). }
         - { name: offset, in: query, schema: { type: integer }, description: Rows to skip. Listings are newest-first. }
@@ -778,11 +912,17 @@ paths:
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: until, in: query, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: DLQ items, including stable id, attempt, record_hash, frozen identity_context, and dag_node when available }
+        '200': { description: DLQ items, including exact decimal string row_id, legacy numeric id, frozen identity_context, recovery_event_id/recovery_operation_id/recovery_context/recovery_tracking_error/recovery_association_known, and dag_node when available }
+        '400': { description: Empty, invalid or duplicate identity constraint }
+        '503': { description: DLQ storage unavailable }
     delete:
       tags: [DLQ]
       summary: Delete DLQ records
       parameters:
+        - { $ref: '#/components/parameters/RecoveryEventQuery' }
+        - { $ref: '#/components/parameters/DLQRowQuery' }
+        - { $ref: '#/components/parameters/RecoveryNodeQuery' }
+        - { $ref: '#/components/parameters/RecoveryConnectionQuery' }
         - { name: id, in: path, required: true, schema: { type: string } }
         - { name: error_class, in: query, schema: { type: string } }
         - { name: contains, in: query, schema: { type: string } }
@@ -798,12 +938,18 @@ paths:
                 type: object
                 properties:
                   deleted: { type: integer, description: Number of rows actually deleted (never a -1 sentinel). }
+        '400': { description: Empty, invalid or duplicate identity constraint }
+        '503': { description: Persistence failure; deletion is rolled back with retained recovery facts }
 
   /dlq/{id}/replay:
     post:
       tags: [DLQ]
       summary: Replay DLQ records
       parameters:
+        - { $ref: '#/components/parameters/RecoveryEventQuery' }
+        - { $ref: '#/components/parameters/DLQRowQuery' }
+        - { $ref: '#/components/parameters/RecoveryNodeQuery' }
+        - { $ref: '#/components/parameters/RecoveryConnectionQuery' }
         - { name: id, in: path, required: true, schema: { type: string } }
         - { name: dry_run, in: query, schema: { type: boolean }, description: Preview the identity gate per row without writing to the sink or mutating DLQ state. }
         - { name: contains, in: query, schema: { type: string } }
@@ -825,6 +971,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DLQReplayGateError' }
+        '503': { description: recovery_metadata_unavailable; acknowledged DLQ rows remain for cleanup retry }
 
   /dlq/{pipeline_id}/{id}:
     delete:
@@ -917,6 +1064,7 @@ paths:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Saved connection }
+        '409': { description: Kind/type change would break current references, or saved references are unreadable }
     delete:
       tags: [Connections]
       summary: Delete a saved connection
@@ -924,6 +1072,22 @@ paths:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Deleted }
+        '409': { description: Connection is used by current specs, or references are unknown; response lists references and unreadable_specs }
+
+  /connections/{name}/references:
+    get:
+      tags: [Connections]
+      summary: Inspect references in current persisted linear and DAG specs
+      description: This is a point-in-time preview. DELETE and current spec writes recheck under the same SQL transaction guard. Historical versions are excluded. No connector config or secrets are returned.
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Current references, including explicit unknown saved specs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectionReferenceReport' }
+        '503': { description: Backend does not support reference protection }
 
   /connections/{name}/test:
     post:

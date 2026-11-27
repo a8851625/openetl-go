@@ -33,11 +33,28 @@ Repair the stored spec or referenced connection and restart; restore-state
 updates never reset the checkpoint. See [runtime-modes.md](./runtime-modes.md)
 for strict/non-strict startup configuration and recovery procedure.
 
+## Current pipeline health
+
+`GET /api/v2/metrics` returns per-pipeline `health`, `circuit_breaker_state` and the
+`health_thresholds` used to compute that response (`checkpoint_stale_seconds` and
+`cdc_lag_ms`). Clients consume that health and threshold snapshot for their
+status and issue labels.
+
+An open circuit is degraded. An unreadable DLQ count is `dlq_file_count: -1`
+and health is unknown when no other current degradation is confirmed.
+Unknown health makes the overall health endpoint degraded (HTTP 503).
+Restoration failure remains `restore_failed` in API/metrics and appears as a
+failed, actionable pipeline in the UI. Historical error counters and the last
+observed error remain diagnostic after recovery.
+
 ## DLQ APIs
 
 Dead-letter records include `error_class` when the runtime can classify the failure. Current classes are `transient`, `data`, `schema`, `auth`, `config`, `programming`, and `unknown`. Retry policy uses the same classifier: transient and unknown errors are retried, while data/schema/auth/config/programming errors fail fast into DLQ or fail the operation.
 
 ### List DLQ Records
+
+Recovery association and retained outcomes are described in
+[Durable recovery records](./recovery-tracking.md).
 `GET /api/v2/dlq/{pipeline}`
 
 Query parameters:
@@ -66,6 +83,10 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
 ```
 
 ### Replay DLQ Records
+
+Recovery metadata errors return HTTP `503` with
+`code: recovery_metadata_unavailable`; retained `sink_acked` rows can be retried
+to finalize cleanup without rewriting the sink.
 `POST /api/v2/dlq/{pipeline}/replay`
 `POST /api/v2/dlq/{pipeline}/{id}/replay`
 
@@ -425,6 +446,29 @@ Response:
   "opened": true
 }
 ```
+
+## Saved Connection References and Deletion
+
+`GET /api/v2/connections/{name}/references` returns `connection_name`, `known`,
+`references`, and `unreadable_specs`. References identify the stable pipeline ID,
+display name, source/transform/sink endpoint, and DAG node ID when applicable.
+The current persisted spec is authoritative, including YAML hot loads, encrypted
+specs and the legacy DLQ sink reference. Historical versions are excluded.
+Connector config and secrets are never included in this response.
+
+The preview is a snapshot. `DELETE /api/v2/connections/{name}` checks again inside
+the same SQL coordination boundary used by current-spec writes and connection
+kind/type changes. Referenced connections return HTTP 409 with `code:
+connection_in_use` and the affected identities. New or updated specs that race
+with deletion fail with `connection_missing_or_incompatible`; the current spec,
+version and optional checkpoint reset are rolled back together.
+
+An unreadable or undecryptable legacy spec sets `known: false` and blocks deletion.
+Repair the listed spec or configure its decryption key, then repeat the preview.
+Inline overrides and compatible connection config changes remain supported.
+The offline backup fidelity path preserves legacy rows as they were; it does not
+silently remove unknown references. Coordination metadata itself is not user
+backup content. SQLite, MySQL and PostgreSQL enforce the same boundary.
 
 ## Saved Connection Context
 

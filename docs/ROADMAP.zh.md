@@ -1,21 +1,56 @@
 # OpenETL-Go Roadmap
 
-> 当前审计基线：`cfbd496`（v0.2.11-beta.3 后续开发，2026-07-24）
+> 当前执行快照（2026-11-27，规划代码基线 `ee3797c`；已发布基线 v0.2.12-beta.21）：
+> P1 技术窗口五项全部 `delivered`，原 Round 5/5 已收口；IT-9 / EV-3 的第 5 轮补验收亦已交付，当前没有 active 主任务。
+> 当前迭代 IT-9 / EV-3 可信资源度量与预算控制已 `delivered`（Round 5/5）；用户选择 1 位实现者、两周参考窗口。
+> 用户已明确授权开发直至迭代完整交付；实际 Round: 5/5；原四增量及共享 MySQL TCP health 补验收全部 delivered。
+> UI-E 的外部用户研究继续 `blocked_external`，用户明确要求先完成技术修复。
+> EV-3 规范化计量、真实双引擎、显式体积灰度和全量 CI 已通过。MaxCompute P0 保持 `deferred`。
 >
-> 最后核对：2026-09-04（补充 ClickHouse 26.1–26.8 迭代观察与候选规划）
->
-> 复审基线：`c2ac396`（v0.2.12-beta.17，2026-08-29）—— 代码级重新核对结果见
+> 历史审计基线：`cfbd496`（v0.2.11-beta.3 后续开发，2026-07-24）；复审基线
+> `c2ac396`（v0.2.12-beta.17，2026-08-29），代码级核对结果见
 > [Production Ready 复审缺口（RA）](#production-ready-复审缺口ra2026-08-29-代码核对)。
-> 该复审只登记当前代码实测仍打开的缺口，不改变 P0 与既有 backlog 的优先级。
+> 该复审只登记当时实测仍打开的缺口，不改变 P0 与既有 backlog 的优先级。
 >
-> 迭代编排：已进入当前执行 backlog 的未实现条目按依赖与伤害组织为 IT-1..IT-4 主线迭代与 PT-A 并行轨，
+> 迭代编排：已进入当前执行 backlog 的未实现条目按依赖与伤害组织为 IT-1..IT-9 与 UI-A..UI-G 迭代，
 > 见 [docs/iterations/](./iterations/README.md)。该目录提供 spec/plan/tasks 三件套与
 > 技术方案、交付约束，**不改变本文的验收标准**；两者冲突时以本文为准。
 >
-> 2026-09-12 起，UI 加固迭代 **UI-A**（前端交互与向导逻辑，源自 v0.2.12-beta.19 发布后的两轮
-> 页面/向导审计）进入执行，见 [UI-A-frontend-hardening](./iterations/UI-A-frontend-hardening/spec.md)。
+> UI 加固迭代 UI-A/UI-C/UI-D/UI-F/UI-G 已全部 delivered；UI-E 因缺外部用户研究输入为
+> `blocked_external`（其 UI-E.3 只读契约 preflight 已于 2026-11-09 完成，见
+> [contract-preflight.md](./iterations/UI-E-task-flow-recovery/contract-preflight.md)）。
 
 本文只维护尚未完成、可以验收的产品和工程工作。已经交付的功能、测试命令和版本说明进入 [CHANGELOG.zh.md](../CHANGELOG.zh.md)；本文末尾只保留必要的证据索引，不再重复完整实现日志。
+
+## 2026-11-26 P1 技术修复窗口
+
+用户决策：完成前轮分析列出的全部 P1；目前没有外部参与者，先完成技术修复。
+本窗口默认上限 5 rounds，依赖与允许范围见
+[P1 技术修复迭代](./iterations/P1-technical-closure-20261126/spec.md)。
+发布认证安排在运行时修改之后，认证必须覆盖最终候选资产。
+
+| 顺序 / Round | Roadmap item | 状态 | 有界结果 |
+| --- | --- | --- | --- |
+| 1/5 | EV-2 | `delivered` | MySQL smoke 验证提交后的实际记录；PR run 45652762125 的 integration job 139341305228 success。最终聚合门禁归 GA-C1。 |
+| 2/5 | P5-H1（P5/UI-F 后续） | `delivered` | API/Go race 与真实容器 UI 14/14；默认熔断冷却后恢复、DLQ unknown、restore_failed 四入口一致。见 [H1 evidence](./iterations/P1-technical-closure-20261126/h1-evidence.md)。 |
+| 3/5 | PR-0-C1（PR-0/UI-E.5 后续） | `delivered` | 共享 SQL 事务保护当前引用；三 backend 竞争/备份/加密重启与真实 UI 9/9。见 [C1 evidence](./iterations/P1-technical-closure-20261126/c1-evidence.md)。 |
+| 4/5 | UI-E-R1（UI-E.3 已授权契约后续） | `delivered` | 故障与 replay 结果保留稳定身份；三 backend recovery/migration/backup、完整 Go race 与真实 UI 21/21，见 [R1 evidence](./iterations/P1-technical-closure-20261126/r1-evidence.md)。 |
+| 5/5 | GA-C1（GA 阻断项 #1 后续） | `delivered` | 898af75 候选 23/23、七个 path（28 checks）、44 UI checks、3 readiness checks 与本地 registry 同字节晋升通过；run 45711062461 的 36/36 jobs 和 Delivery Passed 聚合 success。见 [GA evidence](./iterations/P1-technical-closure-20261126/ga-evidence.md)。 |
+
+UI-E 的 3–5 人首次任务/恢复任务研究仍按原验收标准另行记录，技术修复不将该研究置为
+delivered。EV-3 与运行历史遗留行是本窗口之外的 P2。
+
+## 2026-11-27 当前迭代：IT-9
+
+用户在后续 Roadmap 方向讨论后要求规划下一迭代，并选择 1 位实现者、两周参考窗口。
+本轮以既有 EV-3 为唯一主任务，结果是“资源度量可复核、warning／强制预算的退出码可解释”。
+规划文件见 [spec](./iterations/IT-9-resource-metrics/spec.md)、[plan](./iterations/IT-9-resource-metrics/plan.md)、
+[tasks](./iterations/IT-9-resource-metrics/tasks.md)。EV-3.1–.4 已交付；用户明确授权开始开发，持续到本迭代全部验收闭合。
+
+四个有序增量为归档／v3 口径、真实双引擎对账、显式预算 policy、CI 灰度与证据收口。
+承诺估算 32 理想小时，预留 8 小时（20%）；每天 4 专注小时为容量假设，不代表历史 velocity。
+第五轮仅补本项验收／安全交接。CH-C5–C8 仍是候选，UI-E 保留参与者 blocker；不在本迭代纳入吞吐、
+生产资源准入、运行历史 P2、connector 扩展或用户研究，也不改变这些事项的相对优先级。
 
 ## 产品定位与边界
 
@@ -940,6 +975,27 @@ PR-2.4.4 本轮验收矩阵（Round 1/5）：
 | D1.2 Task ownership | `ClaimTask`/`CASUpdateTask`；`task_fence_test.go`；`master/fence_test.go` | passed | generation CAS；旧 owner 完成 fenced；lease/max-attempts requeue |
 | D1.3 拓扑 | `hack/e2e-distributed.sh`；`TestDistributed*` integration；可选 `OPENETL_BIN` 多进程 smoke | passed (hermetic+integration) | MySQL 共享 store + master HTTP + 2 workers；compose 强制 token 并标 beta |
 | 边界 | `docker-compose.distributed.yml`、`docs/runtime-modes.md` | documented | 单 master、DAG master-local、单 continuous shard 非 multi-active HA |
+
+#### PR-D1 当前版本重认证（2026-11-09，`e28a740`）
+
+GA 判定（`docs/ga-assessment-2026-09-16.md:13`）把 distributed 列为「保持 beta：证据链绑定旧
+commit/镜像，未随当前版本重验」。2026-11-09 在当前 HEAD 上重跑，**首次补齐真实多进程拓扑**
+（此前 D1.3 只跑过 hermetic + integration，`OPENETL_BIN` 分支被 skip）：
+
+| 验收项 | 证据（2026-11-09 实跑） | 结果 |
+| --- | --- | --- |
+| 真实三进程拓扑（1 master + 2 worker 独立 OS 进程） | `OPENETL_BIN=/tmp/openetl-go-d1 ./hack/e2e-distributed.sh`；master `--role master` + `--role worker`×2，共享 MySQL store | passed |
+| worker 在线注册 | `/api/v2/workers` 返回 `e2e-w1`、`e2e-w2` 均 `status: online`、`slots: 2` | passed |
+| 无 token 注册被拒 | 未带 token 的 `POST /api/v2/workers` 返回 401 | passed |
+| shard 分发无重叠 | `TestDistributedDispatchMySQL`、`TestDistributedDispatchMySQLReal`：`w-real-1:2 w-real-2:2` | passed |
+| label 限制 | `TestDistributedDispatchLabelsMySQLHTTP`：3 shard 全部落在 `w-secure` | passed |
+| worker 丢失后重新分配 | `TestDistributedReassignOnWorkerLossMySQL`：`2/2 shards completed by survivor` | passed |
+| generation CAS fencing | `TestReportTaskResultFencesStaleOwner` 等 hermetic 用例（`-race`） | passed |
+
+结论：distributed 的 D1.1–D1.3 在当前 commit 上重新通过，且 D1.3 的「三个以上独立进程」
+验收项这次是**真的执行了**而非 skip。但 GA 阻断项 #2 的解除还需把该结果绑定到发布候选
+commit + 发布镜像 digest 并写入 release evidence；本次结果绑定的是工作树 HEAD `e28a740`
+与本地构建二进制，故 distributed 仍保持 beta 声明，不据此提升。
 
 Non-goals (unchanged): multi-master consensus；跨 worker DAG；single-shard multi-active；跨地域 active-active。
 
@@ -2521,18 +2577,12 @@ RA-1 / IT-2 源序与删除复活
 
 ## 待用户决策
 
-- **schema evolution 立场是否需要显式决议**（2026-08-29 提出；**2026-09-06 用户确认：采 (b)，立项 additive-only，单独排期**）：
-  采纳复盘建议：立项做受限 schema evolution（仅 additive 列变更，破坏性变更仍拒绝），承诺
-  additive-only contract、可审计的版本/fingerprint 与明确类型兼容矩阵；不在 IT-3 交付面内实施，
-  作为独立后续排期（记录于本条目与有界后续）。`ddl_guard` 当前拒绝语义保持为覆盖期基线。
-  用户可随时重审此决议。
-  …（原始选项描述保留如下）
-  **拒绝**源端 DDL 变更，而 Flink CDC 等对标实现是自动传播到 sink。这两者都是合理选择，但目前
-  文档未明确声明这是有意边界还是未实现的能力，用户无法据此判断适用性。可选项：(a) 明确写入
-  「明确暂缓或不做」并在 positioning/README 声明为边界；(b) 立项做受限的 schema evolution
-  （仅 additive 列变更，破坏性变更仍拒绝）。本项只需决定立场，不改变当前排序。
-  **本次 ClickHouse 复盘建议**：选择 (b)，但只承诺 additive-only contract、可审计的版本/fingerprint
-  与明确的类型兼容矩阵；删除列、重命名和不兼容类型仍在 preflight 阻断，不承诺自动迁移全部 DDL。
+- **schema evolution 立场是否需要显式决议** —— **已关闭**（2026-08-29 提出；2026-09-06 用户确认采 (b)
+  additive-only；2026-09-19 由 IT-5/CH-C2 交付实现）。决议与交付证据：
+  additive-only contract、可审计的版本/fingerprint 与明确类型兼容矩阵已随
+  [IT-5](./iterations/IT-5-ch-write-contract/spec.md) T5.4/T5.5 落地（`schema_contract_enforcement`
+  路径证据 5/5）；删除列、重命名与不兼容类型仍在 validate/preflight 阻断。`ddl_guard` 的拒绝
+  语义未改变。本项不再占用待决策列表；如需重审决议请显式提出。
 
 - **ClickHouse 写入吞吐性能分析是否立项**（2026-08-21 提出；**2026-09-06 复核：等待用户确认**）：
   旧记录自行写成“2026-09-05 已决议”，本次复核未据此视为授权。已向用户提交是否并入
@@ -2551,6 +2601,170 @@ RA-1 / IT-2 源序与删除复活
   native/HTTP parity、`async_insert` 等待确认和去重 token 开销的对比，先以 warning 模式跑一个
   版本周期，再决定是否升级为发布门禁。
 
+## 认证证据链可信度（2026-11-09 发现，`active`）
+
+### EV-1：connector evidence manifest 的 provenance 与真实运行脱节
+
+状态：`delivered`（2026-11-09 同日闭合：门禁已加 provenance 校验，16/16 脚本全部真实重跑通过，`-strict` 恢复全绿。详见下方「2026-11-09 闭合记录」）
+
+**发现**：`internal/etl/server/evidence/connector-evidence.json` 的 16 条记录共用一个
+note，声称「Re-certified 2026-11-03: all 16 scripts re-run green ... on the local build of
+commit fe8692d (image f4a97b460169)」。逐条核对后，该声明在四个独立事实上不成立：
+
+1. **记录指向的 commit 不含被声称跑过的脚本。** `git cat-file -e fe8692d:hack/e2e-doris-source-order.sh`
+   失败——该脚本首次落盘于 `f4e7f89`（2026-11-07 19:43）。`fe8692d` 是 2026-09-25 的提交。
+2. **声称的窗口内没有任何提交。** `git log --since=2026-09-26 --until=2026-11-06` 为空；
+   2026-11-03 的镜像只能从「`fe8692d` + 未提交的 IT-7/IT-8 工作区改动」构建。
+3. **声称的镜像在窗口关闭之后才存在。** 窗口 `finished_at` 为 `2026-11-03T15:08:00Z`，
+   而 `f4a97b460169` 的构建时间是 `2026-11-03T16:32:24Z`——晚 84 分钟。
+4. **两条被点名的脚本在窗口之后仍被修改。** `hack/e2e-doris-source-order.sh` 与
+   `hack/e2e-postgres-cdc.sh` 的最后改动都是 `2026-11-07T11:43:16Z`。
+
+manifest 随后被连推四次（`210afd7`→`4577bbc`→`36f8853`→`e28a740`），每次只改
+`certified_commit` 字段、note 原文不变。`checkCommitBinding` 只验证「certified commit 是
+当前 commit 的祖先，且中间只改白名单文件」，不校验 note 与运行记录的一致性，因此
+`-strict` 门禁一直是绿的。
+
+**影响**：`-strict` 绿在此前不能作为「这 16 条在当前 commit 上验证过」的证据。这是
+AGENTS.md「证据即事实」原则的直接违反面，且污染所有 production 声明的前提。
+
+**已落地（2026-11-09）**：
+
+- `hack/cmd/check-connector-evidence/main.go` 新增 `checkRecordProvenance`：校验
+  ① 记录 commit 可解析且是 certified commit 的祖先；② 每个被列出的脚本在该 commit
+  上确实存在（`git cat-file -e <commit>:<script>`）；③ 脚本最后改动时间不晚于记录声称的
+  `finished_at`。任一不满足即计入 issue 并使门禁失败。该检查已能自动复现上述第 1、4 条矛盾。
+- manifest 按 2026-11-09 的真实重跑结果重写：全部 16 条 `verified: true`，provenance 与
+  实际执行对齐。
+
+#### 2026-11-09 闭合记录
+
+首轮重跑时有两条路径因环境不可用被如实标为 `partial`，同日网络恢复后已全部补齐：
+
+| 路径 | 首轮 | 结论 | 解除方式 |
+| --- | --- | --- | --- |
+| `s3`（`hack/e2e-s3-minio.sh`） | blocked | **passed** | `minio/mc` 独立镜像已不再分发（quay.io 与 Docker Hub 均返回授权错误，多个固定 tag 同样失败）。`minio/minio` 服务端镜像自带 `/usr/bin/mc`，脚本改为从本地 MinIO 镜像解析客户端（`MC_IMAGE` 可覆盖），不再新增 registry 依赖。记录型 outage→DLQ→replay 全链路通过。 |
+| `doris`（`hack/e2e-doris.sh`） | blocked | **passed** | registry 恢复后拉到 fe/be 2.1.11；batch / CDC / snapshot+CDC / schema drift / restart-reset / BE outage DLQ-replay 全部通过 |
+| `doris`（`hack/e2e-doris-source-order.sh`） | blocked | **passed** | 同上；`_version` 注入真实源位置、随事件递增、旧序写入被拒三条断言通过 |
+
+最终门禁状态：
+
+```sh
+$ ./hack/check-connector-evidence.sh -strict
+path evidence OK: 7 file(s) under docs/evidence, bound to e28a740d6e4c7c1265a00403e7797f754234bf2b
+connector evidence manifest OK: 16 record(s), certified_commit=e28a740d6e4c7c1265a00403e7797f754234bf2b
+```
+
+**仍需注意（不阻塞本条关闭）**：本次认证绑定的是工作树 HEAD `e28a740` 与本地构建镜像
+`f4a97b46`，不是发布候选 commit + 发布镜像 digest。GA 阻断项 #1 要求的是后者，因此该阻断项
+仍按「需在发布候选上重跑并重绑」保留，本条关闭的是「证据本身不可信」这个问题。
+
+**后续要求**：发布候选 commit 上重跑全部 16 条脚本 → 回写 manifest（含真实窗口与镜像 digest）
+→ 再执行 `-strict`。禁止只改 `certified_commit` 字段而不重跑。
+
+### EV-2：MySQL integration smoke 的 CI 耗时断言不稳定
+
+状态：`delivered`（2026-11-26，Round 1/5：真实 MySQL -race passed，PR integration job success）
+
+**发现**：`v0.2.12-beta.21` 的 tag commit `e28a740` 的 `test.yml` 运行
+（run `42542843252`，2026-11-09T00:56Z）结论为 **failure**：
+
+```text
+Gate / Integration Tests        failure
+Gate / Gate Passed (aggregated) failure
+--- FAIL: TestMySQLBenchmarkRealDB (0.19s)
+    mysql_test.go:179: 1000-row write took 170.78742ms, want <=100ms
+```
+
+本次 API 核查确认：main 的 Test run 失败；同一提交的 Release run
+`42542865524` 和 Release Beta Container run `42542865547` 各自执行门禁并成功。
+对照此前两个成功 Test run（`35750985097`、`35748755916`，均 2026-09-22）该测试未失败。
+
+**根因**：`internal/etl/sink/mysql_test.go` 的 `TestMySQLBenchmarkRealDB` 是一个
+smoke test，却断言绝对墙钟阈值 `elapsed > 100ms`。共享 CI runner 的调度抖动即可越过该阈值，
+而真正的性能基线属于 `docs/resource-baseline.md` 与 `hack/bench-baseline.sh` 的职责
+（在记录过的硬件画像上测量）。绝对阈值断言放在必过 job 里，只会制造 flaky 门禁。
+
+**当前修正（2026-11-26，Round 1/5）**：先前工作区的 5s 阈值被实际提交记录校验替代：
+读取 total/matching rows，核对 1000 个主键范围内的 name/email 值。
+耗时保留为测量输出，批量 SQL/事务继续由既有测试覆盖。
+使用 Go 1.24.13 linux/arm64 容器与隔离 MySQL 8 实际执行
+`go test -race -count=1 -run '^TestMySQL(BenchmarkRealDB|BuildBatchInsertSQL|BuildBatchDeleteSQL)$' -v ./internal/etl/sink`：
+3 个 tests passed，1000 行字段对账通过，write=21.160856ms，exit 0。
+该记录明确包含真实数据库执行。
+
+**CI 复验**：PR #13 的 Test run `45652762125`，commit `93427a5`，
+integration job `139341305228` 的 Run integration tests 和 job conclusion 均为 success。
+该 job 配置真实 MySQL 8 与 ClickHouse，并执行全量 integration-tagged ETL 测试。
+
+**证据范围**：本条按原验收要求闭合 MySQL integration job。当轮聚合门禁曾受旧路径证据影响：
+`ch_dedup_crash_window.json` 绑定 `d82ddc5`，本轮相关测试已在 `93427a5` 修改。
+最终路径/镜像认证与全量聚合门禁已由 GA-C1 收口：冻结实现 run 45711062461 的 source + exact-candidate + Delivery Passed 全部 success。此记录不替代实际 tag 发布验收。
+
+### EV-3：可信资源度量与预算控制
+
+状态：`delivered`（2026-11-28；Round 5/5，有界共享 dev MySQL TCP health 与当前全部 CI 验收闭合）
+
+**规划与状态纠正**：用户要求规划下一迭代，选择 1 人／两周；沿用本项既有优先级。
+首项以固定归档／CLI 验证内部计量，不依赖远端凭据，因此不继续标为外部阻塞。
+IT-9 已用所选归档的展开层字节替代跨引擎的 raw.Size 预算，保留引擎原始诊断值；
+schema v3、真实 Docker/Podman、clean native 校准和显式 policy/enforce 已全部验收。四个增量 delivered。
+实际缺 Docker／Podman 服务、镜像／网络或原始归档时，对应必需验收须写明 owner、输入与 unblock probe，不能当作 pass。
+
+本轮实际决策与证据见 [budget-decision.md](./iterations/IT-9-resource-metrics/evidence/budget-decision.md) 和 [acceptance.md](./iterations/IT-9-resource-metrics/evidence/acceptance.md)。以下保留 2026-11-09 的历史 v2 观测：
+
+- `bench-baseline` job 在托管 Actions 上已执行 17 次、其中 14 次产出有效测量，
+  跨 beta.19→beta.21（约 59 天），**满足 GA 阻断项 #3 的「一个版本周期」**；
+  14 次全部零预算告警，warning 模式未造成 CI flaky。
+- 但两个口径缺陷使阈值不可可靠设定：① Docker 29 改变了镜像体积语义
+  （28.0.4 报 137.57–137.84 MiB，29.4.2 报 45.24 MiB，而同期二进制为 64 MiB）；
+  ② `source.dirty` 恒为 `true`，由 job 自己 tee 的 `baseline-run.log` 造成。
+- **②已于 2026-11-09 修复**：`.gitignore` 补 `/baseline-run.log`，
+  `git check-ignore -v baseline-run.log` 现命中 `.gitignore:46`。
+- ①当时未解决，因此历史决定维持 warning；IT-9 现已重新定义并验证规范化口径，只有选定体积进入显式灰度。
+
+**本迭代收口条件**：保留历史观测与已记录的 warning 决策，先完成引擎无关度量、真实版本／内容对账与新的可信基线，
+再用显式 `--enforce-budgets` 灰度应用有依据的体积预算。不能把 v2 raw.Size 补造为 v3 数据或直接调紧旧常量。
+具体定义与原始证据由 IT-9 三件套承接，下列必需验收为本项的执行标准：
+
+| # | EV-3 必需验收 | 证据范围 |
+| --- | --- | --- |
+| A1 | v3 明确 configuration／archive hashes、归档大小、所选层解压 tar 流字节总和、方法／单位与 engine.Size 诊断值；预算不用 engine.Size fallback | 固定 Docker-save／OCI fixtures、逐层 diff ID／尺寸与 CLI；EV-3.1 |
+| A2 | default、extism、nolua、extism-nolua 四变体完整；default native Linux production／SQLite／TLS／UID 1001／audit／2 CPU／1 GiB／GOMAXPROCS=2，3 trials、16×100 数据及恢复身份／checkpoint 对账保留 | 当前完整 baseline；EV-3.4 |
+| A3 | 至少 default 的同一保存镜像在真实 Docker 与 Podman 两个不同 provider 下，configuration／architecture／diff IDs／展开层体积一致；区分 image-only 与 native 应用运行证据 | server versions、原始 JSON／archive hashes／conformance；EV-3.2 |
+| A4 | v2 历史只读兼容，v1 旧计时格式仍拒绝；v2、dirty、缺方法或缺适用 policy 不能通过新的强制判定 | 历史文件不改写，compatibility／negative CLI；EV-3.1／.3 |
+| A5 | 默认有效超预算 warning/exit 0，选定预算 enforce 超限 exit 1；缺失／失败／错误测量任何模式都 exit 1 | positive、超限、缺字段、错误单位／policy／选择器；EV-3.3 |
+| A6 | policy 按方法／单位／架构／variant 限定并记录基线／余量与 SHA；至少 default binary 和规范化 image 两个稳定体积项可灰度强制；时间／RSS warning、其他变体完整观测 | 当前 v3 基线与预算决定；EV-3.3／.4 |
+| A7 | 当前 CI 真实测量与选定体积灰度 enforce 正常/受控超限可复验；原 source＋三 storage／frontend＋exact-candidate＋Delivery Passed 不被放宽，不增 allowlist | 当前提交完整 CI 和相关负向证据；EV-3.4 |
+| A8 | 不暴露临时 token、私钥、config.Env、层内容或业务 payload；只清理任务资源，cleanup 失败影响结果 | 秘密哨兵／异常归档／cleanup 负向；EV-3.1／.2／.4 |
+| A9 | 文档、policy、格式、实际源码／构建／引擎与原始证据一致；灰度回滚后有效性检查仍必过 | 接受矩阵、决策、回滚与 diff；EV-3.4 |
+
+本项不扩张至运行时容量准入、吞吐／并发、ClickHouse 专项、竞品基准、distributed、CGO 或新连接器。
+仍遵守 at-least-once，生产源位置／checkpoint／sink ack／DLQ 和存储 schema 不修改。
+
+| 增量 | 一个可观察结果 | 状态 | 规划 Round |
+| --- | --- | --- | --- |
+| EV-3.1 | 归档经 CLI 输出可复核规范化体积，完整 harness 支持 v3 与 v2 历史读取 | `delivered` | 1/5 |
+| EV-3.2 | 真实不同引擎读取同一 default 镜像后可对账 | `delivered` | 2/5 |
+| EV-3.3 | policy／warning／enforce 的适用范围与退出码明确 | `delivered` | 3/5 |
+| EV-3.4 | 当前 CI、体积灰度、文档与接受矩阵收口 | `delivered` | 4/5 |
+
+EV-3.1 证据见 [archive-fixtures.md](./iterations/IT-9-resource-metrics/evidence/archive-fixtures.md)：本机／Linux Python 3.12 各 25 tests 和四种固定归档 CLI 通过；真实保存归档 parser 通过。fixture 不算 native runtime 或双引擎认证。全部必需验收通过后才将 EV-3／IT-9 置 delivered。
+EV-3.2 证据见 [image-conformance.md](./iterations/IT-9-resource-metrics/evidence/image-conformance.md)：实际 Docker 29.4.2 与 Podman 5.8.4 对账同一 default 保存镜像，六层共 147,265,024 bytes，comparison exit 0；两个干净 native v3 校准也已通过。首次完整 CI 有 daemonless metadata 与 MySQL fixture readiness 失败，明确留给 EV-3.4，不计 aggregate pass。
+EV-3.3 证据见 [budget-decision.md](./iterations/IT-9-resource-metrics/evidence/budget-decision.md)：38 tests 在本机和 Linux Python 3.12 通过，12 个实际 CLI 正负／回滚检查符合 exit 0/1；default binary/image 按方法、单位、架构限定，policy 基于两个 clean native v3 校准加 25% 余量。EV-3.4 当前 CI 灰度与完整聚合亦已通过。
+第五轮只用于当前残余；若必需环境缺失，按该增量的 owner／unblock test 交接，不能以测试存在或 fixture 通过宣称闭合。
+
+**实际交付**：freeze `191683e4a2ddcd65a7a5c7463d9c6708892ef3c8`，run [46024237806](https://github.com/a8851625/openetl-go/actions/runs/46024237806) 的 36/36 jobs success，含 source、三 storage/frontend、exact-candidate 与 Delivery Passed。
+当前原生 v3 四 variant、3 cold/3 restore/15 RSS/16×100、Docker29.4.2/Podman5.7.0 对账，正常预算 0、受控低预算 1／回滚观测 0 全部通过；38 Python tests、Go checker race、raw archive/source/policy/secret/strict 复核已记录。
+同一候选的 23 cases、七份 tagged / 28 checks 和 canonical manifest 已回填；无新增 GATE_ALLOWLIST 或 maturity。
+四增量与 A1–A9 全部 delivered/passed，第五轮未领取；不自动领取 CH-C5 或其他主任务。原始历史数据与失败 run 保留，用户已有修改已保持。
+
+**第五轮最终补验收**：收口 HEAD run46029555087 在 CDC-MySQL target setup 前出现初始化 socket 切换竞态，已记录真实失败。
+共享 dev MySQL health 的 `localhost` 改为 `127.0.0.1`，保持同一 authenticated SQL；隔离 temp/final 两阶段及 cleanup 实际通过。
+最终实现 freeze `8dfbf8438dafd8568a215464fd8c96acb5618b2e`，run [46032636182](https://github.com/a8851625/openetl-go/actions/runs/46032636182) **36/36 jobs success**，含当前 CDC case、source、exact-candidate、Delivery Passed。
+当前证书/23cases/7tagged与原始同一ZIP成员CRC和摘要已核对，strict当前source绑定通过；A1–A9 全部 passed，Round5/5 收口，无第六增量或第二主任务。
+旧freeze191683e与其36jobs通过是保留的实际历史；最新证据见 IT-9 acceptance/current metadata，不改写源ref或历史校准。
+
 ## 有界后续
 
 这些事项只有在上方当前任务完成或被明确重新排序后才进入执行：
@@ -2559,9 +2773,12 @@ RA-1 / IT-2 源序与删除复活
   三件套落地前，不进入当前执行 backlog。优先关注 CH-C1 ack/dedup、CH-C2 additive-only schema、
   CH-C3 Kafka metadata、CH-C4 manifest、CH-C5 资源预算、CH-C6 诊断事件、CH-C7 原子 rollout、
   CH-C8 确定性插件 ABI。
-- S3/File first-class manifest（即 CH-C4）：**主体已由 IT-8 交付**（`manifest: true` 两步提交 +
-  checkpoint `manifest_key` + 读取侧 `ReadLocalManifests`/`CommittedObjectKeys`）。仍未做的是湖仓事务化
-  （元数据改写、小文件合并、跨日重放去重），因此仍不宣称通用 exactly-once 文件输出。
+- S3/File first-class manifest（即 CH-C4）：**已由 IT-8 交付**（`manifest: true` 两步提交 +
+  checkpoint `manifest_key` + 读取侧 `ReadLocalManifests`/`CommittedObjectKeys`），后续由
+  `output/compact` 补齐小文件合并（`kind: compaction` + `replaces` + `source_batch_ids`），
+  并由 manifest 内容级 `batch_id` 吸收跨日重放（同一 `BatchID` 已提交则不再提交第二次）。
+  仍未做的是通用湖仓事务化（外部 catalog/Iceberg 元数据改写），因此仍不宣称通用
+  exactly-once 文件输出。
 - ODPS/MaxCompute lookup/source 方向；MaxCompute sink 认证主线已于 2026-09-17 移除（deferred），此方向一并下线；优先推荐将维表镜像到 MySQL/PostgreSQL/Redis。
 - Feishu 内置 source 和插件样板的真实环境、429/rate-limit、token failure 和 restart 证据；完成前保持 beta/dev-only。
 - JS/TS/WASM parser 示例扩展；不得将具体行业协议硬编码进核心。

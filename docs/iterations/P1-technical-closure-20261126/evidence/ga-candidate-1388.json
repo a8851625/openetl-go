@@ -1,0 +1,217 @@
+{
+  "format": "openetl-candidate/v1",
+  "source": {
+    "commit": "1388b5d892c818bb31b9d0dfc30d128990916222",
+    "dirty": false,
+    "input_sha256": "92f30c1bde6c39d866c35cfcd9b60bcda8f5bf2723345ecad339047aebda9653"
+  },
+  "version": "0.2.12-beta.21-SNAPSHOT-1388b5d",
+  "build": {
+    "started_at": "2026-11-25T21:16:32Z",
+    "finished_at": "2026-11-25T21:22:40Z",
+    "go": "go version go1.24.13 linux/amd64",
+    "goreleaser": "____       ____      _\n / ___| ___ |  _ \\ ___| | ___  __ _ ___  ___ _ __\n| |  _ / _ \\| |_) / _ \\ |/ _ \\/ _` / __|/ _ \\ '__|\n| |_| | (_) |  _ <  __/ |  __/ (_| \\__ \\  __/ |\n \\____|\\___/|_| \\_\\___|_|\\___|\\__,_|___/\\___|_|\ngoreleaser: Deliver Go Binaries as fast and easily as possible\nhttps://goreleaser.com\n\nGitVersion:    1.26.2\nGitCommit:     d7c23c168fa61d738cd6fba03a645071e174bba5\nGitTreeState:  false\nBuildDate:     2024-05-23T12:15:05Z\nBuiltBy:       goreleaser\nGoVersion:     go1.22.3\nCompiler:      gc\nModuleSum:     h1:1iY1HaXtRiMTrwy6KE1sNjkRjsjMi+9l0k6WUX8GpWw=\nPlatform:      linux/amd64"
+  },
+  "image": {
+    "id": "sha256:708cacb9b1244842793ee8fd0cdd9c65fa74f9524ef560bc5128225e2045fa31",
+    "architecture": "amd64",
+    "labels": {
+      "org.opencontainers.image.revision": "1388b5d892c818bb31b9d0dfc30d128990916222",
+      "org.opencontainers.image.version": "0.2.12-beta.21-SNAPSHOT-1388b5d"
+    },
+    "archive": "candidate-image.tar",
+    "binary_path": "/app/openetl-go",
+    "binary_sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2",
+    "engine_id": "sha256:ce4ac50d4171c9a571f3d9528f383dd580b85601796e4de1fa2c29d3b2680c33",
+    "reference": "openetl-candidate:1a0d6239567e4134",
+    "archive_sha256": "fdcb9a00cd93a7198ba0d19c5e8d2fb45d5e9d221b8e1029f89e3550e4af461e"
+  },
+  "binaries": [
+    {
+      "variant": "default",
+      "goos": "linux",
+      "goarch": "arm64",
+      "path": "dist/default_linux_arm64/openetl-go",
+      "sha256": "e38cafefc816604d1daeccc96bc81b4daec0a423973b5f066048b9ab4e6b98b0",
+      "name": "openetl-go",
+      "archive": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_arm64.tar.gz",
+      "member": "openetl-go"
+    },
+    {
+      "variant": "default",
+      "goos": "linux",
+      "goarch": "amd64",
+      "path": "dist/default_linux_amd64_v1/openetl-go",
+      "sha256": "98c36fd7580a6e2e5d2b33285c615dc6ca81040bd30d69b2146bdb6c90e5a7f2",
+      "name": "openetl-go",
+      "archive": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_amd64.tar.gz",
+      "member": "openetl-go"
+    },
+    {
+      "variant": "default",
+      "goos": "darwin",
+      "goarch": "amd64",
+      "path": "dist/default_darwin_amd64_v1/openetl-go",
+      "sha256": "34b195ca64298efbc3621cfc6787b67a8009d73bdf4ade1d126c3cf0c28cdf0c",
+      "name": "openetl-go",
+      "archive": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_amd64.tar.gz",
+      "member": "openetl-go"
+    },
+    {
+      "variant": "default",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "path": "dist/default_darwin_arm64/openetl-go",
+      "sha256": "89ac627092cfae023f53295db59a56fef2ca3235a2196d1cc051766c8235a32c",
+      "name": "openetl-go",
+      "archive": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_arm64.tar.gz",
+      "member": "openetl-go"
+    },
+    {
+      "variant": "extism",
+      "goos": "linux",
+      "goarch": "amd64",
+      "path": "dist/extism_linux_amd64_v1/openetl-go-extism",
+      "sha256": "14e8209376e580f2fcd89fe5b9c9015d5e8f7bc47359618c8f120431afdadc41",
+      "name": "openetl-go-extism",
+      "archive": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_amd64.tar.gz",
+      "member": "openetl-go-extism"
+    },
+    {
+      "variant": "extism",
+      "goos": "linux",
+      "goarch": "arm64",
+      "path": "dist/extism_linux_arm64/openetl-go-extism",
+      "sha256": "4da24776a11a1b46df725652bd79946ae8b0d9f1ed279534995e494b9d8c4ceb",
+      "name": "openetl-go-extism",
+      "archive": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_arm64.tar.gz",
+      "member": "openetl-go-extism"
+    },
+    {
+      "variant": "extism",
+      "goos": "darwin",
+      "goarch": "amd64",
+      "path": "dist/extism_darwin_amd64_v1/openetl-go-extism",
+      "sha256": "3d376cd86cf942212c9900b368f8cc807b49d6d148e38aa6d06069b08adccc58",
+      "name": "openetl-go-extism",
+      "archive": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_amd64.tar.gz",
+      "member": "openetl-go-extism"
+    },
+    {
+      "variant": "extism",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "path": "dist/extism_darwin_arm64/openetl-go-extism",
+      "sha256": "a5aa2c2437b6eca1690dbb4ab7dc687f9ea536c574b0f3e2fc423008c92c4b57",
+      "name": "openetl-go-extism",
+      "archive": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_arm64.tar.gz",
+      "member": "openetl-go-extism"
+    },
+    {
+      "variant": "default",
+      "goos": "windows",
+      "goarch": "amd64",
+      "path": "dist/default_windows_amd64_v1/openetl-go.exe",
+      "sha256": "59117a1bee515185ab8d7b0f1acae543dec559132ce61939cc467288b58aeb36",
+      "name": "openetl-go.exe",
+      "archive": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_windows_amd64.zip",
+      "member": "openetl-go.exe"
+    },
+    {
+      "variant": "extism",
+      "goos": "windows",
+      "goarch": "amd64",
+      "path": "dist/extism_windows_amd64_v1/openetl-go-extism.exe",
+      "sha256": "1c20a795f5d21288b90ad7b3795aeeb3a7fedbd05be34dcdf3e9f909da3336ca",
+      "name": "openetl-go-extism.exe",
+      "archive": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_windows_amd64.zip",
+      "member": "openetl-go-extism.exe"
+    }
+  ],
+  "archives": [
+    {
+      "variant": "default",
+      "goos": "linux",
+      "goarch": "arm64",
+      "path": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_arm64.tar.gz",
+      "sha256": "19297aac19d7e1fd94a726218682ac303af32475762df41d93cf965b1beca62d",
+      "name": "openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_arm64.tar.gz"
+    },
+    {
+      "variant": "default",
+      "goos": "windows",
+      "goarch": "amd64",
+      "path": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_windows_amd64.zip",
+      "sha256": "c91b30f5f4cf1b1c0bf18e55c4903959ddfd94c5e3481f7ae3c4db545ef44d5a",
+      "name": "openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_windows_amd64.zip"
+    },
+    {
+      "variant": "default",
+      "goos": "linux",
+      "goarch": "amd64",
+      "path": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_amd64.tar.gz",
+      "sha256": "8717330789e0e8bc990f313c3202d1441482a5b056130875268f89643d97e90c",
+      "name": "openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_amd64.tar.gz"
+    },
+    {
+      "variant": "default",
+      "goos": "darwin",
+      "goarch": "amd64",
+      "path": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_amd64.tar.gz",
+      "sha256": "adef8f49326155ea1b1f70e83d4a03adf78e3fd3749aafb77228d04ef9356997",
+      "name": "openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_amd64.tar.gz"
+    },
+    {
+      "variant": "default",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "path": "dist/openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_arm64.tar.gz",
+      "sha256": "705b021b5dfabf888747bf7877abd942fb0ac3810864a4a48f8866f40e4638ae",
+      "name": "openetl-go_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_arm64.tar.gz"
+    },
+    {
+      "variant": "extism",
+      "goos": "linux",
+      "goarch": "arm64",
+      "path": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_arm64.tar.gz",
+      "sha256": "d00043e1d9de254860426bc127ba03c39ebfba9e881a3c99c2fc3900fd9cc6d9",
+      "name": "openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_arm64.tar.gz"
+    },
+    {
+      "variant": "extism",
+      "goos": "darwin",
+      "goarch": "amd64",
+      "path": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_amd64.tar.gz",
+      "sha256": "fabc4a71e09925260c08f519002601052547becca4d01b78388340b0d8b6bb52",
+      "name": "openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_amd64.tar.gz"
+    },
+    {
+      "variant": "extism",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "path": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_arm64.tar.gz",
+      "sha256": "d56fb48098ac41affd01d10d2649d571208f6d3e066a9226c9d917685b618d9e",
+      "name": "openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_darwin_arm64.tar.gz"
+    },
+    {
+      "variant": "extism",
+      "goos": "windows",
+      "goarch": "amd64",
+      "path": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_windows_amd64.zip",
+      "sha256": "ae45a5e900f87a485f32671fd4bdbdd83f43809c777b1095df7a0ea6d638a629",
+      "name": "openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_windows_amd64.zip"
+    },
+    {
+      "variant": "extism",
+      "goos": "linux",
+      "goarch": "amd64",
+      "path": "dist/openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_amd64.tar.gz",
+      "sha256": "257c21f008e5bf98503d01c2236eba05c910e5aeb1bd7f12b3b761a9ca927478",
+      "name": "openetl-go-extism_0.2.12-beta.21-SNAPSHOT-1388b5d_linux_amd64.tar.gz"
+    }
+  ],
+  "checksum_file": {
+    "path": "dist/checksums.txt",
+    "sha256": "dd51466f247e6265e8e4dd690f58fd5aadd607cc095b3876cf747cb4b4b085e3"
+  }
+}

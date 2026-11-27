@@ -50,6 +50,9 @@ var (
 // dropping the image build removes the `go mod download` blocker that stalled
 // BUG-1/2/6 (plan.md route B).
 func BuildBinary(ctx context.Context) (string, error) {
+	if path, _, err := suppliedCandidateBinary(); err != nil || path != "" {
+		return path, err
+	}
 	buildOnce.Do(func() {
 		root, err := repoRoot()
 		if err != nil {

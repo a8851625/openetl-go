@@ -1,0 +1,19 @@
+{
+  "name": "hack/e2e-cdc-mysql.sh",
+  "source_commit": "e72f9fe837b870f5beb15e6f2d11172f262ec87c",
+  "image_id": "sha256:caa73ee9e20026afb0170c02eb3b56643d05b3b19d1226ffb7c1db2744fc79aa",
+  "execution_image_id": "sha256:ed6d144c40019354a4ee0503bde3b008667a41f4ed35ade174ebb2075dbe8549",
+  "execution_config_id": "sha256:caa73ee9e20026afb0170c02eb3b56643d05b3b19d1226ffb7c1db2744fc79aa",
+  "binary_sha256": "1de97b9f19e0dad658c7425544e95b9afbfd323a76147d9bf77710979214a989",
+  "started_at": "2026-11-27T16:07:15Z",
+  "finished_at": "2026-11-27T16:07:47Z",
+  "result": "failed",
+  "exit_code": 1,
+  "error": "mandatory case exited 1",
+  "log_sha256": "b31f306b365ea176be427003a8b4839f349fbb28519d5adebb0bc41abd1dceb0",
+  "artifact_sha256": {},
+  "container_runtime": "Docker version 29.4.2, build 055a478",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+  }
+}

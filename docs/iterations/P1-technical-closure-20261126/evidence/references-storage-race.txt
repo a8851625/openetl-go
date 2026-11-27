@@ -1,0 +1,2 @@
+ok  	github.com/a8851625/openetl-go/internal/etl/storage	9.420s
+ok  	github.com/a8851625/openetl-go/internal/etl/storage/sqlstore	3.277s

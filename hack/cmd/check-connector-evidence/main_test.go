@@ -16,6 +16,7 @@ func TestCheckCommitBindingAllowsEvidenceOnlyDescendant(t *testing.T) {
 
 	writeEvidenceTestFile(t, root, "internal/etl/server/evidence/connector-evidence.json", "refreshed")
 	writeEvidenceTestFile(t, root, "docs/ROADMAP.zh.md", "refreshed")
+	writeEvidenceTestFile(t, root, "docs/iterations/README.md", "refreshed iteration status")
 	commitEvidenceTest(t, root, "refresh evidence")
 	current := mustGitOutput(t, root, "rev-parse", "HEAD")
 
@@ -37,6 +38,49 @@ func TestCheckCommitBindingRejectsRuntimeChange(t *testing.T) {
 	err := checkCommitBinding(root, certified, current)
 	if err == nil || !strings.Contains(err.Error(), "runtime.go") {
 		t.Fatalf("runtime descendant error = %v, want changed runtime path", err)
+	}
+}
+
+func TestCheckCommitBindingAllowsOnlyNamedIT9CloseoutFiles(t *testing.T) {
+	root := initEvidenceGitRepo(t)
+	writeEvidenceTestFile(t, root, "runtime.go", "baseline")
+	commitEvidenceTest(t, root, "baseline")
+	certified := mustGitOutput(t, root, "rev-parse", "HEAD")
+	for _, path := range []string{
+		"docs/iterations/IT-9-resource-metrics/tasks.md",
+		"docs/iterations/IT-9-resource-metrics/evidence/acceptance.md",
+		"docs/iterations/IT-9-resource-metrics/evidence/baseline-v3.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/budget-enforce.json",
+		"docs/resource-baseline.md", "docs/release-checklist.md",
+	} {
+		writeEvidenceTestFile(t, root, path, "actual closeout evidence")
+	}
+	commitEvidenceTest(t, root, "attach IT-9 evidence")
+	if err := checkCommitBinding(root, certified, mustGitOutput(t, root, "rev-parse", "HEAD")); err != nil {
+		t.Fatalf("named IT-9 closeout rejected: %v", err)
+	}
+	for _, path := range []string{
+		"hack/bench_baseline.py", "hack/bench-budgets.json", "hack/e2e-doris-source-order.sh",
+		".github/workflows/_gate.yml", "internal/etl/server/server.go",
+		"docs/iterations/IT-9-resource-metrics/evidence/calibration-v3-amd64.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/unreviewed.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/tool.sh", "docs/unrelated.md",
+	} {
+		if allowedEvidenceDescendantPath(path) {
+			t.Errorf("non-bookkeeping path incorrectly allowed: %s", path)
+		}
+	}
+}
+
+func TestCheckCommitBindingRejectsIT9BudgetPolicyChange(t *testing.T) {
+	root := initEvidenceGitRepo(t)
+	writeEvidenceTestFile(t, root, "hack/bench-budgets.json", "calibrated policy")
+	commitEvidenceTest(t, root, "baseline")
+	certified := mustGitOutput(t, root, "rev-parse", "HEAD")
+	writeEvidenceTestFile(t, root, "hack/bench-budgets.json", "changed budget")
+	commitEvidenceTest(t, root, "policy change")
+	if err := checkCommitBinding(root, certified, mustGitOutput(t, root, "rev-parse", "HEAD")); err == nil || !strings.Contains(err.Error(), "bench-budgets.json") {
+		t.Fatalf("policy descendant error = %v, want re-certification", err)
 	}
 }
 
@@ -74,6 +118,33 @@ func TestCheckPathEvidenceAcceptsFreshPassed(t *testing.T) {
 
 	if err := checkPathEvidenceFile(root, current, filepath.Join(root, "docs/evidence/mysql_cdc__mysql_upsert.json")); err != nil {
 		t.Fatalf("fresh passed evidence rejected: %v", err)
+	}
+}
+
+func TestCheckPathEvidenceAbsoluteDirectory(t *testing.T) {
+	root := initEvidenceGitRepo(t)
+	writeEvidenceTestFile(t, root, "internal/etl/source/mysql_cdc.go", "source")
+	commitEvidenceTest(t, root, "source baseline")
+	commit := mustGitOutput(t, root, "rev-parse", "HEAD")
+	external := t.TempDir()
+	writeEvidenceTestFile(t, external, "mysql_cdc__mysql_upsert.json", pathEvidenceJSON("mysql_cdc__mysql_upsert", commit, `{"name":"happy_path","result":"passed"}`))
+	if err := checkPathEvidenceDir(root, commit, external, true); err != nil {
+		t.Fatalf("absolute candidate evidence rejected: %v", err)
+	}
+	// A failing file in the same external directory must be read and rejected.
+	writeEvidenceTestFile(t, external, "mysql_cdc__mysql_upsert.json", pathEvidenceJSON("mysql_cdc__mysql_upsert", commit, `{"name":"happy_path","result":"failed"}`))
+	if err := checkPathEvidenceDir(root, commit, external, true); err == nil {
+		t.Fatal("absolute candidate evidence was skipped instead of rejected")
+	}
+}
+
+func TestCheckPathEvidenceStrictRequiresFiles(t *testing.T) {
+	root, empty := t.TempDir(), t.TempDir()
+	if err := checkPathEvidenceDir(root, "", empty, true); err == nil {
+		t.Fatal("strict check accepted an empty evidence directory")
+	}
+	if err := checkPathEvidenceDir(root, "", empty, false); err != nil {
+		t.Fatalf("optional structural legacy check changed: %v", err)
 	}
 }
 

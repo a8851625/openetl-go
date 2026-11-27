@@ -2,6 +2,7 @@ package backup_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/a8851625/openetl-go/internal/etl/storage/mysql"
 	"github.com/a8851625/openetl-go/internal/etl/storage/postgres"
 	"github.com/a8851625/openetl-go/internal/etl/storage/sqlite"
+	"github.com/a8851625/openetl-go/internal/etl/storage/sqlstore"
 )
 
 type restoreBackend interface {
@@ -68,6 +70,169 @@ func TestBackupRestoreConformance(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+
+			t.Run("recovery_sql_null_and_json_shape_fidelity", func(t *testing.T) {
+				reset(t)
+				db := s.(interface{ DB() *sql.DB }).DB()
+				var dialect sqlstore.Dialect = sqlstore.SQLiteDialect{}
+				if backend == "mysql" {
+					dialect = sqlstore.MySQLDialect{}
+				} else if backend == "postgres" {
+					dialect = sqlstore.PostgresDialect{}
+				}
+				cases := []struct {
+					context, tracking any
+				}{
+					{nil, nil}, // Pre-migration rows, with no invented association.
+					{`{}`, ""},
+					{`null`, ""}, // Stored JSON null is distinct from SQL NULL.
+					{`{"connection_known":false}`, nil},
+					{`{"endpoint":"sink","connection_known":true,"connection_name":"warehouse","legacy_extra":"retained"}`, "bookkeeping failure"},
+				}
+				for i, c := range cases {
+					job := fmt.Sprintf("recovery-sql-%d", i)
+					if err := s.WriteDeadLetter(ctx, &storage.DLQRecord{JobName: job, Record: core.Record{Data: map[string]any{"id": i}}}); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := db.ExecContext(ctx, dialect.Bind("UPDATE dead_letters SET recovery_context_json=?,recovery_tracking_error=? WHERE job_name=?"), c.context, c.tracking, job); err != nil {
+						t.Fatal(err)
+					}
+				}
+				type rawRecovery struct {
+					context, tracking sql.NullString
+				}
+				readRaw := func() []rawRecovery {
+					t.Helper()
+					var out []rawRecovery
+					for i := range cases {
+						var row rawRecovery
+						if err := db.QueryRowContext(ctx, dialect.Bind("SELECT recovery_context_json,recovery_tracking_error FROM dead_letters WHERE job_name=?"), fmt.Sprintf("recovery-sql-%d", i)).Scan(&row.context, &row.tracking); err != nil {
+							t.Fatal(err)
+						}
+						out = append(out, row)
+					}
+					return out
+				}
+				before := readRaw()
+				file := filepath.Join(t.TempDir(), "recovery-null-v3.json")
+				if _, err := backup.ExportFile(ctx, s, file, backup.Options{}); err != nil {
+					t.Fatal(err)
+				}
+				snap, err := backup.ReadFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := backup.Restore(ctx, s, snap, backup.Options{ClearBeforeRestore: true}); err != nil {
+					t.Fatal(err)
+				}
+				if got := readRaw(); !reflect.DeepEqual(before, got) {
+					t.Fatalf("raw recovery SQL changed: before=%+v after=%+v", before, got)
+				}
+				// Conflicting backup metadata must fail atomically, not erase a
+				// known recovery context or a retained tracking error.
+				for _, mutate := range []func(*storage.DLQRecord){
+					func(r *storage.DLQRecord) { r.BackupRecoveryContextNull = true },
+					func(r *storage.DLQRecord) { r.BackupRecoveryContextJSON = json.RawMessage(`{}`) },
+					func(r *storage.DLQRecord) { r.BackupRecoveryTrackingErrorNull = true },
+				} {
+					bad := *snap
+					bad.DeadLetters = append([]*storage.DLQRecord(nil), snap.DeadLetters...)
+					last := *bad.DeadLetters[len(bad.DeadLetters)-1]
+					mutate(&last)
+					bad.DeadLetters[len(bad.DeadLetters)-1] = &last
+					if err := backup.Restore(ctx, s, &bad, backup.Options{ClearBeforeRestore: true}); err == nil {
+						t.Fatal("conflicting recovery backup metadata accepted")
+					}
+					if got := readRaw(); !reflect.DeepEqual(before, got) {
+						t.Fatal("failed restore changed raw recovery SQL")
+					}
+				}
+			})
+
+			t.Run("recovery_v3_streaming_fidelity_and_failure_atomicity", func(t *testing.T) {
+				reset(t)
+				snap := fidelityFixture()
+				snap.FormatVersion = 3
+				start := snap.Pipelines[0].CreatedAt
+				end := snap.Pipelines[0].UpdatedAt
+				eventID := "a9c53bc1-d2e3-4c28-9716-c85ea039f08a"
+				opID := "b3799575-65aa-4f91-8c80-738b37e84511"
+				snap.DeadLetters[0].RecoveryEventID = eventID
+				snap.DeadLetters[0].RecoveryOperationID = opID
+				snap.DeadLetters[0].RecoveryContext = core.RecoveryCaptureContext{Endpoint: "dag_node", NodeID: "write-orders", ConnectionName: "warehouse", ConnectionKnown: true, SpecVersion: 7}
+				snap.RecoveryEvents = []*storage.RecoveryEvent{
+					{ID: eventID, ScopeKey: strings.Repeat("1", 64), PipelineID: "pipeline-42", PipelineName: "orders", Endpoint: "dag_node", NodeID: "write-orders", ConnectionName: "warehouse", ConnectionKnown: true, SpecVersion: 7, ErrorClass: "transient", FirstError: "sink unavailable", State: "replaying", OpenedAt: start, AttemptCount: 4, RecordCount: 2, ReplayedRows: 1},
+					{ID: "c76db805-e613-48fd-be7e-9d29293073e5", ScopeKey: strings.Repeat("2", 64), PipelineID: "deleted-pipeline", PipelineName: "removed display", Endpoint: "sink", State: "abandoned", OpenedAt: start, ClosedAt: &end, AttemptCount: 1, RecordCount: 1, AbandonedRows: 1},
+				}
+				snap.RecoveryOperations = []*storage.RecoveryOperation{
+					{ID: opID, EventID: eventID, PipelineID: "pipeline-42", DLQRowID: 71, RecordHash: "retained-hash", Kind: "replay", State: "acked", StartedAt: start, AcknowledgedAt: &end},
+					{ID: "c9ae947a-406b-490b-a517-a2c0aa8d06e2", EventID: eventID, PipelineID: "pipeline-42", DLQRowID: 70, RecordHash: "prior-row", Kind: "replay", State: "failed", Error: "historical outage", StartedAt: start, FinishedAt: &end},
+					{ID: "d8d414bd-e74d-4d06-967a-5ef3088c66e6", PipelineID: "deleted-pipeline", DLQRowID: 68, RecordHash: "unknown-row", Kind: "retention", State: "abandoned", StartedAt: start, FinishedAt: &end},
+				}
+				opts := backup.Options{ClearBeforeRestore: true, PluginsDir: t.TempDir()}
+				if err := backup.Restore(ctx, s, snap, opts); err != nil {
+					t.Fatal(err)
+				}
+				file := filepath.Join(t.TempDir(), "recovery-v3.json")
+				counts, err := backup.ExportFile(ctx, s, file, backup.Options{})
+				if err != nil || counts != backup.CountSnapshot(snap) {
+					t.Fatalf("streamed counts=%+v err=%v", counts, err)
+				}
+				streamed, err := backup.ReadFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertSnapshotPayload(t, snap, streamed)
+				if err := backup.Restore(ctx, s, streamed, opts); err != nil {
+					t.Fatal(err)
+				}
+				restored := exportForRestoreTest(t, s)
+				assertSnapshotPayload(t, streamed, restored)
+				record, err := s.(storage.RecoveryStore).GetRecoveryEvent(ctx, eventID)
+				if err != nil || record.DLQOpenRows != 1 || record.State != "replaying" {
+					t.Fatalf("restored live association=%+v err=%v", record, err)
+				}
+				for _, failAt := range []string{"backup.wipe.recovery_events", "backup.restore.recovery_operations"} {
+					s.SetFailureInjector(func(point string) error {
+						if point == failAt {
+							return errors.New("fixture recovery restore failure")
+						}
+						return nil
+					})
+					err := backup.Restore(ctx, s, streamed, opts)
+					s.SetFailureInjector(nil)
+					if err == nil {
+						t.Fatalf("%s did not fail", failAt)
+					}
+					assertSnapshotPayload(t, restored, exportForRestoreTest(t, s))
+				}
+			})
+
+			t.Run("encrypted_connection_references_after_restore", func(t *testing.T) {
+				reset(t)
+				cipher, err := storage.NewSpecCipher("refs", resolverKey(4), "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := s.SaveConnection(ctx, &storage.ConnectionEntry{Name: "restore-target", Kind: "sink", Type: "mysql"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := storage.NewPipelineSpecStore(s, cipher).SaveWithID(ctx, "restore-ref", "restore ref", "sink: {type: mysql, connection: restore-target}", "stopped"); err != nil {
+					t.Fatal(err)
+				}
+				snap := exportForRestoreTest(t, s)
+				if err := backup.Restore(ctx, s, snap, backup.Options{ClearBeforeRestore: true}); err != nil {
+					t.Fatal(err)
+				}
+				assertSnapshotPayload(t, snap, exportForRestoreTest(t, s))
+				report, err := s.(storage.ConnectionReferenceStore).ConnectionReferences(ctx, "restore-target")
+				if err != nil || !report.Known || len(report.References) != 1 || report.References[0].PipelineID != "restore-ref" {
+					t.Fatalf("restored reference = %+v, err=%v", report, err)
+				}
+				if err := s.DeleteConnection(ctx, "restore-target"); !errors.Is(err, storage.ErrConnectionReferenceConflict) {
+					t.Fatalf("restore lost deletion protection: %v", err)
+				}
+			})
 
 			t.Run("id_keyed_and_legacy_history_export", func(t *testing.T) {
 				reset(t)
@@ -267,7 +432,7 @@ func assertSnapshotPayload(t *testing.T, want, got *backup.Snapshot) {
 					// PostgreSQL timestamptz returns the same instant in the
 					// client's timezone. Compare actual timestamps, not offsets.
 					fields := row.(map[string]any)
-					for _, field := range []string{"created_at", "updated_at", "timestamp", "started_at", "finished_at", "registered_at", "last_heartbeat", "assigned_at", "lease_expires_at", "last_tested_at", "installed_at"} {
+					for _, field := range []string{"created_at", "updated_at", "timestamp", "started_at", "finished_at", "registered_at", "last_heartbeat", "assigned_at", "lease_expires_at", "last_tested_at", "installed_at", "opened_at", "closed_at", "sink_acknowledged_at"} {
 						if encoded, ok := fields[field].(string); ok {
 							instant, err := time.Parse(time.RFC3339Nano, encoded)
 							if err != nil {

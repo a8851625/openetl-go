@@ -1,0 +1,42 @@
+==> Start MySQL source
+Unable to find image 'mysql:8.0' locally
+8.0: Pulling from library/mysql
+297d04cfe470: Pulling fs layer
+ab24264a27e9: Pulling fs layer
+4c8a3e0d4e4b: Pulling fs layer
+96d30d9fbee8: Pulling fs layer
+a63160a5eda1: Pulling fs layer
+6ef6c7b50a93: Pulling fs layer
+0d74d296605b: Pulling fs layer
+e3e5d1ac74c1: Pulling fs layer
+49ec2dab01d9: Pulling fs layer
+7534d1db9f8d: Pulling fs layer
+edf85873f64e: Pulling fs layer
+7534d1db9f8d: Download complete
+ab24264a27e9: Download complete
+6ef6c7b50a93: Download complete
+96d30d9fbee8: Download complete
+297d04cfe470: Download complete
+e3e5d1ac74c1: Download complete
+796812c73292: Download complete
+4c8a3e0d4e4b: Download complete
+0d74d296605b: Download complete
+af166387641d: Download complete
+edf85873f64e: Download complete
+49ec2dab01d9: Download complete
+a63160a5eda1: Download complete
+6ef6c7b50a93: Pull complete
+e3e5d1ac74c1: Pull complete
+edf85873f64e: Pull complete
+297d04cfe470: Pull complete
+4c8a3e0d4e4b: Pull complete
+0d74d296605b: Pull complete
+7534d1db9f8d: Pull complete
+a63160a5eda1: Pull complete
+ab24264a27e9: Pull complete
+96d30d9fbee8: Pull complete
+49ec2dab01d9: Pull complete
+Digest: sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+Status: Downloaded newer image for mysql:8.0
+mysql: [Warning] Using a password on the command line interface can be insecure.
+ERROR 2002 (HY000): Can't connect to local MySQL server through socket '/var/run/mysqld/mysqld.sock' (2)

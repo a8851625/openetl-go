@@ -8,9 +8,41 @@ cd "$ROOT_DIR"
 . "$ROOT_DIR/hack/container-cli.sh"
 detect_container_cli
 
-IMAGE="openetl-go-etl:dev"
+IMAGE="${IMAGE:-openetl-go-etl:dev}"
 APP_CONTAINER="etl-openetl-go-s3"
 PIPELINE="file-to-s3"
+
+# mc (the MinIO client) is no longer published as a standalone image on either
+# Docker Hub or quay.io; both return an authorization error as of 2026-11-09.
+# The minio/minio *server* image ships the same client binary at /usr/bin/mc, so
+# reuse it rather than adding a registry dependency the certification cannot
+# satisfy. Override MC_IMAGE when pulling a dedicated client image works again.
+MC_IMAGE="${MC_IMAGE:-}"
+if [ -z "$MC_IMAGE" ]; then
+  for candidate in \
+    quay.io/minio/minio:RELEASE.2024-07-16T23-46-41Z \
+    docker.io/minio/minio:RELEASE.2024-07-16T23-46-41Z; do
+    if "$CONTAINER_CLI" image inspect "$candidate" >/dev/null 2>&1; then
+      MC_IMAGE="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$MC_IMAGE" ]; then
+  echo "!! no local MinIO image carrying /usr/bin/mc; pull one of:" >&2
+  echo "   quay.io/minio/minio:RELEASE.2024-07-16T23-46-41Z" >&2
+  echo "   or set MC_IMAGE to an image containing the mc binary" >&2
+  exit 1
+fi
+mc() {
+  "$CONTAINER_CLI" run --rm --network host --entrypoint /usr/bin/mc "$MC_IMAGE" "$@"
+}
+# The original script drove mc through `sh -c "<pipeline>"` so it could combine
+# alias setup, find, sort and cat in one invocation. Keep that shape, but run it
+# inside the image that actually carries the client binary.
+mc_sh() {
+  "$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh "$MC_IMAGE" -c "$1"
+}
 
 wait_http() {
   url="$1"
@@ -63,7 +95,7 @@ echo "==> Wait MinIO"
 wait_http "http://127.0.0.1:9001/minio/health/live"
 
 echo "==> Reset MinIO bucket"
-"$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc rb --force local/etl-bucket >/dev/null 2>&1 || true"
+mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc rb --force local/etl-bucket >/dev/null 2>&1 || true"
 
 echo "==> Reset ETL data"
 rm -rf data-s3
@@ -97,11 +129,11 @@ echo "$body"
 echo "$body" | grep '"records_written":3'
 
 echo "==> Verify S3 object"
-first_object="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | sort | head -n 1")"
+first_object="$(mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | sort | head -n 1")"
 test "$first_object" != ""
-object_count="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' 2>/dev/null | wc -l" | tr -d '[:space:]')"
+object_count="$(mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' 2>/dev/null | wc -l" | tr -d '[:space:]')"
 test "$object_count" = "1"
-"$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc cat \"$first_object\"" > data-s3/object.jsonl
+mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc cat \"$first_object\"" > data-s3/object.jsonl
 grep 'Ada' data-s3/object.jsonl
 grep 'Grace' data-s3/object.jsonl
 grep 'Hopper' data-s3/object.jsonl
@@ -125,16 +157,16 @@ body="$(curl -fsS http://127.0.0.1:8007/api/v2/pipelines)"
 echo "$body"
 echo "$body" | grep "\"name\":\"$PIPELINE\""
 
-second_object="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | sort | head -n 1")"
+second_object="$(mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' | sort | head -n 1")"
 test "$second_object" = "$first_object"
-object_count="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' 2>/dev/null | wc -l" | tr -d '[:space:]')"
+object_count="$(mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' 2>/dev/null | wc -l" | tr -d '[:space:]')"
 test "$object_count" = "1"
 
 echo "==> Verify MinIO outage routes records to DLQ and replay recovers"
 OUTAGE_PIPELINE="file-to-s3-outage"
 OUTAGE_DIR="$ROOT_DIR/data-s3-outage"
 "$CONTAINER_CLI" rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-"$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc rb --force local/etl-bucket >/dev/null 2>&1 || true"
+mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc rb --force local/etl-bucket >/dev/null 2>&1 || true"
 rm -rf "$OUTAGE_DIR"
 mkdir -p "$OUTAGE_DIR/pipes" "$OUTAGE_DIR/checkpoint" "$OUTAGE_DIR/dlq" "$OUTAGE_DIR/output"
 chmod -R a+rwX "$OUTAGE_DIR"
@@ -206,11 +238,11 @@ replay_body="$(curl -fsS -X POST "http://127.0.0.1:8007/api/v2/dlq/$OUTAGE_PIPEL
 echo "$replay_body"
 echo "$replay_body" | grep '"replayed":5'
 
-object_count="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' 2>/dev/null | wc -l" | tr -d '[:space:]')"
+object_count="$(mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-e2e --name '*.jsonl' 2>/dev/null | wc -l" | tr -d '[:space:]')"
 test "$object_count" = "0"
-object_count="$("$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-outage --name '*.jsonl' | wc -l" | tr -d '[:space:]')"
+object_count="$(mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && mc find local/etl-bucket/s3-outage --name '*.jsonl' | wc -l" | tr -d '[:space:]')"
 test "$object_count" = "5"
-"$CONTAINER_CLI" run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && for obj in \$(mc find local/etl-bucket/s3-outage --name '*.jsonl' | sort); do mc cat \"\$obj\"; done" > "$OUTAGE_DIR/outage-replay.jsonl"
+mc_sh "mc alias set local http://127.0.0.1:9001 minio minio123 >/dev/null && for obj in \$(mc find local/etl-bucket/s3-outage --name '*.jsonl' | sort); do mc cat \"\$obj\"; done" > "$OUTAGE_DIR/outage-replay.jsonl"
 grep 'Ada' "$OUTAGE_DIR/outage-replay.jsonl"
 grep 'Hopper' "$OUTAGE_DIR/outage-replay.jsonl"
 grep 'Vaughan' "$OUTAGE_DIR/outage-replay.jsonl"

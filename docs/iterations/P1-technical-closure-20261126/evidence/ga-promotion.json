@@ -1,0 +1,15 @@
+{
+  "source_commit": "898af75d1f90a954154d74eb53c3737f38e51b8f",
+  "candidate_sha256": "7a6c356c43baee407fc0c2df6e84dcf5cb0dbbf9eb058e08785c67d0d30b2cb1",
+  "image_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+  "destination": "127.0.0.1:41625/openetl-p1:898af75",
+  "registry_digests": [
+    "127.0.0.1:41625/openetl-p1@sha256:af6c9f35e665c38b9b18f60fbdfcf252f31168cc851464b6b2cc70d656efc268"
+  ],
+  "source_engine_id": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
+  "loaded_image_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+  "promoted_image_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+  "binary_sha256": "992c42142c64eb83ff3b65e8f220185dd7a3e3e4b8cf8668b2ce4971be3bb6ab",
+  "promoted_at": "2026-11-26T00:24:51Z",
+  "result": "passed"
+}

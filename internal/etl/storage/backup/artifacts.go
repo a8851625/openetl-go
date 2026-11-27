@@ -45,7 +45,7 @@ func stageRestoreArtifacts(ctx context.Context, snap *Snapshot, opts Options) ([
 			payloads[p.Name] = data
 			continue
 		}
-		if snap.FormatVersion == FormatVersion {
+		if snap.FormatVersion >= 2 {
 			return nil, "", fmt.Errorf("backup: v%d snapshot is missing artifact for plugin %q", FormatVersion, p.Name)
 		}
 		// v1 contained paths only. The operator must restore the old files to

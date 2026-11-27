@@ -390,10 +390,14 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (payload === undefined ? undefined : payload) as T;
 }
 
-export function useApi<T>(path: string, refreshKey: number): ApiState<T> {
+export function useApi<T>(path: string, refreshKey: number, enabled = true): ApiState<T> {
   const [state, setState] = useState<ApiState<T>>({ loading: true, refreshing: true });
   const firstRender = useRef(true);
   useEffect(() => {
+    if (!enabled) {
+      setState({ loading: false, refreshing: false });
+      return;
+    }
     let cancelled = false;
     // Keep prior data during refreshes to avoid a visual flash, while exposing
     // the real in-flight state to controls such as the top-bar Refresh now.
@@ -419,7 +423,7 @@ export function useApi<T>(path: string, refreshKey: number): ApiState<T> {
     return () => {
       cancelled = true;
     };
-  }, [path, refreshKey]);
+  }, [path, refreshKey, enabled]);
   return state;
 }
 

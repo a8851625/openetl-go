@@ -3,12 +3,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/shared/empty-state';
 import { normalizePipelines } from '@/lib/api';
 import { pipelineDLQBacklog } from '@/lib/dlq';
-import { deriveIssues, type DerivedIssue , issueTitle } from '@/lib/pipeline-health';
+import { deriveIssues, type DerivedIssue, issueTitle, issueSummary } from '@/lib/pipeline-health';
 import type { ApiState, MetricsPipeline, Pipeline, TFunc } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { ArrowRight } from 'lucide-react';
+import { RecoveryRecords } from '@/components/recovery-records';
+import type { TaskContext } from '@/lib/routing';
 
 type Props = {
+	context?: TaskContext;
+	refreshKey?: number;
   t: TFunc;
   pipelines: ApiState<{ pipelines: Pipeline[] }>;
   metrics: ApiState<{ pipelines: MetricsPipeline[] }>;
@@ -19,6 +23,8 @@ type Props = {
 };
 
 export function IssuesPage({
+	context,
+	refreshKey,
   t,
   pipelines,
   metrics,
@@ -29,20 +35,15 @@ export function IssuesPage({
 }: Props) {
   const pList = normalizePipelines(pipelines.data);
   const mList = metrics.data?.pipelines || [];
-  const issues = deriveIssues(pList, mList);
+  const issues = deriveIssues(pList, mList).filter((issue) => !context?.pipelineId || issue.pipelineKey === context.pipelineId);
   const blocking = issues.filter((i) => i.severity === 'blocking').length;
   const warning = issues.filter((i) => i.severity === 'warning').length;
   const dlqTotal = pList.reduce((a, p) => a + pipelineDLQBacklog(p), 0);
 
   const act = (issue: DerivedIssue) => {
     onSelect(issue.pipelineKey);
-    const issueQ = `?issue=${encodeURIComponent(issue.id)}`;
     if (issue.action === 'dlq') {
       onOpenDLQ(issue.pipelineKey);
-      // keep issue param discoverable for deep links
-      if (!window.location.hash.includes('issue=')) {
-        window.history.replaceState(null, '', `${window.location.hash.split('?')[0]}${issueQ}`);
-      }
     } else if (issue.action === 'connections') onOpenConnections();
     else onOpenPipeline(issue.pipelineKey, 'issues');
   };
@@ -78,6 +79,8 @@ export function IssuesPage({
         </Card>
       </div>
 
+      <RecoveryRecords t={t} context={context} refreshKey={refreshKey} />
+
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">{t('issues.inbox')}</CardTitle>
@@ -104,7 +107,7 @@ export function IssuesPage({
                 <div className="mt-0.5 text-xs text-muted-foreground">
                   <span className="font-medium text-foreground/80">{issue.pipelineName}</span>
                   {' · '}
-                  {issue.summary}
+                  {issueSummary(issue, t)}
                   {issue.node ? ` · node ${issue.node}` : ''}
                   {issue.field ? `.${issue.field}` : ''}
                 </div>

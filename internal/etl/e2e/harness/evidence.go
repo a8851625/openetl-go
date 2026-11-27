@@ -25,6 +25,7 @@ type Evidence struct {
 	Checks       []Check           `json:"checks"`
 	Result       string            `json:"result"` // passed | failed | skipped
 	FinishedAt   string            `json:"finished_at,omitempty"`
+	Asset        *CandidateAsset   `json:"asset,omitempty"`
 }
 
 // Check is one assertion block of a path evidence run.
@@ -94,7 +95,20 @@ func NewEvidenceRecorder(t testLifecycle, pathID string) *Recorder {
 		},
 		t: t,
 	}
+	if _, hash, err := suppliedCandidateBinary(); err != nil {
+		r.AddCheck("candidate_binary", "failed", err.Error())
+		t.Errorf("candidate binary: %v", err)
+	} else if hash != "" {
+		r.ev.Asset = &CandidateAsset{Kind: "binary", BinarySHA256: hash}
+	}
 	t.Cleanup(func() {
+		if r.ev.Asset != nil {
+			_, hash, err := suppliedCandidateBinary()
+			if err != nil || hash != r.ev.Asset.BinarySHA256 {
+				r.AddCheck("candidate_binary", "failed", "candidate executable changed during the run")
+				t.Errorf("candidate executable changed during the run: %v", err)
+			}
+		}
 		r.finish()
 		evDir := EvidenceDir()
 		if evDir == "" {

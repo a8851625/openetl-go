@@ -1,0 +1,50 @@
+{
+  "format": "openetl-it9-user-change-evidence/v1",
+  "resource_document": {
+    "note": "Only IT-9 additions were committed; original user v2/history corrections remain in the working tree",
+    "original_copy_sha256": "83cff59b6348d30c2dde47ea95104c4ba1674d0cb976612aadf56b575d6e83cd",
+    "original_sha256": "83cff59b6348d30c2dde47ea95104c4ba1674d0cb976612aadf56b575d6e83cd",
+    "remaining_user_diff_sha256": "10fd1600d2569d1d3577277bea667988c9790fd6fc125e6339d16d37ff6fd7de",
+    "user_added_deleted_lines_unchanged": true
+  },
+  "result": "passed",
+  "source_commit": "8dfbf8438dafd8568a215464fd8c96acb5618b2e",
+  "unrelated_files": [
+    {
+      "current_sha256": "dd84dbe320fe2adbc5404444573d2a2bd71b3680d5059246eddf389b25394e87",
+      "initial_sha256": "dd84dbe320fe2adbc5404444573d2a2bd71b3680d5059246eddf389b25394e87",
+      "path": "CHANGELOG.md",
+      "result": "passed"
+    },
+    {
+      "current_sha256": "031e4aa27f79c9426d40375e4325ab1d9fe2f6e74479bd095c4dc38996afcc5e",
+      "initial_sha256": "031e4aa27f79c9426d40375e4325ab1d9fe2f6e74479bd095c4dc38996afcc5e",
+      "path": "CHANGELOG.zh.md",
+      "result": "passed"
+    },
+    {
+      "current_sha256": "eb30564c58a8e102e21ab11826a5cd757047f79fea0963124849a99d32f6548e",
+      "initial_sha256": "eb30564c58a8e102e21ab11826a5cd757047f79fea0963124849a99d32f6548e",
+      "path": "docs/ga-assessment-2026-09-16.md",
+      "result": "passed"
+    },
+    {
+      "current_sha256": "70a362f3c5c4a5bd9997f6cb8dd896dbfcb2148989bea2fb552d142275c8dc17",
+      "initial_sha256": "70a362f3c5c4a5bd9997f6cb8dd896dbfcb2148989bea2fb552d142275c8dc17",
+      "path": "docs/Outcome-Roadmap-2026.md",
+      "result": "passed"
+    },
+    {
+      "current_sha256": "22f04e29ed11884ef6c4d9c47bc6fc198d796a9e9bdbbab85301148be90ad837",
+      "initial_sha256": "22f04e29ed11884ef6c4d9c47bc6fc198d796a9e9bdbbab85301148be90ad837",
+      "path": "docs/bench-gate-decision.md",
+      "result": "passed"
+    },
+    {
+      "current_sha256": "2ec24ce8bda1c0b44a28db58fd4fe8056a422fcf980d35b9573e150b8a20e8c6",
+      "initial_sha256": "2ec24ce8bda1c0b44a28db58fd4fe8056a422fcf980d35b9573e150b8a20e8c6",
+      "path": "dsh-goal-fix-report.md",
+      "result": "passed"
+    }
+  ]
+}

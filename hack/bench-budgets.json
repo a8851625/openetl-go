@@ -1,0 +1,77 @@
+{
+  "calibrations": [
+    {
+      "architecture": "amd64",
+      "report_path": "docs/iterations/IT-9-resource-metrics/evidence/calibration-v3-amd64.json",
+      "report_sha256": "c9e3fcda1acd6692834054ddc657e8ccf1d6818abe72f3ec2b73a2f4adff1a67",
+      "schema_version": 3,
+      "scope": "packaging-startup-restore",
+      "source_commit": "653ce1712b2898f19ad130ca140abd3333179aa1",
+      "source_dirty": false,
+      "source_sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f"
+    },
+    {
+      "architecture": "arm64",
+      "report_path": "docs/iterations/IT-9-resource-metrics/evidence/baseline-v3-arm64.json",
+      "report_sha256": "424701c8e30d9ef6fffd0e0f4aa6d08c3de6dc45b2895c8ebd103bbf3a83627e",
+      "schema_version": 3,
+      "scope": "packaging-startup-restore",
+      "source_commit": "d2d7c1d40dd8e124b97076ab306077426866d8e1",
+      "source_dirty": false,
+      "source_sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f"
+    }
+  ],
+  "format": "openetl-resource-budgets/v1",
+  "rationale": "Initial size canary: clean native v3 baseline + 25% headroom rounded up to MiB. Only default binary and normalized image layer bytes enforce; startup/RSS retain historical warning checks. Other variants remain fully measured without size enforcement.",
+  "rules": [
+    {
+      "architecture": "amd64",
+      "baseline_bytes": 67285176,
+      "id": "default-amd64-binary",
+      "max_bytes": 84934656,
+      "method": "file-bytes/v1",
+      "metric": "binary_bytes",
+      "mode": "enforce",
+      "os": "linux",
+      "unit": "bytes",
+      "variant": "default"
+    },
+    {
+      "architecture": "amd64",
+      "baseline_bytes": 147265024,
+      "id": "default-amd64-image",
+      "max_bytes": 184549376,
+      "method": "uncompressed-layer-bytes/v1",
+      "metric": "image_uncompressed_layer_bytes",
+      "mode": "enforce",
+      "os": "linux",
+      "unit": "bytes",
+      "variant": "default"
+    },
+    {
+      "architecture": "arm64",
+      "baseline_bytes": 63963320,
+      "id": "default-arm64-binary",
+      "max_bytes": 80740352,
+      "method": "file-bytes/v1",
+      "metric": "binary_bytes",
+      "mode": "enforce",
+      "os": "linux",
+      "unit": "bytes",
+      "variant": "default"
+    },
+    {
+      "architecture": "arm64",
+      "baseline_bytes": 141062656,
+      "id": "default-arm64-image",
+      "max_bytes": 177209344,
+      "method": "uncompressed-layer-bytes/v1",
+      "metric": "image_uncompressed_layer_bytes",
+      "mode": "enforce",
+      "os": "linux",
+      "unit": "bytes",
+      "variant": "default"
+    }
+  ],
+  "version": "2026-11-27.1"
+}

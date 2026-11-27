@@ -40,11 +40,11 @@ const (
 
 // HealthThresholds controls degraded/unhealthy transitions for running pipelines.
 type HealthThresholds struct {
-	StaleCheckpointSec int64
-	HighCDCLagMs       int64
-	WorkerStaleSec     int64
+	StaleCheckpointSec int64 `json:"checkpoint_stale_seconds"`
+	HighCDCLagMs       int64 `json:"cdc_lag_ms"`
+	WorkerStaleSec     int64 `json:"worker_stale_seconds"`
 	// SinkStuckMs is reserved for future per-sink stall detection; 0 disables.
-	SinkStuckMs int64
+	SinkStuckMs int64 `json:"sink_stuck_ms"`
 }
 
 // DefaultHealthThresholds returns production-friendly defaults matching the UI.
@@ -117,6 +117,9 @@ func DerivePipelineHealth(in PipelineHealthInput, th HealthThresholds) PipelineH
 			in.CircuitBreakerState == 1 { // open
 			return PipelineDegraded
 		}
+		if in.DLQFileCount < 0 {
+			return PipelineUnknown
+		}
 		return PipelineHealthy
 	default:
 		return PipelineUnknown
@@ -165,7 +168,7 @@ func AggregateHealth(components []ComponentHealth, pipelineHealth map[string]Pip
 		switch h {
 		case PipelineFailed:
 			failed++
-		case PipelineDegraded, PipelineRestoreFailed:
+		case PipelineDegraded, PipelineRestoreFailed, PipelineUnknown:
 			degraded++
 		}
 	}

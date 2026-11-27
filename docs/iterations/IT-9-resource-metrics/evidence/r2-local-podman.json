@@ -1,0 +1,227 @@
+{
+  "cleanup": {
+    "errors": [],
+    "owned_tag": "localhost/openetl-image-probe-5a1b996bb298405b92489aa8f1eb181d:selected",
+    "passed": true,
+    "scope": "owned tag and private transport only; shared images are retained"
+  },
+  "engine_diagnostics": {
+    "architecture": "amd64",
+    "engine_reported_image_bytes": 147796977,
+    "image_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+    "os": "linux"
+  },
+  "finished_at": "2026-11-27T14:33:52Z",
+  "format": "openetl-image-engine-probe/v1",
+  "harness_sha256": "166428036b99a2f347a109277066fa0e89a64ea594464c31a782760360963f31",
+  "image_archive_path": "image.tar",
+  "input_metrics": {
+    "architecture": "amd64",
+    "archive_format": "docker-save",
+    "ignored_legacy_layer_aliases": 0,
+    "image_archive_bytes": 48193024,
+    "image_archive_sha256": "00d60ed0344d1f0ae95a036128a45d45a7d1f59c4d8b5ef273f95a25869202d6",
+    "image_config_sha256": "5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+    "image_uncompressed_layer_bytes": 147790336,
+    "layer_inventory": [
+      {
+        "blob_bytes": 3419815,
+        "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+        "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+        "encoding": "gzip",
+        "ordinal": 0,
+        "uncompressed_bytes": 7688192
+      },
+      {
+        "blob_bytes": 93,
+        "blob_sha256": "4285063c9ec6f816fb78fc3829982a5725f439c6fd32d99186546c0b53d0444e",
+        "diff_id": "sha256:973e0223d04fb6d80f8bdc197d8fade1a1428b012c20c7e836d74d786e9cea97",
+        "encoding": "gzip",
+        "ordinal": 1,
+        "uncompressed_bytes": 1536
+      },
+      {
+        "blob_bytes": 1836854,
+        "blob_sha256": "3142495fd8fd304b745c0ae22a294e6d5b24283cf98f193df9282854eae1463a",
+        "diff_id": "sha256:bec84882bde93f8d049b03ab090782f8c035e74c5b54ba40f8bea3f481406c59",
+        "encoding": "gzip",
+        "ordinal": 2,
+        "uncompressed_bytes": 5580800
+      },
+      {
+        "blob_bytes": 21454869,
+        "blob_sha256": "d5b3452189b163a8c36ce3dbcc58189757d412d0adc214dad4e1824da9dae89c",
+        "diff_id": "sha256:bab80dd850a4c60adfec446931933c9ebf16b2ae43b46053d641208be6d6c345",
+        "encoding": "gzip",
+        "ordinal": 3,
+        "uncompressed_bytes": 67246592
+      },
+      {
+        "blob_bytes": 3681,
+        "blob_sha256": "3670a622b38077a88fda84cddf0caf965aab22f9b83e8328f37d75c99077c0b5",
+        "diff_id": "sha256:433627986a85047cad18df175e5bb2af366102bebd66f2dd11f2add4e070e5d4",
+        "encoding": "gzip",
+        "ordinal": 4,
+        "uncompressed_bytes": 12800
+      },
+      {
+        "blob_bytes": 21455033,
+        "blob_sha256": "ccc44f1da33b43b565f1e4ccef39aa06e56bb5ecde3f4a7c58ae5eb5d4b242df",
+        "diff_id": "sha256:51a1d0f52e6754984e90fb78f65968573f279a81182645a15832fc28c91e42bc",
+        "encoding": "gzip",
+        "ordinal": 5,
+        "uncompressed_bytes": 67260416
+      }
+    ],
+    "method": "uncompressed-layer-bytes/v1",
+    "os": "linux",
+    "unit": "bytes"
+  },
+  "load_transport_metrics": {
+    "architecture": "amd64",
+    "archive_format": "docker-save",
+    "ignored_legacy_layer_aliases": 0,
+    "image_archive_bytes": 48189440,
+    "image_archive_sha256": "90d1f99fa6e33c9c866db7cd67921e109b0a751f4f055994c47862b284e5a52b",
+    "image_config_sha256": "5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+    "image_uncompressed_layer_bytes": 147790336,
+    "layer_inventory": [
+      {
+        "blob_bytes": 3419815,
+        "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+        "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+        "encoding": "gzip",
+        "ordinal": 0,
+        "uncompressed_bytes": 7688192
+      },
+      {
+        "blob_bytes": 93,
+        "blob_sha256": "4285063c9ec6f816fb78fc3829982a5725f439c6fd32d99186546c0b53d0444e",
+        "diff_id": "sha256:973e0223d04fb6d80f8bdc197d8fade1a1428b012c20c7e836d74d786e9cea97",
+        "encoding": "gzip",
+        "ordinal": 1,
+        "uncompressed_bytes": 1536
+      },
+      {
+        "blob_bytes": 1836854,
+        "blob_sha256": "3142495fd8fd304b745c0ae22a294e6d5b24283cf98f193df9282854eae1463a",
+        "diff_id": "sha256:bec84882bde93f8d049b03ab090782f8c035e74c5b54ba40f8bea3f481406c59",
+        "encoding": "gzip",
+        "ordinal": 2,
+        "uncompressed_bytes": 5580800
+      },
+      {
+        "blob_bytes": 21454869,
+        "blob_sha256": "d5b3452189b163a8c36ce3dbcc58189757d412d0adc214dad4e1824da9dae89c",
+        "diff_id": "sha256:bab80dd850a4c60adfec446931933c9ebf16b2ae43b46053d641208be6d6c345",
+        "encoding": "gzip",
+        "ordinal": 3,
+        "uncompressed_bytes": 67246592
+      },
+      {
+        "blob_bytes": 3681,
+        "blob_sha256": "3670a622b38077a88fda84cddf0caf965aab22f9b83e8328f37d75c99077c0b5",
+        "diff_id": "sha256:433627986a85047cad18df175e5bb2af366102bebd66f2dd11f2add4e070e5d4",
+        "encoding": "gzip",
+        "ordinal": 4,
+        "uncompressed_bytes": 12800
+      },
+      {
+        "blob_bytes": 21455033,
+        "blob_sha256": "ccc44f1da33b43b565f1e4ccef39aa06e56bb5ecde3f4a7c58ae5eb5d4b242df",
+        "diff_id": "sha256:51a1d0f52e6754984e90fb78f65968573f279a81182645a15832fc28c91e42bc",
+        "encoding": "gzip",
+        "ordinal": 5,
+        "uncompressed_bytes": 67260416
+      }
+    ],
+    "method": "uncompressed-layer-bytes/v1",
+    "os": "linux",
+    "unit": "bytes"
+  },
+  "metrics": {
+    "architecture": "amd64",
+    "archive_format": "docker-save",
+    "ignored_legacy_layer_aliases": 6,
+    "image_archive_bytes": 147816448,
+    "image_archive_sha256": "e49bd13f48fed09198e9df6e56505ccab7ddf0ed9d3bdedcd0f4532e27325481",
+    "image_config_sha256": "5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+    "image_uncompressed_layer_bytes": 147790336,
+    "layer_inventory": [
+      {
+        "blob_bytes": 7688192,
+        "blob_sha256": "0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+        "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+        "encoding": "raw",
+        "ordinal": 0,
+        "uncompressed_bytes": 7688192
+      },
+      {
+        "blob_bytes": 1536,
+        "blob_sha256": "973e0223d04fb6d80f8bdc197d8fade1a1428b012c20c7e836d74d786e9cea97",
+        "diff_id": "sha256:973e0223d04fb6d80f8bdc197d8fade1a1428b012c20c7e836d74d786e9cea97",
+        "encoding": "raw",
+        "ordinal": 1,
+        "uncompressed_bytes": 1536
+      },
+      {
+        "blob_bytes": 5580800,
+        "blob_sha256": "bec84882bde93f8d049b03ab090782f8c035e74c5b54ba40f8bea3f481406c59",
+        "diff_id": "sha256:bec84882bde93f8d049b03ab090782f8c035e74c5b54ba40f8bea3f481406c59",
+        "encoding": "raw",
+        "ordinal": 2,
+        "uncompressed_bytes": 5580800
+      },
+      {
+        "blob_bytes": 67246592,
+        "blob_sha256": "bab80dd850a4c60adfec446931933c9ebf16b2ae43b46053d641208be6d6c345",
+        "diff_id": "sha256:bab80dd850a4c60adfec446931933c9ebf16b2ae43b46053d641208be6d6c345",
+        "encoding": "raw",
+        "ordinal": 3,
+        "uncompressed_bytes": 67246592
+      },
+      {
+        "blob_bytes": 12800,
+        "blob_sha256": "433627986a85047cad18df175e5bb2af366102bebd66f2dd11f2add4e070e5d4",
+        "diff_id": "sha256:433627986a85047cad18df175e5bb2af366102bebd66f2dd11f2add4e070e5d4",
+        "encoding": "raw",
+        "ordinal": 4,
+        "uncompressed_bytes": 12800
+      },
+      {
+        "blob_bytes": 67260416,
+        "blob_sha256": "51a1d0f52e6754984e90fb78f65968573f279a81182645a15832fc28c91e42bc",
+        "diff_id": "sha256:51a1d0f52e6754984e90fb78f65968573f279a81182645a15832fc28c91e42bc",
+        "encoding": "raw",
+        "ordinal": 5,
+        "uncompressed_bytes": 67260416
+      }
+    ],
+    "method": "uncompressed-layer-bytes/v1",
+    "os": "linux",
+    "unit": "bytes"
+  },
+  "provider": {
+    "client": {
+      "APIVersion": "5.8.2",
+      "GitCommit": "",
+      "Os": "darwin",
+      "OsArch": "darwin/arm64",
+      "Version": "5.8.2"
+    },
+    "id": "podman",
+    "instance": "localhost.localdomain",
+    "server": {
+      "APIVersion": "5.8.4",
+      "GitCommit": "5431df23c742e5edea35bef34eed696f4db0106b",
+      "Os": "linux",
+      "OsArch": "linux/arm64",
+      "Version": "5.8.4"
+    },
+    "server_version": "5.8.4"
+  },
+  "scope": "image-only",
+  "source_commit": "1bcfd40c009bb21b89b70190045e585f23eaecb2",
+  "started_at": "2026-11-27T14:33:48Z",
+  "status": "passed"
+}

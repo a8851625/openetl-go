@@ -8,7 +8,7 @@ cd "$ROOT_DIR"
 . "$ROOT_DIR/hack/container-cli.sh"
 detect_container_cli
 
-IMAGE="openetl-go-etl:dev"
+IMAGE="${IMAGE:-openetl-go-etl:dev}"
 MYSQL_CONTAINER="etl-mysql-source"
 CH_CONTAINER="etl-clickhouse"
 APP_CONTAINER="etl-openetl-go-snapshot-cdc-clickhouse"

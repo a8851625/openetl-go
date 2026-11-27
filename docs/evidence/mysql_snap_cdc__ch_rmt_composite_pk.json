@@ -1,8 +1,8 @@
 {
   "path_id": "mysql_snap_cdc__ch_rmt_composite_pk",
-  "commit": "d82ddc50eaab03a3fbc2fda043d7b4d5422396ca",
-  "run_started_at": "2026-11-09T00:34:03Z",
-  "runner": "local",
+  "commit": "8dfbf8438dafd8568a215464fd8c96acb5618b2e",
+  "run_started_at": "2026-11-27T16:30:57Z",
+  "runner": "github-actions",
   "deps": {
     "clickhouse": "docker.io/clickhouse/clickhouse-server:24.3",
     "harness": "e2e",
@@ -31,5 +31,9 @@
     }
   ],
   "result": "passed",
-  "finished_at": "2026-11-09T00:34:07Z"
+  "finished_at": "2026-11-27T16:31:00Z",
+  "asset": {
+    "kind": "binary",
+    "binary_sha256": "d8ebad8021fa5b606a8007166cfc3a56a544cdcfc21a0271da629726efc630c5"
+  }
 }

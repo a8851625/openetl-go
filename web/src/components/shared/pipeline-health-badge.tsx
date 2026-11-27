@@ -68,6 +68,7 @@ export function PipelineHealthBadge({
   return (
     <Badge
       variant="outline"
+      data-health={health}
       className={cn('gap-1 text-[10px] font-medium px-1.5', STYLES[health], className)}
       title={healthLabel(t, health)}
     >

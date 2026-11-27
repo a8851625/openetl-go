@@ -1,0 +1,10 @@
+=== RUN   TestApplyRetentionDeletesAgedRows
+--- PASS: TestApplyRetentionDeletesAgedRows (0.17s)
+=== RUN   TestLegacyJSONLBackupIncludesRecoveryFacts
+--- PASS: TestLegacyJSONLBackupIncludesRecoveryFacts (0.18s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/etl/storage	1.374s
+=== RUN   TestDAGRecoveryCaptureUsesActualFailedNode
+--- PASS: TestDAGRecoveryCaptureUsesActualFailedNode (0.00s)
+PASS
+ok  	github.com/a8851625/openetl-go/internal/etl/orchestrator	1.024s

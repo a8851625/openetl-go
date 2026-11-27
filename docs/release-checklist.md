@@ -6,30 +6,46 @@ It binds CI evidence, resource baseline, storage matrix, and residual risks.
 ## 1. Code gates (pipeline-enforced — not manual checks)
 
 Since IT-1/T1.1 + T1.2 (roadmap RA-4) these gates run inside the reusable
-workflow `.github/workflows/_gate.yml`; the aggregated `gate-passed` job is the
-single verdict. `release.yml` and `release-beta-container.yml` both declare
-`needs: gate`, so a red **or skipped** gate job blocks GitHub Release / GHCR
-publishing. The table below documents what the pipeline runs — it must not be
-checked by hand.
+workflow `.github/workflows/_gate.yml`; its aggregated `gate-passed` job requires
+every source gate. `test.yml` also requires the exact-candidate gate in
+`delivery-passed`. `release.yml` requires both gates before publication. A beta
+retry verifies an existing certified bundle and its source tag without rebuilding.
+The table below documents the source gate — it must not be checked by hand.
 
 | Gate job | What the pipeline runs | Pass criteria |
 | --- | --- | --- |
 | lint | `go vet ./...` | exit 0 |
 | connector-evidence | `hack/check-connector-evidence.sh` (+ `-strict` on main push) | exit 0 |
 | unit-test | `go test -race -count=1 ./internal/etl/... ./internal/logic/...` | exit 0 |
+| frontend-test | `npm test`, typecheck, lint and frontend build | exit 0 |
 | production-gate | telemetry/alert unit tests, release asset scan, production profile / runtime / SQLite backup smokes | exit 0 |
 | storage-mysql | `hack/e2e-storage-mysql.sh` | exit 0 |
 | storage-postgres | `hack/e2e-storage-postgres.sh` | exit 0 |
 | integration-test | `go test -race -tags=integration ./internal/etl/...` (MySQL + ClickHouse services) | exit 0 |
+| connector-e2e | tagged connector path evidence on the current source | exit 0; required evidence is nonempty and passed |
+| bench-baseline | Four Dockerfile variants; default native startup/RSS/restore; v3 archive/source rechecks; actual Docker/Podman image conformance; explicit `hack/bench-budgets.json` size policy and controlled-negative/rollback checks | Valid measurements and conformance required; selected default binary/image sizes enforce; startup/RSS warn |
+
+IT-9 size canary applies only to calibrated native Linux default Dockerfile
+binary and uncompressed image-layer bytes. v2 engine.Size cannot satisfy it.
+The normal measure/check commands use explicit `--budgets` and
+`--enforce-budgets`; a controlled low image limit must yield exit 1 with
+`data_valid=true`, and observation of the same report must yield exit 0.
+Unknown failures do not count as the expected negative case. See
+[the budget decision](./iterations/IT-9-resource-metrics/evidence/budget-decision.md)
+and [resource baseline](./resource-baseline.md). To stop canary enforcement,
+remove the enforce flag from normal measure/check steps while retaining v3
+validity, conformance and policy observation checks. All source and candidate
+aggregation dependencies remain mandatory.
 
 ### 1a. Aggregated verdict (skip is never pass)
 
 `gate-passed` re-asserts `toJSON(needs)` with jq: **every** gate job must have
 `result == "success"`. GitHub Actions does not fail a `needs` chain when an
 upstream job is skipped, so skipped/cancelled jobs are counted as gate failures
-here (IT-1 spec 交付约束 1). Callers: `test.yml` (push/PR), `release.yml` and
-`release-beta-container.yml` (tag push; the beta workflow pins the gate to the
-requested tag via the `ref` input, so the verdict binds to the tag commit).
+here (IT-1 spec 交付约束 1). Callers: `test.yml` (push/PR) and `release.yml`
+(tag push, followed by build → exact-candidate certification → promotion).
+`release-beta-container.yml` is a manual retry of preserved, unexpired certified
+bytes for an existing beta tag; it does not rebuild or rerun source compilation.
 
 ### 1b. Exemption allowlist (empty by default)
 
@@ -130,3 +146,8 @@ each assessment.
 | Implementer | | | |
 | Reviewer | | | |
 | Release tag | | | |
+
+
+## Candidate bytes and post-build evidence
+
+New releases use [candidate build/certify/promote](./candidate-release.md). The publisher loads/uploads the certified image and archives and retains a registry receipt; it does not rebuild after the gate. External connector evidence is bound to the running executable SHA and source commit. PR acceptance includes the exact-candidate aggregate.

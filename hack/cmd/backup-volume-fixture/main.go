@@ -94,6 +94,9 @@ func volumeRows(i int) (*storage.DLQRecord, *storage.AuditEntry, *storage.RunRec
 		RecordHash: fmt.Sprintf("historical-%d", i), PipelineVersion: i%9 + 1, DAGNode: "write-orders",
 		Record:          core.Record{Operation: core.OpUpdate, Data: map[string]any{"id": json.Number(key), "sequence": i, "payload": strings.Repeat("v", 256), "literal": "中'\\<>&"}, Metadata: core.Metadata{Table: "orders", Key: key, PrimaryKeyColumns: []string{"id"}}},
 		IdentityContext: core.DLQIdentityContext{RawPayload: `{"id":` + key + `}`, PayloadEncoding: core.DLQPayloadEncodingSourceBytes, PrimaryKeyColumns: []string{"id"}, SourceTable: "orders", TargetTable: "ods_orders", ReplayProvenance: core.DLQReplayProvenanceNormalFlow, ReplayState: core.DLQReplayStateSinkAcked, ReplayAttempt: i % 3, SinkAcknowledgedAt: &finish},
+		// Raw insertion deliberately models legacy rows whose new recovery
+		// columns are SQL NULL. Keep that distinction in the exported backup.
+		BackupRecoveryContextNull: true, BackupRecoveryTrackingErrorNull: true,
 	}
 	audit := &storage.AuditEntry{ID: int64(i * 5), Action: fmt.Sprintf("operation-%d", i), Method: "POST", Path: fmt.Sprintf("/api/v2/fixture/%d", i), Target: job, Remote: "127.0.0.1", CreatedAt: stamp}
 	run := &storage.RunRecord{ID: int64(i * 7), JobName: job, Status: "failed", StartedAt: stamp, FinishedAt: &finish, DurationMs: int64(i % 113), RecordsRead: int64(i), RecordsWritten: int64(i / 2), RecordsFailed: int64(i % 31), RecordsDLQ: int64(i % 17)}

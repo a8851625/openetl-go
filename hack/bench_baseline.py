@@ -8,12 +8,15 @@ cover the native container architecture and this scope, not all release paths.
 
 import argparse
 import base64
+import gzip
 import hashlib
+import io
 import json
 import math
 import os
 from pathlib import Path
 import platform
+import posixpath
 import re
 import secrets
 import shutil
@@ -22,11 +25,13 @@ import ssl
 import statistics
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
 import urllib.request
 import uuid
+import zlib
 
 
 VARIANTS = {"default": "", "extism": "extism", "nolua": "nolua", "extism-nolua": "extism,nolua"}
@@ -35,6 +40,30 @@ BUILD_INPUTS = ["Dockerfile", ".dockerignore", "go.mod", "go.sum", "main.go",
 EXCLUDED_PARTS = {".git", "node_modules", "data", "logs", "log", ".pi", ".pi-subagents",
                   ".bench-out", "screenshots", "__pycache__"}
 MIB = 1024 * 1024
+IMAGE_METHOD = "uncompressed-layer-bytes/v1"
+BINARY_METHOD = "file-bytes/v1"
+BUDGET_FORMAT = "openetl-resource-budgets/v1"
+BUDGET_METRICS = {"binary_bytes": BINARY_METHOD, "image_uncompressed_layer_bytes": IMAGE_METHOD}
+READ_CHUNK = MIB
+MAX_METADATA_BYTES = 8 * MIB
+MAX_ARCHIVE_BYTES = 8 * 1024 * MIB
+MAX_LAYER_BYTES = 4 * 1024 * MIB
+MAX_IMAGE_BYTES = 8 * 1024 * MIB
+MAX_MEMBERS = 100000
+MAX_LAYERS = 4096
+INDEX_TYPES = {"application/vnd.oci.image.index.v1+json",
+               "application/vnd.docker.distribution.manifest.list.v2+json"}
+MANIFEST_TYPES = {"application/vnd.oci.image.manifest.v1+json",
+                  "application/vnd.docker.distribution.manifest.v2+json"}
+CONFIG_TYPES = {"application/vnd.oci.image.config.v1+json",
+                "application/vnd.docker.container.image.v1+json"}
+RAW_LAYER_TYPES = {"application/vnd.oci.image.layer.v1.tar",
+                   "application/vnd.oci.image.layer.nondistributable.v1.tar",
+                   "application/vnd.docker.image.rootfs.diff.tar"}
+GZIP_LAYER_TYPES = {"application/vnd.oci.image.layer.v1.tar+gzip",
+                    "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip",
+                    "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                    "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip"}
 
 
 class MeasurementError(RuntimeError):
@@ -60,10 +89,531 @@ def write_json(path, value):
     temporary.replace(path)
 
 
+def new_output_directory(path):
+    require(not path.is_symlink() and (not path.exists() or path.is_dir() and not any(path.iterdir())),
+            "output directory must be new or empty and not a symlink")
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
 def positive(value, label):
     require(type(value) in (int, float) and math.isfinite(value) and value > 0,
             f"missing, non-finite or non-positive measurement: {label}")
     return value
+
+
+def byte_count(value, label, *, allow_zero=False):
+    require(type(value) is int and value >= (0 if allow_zero else 1),
+            "missing or invalid byte count: " + label)
+    return value
+
+
+def normalize_sha256(value):
+    require(isinstance(value, str), "SHA256 digest must be text")
+    value = value.strip().lower()
+    if value.startswith("sha256:"):
+        value = value[7:]
+    require(re.fullmatch(r"[0-9a-f]{64}", value) is not None, "invalid SHA256 digest")
+    return value
+
+
+def _hash_file(source):
+    h, size = hashlib.sha256(), 0
+    while body := source.read(READ_CHUNK):
+        size += len(body)
+        require(size <= MAX_ARCHIVE_BYTES, "image archive exceeds measurement limit")
+        h.update(body)
+    return h.hexdigest(), size
+
+
+def _member_name(name):
+    require(isinstance(name, str) and "\\" not in name and "\x00" not in name
+            and not name.startswith("/") and ".." not in name.split("/"),
+            "unsafe image archive path")
+    name = posixpath.normpath(name)
+    require(name != ".." and not name.startswith("../"), "unsafe image archive path")
+    return name
+
+
+class _BoundedArchiveFile:
+    """Bound metadata reads before tarfile processes PAX/long-name headers."""
+    def __init__(self, source):
+        self.source = source
+
+    def read(self, size=-1):
+        require(0 <= size <= MAX_METADATA_BYTES, "image archive metadata exceeds measurement limit")
+        return self.source.read(size)
+
+    def seek(self, *args):
+        return self.source.seek(*args)
+
+    def tell(self):
+        return self.source.tell()
+
+    def seekable(self):
+        return True
+
+    def readable(self):
+        return True
+
+
+class _HashingBlob:
+    def __init__(self, source):
+        self.source, self.h, self.size = source, hashlib.sha256(), 0
+
+    def read(self, size=-1):
+        require(0 <= size <= MAX_METADATA_BYTES, "unbounded layer read")
+        body = self.source.read(size)
+        self.size += len(body)
+        require(self.size <= MAX_LAYER_BYTES, "encoded image layer exceeds measurement limit")
+        self.h.update(body)
+        return body
+
+
+def _unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        require(key not in value, "duplicate field in image metadata")
+        value[key] = item
+    return value
+
+
+def _metadata_json(body):
+    def invalid_constant(_):
+        raise MeasurementError("non-finite value in image metadata")
+    try:
+        return json.loads(body.decode("utf-8"), object_pairs_hook=_unique_object,
+                          parse_constant=invalid_constant)
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise MeasurementError("invalid image metadata JSON") from exc
+
+
+def _tar_header(body):
+    if len(body) != 512:
+        return False
+    if body == bytes(512):
+        return True
+    try:
+        tarfile.TarInfo.frombuf(body, "utf-8", "surrogateescape")
+        return True
+    except tarfile.HeaderError:
+        return False
+
+
+def measure_image_archive(path, expected_config=None, expected_architecture=None):
+    """Measure one selected image, without extraction or using inspect.Size."""
+    path = Path(path)
+    require(not path.is_symlink() and path.is_file(), "image archive must be a regular file")
+    expected = normalize_sha256(expected_config) if expected_config is not None else None
+    require(expected is not None or expected_architecture is not None,
+            "image selection needs an expected configuration digest or architecture")
+    try:
+        with path.open("rb") as source:
+            before = os.fstat(source.fileno())
+            require(before.st_size <= MAX_ARCHIVE_BYTES, "image archive exceeds measurement limit")
+            archive_sha, archive_size = _hash_file(source)
+            source.seek(0)
+            # Engine save produces a raw tar container. Layer encodings are separate.
+            with tarfile.open(fileobj=_BoundedArchiveFile(source), mode="r:") as archive:
+                members, aliases, seen_names = {}, [], set()
+                for count, member in enumerate(archive):
+                    require(count < MAX_MEMBERS, "too many image archive members")
+                    name = _member_name(member.name)
+                    if member.isdir():
+                        continue
+                    require(name != "." and name not in seen_names, "duplicate or invalid image archive member")
+                    seen_names.add(name)
+                    if member.issym():
+                        # Podman Docker-save emits unused legacy layer aliases.
+                        # They are metadata only: never follow them, and reject
+                        # manifest references to them by excluding from members.
+                        require(re.fullmatch(r"[0-9a-f]{64}/layer\.tar", name) is not None
+                                and re.fullmatch(r"\.\./[0-9a-f]{64}\.tar", member.linkname) is not None
+                                and member.size == 0, "image archive links and special files are unsupported")
+                        aliases.append(member.linkname[3:])
+                        continue
+                    require(member.isfile(), "image archive links and special files are unsupported")
+                    require(0 <= member.size <= MAX_LAYER_BYTES, "image archive member exceeds measurement limit")
+                    members[name] = member
+                require(all(target in members for target in aliases), "legacy image alias target is not a regular archive member")
+
+                def blob(name, maximum=MAX_METADATA_BYTES):
+                    name = _member_name(name)
+                    require(name in members, "image archive is missing a required blob")
+                    member = members[name]
+                    require(member.size <= maximum, "image metadata exceeds measurement limit")
+                    with archive.extractfile(member) as item:
+                        body = item.read(member.size)
+                    require(len(body) == member.size, "truncated image metadata")
+                    claimed = None
+                    if re.fullmatch(r"blobs/sha256/[0-9a-f]{64}", name):
+                        claimed = name.rsplit("/", 1)[1]
+                    elif re.fullmatch(r"[0-9a-f]{64}\.json", name):
+                        claimed = name[:-5]
+                    require(claimed is None or digest(body) == claimed, "image metadata digest mismatch")
+                    return body
+
+                def descriptor(item):
+                    require(isinstance(item, dict), "invalid image descriptor")
+                    sha = normalize_sha256(item.get("digest"))
+                    require(item["digest"] == "sha256:" + sha, "unsupported image digest algorithm")
+                    name = "blobs/sha256/" + sha
+                    require(name in members, "image archive is missing a descriptor blob")
+                    require(type(item.get("size")) is int and item["size"] == members[name].size,
+                            "image descriptor size mismatch")
+                    return name, sha
+
+                choices = []
+
+                def add_choice(config_body, layers, archive_format):
+                    sha = digest(config_body)
+                    if expected is not None and sha != expected:
+                        return
+                    config = _metadata_json(config_body)
+                    require(isinstance(config, dict), "image configuration must be an object")
+                    architecture = config.get("architecture")
+                    require(isinstance(architecture, str) and architecture
+                            and isinstance(config.get("os"), str) and config["os"],
+                            "image configuration lacks platform")
+                    if expected_architecture is not None and architecture != expected_architecture:
+                        return
+                    rootfs = config.get("rootfs")
+                    require(isinstance(rootfs, dict) and rootfs.get("type") == "layers"
+                            and isinstance(rootfs.get("diff_ids"), list), "invalid image rootfs metadata")
+                    diff_ids = rootfs["diff_ids"]
+                    require(isinstance(layers, list) and len(layers) == len(diff_ids)
+                            and len(layers) <= MAX_LAYERS, "image layer/rootfs count mismatch")
+                    require(all(isinstance(d, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", d)
+                                for d in diff_ids), "invalid image diff ID")
+                    choices.append((sha, config["os"], architecture, diff_ids, layers, archive_format))
+
+                if "manifest.json" in members:
+                    manifest = _metadata_json(blob("manifest.json"))
+                    require(isinstance(manifest, list) and 0 < len(manifest) <= MAX_LAYERS,
+                            "invalid Docker save manifest")
+                    for item in manifest:
+                        require(isinstance(item, dict) and isinstance(item.get("Config"), str)
+                                and isinstance(item.get("Layers"), list), "invalid Docker image entry")
+                        layers = [{"path": _member_name(name), "media_type": None, "digest": None}
+                                  for name in item["Layers"]]
+                        add_choice(blob(item["Config"]), layers, "docker-save")
+                else:
+                    layout = _metadata_json(blob("oci-layout"))
+                    require(isinstance(layout, dict) and layout.get("imageLayoutVersion") == "1.0.0",
+                            "unsupported OCI layout")
+                    visited = set()
+
+                    def walk(index, depth=0):
+                        require(depth <= 8 and isinstance(index, dict)
+                                and index.get("schemaVersion") == 2
+                                and isinstance(index.get("manifests"), list)
+                                and len(index["manifests"]) <= MAX_LAYERS, "invalid OCI image index")
+                        for entry in index["manifests"]:
+                            require(isinstance(entry, dict), "invalid OCI descriptor")
+                            p = entry.get("platform")
+                            if expected_architecture is not None and isinstance(p, dict) \
+                                    and p.get("architecture") not in (None, expected_architecture):
+                                continue
+                            name, sha = descriptor(entry)
+                            if sha in visited:
+                                continue
+                            visited.add(sha)
+                            media = entry.get("mediaType")
+                            if media in INDEX_TYPES:
+                                walk(_metadata_json(blob(name)), depth + 1)
+                            else:
+                                require(media in MANIFEST_TYPES, "unsupported OCI manifest media type")
+                                image = _metadata_json(blob(name))
+                                require(isinstance(image, dict) and image.get("schemaVersion") == 2
+                                        and isinstance(image.get("config"), dict)
+                                        and isinstance(image.get("layers"), list), "invalid OCI image manifest")
+                                config_entry = image["config"]
+                                if expected is not None and config_entry.get("digest") != "sha256:" + expected:
+                                    continue
+                                require(config_entry.get("mediaType") in CONFIG_TYPES,
+                                        "unsupported OCI configuration media type")
+                                config_name, _ = descriptor(config_entry)
+                                layers = []
+                                for layer in image["layers"]:
+                                    layer_name, layer_sha = descriptor(layer)
+                                    layers.append({"path": layer_name, "media_type": layer.get("mediaType"),
+                                                   "digest": layer_sha})
+                                add_choice(blob(config_name), layers, "oci")
+
+                    walk(_metadata_json(blob("index.json")))
+
+                require(len(choices) == 1, "image selection is missing or ambiguous")
+                config_sha, image_os, architecture, diff_ids, layers, archive_format = choices[0]
+                inventory, total = [], 0
+                for ordinal, (layer, diff_id) in enumerate(zip(layers, diff_ids)):
+                    name = layer["path"]
+                    require(name in members, "image archive is missing a layer")
+                    member = members[name]
+                    with archive.extractfile(member) as raw:
+                        prefix = raw.read(512)
+                        raw.seek(0)
+                        media = layer["media_type"]
+                        if media is None:
+                            if _tar_header(prefix):
+                                encoding = "raw"
+                            else:
+                                require(prefix.startswith(b"\x1f\x8b"), "unsupported image layer encoding")
+                                encoding = "gzip"
+                        else:
+                            require(media in RAW_LAYER_TYPES | GZIP_LAYER_TYPES,
+                                    "unsupported image layer media type/encoding")
+                            encoding = "gzip" if media in GZIP_LAYER_TYPES else "raw"
+                        encoded = _HashingBlob(raw)
+                        payload = gzip.GzipFile(fileobj=encoded, mode="rb") if encoding == "gzip" else encoded
+                        h, size, first = hashlib.sha256(), 0, b""
+                        try:
+                            while body := payload.read(READ_CHUNK):
+                                size += len(body)
+                                require(size <= MAX_LAYER_BYTES and total + size <= MAX_IMAGE_BYTES,
+                                        "expanded image layers exceed measurement limit")
+                                h.update(body)
+                                if len(first) < 512:
+                                    first += body[:512 - len(first)]
+                        finally:
+                            if encoding == "gzip":
+                                payload.close()
+                        while encoded.read(READ_CHUNK):
+                            pass
+                        require(encoded.size == member.size, "truncated encoded image layer")
+                        require(_tar_header(first) and size >= 1024 and size % 512 == 0,
+                                "image layer is not a complete tar stream")
+                        require("sha256:" + h.hexdigest() == diff_id, "uncompressed image layer diff ID mismatch")
+                        claimed = layer["digest"]
+                        if re.fullmatch(r"blobs/sha256/[0-9a-f]{64}", name):
+                            claimed = name.rsplit("/", 1)[1]
+                        require(claimed is None or encoded.h.hexdigest() == claimed, "encoded image layer digest mismatch")
+                        total += size
+                        inventory.append({"ordinal": ordinal, "blob_sha256": encoded.h.hexdigest(),
+                                          "blob_bytes": encoded.size, "diff_id": diff_id,
+                                          "encoding": encoding, "uncompressed_bytes": size})
+            source.seek(0)
+            after_sha, after_size = _hash_file(source)
+            after = os.fstat(source.fileno())
+            require(archive_sha == after_sha and archive_size == after_size
+                    and (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                    == (after.st_size, after.st_mtime_ns, after.st_ctime_ns),
+                    "image archive changed during measurement")
+        return {"method": IMAGE_METHOD, "unit": "bytes", "archive_format": archive_format,
+                "image_config_sha256": config_sha, "image_archive_sha256": archive_sha,
+                "image_archive_bytes": archive_size, "image_uncompressed_layer_bytes": total,
+                "os": image_os, "architecture": architecture, "layer_inventory": inventory,
+                "ignored_legacy_layer_aliases": len(aliases)}
+    except (OSError, tarfile.TarError, EOFError, ValueError, KeyError, TypeError, zlib.error) as exc:
+        raise MeasurementError("invalid or unreadable image archive") from exc
+
+
+def validate_image_metrics(metrics):
+    try:
+        require(isinstance(metrics, dict) and metrics["method"] == IMAGE_METHOD and metrics["unit"] == "bytes",
+                "image metric method or units differ")
+        require(metrics["archive_format"] in ("docker-save", "oci"), "unsupported image archive format")
+        for key in ("image_config_sha256", "image_archive_sha256"):
+            require(re.fullmatch(r"[0-9a-f]{64}", metrics[key]) is not None, "missing image content digest")
+        byte_count(metrics["image_archive_bytes"], "image archive")
+        byte_count(metrics.get("ignored_legacy_layer_aliases", 0), "ignored legacy layer aliases", allow_zero=True)
+        byte_count(metrics["image_uncompressed_layer_bytes"], "expanded image", allow_zero=True)
+        require(isinstance(metrics["layer_inventory"], list) and len(metrics["layer_inventory"]) <= MAX_LAYERS,
+                "missing image layer inventory")
+        total = 0
+        for ordinal, layer in enumerate(metrics["layer_inventory"]):
+            require(type(layer["ordinal"]) is int and layer["ordinal"] == ordinal, "image layer order differs")
+            require(re.fullmatch(r"[0-9a-f]{64}", layer["blob_sha256"]) is not None
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}", layer["diff_id"]) is not None,
+                    "missing image layer digests")
+            require(layer["encoding"] in ("raw", "gzip"), "unsupported image layer encoding")
+            byte_count(layer["blob_bytes"], "encoded image layer")
+            total += byte_count(layer["uncompressed_bytes"], "expanded image layer")
+        require(total == metrics["image_uncompressed_layer_bytes"] and total <= MAX_IMAGE_BYTES,
+                "image layer size total differs")
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise MeasurementError("incomplete image metric evidence") from exc
+
+
+def sanitize_image_inspect(output):
+    """Inspect logs must not persist Config.Env or other unneeded configuration."""
+    try:
+        records = json.loads(output)
+        require(isinstance(records, list) and len(records) == 1 and isinstance(records[0], dict),
+                "invalid image inspect response")
+        item = records[0]
+        selected = {key: item[key] for key in ("Id", "Digest", "RepoDigests", "Size", "Os", "Architecture")
+                    if key in item}
+        selected["Config"] = {"Healthcheck": item.get("Config", {}).get("Healthcheck")}
+        if "Healthcheck" in item:
+            selected["Healthcheck"] = item["Healthcheck"]
+        if "RootFS" in item:
+            selected["RootFS"] = {key: item["RootFS"][key] for key in ("Type", "Layers") if key in item["RootFS"]}
+        return json.dumps([selected], sort_keys=True) + "\n"
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise MeasurementError("invalid image inspect response; output redacted") from exc
+
+
+def sanitize_engine_info(output):
+    try:
+        info = json.loads(output)
+        require(isinstance(info, dict), "invalid engine info; output redacted")
+        if "host" in info:
+            selected = {"host": {key: info["host"][key] for key in
+                                  ("os", "arch", "cpus", "memTotal", "kernel", "hostname") if key in info["host"]},
+                        "version": {key: info.get("version", {})[key] for key in
+                                    ("Version", "APIVersion", "GitCommit") if key in info.get("version", {})}}
+        else:
+            selected = {key: info[key] for key in ("OSType", "Architecture", "NCPU", "MemTotal", "KernelVersion",
+                                                  "ServerVersion", "ID") if key in info}
+        return json.dumps(selected, sort_keys=True) + "\n"
+    except (ValueError, KeyError, TypeError) as exc:
+        raise MeasurementError("invalid engine info; output redacted") from exc
+
+
+def sanitize_engine_version(output):
+    try:
+        version = json.loads(output)
+        require(isinstance(version, dict), "invalid engine version; output redacted")
+        selected = {}
+        for side in ("Client", "Server"):
+            raw = version.get(side, {})
+            selected[side] = {key: raw[key] for key in
+                              ("Version", "ApiVersion", "APIVersion", "GitCommit", "Os", "Arch", "OsArch") if key in raw}
+            if "Platform" in raw:
+                selected[side]["Platform"] = {"Name": raw["Platform"].get("Name")}
+            if "Components" in raw:
+                selected[side]["Components"] = [{key: component[key] for key in ("Name", "Version") if key in component}
+                                                 for component in raw["Components"]]
+        return json.dumps(selected, sort_keys=True) + "\n"
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise MeasurementError("invalid engine version; output redacted") from exc
+
+
+def provider_identity(info, version):
+    """Identify the server, never infer its provider from the CLI executable."""
+    server, client = version.get("Server", {}), version.get("Client", {})
+    if "host" in info:
+        provider = "podman"
+        actual_version = info.get("version", {}).get("Version")
+        instance = info["host"].get("hostname")
+        connection = "remote-api"
+        if not server:
+            # Native Linux Podman is daemonless: version has Client only.
+            # Its info.version is the actual local engine, and must agree
+            # with a Linux CLI version, rather than an arbitrary executable.
+            require(client.get("Version") == actual_version
+                    and (client.get("Os") == "linux" or client.get("OsArch", "").startswith("linux/")),
+                    "daemonless Podman engine/client versions or platform disagree")
+            server = {**info["version"], "Os": info["host"].get("os"), "Arch": info["host"].get("arch")}
+            connection = "daemonless-local"
+        require(server.get("Version") == actual_version, "Podman server versions disagree")
+    else:
+        components = server.get("Components", [])
+        require(any(c.get("Name") == "Engine" for c in components)
+                and "podman" not in json.dumps(server).lower(), "unrecognized or aliased container engine")
+        provider, actual_version, instance = "docker", info.get("ServerVersion"), info.get("ID")
+        connection = "engine-api"
+        require(server.get("Version") == actual_version, "Docker server versions disagree")
+    require(isinstance(actual_version, str) and actual_version
+            and isinstance(client.get("Version"), str) and client["Version"], "missing actual engine versions")
+    return {"id": provider, "server_version": actual_version, "server": server,
+            "client": client, "instance": instance, "connection": connection}
+
+
+def canonical_image_content(metrics):
+    validate_image_metrics(metrics)
+    return {key: metrics[key] for key in ("method", "unit", "image_config_sha256", "os", "architecture",
+                                          "image_uncompressed_layer_bytes")} | {
+        "layers": [{key: layer[key] for key in ("ordinal", "diff_id", "uncompressed_bytes")}
+                   for layer in metrics["layer_inventory"]]}
+
+
+def prepare_owned_image_archive(source_path, target_path, metrics, tag):
+    """Copy only the selected immutable image, replacing transport tags only.
+
+    Loading the original archive could overwrite unrelated repository tags.
+    A private Docker-save transport retains exact config and layer bytes and
+    assigns one unique probe tag; it is measured again before engine load.
+    """
+    with Path(source_path).open("rb") as source:
+        with tarfile.open(fileobj=_BoundedArchiveFile(source), mode="r:") as archive:
+            members = {_member_name(member.name): member for member in archive if member.isfile()}
+            config_sha = metrics["image_config_sha256"]
+            if metrics["archive_format"] == "docker-save":
+                with archive.extractfile(members["manifest.json"]) as item:
+                    manifest = _metadata_json(item.read(MAX_METADATA_BYTES))
+                matches = []
+                for image in manifest:
+                    with archive.extractfile(members[_member_name(image["Config"])]) as item:
+                        if digest(item.read(MAX_METADATA_BYTES)) == config_sha:
+                            matches.append(image)
+                require(len(matches) == 1, "probe image selection is ambiguous")
+                config_name, layer_names = matches[0]["Config"], matches[0]["Layers"]
+            else:
+                config_name = "blobs/sha256/" + config_sha
+                layer_names = ["blobs/sha256/" + layer["blob_sha256"] for layer in metrics["layer_inventory"]]
+            config_target = config_sha + ".json"
+            layer_targets = ["blobs/sha256/" + layer["blob_sha256"] for layer in metrics["layer_inventory"]]
+            body = json.dumps([{"Config": config_target, "Layers": layer_targets, "RepoTags": [tag]}],
+                              separators=(",", ":")).encode()
+            with tarfile.open(target_path, mode="w", format=tarfile.USTAR_FORMAT) as output:
+                pairs = [(config_name, config_target), *zip(layer_names, layer_targets)]
+                copied = set()
+                for original, target in pairs:
+                    if target in copied:
+                        continue
+                    copied.add(target)
+                    member = members[_member_name(original)]
+                    header = tarfile.TarInfo(target)
+                    header.size, header.mode, header.mtime = member.size, 0o600, 0
+                    with archive.extractfile(member) as item:
+                        output.addfile(header, item)
+                header = tarfile.TarInfo("manifest.json")
+                header.size, header.mode, header.mtime = len(body), 0o600, 0
+                output.addfile(header, io.BytesIO(body))
+        source.seek(0)
+        require(_hash_file(source) == (metrics["image_archive_sha256"], metrics["image_archive_bytes"]),
+                "input archive changed during probe preparation")
+    copied = measure_image_archive(target_path, config_sha, metrics["architecture"])
+    require(canonical_image_content(copied) == canonical_image_content(metrics), "probe preparation changed image content")
+    return copied
+
+
+def compare_image_probes(left, right, artifact_roots=None):
+    try:
+        for ordinal, report in enumerate((left, right)):
+            require(report["format"] == "openetl-image-engine-probe/v1" and report["scope"] == "image-only"
+                    and report["status"] == "passed" and report["cleanup"]["passed"] is True
+                    and report["cleanup"]["errors"] == [], "image provider probe is not passed")
+            require(report["provider"]["id"] in ("docker", "podman")
+                    and report["provider"]["server_version"] == report["provider"]["server"]["Version"],
+                    "missing actual provider identity/version")
+            require(re.fullmatch(r"[0-9a-f]{64}", report["harness_sha256"]) is not None,
+                    "missing image probe harness fingerprint")
+            require(canonical_image_content(report["input_metrics"]) == canonical_image_content(report["metrics"]),
+                    "engine round-trip changed image content")
+            if artifact_roots is not None:
+                root = Path(artifact_roots[ordinal]).resolve()
+                relative = report["image_archive_path"]
+                require(relative == "image.tar" and not (root / relative).is_symlink(), "unsafe image probe archive path")
+                actual = measure_image_archive(root / relative, report["metrics"]["image_config_sha256"],
+                                               report["metrics"]["architecture"])
+                require(actual == report["metrics"], "probe report differs from preserved engine archive")
+        require({left["provider"]["id"], right["provider"]["id"]} == {"docker", "podman"},
+                "two actual different Docker/Podman engines are required; CLI aliases do not count")
+        require(left["input_metrics"] == right["input_metrics"], "probes did not receive the same saved image archive")
+        require(left["harness_sha256"] == right["harness_sha256"], "image probe implementations differ")
+        require(canonical_image_content(left["metrics"]) == canonical_image_content(right["metrics"]),
+                "normalized image content differs across engines")
+        return {"format": "openetl-image-conformance/v1", "scope": "image-only", "status": "passed",
+                "input_archive_sha256": left["input_metrics"]["image_archive_sha256"],
+                "harness_sha256": left["harness_sha256"], "content": canonical_image_content(left["metrics"]),
+                "providers": [{"provider": report["provider"], "image_archive_sha256": report["metrics"]["image_archive_sha256"],
+                               "image_archive_bytes": report["metrics"]["image_archive_bytes"],
+                               "engine_diagnostics": report["engine_diagnostics"]} for report in (left, right)],
+                "limitations": ["Image-only conformance; neither image is started by this probe.",
+                                "Archive bytes, encodings and engine-reported sizes are diagnostic, not equal-size criteria."]}
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise MeasurementError("incomplete image conformance evidence") from exc
 
 
 def image_identity(raw):
@@ -72,6 +622,7 @@ def image_identity(raw):
         image_id = "sha256:" + image_id
     return {"image_id": image_id, "manifest_digest": raw.get("Digest") or None,
             "repo_digests": raw.get("RepoDigests") or [], "bytes": raw["Size"],
+            "engine_reported_image_bytes": raw["Size"],
             "os": raw["Os"], "architecture": raw["Architecture"],
             "healthcheck": raw.get("Config", {}).get("Healthcheck") or raw.get("Healthcheck")}
 
@@ -102,10 +653,12 @@ def parse_proc_status(raw):
     return {"rss_bytes": values["VmRSS"], "peak_rss_bytes": values["VmHWM"]}
 
 
-def validate_result(result):
-    """Reject failed/missing data before applying warning-only budgets."""
+def validate_result(result, artifact_root=None):
+    """Check measurement validity independently of the selected budget mode."""
     try:
-        require(result["schema_version"] == 2 and result["status"] == "passed", "baseline is not passed v2")
+        version = result["schema_version"]
+        require(type(version) is int and version in (2, 3) and result["status"] == "passed",
+                "baseline is not passed v2/v3")
         require(result["scope"] == "packaging-startup-restore", "unexpected baseline scope")
         require(re.fullmatch(r"[0-9a-f]{40}", result["source"]["commit"]) is not None, "missing source commit")
         require(re.fullmatch(r"[0-9a-f]{64}", result["source"]["sha256"]) is not None, "missing source fingerprint")
@@ -113,20 +666,84 @@ def validate_result(result):
             positive(result["hardware"][key], "hardware." + key)
         require(result["hardware"]["os"] == "linux", "runtime hardware must describe Linux")
         require(result["toolchain"]["go_version"].startswith("go version go"), "missing actual Go toolchain")
+        if version == 3:
+            require(type(result["source"]["dirty"]) is bool, "missing actual dirty-source status")
+            byte_count(result["source"]["files"], "source file count")
+            byte_count(result["hardware"]["memory_bytes"], "host memory bytes")
+            require(result["hardware"]["container_engine"] in ("docker", "podman")
+                    and isinstance(result["hardware"]["runtime_version"], str)
+                    and result["hardware"]["runtime_version"], "missing actual container engine/version")
+            require(isinstance(result["toolchain"]["container_client_version"], str)
+                    and result["toolchain"]["container_client_version"]
+                    and isinstance(result["toolchain"]["python_version"], str)
+                    and result["toolchain"]["python_version"], "missing actual measurement tool versions")
+            require(result["cleanup"]["passed"] is True and result["cleanup"]["errors"] == [],
+                    "owned-resource cleanup did not complete")
+            require(type(result["parameters"]["cpus"]) is int and result["parameters"]["cpus"] == 2
+                    and byte_count(result["parameters"]["memory_bytes"], "runtime memory limit") == 1024 * MIB
+                    and type(result["parameters"]["gomaxprocs"]) is int and result["parameters"]["gomaxprocs"] == 2,
+                    "wrong measured runtime limits")
+            harness = result["harness_sha256"]
+            require(set(harness) == {"bench-baseline.sh", "bench_baseline.py", "cmd/process-measure/main.go",
+                                     "cmd/process-measure/main_test.go"}
+                    and all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) for value in harness.values()),
+                    "missing measurement harness fingerprints")
+            if artifact_root is not None:
+                source_files, _ = read_json_evidence(Path(artifact_root) / "source-files.json", "source inventory")
+                require(isinstance(source_files, list) and len(source_files) == result["source"]["files"]
+                        and json_hash(source_files) == result["source"]["sha256"], "source inventory fingerprint differs")
+                paths = []
+                for entry in source_files:
+                    path = entry["path"]
+                    require(path == _member_name(path) and path != "."
+                            and re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]) is not None,
+                            "invalid source inventory entry")
+                    byte_count(entry["bytes"], "source file bytes", allow_zero=True)
+                    require(type(entry["mode"]) is int and 0 <= entry["mode"] <= 0o777, "invalid source file mode")
+                    paths.append(path)
+                require(paths == sorted(set(paths)), "source inventory paths are not ordered and unique")
         images = result["images"]
         require(set(images) == set(VARIANTS), "incomplete build-tag matrix")
         for variant, item in images.items():
             require(re.fullmatch(r"sha256:[0-9a-f]{64}", item["image_id"]) is not None, "missing image ID")
             require(item["os"] == "linux" and item["architecture"] == result["hardware"]["architecture"],
                     "image and runtime architecture differ")
-            for key in ("bytes", "binary_bytes", "frontend_bytes", "packed_bytes"):
+            for key in (("bytes", "binary_bytes", "frontend_bytes", "packed_bytes") if version == 2
+                        else ("binary_bytes", "frontend_bytes", "packed_bytes")):
                 positive(item[key], variant + "." + key)
+                if version == 3:
+                    byte_count(item[key], variant + "." + key)
             for key in ("binary_sha256", "frontend_sha256", "packed_sha256"):
                 require(re.fullmatch(r"[0-9a-f]{64}", item[key]) is not None, "missing packaged content fingerprint")
+            if version == 3:
+                validate_image_metrics(item)
+                byte_count(item["image_uncompressed_layer_bytes"], "application image layers")
+                require(item["binary_bytes"] <= item["image_uncompressed_layer_bytes"],
+                        "packaged binary exceeds the complete expanded image layers")
+                byte_count(item["engine_reported_image_bytes"], "engine-reported image", allow_zero=True)
+                byte_count(item["bytes"], "legacy image diagnostic", allow_zero=True)
+                require(item["bytes"] == item["engine_reported_image_bytes"], "legacy image diagnostic alias differs")
+                require(item["build_tags"] == VARIANTS[variant] and item["cgo_enabled"] is False,
+                        "packaging variant differs")
+                relative = item["image_archive_path"]
+                require(isinstance(relative, str) and relative == _member_name(relative) and relative != ".",
+                        "unsafe measured archive path")
+                if artifact_root is not None:
+                    root = Path(artifact_root).resolve()
+                    path = root / relative
+                    require(not path.is_symlink() and path.resolve().is_relative_to(root),
+                            "measured image archive escapes artifact root")
+                    actual = measure_image_archive(path, item["image_config_sha256"], item["architecture"])
+                    require(all(item[key] == value for key, value in actual.items()),
+                            "reported image measurements differ from preserved archive")
         runtime = result["runtime"]
         require(runtime["image_id"] == images["default"]["image_id"], "measured runtime uses another image")
         require(runtime["uid"] == 1001 and runtime["tls_verified"] is True
                 and runtime["profile"] == "production", "wrong production runtime profile")
+        if version == 3:
+            require(runtime["image_config_sha256"] == images["default"]["image_config_sha256"]
+                    and runtime["image_binary_sha256"] == images["default"]["binary_sha256"],
+                    "runtime content identity differs from measured image")
         expected_trials = result["parameters"]["trials"]
         count = result["parameters"]["restore_pipelines"]
         require(type(expected_trials) is int and expected_trials >= 1, "missing trial count")
@@ -136,6 +753,8 @@ def validate_result(result):
         for trial in runtime["cold_trials"]:
             positive(trial["start_to_health_seconds"], "cold start")
             require(trial["health"]["status"] == "ok", "cold start never became healthy")
+            if version == 3:
+                require(trial["binary_sha256"] == runtime["image_binary_sha256"], "cold process executable differs")
             require(len(trial["idle_samples"]) >= 2, "idle measurement has insufficient samples")
             for sample in trial["idle_samples"]:
                 positive(sample["rss_bytes"], "idle RSS")
@@ -147,6 +766,8 @@ def validate_result(result):
                     and trial["checkpoint_count"] == count, "restored dataset is incomplete")
             require(trial["identity_sha256"] == runtime["fixture"]["identity_sha256"],
                     "restored API identity/checkpoint content differs")
+            if version == 3:
+                require(trial["binary_sha256"] == runtime["image_binary_sha256"], "restored process executable differs")
             resource = trial["restore_resource"]
             require(resource["method"] == "wait4.rusage.ru_maxrss" and resource["platform"] == "linux"
                     and resource["native_rss_unit"] == "KiB" and resource["exit_code"] == 0,
@@ -162,13 +783,153 @@ def validate_result(result):
     # Observation budgets, not percentage regressions against withdrawn numbers.
     measurements = {
         "default binary MiB": (images["default"]["binary_bytes"] / MIB, 80),
-        "default image MiB": (images["default"]["bytes"] / MIB, 200),
         "median start-to-health seconds": (statistics.median(t["start_to_health_seconds"] for t in runtime["cold_trials"]), 5),
         "median idle RSS MiB": (statistics.median(s["rss_bytes"] for t in runtime["cold_trials"] for s in t["idle_samples"]) / MIB, 250),
         "median restored start-to-health seconds": (statistics.median(t["start_to_health_seconds"] for t in runtime["restore_trials"]), 5),
     }
+    if version == 2:
+        # This threshold belongs to its historical engine-dependent definition.
+        measurements["default image MiB (legacy engine report)"] = (images["default"]["bytes"] / MIB, 200)
     return [f"{name}: {value:.3f} exceeds observation budget {budget}"
             for name, (value, budget) in measurements.items() if value > budget]
+
+
+def read_json_evidence(path, label):
+    with Path(path).open("rb") as source:
+        body = source.read(MAX_METADATA_BYTES + 1)
+    require(len(body) <= MAX_METADATA_BYTES, label + " exceeds metadata limit")
+    try:
+        value = _metadata_json(body)
+    except MeasurementError as exc:
+        raise MeasurementError("invalid " + label + " JSON") from exc
+    return value, digest(body)
+
+
+def read_budget_policy(path):
+    policy, policy_sha = read_json_evidence(path, "budget policy")
+    validate_budget_policy(policy)
+    return policy, policy_sha
+
+
+def validate_budget_policy(policy):
+    try:
+        require(isinstance(policy, dict) and policy["format"] == BUDGET_FORMAT, "unsupported budget policy format")
+        require(isinstance(policy["version"], str) and re.fullmatch(r"[a-zA-Z0-9.-]{1,64}", policy["version"]),
+                "invalid budget policy version")
+        require(isinstance(policy["rationale"], str) and policy["rationale"].strip(), "missing budget rationale")
+        calibrations = policy["calibrations"]
+        require(isinstance(calibrations, list) and 0 < len(calibrations) <= 16, "missing budget calibrations")
+        architectures = set()
+        for calibration in calibrations:
+            arch = calibration["architecture"]
+            require(isinstance(arch, str) and re.fullmatch(r"[a-z][a-z0-9_]{1,15}", arch)
+                    and arch not in architectures, "invalid or duplicate calibrated architecture")
+            architectures.add(arch)
+            require(type(calibration["schema_version"]) is int and calibration["schema_version"] == 3 and calibration["source_dirty"] is False
+                    and calibration["scope"] == "packaging-startup-restore", "budget calibration is not clean v3")
+            require(re.fullmatch(r"[0-9a-f]{40}", calibration["source_commit"]) is not None,
+                    "missing calibration source commit")
+            for key in ("source_sha256", "report_sha256"):
+                require(re.fullmatch(r"[0-9a-f]{64}", calibration[key]) is not None, "missing calibration fingerprint")
+        rules = policy["rules"]
+        require(isinstance(rules, list) and 0 < len(rules) <= 32, "missing budget rules")
+        ids, selectors, scoped = set(), set(), {}
+        for rule in rules:
+            require(isinstance(rule["id"], str) and re.fullmatch(r"[a-z0-9_-]{1,80}", rule["id"])
+                    and rule["id"] not in ids, "invalid or duplicate budget rule ID")
+            ids.add(rule["id"])
+            metric = rule["metric"]
+            require(metric in BUDGET_METRICS and rule["method"] == BUDGET_METRICS[metric]
+                    and rule["unit"] == "bytes", "budget metric method/unit differs")
+            require(rule["os"] == "linux" and rule["architecture"] in architectures
+                    and rule["variant"] == "default" and rule["mode"] == "enforce",
+                    "budget selector or enforcement scope differs")
+            maximum = byte_count(rule["max_bytes"], "budget max_bytes")
+            require(maximum <= MAX_IMAGE_BYTES, "budget max_bytes exceeds supported range")
+            require(byte_count(rule["baseline_bytes"], "calibrated metric bytes") <= MAX_IMAGE_BYTES,
+                    "calibrated metric exceeds supported range")
+            selector = (rule["os"], rule["architecture"], rule["variant"], metric)
+            require(selector not in selectors, "duplicate budget metric selector")
+            selectors.add(selector)
+            scoped.setdefault(rule["architecture"], set()).add(metric)
+        require(set(scoped) == architectures and all(metrics == set(BUDGET_METRICS) for metrics in scoped.values()),
+                "policy must cover both default binary and normalized image sizes for every calibrated architecture")
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise MeasurementError("incomplete or malformed budget policy") from exc
+
+
+def evaluate_size_budgets(result, policy, policy_sha256, *, enforce=False):
+    validate_budget_policy(policy)
+    evaluation = {"policy_format": policy["format"], "policy_version": policy["version"],
+                  "policy_sha256": normalize_sha256(policy_sha256), "mode": "enforce" if enforce else "observation",
+                  "status": "not_applicable", "eligible_for_enforcement": False, "metrics": [],
+                  "warnings": [], "errors": [], "unbudgeted_variants": sorted(set(VARIANTS) - {"default"})}
+    if result["schema_version"] != 3:
+        require(not enforce, "size enforcement requires schema v3; v2 is historical observation only")
+        evaluation["warnings"].append("v2 historical measurements have no applicable v3 size policy")
+        return evaluation
+    require(not enforce or result["source"]["dirty"] is False, "dirty-source measurements cannot pass size enforcement")
+    architecture = result["hardware"]["architecture"]
+    selected = [rule for rule in policy["rules"] if rule["architecture"] == architecture]
+    if not selected:
+        require(not enforce, "no applicable size policy for measured architecture")
+        evaluation["warnings"].append("No size policy applies to measured architecture " + architecture)
+        return evaluation
+    evaluation["eligible_for_enforcement"] = result["source"]["dirty"] is False
+    if not evaluation["eligible_for_enforcement"]:
+        evaluation["warnings"].append("Dirty-source size observations are ineligible for enforcement")
+    for rule in selected:
+        item = result["images"][rule["variant"]]
+        require(item["os"] == rule["os"] and item["architecture"] == rule["architecture"], "budget selector differs from image")
+        if rule["metric"] == "image_uncompressed_layer_bytes":
+            require(item["method"] == rule["method"] and item["unit"] == rule["unit"], "image budget method/unit differs")
+        value = byte_count(item[rule["metric"]], "selected size metric")
+        exceeded = value > rule["max_bytes"]
+        evaluation["metrics"].append({key: rule[key] for key in
+                                       ("id", "metric", "method", "unit", "os", "architecture", "variant", "max_bytes")} |
+                                     {"value_bytes": value, "exceeded": exceeded, "blocking": bool(enforce)})
+        if exceeded:
+            message = f"{rule['id']}: {value} bytes exceeds budget {rule['max_bytes']} bytes"
+            evaluation["errors" if enforce else "warnings"].append(message)
+    evaluation["status"] = "failed" if evaluation["errors"] else "warning" if evaluation["warnings"] else "passed"
+    return evaluation
+
+
+def budget_audit(result, warnings, policy_path=None, *, enforce=False):
+    audit = {"format": "openetl-budget-evaluation/v1", "data_valid": True,
+             "source_commit": result["source"]["commit"], "source_sha256": result["source"]["sha256"],
+             "mode": "enforce" if enforce else "observation", "status": "not_evaluated",
+             "warnings": list(warnings), "errors": [], "metrics": [], "eligible_for_enforcement": False}
+    try:
+        require(not enforce or policy_path is not None, "size enforcement requires explicit --budgets policy")
+        if policy_path is not None:
+            policy, policy_sha = read_budget_policy(policy_path)
+            audit.update(policy_format=policy["format"], policy_version=policy["version"], policy_sha256=policy_sha)
+            evaluation = evaluate_size_budgets(result, policy, policy_sha, enforce=enforce)
+            # A supplied v3 policy owns the binary threshold. The legacy
+            # hard-coded binary observation must not duplicate its warning.
+            if result["schema_version"] == 3 and evaluation["metrics"]:
+                warnings = [warning for warning in warnings if not warning.startswith("default binary MiB:")]
+            audit.update(evaluation)
+            audit["warnings"] = list(warnings) + evaluation["warnings"]
+        else:
+            audit["reason"] = "No explicit size policy supplied; measurements and historical observation checks only"
+    except (MeasurementError, OSError, ValueError) as exc:
+        audit["status"] = "failed"
+        audit["errors"] = [str(exc)]
+    return audit
+
+
+def print_budget_audit(audit):
+    for message in audit["warnings"]:
+        print("::warning::" + message)
+    for message in audit["errors"]:
+        print("::error::" + message, file=sys.stderr)
+    if "policy_sha256" in audit:
+        print(f"Size policy {audit['policy_version']} sha256:{audit['policy_sha256']}; mode={audit['mode']}; "
+              f"selected={len(audit['metrics'])}; status={audit['status']}")
+    print(f"Measurements {'valid' if audit['data_valid'] else 'invalid'}; size budgets {audit['status']}; "
+          f"observation warnings: {len(audit['warnings'])}")
 
 
 class Baseline:
@@ -188,7 +949,7 @@ class Baseline:
         self.context.mkdir()
         self.fixture = private / "fixture"
         self.fixture.mkdir()
-        self.result = {"schema_version": 2, "status": "running", "scope": "packaging-startup-restore",
+        self.result = {"schema_version": 3, "status": "running", "scope": "packaging-startup-restore",
                        "measured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                        "parameters": {"trials": args.trials, "settle_seconds": args.settle_seconds,
                                       "idle_samples": args.idle_samples, "sample_interval_seconds": 1,
@@ -201,13 +962,18 @@ class Baseline:
                            "CGO/QuickJS is not published by .goreleaser.yml and is not measured here.",
                            "Loaded control-plane peak is not sustained pipeline throughput/concurrency evidence.",
                            "ClickHouse specialty scope is pending; no specialty benchmark is run."]}
+        self.result["limitations"].extend([
+            "Image bytes is a legacy diagnostic alias of engine_reported_image_bytes, never the v3 image budget.",
+            "Uncompressed image layer bytes includes layer tar headers/whiteouts/overwritten content; not merged rootfs or process memory.",
+            "Saved archive bytes depends on transport/compression; compare the selected uncompressed layer metric."])
 
-    def run(self, args, *, timeout=120, logged=False, input_text=None, check=True):
+    def run(self, args, *, timeout=120, logged=False, input_text=None, check=True, sanitizer=None):
         self.sequence += 1
         log = self.out / f"command-{self.sequence:03d}.log"
         with (self.out / "commands.jsonl").open("a") as index:
             index.write(json.dumps({"log": log.name, "argv": [str(a) for a in args]}) + "\n")
         if logged:
+            require(sanitizer is None, "streamed command cannot require output sanitization")
             with log.open("w") as output:
                 proc = subprocess.run(args, cwd=self.root, text=True, input=input_text,
                                       stdout=output, stderr=subprocess.STDOUT, timeout=timeout)
@@ -216,7 +982,13 @@ class Baseline:
             proc = subprocess.run(args, cwd=self.root, text=True, input=input_text,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
             data = proc.stdout
-            log.write_text(data + proc.stderr)
+            if sanitizer is not None:
+                try:
+                    data = sanitizer(data)
+                except MeasurementError:
+                    log.write_text("Image inspect response invalid; raw output redacted.\n")
+                    raise
+            log.write_text(data + (proc.stderr if sanitizer is None else ""))
         require(not check or proc.returncode == 0, f"command failed ({proc.returncode}); see {log.name}")
         return data
 
@@ -228,7 +1000,7 @@ class Baseline:
             # Full inspect includes the temporary token/encryption key in Env.
             # Persist only process state, which is all these checks consume.
             return {"State": json.loads(self.cli(kind, "inspect", "--format", "{{json .State}}", name))}
-        return json.loads(self.cli(kind, "inspect", name))[0]
+        return json.loads(self.cli(kind, "inspect", name, sanitizer=sanitize_image_inspect))[0]
 
     def snapshot(self):
         globs = [arg for part in sorted(EXCLUDED_PARTS) for arg in ("-g", "!" + part)]
@@ -254,7 +1026,7 @@ class Baseline:
                                                         "cmd/process-measure/main.go", "cmd/process-measure/main_test.go")}
 
     def hardware(self):
-        info = json.loads(self.cli("info", "--format", "{{json .}}"))
+        info = json.loads(self.cli("info", "--format", "{{json .}}", sanitizer=sanitize_engine_info))
         self.build_options = ["--pull=false"]
         self.log_driver = "k8s-file" if "host" in info else "json-file"
         self.result["parameters"]["container_log_driver"] = self.log_driver
@@ -266,18 +1038,22 @@ class Baseline:
             hardware = {"os": host["os"], "architecture": host["arch"], "cpus": host["cpus"],
                         "memory_bytes": host["memTotal"], "kernel": host["kernel"],
                         "runtime_version": info["version"]["Version"]}
+            hardware["container_engine"] = "podman"
         else:
             architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(info["Architecture"], info["Architecture"])
             hardware = {"os": info["OSType"], "architecture": architecture, "cpus": info["NCPU"],
                         "memory_bytes": info["MemTotal"], "kernel": info["KernelVersion"],
                         "runtime_version": info["ServerVersion"]}
+            hardware["container_engine"] = "docker"
+        self.client_version = self.cli("version", "--format", "{{json .Client}}").strip()
         hardware["client_platform"] = platform.platform()
         hardware["other_running_containers"] = len(self.cli("ps", "-q").splitlines())
         self.result["hardware"] = hardware
         self.result["base_images"] = {}
         for tag in ("docker.io/library/node:20-alpine", "docker.io/library/golang:1.24-alpine", "docker.io/library/alpine:3.19"):
-            present = self.cli("image", "inspect", tag, check=False)
-            if not present.strip() or json.loads(present) == []:
+            # Existence checks must not log an unsanitized Config.Env either.
+            present = self.cli("image", "inspect", "--format", "{{.Id}}", tag, check=False)
+            if not present.strip():
                 self.cli("pull", tag, logged=True, timeout=1200)
             self.result["base_images"][tag] = image_identity(self.inspect("image", tag))
 
@@ -302,6 +1078,15 @@ class Baseline:
             item = image_identity(raw_image)
             require((item["healthcheck"] or {}).get("Test"), "Dockerfile HEALTHCHECK was lost")
             item.update({"tag": tag, "build_tags": tags, "cgo_enabled": False})
+            archive_path = self.out / ("image-" + variant + ".tar")
+            save_args = ["save"]
+            if self.result["hardware"]["container_engine"] == "podman":
+                # Keep the original Docker config identity (OCI conversion can
+                # change it). Unreferenced legacy aliases are never followed.
+                save_args += ["--format", "docker-archive"]
+            self.cli(*save_args, "-o", str(archive_path), tag, logged=True, timeout=300)
+            item.update(measure_image_archive(archive_path, expected_architecture=item["architecture"]))
+            item["image_archive_path"] = archive_path.name
             container = self.create("extract-" + variant, tag)
             binary = self.private / (variant + "-main")
             public = self.private / (variant + "-public")
@@ -325,6 +1110,8 @@ class Baseline:
             "pack_recipe": "Dockerfile: SKIP_UI=1 hack/pack.sh; gf URL/output are in build logs",
             "gf_default_download_version": re.search(r"github.com/gogf/gf/v2\s+(\S+)",
                                                        (self.context / "go.mod").read_text())[1],
+            "container_client_version": self.client_version,
+            "python_version": platform.python_version(),
         }
         packed_container = self.create("packed", builder)
         packed = self.private / "packed.go"
@@ -420,7 +1207,11 @@ class Baseline:
         status, page = self.request(base, "/", raw=True)
         require(status == 200 and b"<html" in page.lower(), "packaged UI did not load")
         require(self.cli("exec", container, "id", "-u").strip() == "1001", "runtime is not USER etl")
+        binary_sha = self.cli("exec", container, "sha256sum", "/app/main").split()[0]
+        require(binary_sha == self.result["images"]["default"]["binary_sha256"],
+                "running executable differs from measured image")
         return container, base, {"start_to_health_seconds": elapsed, "health": health,
+                                 "binary_sha256": binary_sha,
                                  "started_at": self.inspect("container", container)["State"]["StartedAt"]}
 
     def state(self, base):
@@ -495,6 +1286,8 @@ class Baseline:
         self.default_image = self.result["images"]["default"]["tag"]
         self.prepare_fixture()
         runtime = {"image_id": self.result["images"]["default"]["image_id"], "uid": 1001,
+                   "image_config_sha256": self.result["images"]["default"]["image_config_sha256"],
+                   "image_binary_sha256": self.result["images"]["default"]["binary_sha256"],
                    "profile": "production", "tls_verified": True, "cold_trials": [], "restore_trials": []}
         self.result["runtime"] = runtime
         for i in range(self.args.trials):
@@ -559,6 +1352,80 @@ class Baseline:
         require(not failures, "owned-resource cleanup failed; see result.json and command logs")
 
 
+class ImageProbe:
+    """An image-only load/save probe with a single owned tag and no app process."""
+    def __init__(self, args, private):
+        self.args, self.private, self.out = args, private, args.out.resolve()
+        self.tag = "localhost/openetl-image-probe-" + uuid.uuid4().hex + ":selected"
+        self.sequence, self.load_attempted = 0, False
+        self.report = {"format": "openetl-image-engine-probe/v1", "scope": "image-only", "status": "failed",
+                       "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=args.root, text=True).strip(),
+                       "harness_sha256": digest(Path(__file__).read_bytes()), "image_archive_path": "image.tar"}
+
+    def command(self, *args, check=True, sanitizer=None):
+        self.sequence += 1
+        proc = subprocess.run([self.args.container_cli, *args], text=True, capture_output=True, timeout=300)
+        output = proc.stdout
+        if sanitizer is not None:
+            try:
+                output = sanitizer(output)
+            except MeasurementError:
+                (self.out / f"command-{self.sequence:03d}.log").write_text("Invalid provider response; raw output redacted.\n")
+                raise
+        # stderr is withheld for inspect/info/version too: a malformed server
+        # response must not bypass the output allowlist through diagnostics.
+        log = self.out / f"command-{self.sequence:03d}.log"
+        log.write_text(output + (proc.stderr if sanitizer is None else "") + f"\n[exit code: {proc.returncode}]\n")
+        with (self.out / "commands.jsonl").open("a") as index:
+            index.write(json.dumps({"argv": [self.args.container_cli, *args], "log": log.name, "exit_code": proc.returncode}) + "\n")
+        require(not check or proc.returncode == 0, f"image probe command failed ({proc.returncode}); see {log.name}")
+        return output, proc.returncode
+
+    def measure(self):
+        require(self.args.image_config_digest is not None, "image probe needs an expected configuration digest")
+        metrics = measure_image_archive(self.args.image_archive, self.args.image_config_digest, self.args.image_architecture)
+        self.report["input_metrics"] = metrics
+        info = json.loads(self.command("info", "--format", "{{json .}}", sanitizer=sanitize_engine_info)[0])
+        version = json.loads(self.command("version", "--format", "{{json .}}", sanitizer=sanitize_engine_version)[0])
+        provider = provider_identity(info, version)
+        self.report["provider"] = provider
+        transport = self.private / "owned-image.tar"
+        self.report["load_transport_metrics"] = prepare_owned_image_archive(self.args.image_archive, transport, metrics, self.tag)
+        self.load_attempted = True
+        self.command("load", "-i", str(transport))
+        raw = json.loads(self.command("image", "inspect", self.tag, sanitizer=sanitize_image_inspect)[0])[0]
+        identity = image_identity(raw)
+        self.report["engine_diagnostics"] = {key: identity[key] for key in
+                                             ("image_id", "engine_reported_image_bytes", "os", "architecture")}
+        require(identity["os"] == metrics["os"] and identity["architecture"] == metrics["architecture"],
+                "loaded image platform differs from input")
+        require(raw.get("RootFS", {}).get("Layers") == [layer["diff_id"] for layer in metrics["layer_inventory"]],
+                "engine rootfs diff IDs differ from input")
+        save = ["save"] + (["--format", "docker-archive"] if provider["id"] == "podman" else [])
+        self.command(*save, "-o", str(self.out / "image.tar"), self.tag)
+        actual = measure_image_archive(self.out / "image.tar", metrics["image_config_sha256"], metrics["architecture"])
+        require(canonical_image_content(actual) == canonical_image_content(metrics), "engine transport changed image content")
+        self.report["metrics"] = actual
+        self.report["status"] = "passed"
+
+    def cleanup(self):
+        errors = []
+        if self.load_attempted:
+            try:
+                _, status = self.command("image", "inspect", "--format", "{{.Id}}", self.tag, check=False)
+                if status == 0:
+                    self.command("image", "rm", self.tag)
+                else:
+                    # Distinguish a missing owned tag from an unavailable engine.
+                    self.command("info", "--format", "{{json .}}", sanitizer=sanitize_engine_info)
+            except (MeasurementError, subprocess.SubprocessError, OSError) as exc:
+                errors.append(str(exc))
+        self.report["cleanup"] = {"passed": not errors, "errors": errors, "owned_tag": self.tag,
+                                  "scope": "owned tag and private transport only; shared images are retained"}
+        require(not errors, "image probe owned-tag cleanup failed")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
@@ -570,24 +1437,102 @@ def main():
     parser.add_argument("--restore-pipelines", type=int, default=16)
     parser.add_argument("--ready-timeout", type=float, default=60)
     parser.add_argument("--keep-images", action="store_true", help="retain newly built tags for follow-up measurements")
-    parser.add_argument("--check", type=Path, help="validate a result and print warning-only observation budgets")
+    parser.add_argument("--check", type=Path, help="recompute v3 archive/source evidence or read historical v2; --out saves a separate budget-result.json")
+    parser.add_argument("--budgets", type=Path, help="explicit versioned default binary/image size policy (warning mode by default)")
+    parser.add_argument("--enforce-budgets", action="store_true", help="fail selected size limits; requires explicit v3 policy and clean source")
+    parser.add_argument("--image-archive", type=Path, help="measure a selected image in a Docker-save or OCI tar; does not build/start")
+    parser.add_argument("--image-config-digest", help="expected configuration SHA256, required for image-archive mode")
+    parser.add_argument("--image-architecture", help="optional expected image architecture")
+    parser.add_argument("--image-engine-probe", action="store_true", help="load/save selected archive on one actual engine, without starting it")
+    parser.add_argument("--compare-image-probes", nargs=2, type=Path, metavar=("DOCKER_JSON", "PODMAN_JSON"),
+                        help="recompute two saved engine archives and compare actual-provider image-only probes")
     args = parser.parse_args()
+    if sum(bool(mode) for mode in (args.check, args.image_archive, args.compare_image_probes)) > 1:
+        parser.error("check, image-archive and compare-image-probes modes are mutually exclusive")
+    if args.image_engine_probe and args.image_archive is None:
+        parser.error("image-engine-probe requires image-archive")
+    if (args.budgets is not None or args.enforce_budgets) and (args.image_archive or args.compare_image_probes):
+        parser.error("budget flags apply only to packaging-startup-restore measurements/checks")
+    if args.image_config_digest is not None and args.image_archive is None:
+        parser.error("image-config-digest requires image-archive")
+    if args.image_architecture is not None and args.image_archive is None:
+        parser.error("image-architecture requires image-archive")
     if args.check:
+        out_ready = False
+        audit = {"format": "openetl-budget-evaluation/v1", "mode": "enforce" if args.enforce_budgets else "observation",
+                 "data_valid": False, "status": "failed", "warnings": [], "errors": [], "metrics": []}
         try:
-            warnings = validate_result(json.loads(args.check.read_text()))
+            if args.out is not None:
+                new_output_directory(args.out)
+                out_ready = True
+            result, result_sha = read_json_evidence(args.check, "baseline")
+            warnings = validate_result(result, artifact_root=args.check.parent)
+            audit = budget_audit(result, warnings, args.budgets, enforce=args.enforce_budgets)
+            audit["baseline_sha256"] = result_sha
         except (MeasurementError, ValueError, OSError) as exc:
-            print(f"::error::{exc}", file=sys.stderr)
-            return 1
-        for warning in warnings:
-            print("::warning::" + warning)
-        print("Baseline measurements valid; observation budget warnings: " + str(len(warnings)))
-        return 0
+            audit["errors"] = [str(exc)]
+        if out_ready:
+            write_json(args.out / "budget-result.json", audit)
+        print_budget_audit(audit)
+        return 0 if audit["data_valid"] and audit["status"] != "failed" else 1
     if args.trials < 1 or args.idle_samples < 2 or args.restore_pipelines < 1 or args.ready_timeout <= 0 or args.settle_seconds < 0:
         parser.error("positive trials/pipelines/timeout, >=2 idle samples and nonnegative settling time are required")
     if args.out is None:
         args.out = Path(os.environ.get("BENCH_OUT_DIR", str(args.root / ".bench-out" / ("baseline-" + uuid.uuid4().hex[:12]))))
-    require(not args.out.exists() or not any(args.out.iterdir()), "output directory must be new or empty")
-    args.out.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        new_output_directory(args.out)
+        if args.budgets is not None:
+            read_budget_policy(args.budgets)
+        require(not args.enforce_budgets or args.budgets is not None, "size enforcement requires explicit --budgets policy")
+    except (MeasurementError, ValueError, OSError) as exc:
+        print("::error::" + str(exc), file=sys.stderr)
+        return 1
+    if args.compare_image_probes:
+        report = {"format": "openetl-image-conformance/v1", "scope": "image-only", "status": "failed"}
+        try:
+            reports = [json.loads(path.read_text()) for path in args.compare_image_probes]
+            report = compare_image_probes(*reports, artifact_roots=[path.parent for path in args.compare_image_probes])
+        except (MeasurementError, ValueError, OSError) as exc:
+            report["error"] = str(exc)
+            print("::error::" + str(exc), file=sys.stderr)
+        write_json(args.out / "result.json", report)
+        print("Image-only conformance " + report["status"])
+        return 0 if report["status"] == "passed" else 1
+    if args.image_engine_probe:
+        with tempfile.TemporaryDirectory(prefix="openetl-image-probe-") as temporary:
+            probe = ImageProbe(args, Path(temporary))
+            try:
+                probe.measure()
+            except (MeasurementError, ValueError, OSError, subprocess.SubprocessError) as exc:
+                probe.report["status"] = "failed"
+                probe.report["error"] = str(exc)
+                print("::error::" + str(exc), file=sys.stderr)
+            finally:
+                try:
+                    probe.cleanup()
+                except (MeasurementError, OSError, subprocess.SubprocessError) as exc:
+                    probe.report["status"] = "failed"
+                    probe.report["cleanup_error"] = str(exc)
+                probe.report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                write_json(args.out / "result.json", probe.report)
+        print("Image-only engine probe " + probe.report["status"])
+        return 0 if probe.report["status"] == "passed" else 1
+    if args.image_archive is not None:
+        report = {"format": "openetl-image-metrics/v1", "scope": "image-archive", "status": "failed",
+                  "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        try:
+            require(args.image_config_digest is not None, "image-archive requires an expected configuration digest")
+            report["metrics"] = measure_image_archive(args.image_archive, args.image_config_digest,
+                                                      args.image_architecture)
+            validate_image_metrics(report["metrics"])
+            report["status"] = "passed"
+        except MeasurementError as exc:
+            report["error"] = str(exc)
+            print("Image archive measurement failed: " + str(exc), file=sys.stderr)
+        report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        write_json(args.out / "result.json", report)
+        print(f"Image archive {report['status']}: {args.out / 'result.json'}")
+        return 0 if report["status"] == "passed" else 1
     def interrupted(signum, frame):
         raise MeasurementError(f"interrupted by signal {signum}")
     signal.signal(signal.SIGTERM, interrupted)
@@ -600,7 +1545,6 @@ def main():
             bench.build()
             bench.measure()
             bench.result["status"] = "passed"
-            bench.result["warnings"] = validate_result(bench.result)
         except Exception as exc:
             bench.result["status"] = "failed"
             bench.result["error"] = str(exc)
@@ -611,9 +1555,23 @@ def main():
             except Exception as exc:
                 bench.result["status"] = "failed"
                 bench.result["cleanup_error"] = str(exc)
+            if bench.result["status"] == "passed":
+                try:
+                    warnings = validate_result(bench.result, artifact_root=args.out)
+                    bench.result["budget"] = budget_audit(bench.result, warnings, args.budgets, enforce=args.enforce_budgets)
+                    bench.result["warnings"] = bench.result["budget"]["warnings"]
+                    print_budget_audit(bench.result["budget"])
+                except (MeasurementError, ValueError, OSError) as exc:
+                    bench.result["status"] = "failed"
+                    bench.result["error"] = str(exc)
+                    print("Baseline validation failed: " + str(exc), file=sys.stderr)
+            if bench.result["status"] != "passed":
+                bench.result["budget"] = {"format": "openetl-budget-evaluation/v1", "data_valid": False,
+                                          "status": "not_evaluated", "reason": "Measurements failed; no budget verdict"}
             write_json(args.out / "result.json", bench.result)
-    print(f"Baseline {bench.result['status']}: {args.out / 'result.json'}", flush=True)
-    return 0 if bench.result["status"] == "passed" else 1
+    print(f"Baseline measurements {bench.result['status']}; size budgets {bench.result['budget']['status']}: "
+          f"{args.out / 'result.json'}", flush=True)
+    return 0 if bench.result["status"] == "passed" and bench.result["budget"]["status"] != "failed" else 1
 
 
 if __name__ == "__main__":

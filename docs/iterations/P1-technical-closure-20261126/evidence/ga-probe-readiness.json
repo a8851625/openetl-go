@@ -1,0 +1,19 @@
+{
+  "image": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
+  "image_id": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
+  "checks": [
+    {
+      "name": "source/executable-bound external certification becomes visible without a rebuild",
+      "result": "passed"
+    },
+    {
+      "name": "a certificate for another executable fails closed",
+      "result": "passed"
+    },
+    {
+      "name": "correct evidence restores readiness on the unchanged image",
+      "result": "passed"
+    }
+  ],
+  "result": "passed"
+}

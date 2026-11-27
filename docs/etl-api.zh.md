@@ -36,6 +36,12 @@ checkpoint。strict/non-strict 启动配置与处置流程见
 死信记录包含 `error_class` 字段，表示运行时对失败原因的分类。当前分类包括 `transient`（瞬时错误）、`data`（数据错误）、`schema`（模式错误）、`auth`（认证错误）、`config`（配置错误）、`programming`（编程错误）和 `unknown`（未知错误）。重试策略使用相同的分类：transient 和 unknown 错误会重试，而 data/schema/auth/config/programming 错误会快速失败进入 DLQ 或直接使操作失败。
 
 ### 列出 DLQ 记录
+
+新增 `row_id` 十进制字符串用于精确行定位，保留数字 `id` 兼容旧客户端。
+可通过 `recovery_event_id`、`id`、`node_id`、`connection_name` 精确约束列表、
+试运行、重放和删除范围；无效、空值或重复身份参数会被拒绝。
+服务端恢复 UUID、关联字段、留存结果及故障边界见
+[恢复追踪契约](./recovery-tracking.md)。
 `GET /api/v2/dlq/{pipeline}`
 
 查询参数：
@@ -61,6 +67,12 @@ curl -H "X-API-Token: $ETL_API_TOKEN" \
 ```
 
 ### 重放 DLQ 记录
+
+`GET /api/v2/recovery-events?pipeline_id=<uuid>` 和
+`GET /api/v2/recovery-events/<uuid>` 可在重启、死信移除及管道删除后查询结果。
+试运行只记录身份预检结果，不写目标、不改变死信交付状态。
+恢复结果落盘失败返回 `503 / recovery_metadata_unavailable`，保留 `sink_acked`
+死信；重启后重试只完成清理。主动丢弃或 TTL/容量驱逐不会被记为重放成功。
 `POST /api/v2/dlq/{pipeline}/replay`
 `POST /api/v2/dlq/{pipeline}/{id}/replay`
 

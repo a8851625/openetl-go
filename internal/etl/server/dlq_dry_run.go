@@ -8,6 +8,7 @@ import (
 
 	"github.com/a8851625/openetl-go/internal/etl/core"
 	"github.com/a8851625/openetl-go/internal/etl/pipeline"
+	"github.com/a8851625/openetl-go/internal/etl/storage"
 )
 
 // isDryRunRequest reports whether a replay request is a preview only.
@@ -31,11 +32,13 @@ func isDryRunRequest(r *http.Request) bool {
 
 // DLQDryRunItem is the per-row verdict of a replay dry run.
 type DLQDryRunItem struct {
-	ID         int64  `json:"id"`
-	DAGNode    string `json:"dag_node,omitempty"`
-	Replayable bool   `json:"replayable"`
-	State      string `json:"state,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	RecoveryEventID     string `json:"recovery_event_id,omitempty"`
+	RecoveryOperationID string `json:"recovery_operation_id,omitempty"`
+	ID                  int64  `json:"id"`
+	DAGNode             string `json:"dag_node,omitempty"`
+	Replayable          bool   `json:"replayable"`
+	State               string `json:"state,omitempty"`
+	Reason              string `json:"reason,omitempty"`
 }
 
 // DLQDryRunResult summarises what a real replay would do.
@@ -69,14 +72,32 @@ func (s *Server) dryRunDLQReplay(ctx context.Context, name string, filter dlqFil
 		return nil, fmt.Errorf("pipeline %s uses a CDC source with a non-idempotent sink and does not set allow_unsafe; replaying would duplicate records, so it is refused until the spec accepts that boundary", name)
 	}
 
+	items, err = s.beginRecoveryOperations(ctx, name, items, "dry_run")
+	if err != nil {
+		return nil, err
+	}
 	result := &DLQDryRunResult{DryRun: true, Items: make([]DLQDryRunItem, 0, len(items))}
+	appendVerdict := func(item storage.DeadLetter, verdict DLQDryRunItem) error {
+		state := "preview_passed"
+		if !verdict.Replayable {
+			state = "preview_blocked"
+		}
+		if err := s.finishRowRecovery(ctx, item, state, verdict.Reason); err != nil {
+			return err
+		}
+		verdict.RecoveryEventID, verdict.RecoveryOperationID = item.RecoveryEventID, item.RecoveryOperationID
+		result.Items = append(result.Items, verdict)
+		return nil
+	}
 	for _, item := range items {
 		verdict := DLQDryRunItem{ID: item.ID, DAGNode: item.DAGNode, Replayable: true}
 		if item.IdentityContext.ReplayState == core.DLQReplayStateSinkAcked {
 			// A sink-acknowledged row only needs cleanup; nothing is re-written.
 			verdict.State = string(core.DLQReplayStateSinkAcked)
 			result.Replayable++
-			result.Items = append(result.Items, verdict)
+			if err := appendVerdict(item, verdict); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		var gateErr error
@@ -86,7 +107,9 @@ func (s *Server) dryRunDLQReplay(ctx context.Context, name string, filter dlqFil
 				verdict.Replayable = false
 				verdict.Reason = "dag dlq record has no dag_node; replay requires node context"
 				result.Blocked++
-				result.Items = append(result.Items, verdict)
+				if err := appendVerdict(item, verdict); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			prepared := item
@@ -108,11 +131,15 @@ func (s *Server) dryRunDLQReplay(ctx context.Context, name string, filter dlqFil
 				verdict.Reason = blockErr.Reason
 			}
 			result.Blocked++
-			result.Items = append(result.Items, verdict)
+			if err := appendVerdict(item, verdict); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		result.Replayable++
-		result.Items = append(result.Items, verdict)
+		if err := appendVerdict(item, verdict); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }

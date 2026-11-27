@@ -1,0 +1,22 @@
+PASS real MySQL service outage creates a stable recovery identity
+PASS identity dry-run persists preview without changing DLQ or delivery
+PASS failed replay persists its error while retaining the backlog
+PASS open-issues-recovery-context
+PASS open-dlq-recovery-context
+PASS open-connections-recovery-context
+PASS detail-tabs-preserve-context
+PASS result persistence failure and restart finalize without a second sink write
+PASS retained-result-after-restart-and-row-removal
+PASS missing-recovery-does-not-select-another-record
+PASS missing-pipeline-disables-DLQ-actions
+PASS mismatched-node-is-explicit
+PASS sensitive-link-cleared
+PASS capture metadata failure retains DLQ and permits a safe file checkpoint
+PASS unassociated capture fallback retains its replay result
+PASS pipeline-switch-clears-previous-task-scope
+PASS missing-connection-is-explicit
+PASS legacy rows remain explicitly unassociated
+PASS legacy-association-visible
+PASS purge-keeps-exact-row-scope
+PASS deleted-pipeline-keeps-recovery-facts
+Evidence: /private/tmp/openetl-p1-r4-e2e7

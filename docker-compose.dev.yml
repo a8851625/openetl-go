@@ -18,7 +18,9 @@ services:
       - ./testdata/mysql/init:/docker-entrypoint-initdb.d
       - ./testdata/mysql/conf.d:/etc/mysql/conf.d
     healthcheck:
-      test: ["CMD", "mysql", "-h", "localhost", "-u", "root", "-proot123456", "-e", "SELECT 1"]
+      # The initialization mysqld uses a socket with skip-networking. Only
+      # the final server can pass this authenticated TCP query.
+      test: ["CMD", "mysql", "-h", "127.0.0.1", "-u", "root", "-proot123456", "-e", "SELECT 1"]
       interval: 5s
       timeout: 5s
       retries: 30

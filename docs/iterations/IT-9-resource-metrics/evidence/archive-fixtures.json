@@ -1,0 +1,170 @@
+{
+  "cases": [
+    {
+      "exit_code": 0,
+      "expected_uncompressed_layer_bytes": 20480,
+      "fixture": "docker-save-raw",
+      "report": {
+        "finished_at": "2026-11-27T14:26:07Z",
+        "format": "openetl-image-metrics/v1",
+        "metrics": {
+          "architecture": "arm64",
+          "archive_format": "docker-save",
+          "image_archive_bytes": 30720,
+          "image_archive_sha256": "5ca070672f10ee75b448ab1a1d121728594313d9adedc22f729df3292d94476a",
+          "image_config_sha256": "fea1a3a9d1bdf3aca6ad604e9867ba4944d62dcb85f09b713f86fb10e424b4ec",
+          "image_uncompressed_layer_bytes": 20480,
+          "layer_inventory": [
+            {
+              "blob_bytes": 10240,
+              "blob_sha256": "12e91f994aaa72f223e2cf457d5a34c6fac71a13cef6ca854d7d6ec73ac7740c",
+              "diff_id": "sha256:12e91f994aaa72f223e2cf457d5a34c6fac71a13cef6ca854d7d6ec73ac7740c",
+              "encoding": "raw",
+              "ordinal": 0,
+              "uncompressed_bytes": 10240
+            },
+            {
+              "blob_bytes": 10240,
+              "blob_sha256": "32fc69d25752244d31adfaaba703fda639082502a72fda21862c072d92fef452",
+              "diff_id": "sha256:32fc69d25752244d31adfaaba703fda639082502a72fda21862c072d92fef452",
+              "encoding": "raw",
+              "ordinal": 1,
+              "uncompressed_bytes": 10240
+            }
+          ],
+          "method": "uncompressed-layer-bytes/v1",
+          "os": "linux",
+          "unit": "bytes"
+        },
+        "scope": "image-archive",
+        "started_at": "2026-11-27T14:26:07Z",
+        "status": "passed"
+      }
+    },
+    {
+      "exit_code": 0,
+      "expected_uncompressed_layer_bytes": 20480,
+      "fixture": "docker-save-gzip",
+      "report": {
+        "finished_at": "2026-11-27T14:26:07Z",
+        "format": "openetl-image-metrics/v1",
+        "metrics": {
+          "architecture": "arm64",
+          "archive_format": "docker-save",
+          "image_archive_bytes": 10240,
+          "image_archive_sha256": "88506c97ddef4533131e6838dd769de30700778712fe8a21d41a4b7b8a1a1662",
+          "image_config_sha256": "fea1a3a9d1bdf3aca6ad604e9867ba4944d62dcb85f09b713f86fb10e424b4ec",
+          "image_uncompressed_layer_bytes": 20480,
+          "layer_inventory": [
+            {
+              "blob_bytes": 119,
+              "blob_sha256": "2df35075d2df8cf85f8a5f45dc9744907e1097eb5101b69444905f2df58add3f",
+              "diff_id": "sha256:12e91f994aaa72f223e2cf457d5a34c6fac71a13cef6ca854d7d6ec73ac7740c",
+              "encoding": "gzip",
+              "ordinal": 0,
+              "uncompressed_bytes": 10240
+            },
+            {
+              "blob_bytes": 123,
+              "blob_sha256": "a14c712444d15c4b9354ea91adae937b894f0fa628a08cc2e795ff21dddebeee",
+              "diff_id": "sha256:32fc69d25752244d31adfaaba703fda639082502a72fda21862c072d92fef452",
+              "encoding": "gzip",
+              "ordinal": 1,
+              "uncompressed_bytes": 10240
+            }
+          ],
+          "method": "uncompressed-layer-bytes/v1",
+          "os": "linux",
+          "unit": "bytes"
+        },
+        "scope": "image-archive",
+        "started_at": "2026-11-27T14:26:07Z",
+        "status": "passed"
+      }
+    },
+    {
+      "exit_code": 0,
+      "expected_uncompressed_layer_bytes": 20480,
+      "fixture": "oci-raw",
+      "report": {
+        "finished_at": "2026-11-27T14:26:08Z",
+        "format": "openetl-image-metrics/v1",
+        "metrics": {
+          "architecture": "arm64",
+          "archive_format": "oci",
+          "image_archive_bytes": 30720,
+          "image_archive_sha256": "fcf361c5f88af0c0848058b49c37ace011e182fad2cb23915151458b96bd352e",
+          "image_config_sha256": "fea1a3a9d1bdf3aca6ad604e9867ba4944d62dcb85f09b713f86fb10e424b4ec",
+          "image_uncompressed_layer_bytes": 20480,
+          "layer_inventory": [
+            {
+              "blob_bytes": 10240,
+              "blob_sha256": "12e91f994aaa72f223e2cf457d5a34c6fac71a13cef6ca854d7d6ec73ac7740c",
+              "diff_id": "sha256:12e91f994aaa72f223e2cf457d5a34c6fac71a13cef6ca854d7d6ec73ac7740c",
+              "encoding": "raw",
+              "ordinal": 0,
+              "uncompressed_bytes": 10240
+            },
+            {
+              "blob_bytes": 10240,
+              "blob_sha256": "32fc69d25752244d31adfaaba703fda639082502a72fda21862c072d92fef452",
+              "diff_id": "sha256:32fc69d25752244d31adfaaba703fda639082502a72fda21862c072d92fef452",
+              "encoding": "raw",
+              "ordinal": 1,
+              "uncompressed_bytes": 10240
+            }
+          ],
+          "method": "uncompressed-layer-bytes/v1",
+          "os": "linux",
+          "unit": "bytes"
+        },
+        "scope": "image-archive",
+        "started_at": "2026-11-27T14:26:08Z",
+        "status": "passed"
+      }
+    },
+    {
+      "exit_code": 0,
+      "expected_uncompressed_layer_bytes": 20480,
+      "fixture": "oci-gzip",
+      "report": {
+        "finished_at": "2026-11-27T14:26:08Z",
+        "format": "openetl-image-metrics/v1",
+        "metrics": {
+          "architecture": "arm64",
+          "archive_format": "oci",
+          "image_archive_bytes": 10240,
+          "image_archive_sha256": "ed860fb1d44c844e0c76019e1ed21dcf95374cefa9bcab96536a9653de13fb66",
+          "image_config_sha256": "fea1a3a9d1bdf3aca6ad604e9867ba4944d62dcb85f09b713f86fb10e424b4ec",
+          "image_uncompressed_layer_bytes": 20480,
+          "layer_inventory": [
+            {
+              "blob_bytes": 119,
+              "blob_sha256": "2df35075d2df8cf85f8a5f45dc9744907e1097eb5101b69444905f2df58add3f",
+              "diff_id": "sha256:12e91f994aaa72f223e2cf457d5a34c6fac71a13cef6ca854d7d6ec73ac7740c",
+              "encoding": "gzip",
+              "ordinal": 0,
+              "uncompressed_bytes": 10240
+            },
+            {
+              "blob_bytes": 123,
+              "blob_sha256": "a14c712444d15c4b9354ea91adae937b894f0fa628a08cc2e795ff21dddebeee",
+              "diff_id": "sha256:32fc69d25752244d31adfaaba703fda639082502a72fda21862c072d92fef452",
+              "encoding": "gzip",
+              "ordinal": 1,
+              "uncompressed_bytes": 10240
+            }
+          ],
+          "method": "uncompressed-layer-bytes/v1",
+          "os": "linux",
+          "unit": "bytes"
+        },
+        "scope": "image-archive",
+        "started_at": "2026-11-27T14:26:08Z",
+        "status": "passed"
+      }
+    }
+  ],
+  "harness_sha256": "c6f281e31e96e7358f7d3f257683a5f18c8606ad5657858c1a38ebfb81f1afcd",
+  "scope": "deterministic-fixtures-only"
+}

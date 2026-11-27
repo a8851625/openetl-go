@@ -35,46 +35,102 @@ unverified record is reported as `partial` / `production_with_review` without
 changing connector maturity. Missing or malformed records are `missing`, and
 an expired verified record is `partial`.
 
-### Rebind 2026-11-03 (all 15 scripts re-run)
+### Current candidate evidence — 2026-11-26
 
-Manifest rebound to commit `fe8692d` with the locally built image digest
-`sha256:74ee5fb8...`. Every record's script list was re-executed green with
-`CONTAINER_CLI=podman` (podman 5.8.2, MySQL 8.0, ClickHouse 24.3, Doris 2.1.11,
-Redpanda, MinIO):
+[GA-C1 evidence](./iterations/P1-technical-closure-20261126/ga-evidence.md) records
+candidate `898af75d1f90a954154d74eb53c3737f38e51b8f` from
+[run 45711062461](https://github.com/a8851625/openetl-go/actions/runs/45711062461):
+all 16 connector scripts, two primary scripts, seven tagged path artifacts,
+three P1 browser probes and the external-readiness probe passed (23 case reports).
+The ten preserved default/extism archives retain their original checksums.
+
+The actual image configuration SHA is
+`sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e`;
+its executable SHA is
+`992c42142c64eb83ff3b65e8f220185dd7a3e3e4b8cf8668b2ce4971be3bb6ab`.
+These are measured from preserved bytes. Provider image IDs and registry manifest
+digests are separate identities; see [candidate release](./candidate-release.md).
+An externally mounted certificate must also match the running source and binary.
+
+The S3 fixture was built on the cold runner from pinned MinIO/mc public commits
+when both public image repositories denied access. Its source-build labels and
+actual image ID remain in the report. Runtime connector maturity is unchanged.
+All 36 jobs, including the source and exact-candidate aggregates, passed on the
+frozen implementation. The preserved assets also passed a local-registry
+push/immutable-pull comparison. Research and distributed profiles remain outside
+this certification; final bookkeeping HEAD checks are linked in PR #13.
+
+### Historical first attempt — 2026-11-09 (13 of 16 scripts passed)
+
+
+The previous record in this section claimed a 2026-11-03 re-run of all 16 scripts on
+commit `fe8692d`. That claim did not hold up and has been retracted — see
+[EV-1 in the roadmap](./ROADMAP.zh.md) for the four independent contradictions
+(the scripts did not exist at `fe8692d`; no commit exists inside the claimed window;
+the claimed image was built 84 minutes after the window closed; two named scripts
+were modified four days later).
+
+The first attempt was re-executed on **2026-11-09**, working tree at `e28a740`, locally built image
+`f4a97b460169a27cb1a87c0cf8bcfde4750d9c5c71b7adc8397e77c7448989da`
+(built 2026-11-03T16:32:24Z), `CONTAINER_CLI=podman` 5.8.2:
 
 | Script | Result |
 | --- | --- |
-| `hack/e2e.sh` | file→file, MySQL batch→file, MySQL batch→MySQL |
-| `hack/e2e-http-source.sh` | HTTP pagination/auth headers |
-| `hack/e2e-s3-minio.sh` | S3 sink, deterministic replay |
-| `hack/e2e-kafka.sh` | file→Kafka, Kafka→file |
-| `hack/e2e-kafka-raw-ods.sh` | raw protocol → Lua flat_map → MySQL lookup → Kafka ODS |
-| `hack/e2e-mysql-postgres.sh` | MySQL batch JOIN→PostgreSQL upsert, preflight reject, checkpoint replay |
-| `hack/e2e-cdc-mysql.sh` | MySQL CDC→MySQL |
-| `hack/e2e-cdc-postgres.sh` | MySQL CDC→PostgreSQL insert/update/delete |
-| `hack/e2e-snapshot-cdc.sh` | integrated snapshot+CDC→MySQL |
-| `hack/e2e-clickhouse.sh` | MySQL CDC→ClickHouse |
-| `hack/e2e-debezium-mysql.sh` | Debezium Kafka→MySQL ODS |
-| `hack/e2e-kafka-multitable-clickhouse.sh` | Kafka multi-table→ClickHouse |
-| `hack/e2e-snapshot-cdc-clickhouse.sh` | snapshot+CDC→ClickHouse incl. outage DLQ/replay |
-| `hack/e2e-doris.sh` | MySQL→Doris Stream Load / insert fallback |
-| `hack/e2e-doris-source-order.sh` | Doris `source_order` sequence injection + stale-write rejection (new) |
-| `hack/e2e-postgres-cdc.sh` | PostgreSQL 16 pgoutput: insert/update/delete, metadata PK upsert, keepalive, restart, TRUNCATE (new; promotes `postgres_cdc` to production) |
+| `hack/e2e.sh` | passed — file→file, MySQL batch→file, MySQL batch→MySQL |
+| `hack/e2e-http-source.sh` | passed — HTTP pagination/auth headers |
+| `hack/e2e-mysql-postgres.sh` | passed — MySQL batch JOIN→PostgreSQL upsert, preflight reject, checkpoint replay |
+| `hack/e2e-cdc-mysql.sh` | passed — MySQL CDC→MySQL |
+| `hack/e2e-cdc-postgres.sh` | passed — MySQL CDC→PostgreSQL insert/update/delete |
+| `hack/e2e-snapshot-cdc.sh` | passed — integrated snapshot+CDC→MySQL |
+| `hack/e2e-clickhouse.sh` | passed — MySQL CDC→ClickHouse |
+| `hack/e2e-snapshot-cdc-clickhouse.sh` | passed — snapshot+CDC→ClickHouse incl. outage DLQ/replay |
+| `hack/e2e-kafka.sh` | passed — file→Kafka, Kafka→file |
+| `hack/e2e-kafka-raw-ods.sh` | passed — raw protocol → Lua flat_map → MySQL lookup → Kafka ODS |
+| `hack/e2e-kafka-multitable-clickhouse.sh` | passed — Kafka multi-table→ClickHouse |
+| `hack/e2e-debezium-mysql.sh` | passed — Debezium Kafka→MySQL ODS |
+| `hack/e2e-postgres-cdc.sh` | passed — PostgreSQL 16 pgoutput: insert/update/delete, metadata PK upsert, idle keepalive, checkpoint restart, TRUNCATE fail-closed |
+| `hack/e2e-s3-minio.sh` | **blocked** — needs `quay.io/minio/mc`; `quay.io` DNS failed and `docker.io/minio/mc` timed out |
+| `hack/e2e-doris.sh` | **blocked** — needs `docker.io/apache/doris:fe-2.1.11`; registry TLS handshake timeout |
+| `hack/e2e-doris-source-order.sh` | **blocked** — same Doris FE/BE dependency |
 
-The Doris record additionally carries the `source_order_replay` case, and
-`hack/e2e-doris-source-order.sh` is now the ordering proof referenced by IT-7
-T7.5. A new `source/postgres_cdc` record carries the real-PostgreSQL path and
-promotes that connector from beta to production. Strict mode passes locally:
+At that first attempt, `s3` and `doris` were `verified: false` / `partial`.
+The same-day follow-through later passed all 16 scripts, as recorded in ROADMAP
+EV-1. This historical output is retained; current candidate status is above:
 
 ```sh
-./hack/check-connector-evidence.sh -strict \
-  -commit "$(git rev-parse HEAD)" \
-  -image "$(podman image inspect openetl-go-etl:dev --format '{{.Id}}')"
+$ ./hack/check-connector-evidence.sh -strict
+sink/s3: partial (record is present but is not marked verified by the certification run)
+sink/doris: partial (record is present but is not marked verified by the certification run)
+check-connector-evidence: evidence check found 2 issue(s)
 ```
 
-Note on cadence: nothing schedules re-certification, so the records go `partial`
-again 30 days after `finished_at`. Re-running the same 15 scripts and rebinding
-the manifest is the whole refresh procedure.
+### Provenance is now machine-checked
+
+`hack/check-connector-evidence.sh` previously only asked whether the certified commit
+was an ancestor of HEAD. That is why the retracted claim above could sit in a
+green gate: ancestry was true, provenance was not. `checkRecordProvenance` now also
+requires that
+
+1. the record commit resolves and is an ancestor of the certified commit;
+2. every script the record names **existed at that commit**
+   (`git cat-file -e <commit>:<script>`);
+3. no named script was last modified **after** the record's `finished_at`.
+
+Conditions 1 and 3 are what catch the retracted claim automatically:
+
+```sh
+$ ./hack/check-connector-evidence.sh        # before the 2026-11-09 rewrite
+provenance sink/doris: script hack/e2e-doris-source-order.sh was last changed at
+  2026-11-07T11:43:16Z, after the claimed certification window ended at 2026-11-03T15:08:00Z
+provenance source/postgres_cdc: script hack/e2e-postgres-cdc.sh was last changed at ...
+```
+
+Editing only `certified_commit` no longer refreshes a record. Re-running the scripts
+and rewriting the window is the only path that satisfies the gate.
+
+Note on cadence: nothing schedules re-certification, so records go `partial` again
+30 days after `finished_at`. Re-running the scripts and rebinding the manifest with
+the real window and image digest is the whole refresh procedure.
 
 ### Rebind 2026-09-02 (IT-1/T1.12)
 

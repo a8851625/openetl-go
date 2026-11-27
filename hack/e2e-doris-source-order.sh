@@ -32,6 +32,7 @@ fail() { echo "  FAIL: $1" >&2; exit 1; }
 
 doris_sql() { "$CONTAINER_CLI" exec "$FE" mysql -h127.0.0.1 -P9030 -uroot "$@"; }
 mysql_sql() { "$CONTAINER_CLI" exec "$MYSQL" mysql -uroot -proot123456 "$DB" -e "$1"; }
+mysql_ready() { "$CONTAINER_CLI" exec "$MYSQL" mysql -h127.0.0.1 -uroot -proot123456 -e "SELECT 1" >/dev/null 2>&1; }
 
 wait_doris_sql() {
   i=0
@@ -74,9 +75,12 @@ echo "==> Start MySQL source"
   --default-authentication-plugin=mysql_native_password >/dev/null
 i=0
 while [ "$i" -lt 90 ]; do
-  "$CONTAINER_CLI" exec "$MYSQL" mysql -uroot -proot123456 -e "SELECT 1" >/dev/null 2>&1 && break
+  # The initialization mysqld accepts Unix-socket SQL, then exits. Its
+  # skip-networking mode cannot pass this authenticated TCP readiness check.
+  mysql_ready && break
   i=$((i + 1)); sleep 2
 done
+mysql_ready || fail "MySQL source did not become ready on TCP after initialization"
 "$CONTAINER_CLI" exec "$MYSQL" mysql -uroot -proot123456 -e "GRANT REPLICATION SLAVE, REPLICATION CLIENT, SELECT ON *.* TO 'sync_user'@'%'; FLUSH PRIVILEGES;"
 mysql_sql "CREATE TABLE so_orders (id BIGINT PRIMARY KEY, name VARCHAR(64), amount INT) ENGINE=InnoDB;"
 pass "source table created (rows are written after the CDC stream starts)"

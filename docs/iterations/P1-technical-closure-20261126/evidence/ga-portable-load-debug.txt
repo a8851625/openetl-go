@@ -1,0 +1,9 @@
+{
+  "scope": "portable load integration only; original ledger unchanged",
+  "source_commit": "dcd5089f238f120831e8db66a7a13a6db9b26d4e",
+  "source_engine_id": "sha256:5d12f7183390114a2337bc172e78eb4d56708b324e97c4537001203fd31611d8",
+  "config_id": "sha256:8a2afbac806c65506db40843f4de4b2c7f94b7a12087580e493ebcf4e0e8cf9b",
+  "loaded_engine_id": "sha256:8a2afbac806c65506db40843f4de4b2c7f94b7a12087580e493ebcf4e0e8cf9b",
+  "binary_sha256": "c8d9554f643f00d5a0ff4d2e00c71190d10a7e02594c3d1c66c8b225c87c5d32",
+  "result": "passed"
+}

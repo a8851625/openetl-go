@@ -15,3 +15,25 @@ jobs:
     name: Gate
     uses: ./.github/workflows/_gate.yml
     secrets: inherit
+  candidate:
+    name: Candidate
+    uses: ./.github/workflows/_candidate.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      snapshot: true
+    secrets: inherit
+  delivery-passed:
+    name: Delivery Passed (aggregated)
+    needs: [gate, candidate]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both source and exact-candidate gates
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json,os
+          results=json.loads(os.environ["RESULTS"])
+          assert all(v["result"]=="success" for v in results.values()), results
+          PY

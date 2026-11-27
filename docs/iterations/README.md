@@ -1,12 +1,12 @@
 # 迭代规划总览（SDD）
 
-> 规划基线：`c2ac396`（v0.2.12-beta.17，2026-08-29）
+> 规划基线：`ee3797c`（P1 修复分支，2026-11-27，非新增发布版本）；历史基线 `e28a740`（v0.2.12-beta.21）与 `c2ac396`（v0.2.12-beta.17）
 >
 > 唯一执行 backlog 仍是 [docs/ROADMAP.zh.md](../ROADMAP.zh.md)。本目录不复制 roadmap 条目，
 > 只把**已经进入当前执行 backlog、尚未实现**的条目组织成可领取、可验证的迭代，并补充
 > roadmap 条目层面没有的**技术方案**与**交付约束**。两者冲突时以 ROADMAP 的验收标准为准。
 >
-> ROADMAP 中标为“候选规划/待决策”的内容（当前包括 ClickHouse `CH-C1`–`CH-C8`）不属于
+> ROADMAP 中标为“候选规划/待决策”的内容（当前包括 ClickHouse `CH-C5`–`CH-C8`）不属于
 > 本目录的覆盖范围，也不计入“未实现条目已覆盖”的承诺。候选项只有在用户确认范围与优先级、
 > 并新增或更新对应的 `spec.md`/`plan.md`/`tasks.md` 后，才可进入本目录和状态看板。
 
@@ -26,6 +26,8 @@
 
 | 迭代 | 主题 | 归属 roadmap 条目 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
+| [P1 技术修复](./P1-technical-closure-20261126/) | 用户授权的五项 P1 技术闭环 | EV-2、P5-H1、PR-0-C1、UI-E-R1、GA-C1 | 按依赖顺序；外部用户研究另行保留 | delivered（Round 5/5：五项技术验收闭合；23-case 候选、同字节晋升和完整 CI 聚合通过；见 [验收记录](./P1-technical-closure-20261126/tasks.md)） |
+| [IT-9](./IT-9-resource-metrics/) | 可信资源度量与预算控制 | EV-3.1–EV-3.4；唯一主任务 EV-3 | 固定归档／Python 首项可准备；真实引擎／原始镜像缺口按增量记录 | `delivered`（Round 5/5：v3/双引擎/体积灰度和 MySQL fixture 补验收关闭；run46032636182 全部36 jobs passed） |
 | [IT-1](./IT-1-verification-substrate/) | 验证基座与存量收口 | RA-4、RA-7、BUG-1/2/6、GAP-1/3/4、P4 follow-up | 无 | `complete` |
 | [IT-2](./IT-2-correctness/) | 正确性（控制面真值 + 数据面身份与顺序） | RA-1、RA-2、RA-3、GAP-7.1/.2/.3 | IT-1 | `complete`（2026-09-05；T2.1–T2.8 全部 done，16 项验收 passed） |
 | [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `complete`（2026-09-16：T3.1–T3.7 全部 done，含 T3.6-B 路径吞吐与三 backend 并发曲线；证据 it3-baseline-20260916） |
@@ -100,12 +102,14 @@ IT-3 集中在 `storage`/`backup`/CI 基准），在满足「同一时间只推�
 | RA-5：secret 两套真值来源 | `delivered`（复核 Round 2/5） | IT-3 |
 | RA-6：backup 硬截断 100000 | `delivered`（复核 Round 3/5） | IT-3 |
 | PR-1.3 残留：非原子 restore、version/ID 保真、WASM artifact、Redis state | `delivered`（复核 Round 1/5） | IT-3 |
-| RA-8：实测 resource baseline | `active`（复核 Round 5/5，T3.6-A 已交付） | IT-3 |
+| RA-8：实测 resource baseline | `delivered`（2026-09-16 T3.6-B 闭合；详见 [ROADMAP](../ROADMAP.zh.md) RA-8 与 [resource-baseline.md](../resource-baseline.md)） | IT-3 |
 | 决策记录：RA-1 优先级 | 已按用户持续交付授权在 IT-1 后完成（2026-09-05） | IT-2 |
 | schema evolution：additive-only 单独排期 | 2026-09-06 用户确认 | IT-3 |
 | 待决策：ClickHouse 写入吞吐是否立项 | 未决 | IT-3（与 RA-8 合并测定） |
 | 项目级发布门槛 / 移除 beta 判定 | — | IT-4 |
-| ClickHouse 迭代启发候选 `CH-C1`–`CH-C8` | `CH-C1`/`CH-C3`/`CH-C2` 于 2026-09-17 晋级第一批立项（IT-5）；`CH-C4`–`CH-C8` 保持候选池 | IT-5（第一批）；其余未晋级 |
+| ClickHouse 迭代启发候选 `CH-C1`–`CH-C8` | `CH-C1`/`CH-C3`/`CH-C2` 于 2026-09-17 晋级第一批立项并已由 IT-5 交付；`CH-C4` 主体由 IT-8 交付；`CH-C5`–`CH-C8` 保持候选池 | IT-5（第一批，delivered）；其余未晋级 |
+| EV-1：connector evidence manifest provenance | `delivered`（2026-11-09 同日补齐；当前清单 16 条，发布候选绑定归 GA-C1） | 见 ROADMAP EV-1 与 P1 技术修复窗口 |
+| EV-3：resource-baseline 度量口径与预算灰度 | `delivered`（2026-11-28：freeze8dfbf84 / run46032636182 全部通过；A1–A9 与第5轮关闭） | IT-9（./IT-9-resource-metrics/） |
 | UI-D：实测交互可信度与小屏可用性 | `delivered`（2026-09-26：UI-D.1–D.6；真实 app 容器 209/209） | UI-D |
 | UI-E：首次成功与故障恢复任务闭环 | `blocked_external`（2026-09-26：UI-E.1 缺 3–5 名外部目标用户；研究协议已就绪） | UI-E |
 | UI-F：控制面路由安全与运行状态真实性 | `delivered`（2026-09-27：F.1–F.7，265/265） | UI-F |
@@ -113,7 +117,7 @@ IT-3 集中在 `storage`/`backup`/CI 基准），在满足「同一时间只推�
 | IT-7：Doris sink 源序写入（sequence column + delete sign） | `delivered`（2026-11-03 关闭：写侧序列注入 + preflight 门禁 + 排序 e2e + 认证回写） | IT-7（./IT-7-doris-source-order/） |
 | IT-8：数据完整性闭环（对账/对象提交清单/单表重同步/无主键表快照） | `delivered`（2026-11-01；T8.1–T8.5 全部完成，含真实容器 e2e） | IT-8（./IT-8-data-integrity-closure/） |
 
-**显式不纳入本轮**：ROADMAP「有界后续」及 ClickHouse `CH-C1`–`CH-C8` 候选项（包括
+**显式不纳入本轮**：ROADMAP「有界后续」及仍未晋级的 ClickHouse `CH-C5`–`CH-C8` 候选项（包括
 ODPS lookup/source 方向、Feishu 真实环境证据、JS/TS/WASM
 parser 示例扩展、复杂多事实 merge）与「明确暂缓或不做」全部条目。它们保持原状态，需要
 显式重新排序并补齐迭代三件套才进入执行。
@@ -176,6 +180,6 @@ AGENTS.md 默认一次执行请求上限 **5 rounds**。每个迭代的 `tasks.m
 | IT-5 | T5.1 完成：dedup token + provider + 错误分类 | T5.2 完成：双协议 crash-window e2e（顺带修复 hook 遮蔽与 replay panic 两个真实 bug） | T5.3 完成：Kafka envelope 全链路 + Redpanda harness | T5.4 完成：contract 类型/存储/enforce 接入 | T5.5 完成：contract e2e 5/5 + 三 backend drill + 全量回归；迭代 `complete` | `complete` |
 | UI-C | UC.1 完成：label htmlFor/id + field.* i18n 标签（38 key） | UC.2 完成：移动 toast 提示 + 多选批量删除（C 系列 9 断言） | — | — | — | `complete` |
 | UI-D | UI-D.1/UI-D.2：批量确认与可供性 ✅ | UI-D.3：小屏值守布局 ✅ | UI-D.4：向导步骤发现 ✅ | UI-D.5：刷新/a11y ✅ | UI-D.6：真实容器复验/证据收口 ✅（2026-09-26，209/209） | `delivered` |
-| UI-E | UI-E.1：用户任务走查（`blocked_external`，等待 3–5 名目标用户） | UI-E.2：首次任务分层（依赖 E.1） | UI-E.3：事实契约 preflight（可独立只读准备，不替代 E.1） | UI-E.4/UI-E.5：恢复/深链/推进（依赖） | UI-E.6：容器回归与回访 | `blocked_external` |
+| UI-E | UI-E.1：用户任务走查（`blocked_external`，等待 3–5 名目标用户） | UI-E.2：首次任务分层（依赖 E.1） | UI-E.3：事实契约 preflight ✅（2026-11-09，只读完成，结论「不足」见 [contract-preflight.md](./UI-E-task-flow-recovery/contract-preflight.md)） | UI-E.4/UI-E.5：恢复/深链/推进（依赖 E.3 提案获批） | UI-E.6：容器回归与回访 | `blocked_external` |
 | UI-F | UI-F.1：detail route identity guard（`delivered`） | UI-F.2/UI-F.3：Settings 路由/删除确认（`delivered`） | UI-F.4/UI-F.6：状态事实/i18n-a11y（`delivered`） | UI-F.5：小屏 containment（`delivered`） | UI-F.7：收口复验（`delivered`，265/265） | `delivered` |
 | UI-A | UI-A.1–A.4 完成（2026-09-12，e2e 145） | UI-B.1 完成（e2e 148） | UI-B.2 完成（e2e 153） | UI-B.3/B.4 完成（e2e 156/158） | UI-B.5 缓冲轮完成（i18n 全量，e2e 158）；迭代 `complete` | `complete` |

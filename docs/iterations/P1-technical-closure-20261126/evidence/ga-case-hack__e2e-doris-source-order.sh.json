@@ -1,0 +1,21 @@
+{
+  "name": "hack/e2e-doris-source-order.sh",
+  "source_commit": "898af75d1f90a954154d74eb53c3737f38e51b8f",
+  "image_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+  "execution_image_id": "sha256:7c4b4ec63170daa388c9e0429306b147a0e48db034cd4b86b3aa08e1724930a8",
+  "execution_config_id": "sha256:5ce9794ad47c434b5b2dd61a045125929bfe2f8477f196d5ceb11bcdcc333f4e",
+  "binary_sha256": "992c42142c64eb83ff3b65e8f220185dd7a3e3e4b8cf8668b2ce4971be3bb6ab",
+  "started_at": "2026-11-25T22:21:40Z",
+  "finished_at": "2026-11-25T22:23:44Z",
+  "result": "passed",
+  "exit_code": 0,
+  "error": "",
+  "log_sha256": "727629c1e0b8d3366bc1089799963c16687584acf64e55c9390809cee9ffd72e",
+  "artifact_sha256": {},
+  "container_runtime": "Docker version 29.4.2, build 055a478",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+    "docker.io/apache/doris:fe-2.1.11": "sha256:f0d54ae0e7ca21e93cafcc0324c1b153fd15eb6a77e9bd5f3d239557940b9fb8",
+    "docker.io/apache/doris:be-2.1.11": "sha256:835a4cc7bc26c682a2ea1641328f5decdc98f8e661f7b955cdf579afb86f50f5"
+  }
+}

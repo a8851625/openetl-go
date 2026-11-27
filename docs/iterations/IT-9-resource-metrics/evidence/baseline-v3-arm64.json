@@ -1,0 +1,859 @@
+{
+  "base_images": {
+    "docker.io/library/alpine:3.19": {
+      "architecture": "arm64",
+      "bytes": 8034276,
+      "engine_reported_image_bytes": 8034276,
+      "healthcheck": null,
+      "image_id": "sha256:6cf065f724d522cbb3e1898559cd88f015db8a1a4210d2d048a0853b69b57ba9",
+      "manifest_digest": "sha256:5cd72f301a291887075a70d8b14aed6ee228fc9fd8f65e1e7eaa072f2115efd6",
+      "os": "linux",
+      "repo_digests": [
+        "docker.io/library/alpine@sha256:5cd72f301a291887075a70d8b14aed6ee228fc9fd8f65e1e7eaa072f2115efd6",
+        "docker.io/library/alpine@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1"
+      ]
+    },
+    "docker.io/library/golang:1.24-alpine": {
+      "architecture": "arm64",
+      "bytes": 271280616,
+      "engine_reported_image_bytes": 271280616,
+      "healthcheck": null,
+      "image_id": "sha256:fa0811e6d279edea461b508a8f1c66f0fee2ba0b75dcaddd07ffda3661d7e2d3",
+      "manifest_digest": "sha256:2e926920fc5fa28349f4b9eaf82fd2615da1964293219a816ab699233492d921",
+      "os": "linux",
+      "repo_digests": [
+        "docker.io/library/golang@sha256:2e926920fc5fa28349f4b9eaf82fd2615da1964293219a816ab699233492d921",
+        "docker.io/library/golang@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191"
+      ]
+    },
+    "docker.io/library/node:20-alpine": {
+      "architecture": "arm64",
+      "bytes": 138082028,
+      "engine_reported_image_bytes": 138082028,
+      "healthcheck": null,
+      "image_id": "sha256:cd266ddf7e80183cbac3cb23b49e90ab83a06f14f95d28681d8468f89dc00615",
+      "manifest_digest": "sha256:d63c387675b0ec5d7ef0c15b03691ac9f82803a8b30c87de3ce8a16960831cbc",
+      "os": "linux",
+      "repo_digests": [
+        "docker.io/library/node@sha256:d63c387675b0ec5d7ef0c15b03691ac9f82803a8b30c87de3ce8a16960831cbc",
+        "docker.io/library/node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293"
+      ]
+    }
+  },
+  "cleanup": {
+    "errors": [],
+    "images_retained": false,
+    "passed": true
+  },
+  "hardware": {
+    "architecture": "arm64",
+    "client_platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "container_engine": "podman",
+    "cpus": 5,
+    "kernel": "7.0.11-200.fc44.aarch64",
+    "memory_bytes": 16717205504,
+    "os": "linux",
+    "other_running_containers": 0,
+    "runtime_version": "5.8.4"
+  },
+  "harness_sha256": {
+    "bench-baseline.sh": "a31f48a90218e9fbfb32d5619832125c84276e8bc949100191a8fa047d9facad",
+    "bench_baseline.py": "166428036b99a2f347a109277066fa0e89a64ea594464c31a782760360963f31",
+    "cmd/process-measure/main.go": "5d57185945f5b95717a39d8e5b3fd8117d3b0166f6672893a9a16da3e99f01dc",
+    "cmd/process-measure/main_test.go": "93488f9eedad227b8460fc5dbc968298e378f766c02c4f08033c08d3fd70d601"
+  },
+  "images": {
+    "default": {
+      "architecture": "arm64",
+      "archive_format": "docker-save",
+      "binary_bytes": 63963320,
+      "binary_sha256": "7348603365b6a7cf4c00fbf82001f03e8c68ca71dc8d3b2c13682694f2775541",
+      "build_tags": "",
+      "bytes": 141069692,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 141069692,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 7,
+      "image_archive_bytes": 141094400,
+      "image_archive_path": "image-default.tar",
+      "image_archive_sha256": "10566cacd5829483d66abb84d6324847303e9edd9da03e93462cd2da91517a55",
+      "image_config_sha256": "119ba32a21ea52384feb67894565960261f2c2f1617696980dcbc6fd241c31ca",
+      "image_id": "sha256:119ba32a21ea52384feb67894565960261f2c2f1617696980dcbc6fd241c31ca",
+      "image_uncompressed_layer_bytes": 141062656,
+      "layer_inventory": [
+        {
+          "blob_bytes": 8023552,
+          "blob_sha256": "8ff721756ec0097ba331876f1502858f8849716bdf720516fafa96c72a8d7dac",
+          "diff_id": "sha256:8ff721756ec0097ba331876f1502858f8849716bdf720516fafa96c72a8d7dac",
+          "encoding": "raw",
+          "ordinal": 0,
+          "uncompressed_bytes": 8023552
+        },
+        {
+          "blob_bytes": 2671616,
+          "blob_sha256": "e17934db3496068fce60d9147474a5b3dc016595a1dc336021a39c64b9e5e8dc",
+          "diff_id": "sha256:e17934db3496068fce60d9147474a5b3dc016595a1dc336021a39c64b9e5e8dc",
+          "encoding": "raw",
+          "ordinal": 1,
+          "uncompressed_bytes": 2671616
+        },
+        {
+          "blob_bytes": 11264,
+          "blob_sha256": "478177c57d21efecc0bd0538afa5e793e8a82a02b56307213fff11a3ecae008b",
+          "diff_id": "sha256:478177c57d21efecc0bd0538afa5e793e8a82a02b56307213fff11a3ecae008b",
+          "encoding": "raw",
+          "ordinal": 2,
+          "uncompressed_bytes": 11264
+        },
+        {
+          "blob_bytes": 63965696,
+          "blob_sha256": "3ad0d413c3edc0af4592c293013bf5c30af12ac9171cb8170cb50d85a9c55ecc",
+          "diff_id": "sha256:3ad0d413c3edc0af4592c293013bf5c30af12ac9171cb8170cb50d85a9c55ecc",
+          "encoding": "raw",
+          "ordinal": 3,
+          "uncompressed_bytes": 63965696
+        },
+        {
+          "blob_bytes": 1199616,
+          "blob_sha256": "beffceb2a032ee94448fd42b4e3b74312ef8e0b8753578e3b26bf152208937c9",
+          "diff_id": "sha256:beffceb2a032ee94448fd42b4e3b74312ef8e0b8753578e3b26bf152208937c9",
+          "encoding": "raw",
+          "ordinal": 4,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 12800,
+          "blob_sha256": "e18c6c826bf774ec8d32aa0e1f77ec0465718aabe90d28c15d23997be97869af",
+          "diff_id": "sha256:e18c6c826bf774ec8d32aa0e1f77ec0465718aabe90d28c15d23997be97869af",
+          "encoding": "raw",
+          "ordinal": 5,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 65178112,
+          "blob_sha256": "3a0c9260c91675b0228d48dd4016456fc4b22b9fb743b0c7f1c69ff417bb31b0",
+          "diff_id": "sha256:3a0c9260c91675b0228d48dd4016456fc4b22b9fb743b0c7f1c69ff417bb31b0",
+          "encoding": "raw",
+          "ordinal": 6,
+          "uncompressed_bytes": 65178112
+        }
+      ],
+      "manifest_digest": "sha256:cf494d47ef31cb6a50611366a9addca4993fda37456fcce4cb03f909ae4f3035",
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466366,
+      "packed_sha256": "f18911159109e51af7a6a0cf781b2af83d5e0b85f09cbd45b251e7839f9f98db",
+      "repo_digests": [
+        "localhost/openetl-baseline-7b9d5180e71e@sha256:cf494d47ef31cb6a50611366a9addca4993fda37456fcce4cb03f909ae4f3035"
+      ],
+      "tag": "localhost/openetl-baseline-7b9d5180e71e:default",
+      "unit": "bytes"
+    },
+    "extism": {
+      "architecture": "arm64",
+      "archive_format": "docker-save",
+      "binary_bytes": 67502264,
+      "binary_sha256": "289478542b02e78449dd87452d0c6533e9210db4f4cbbf4bbca1c4ffb566cc1f",
+      "build_tags": "extism",
+      "bytes": 148147577,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 148147577,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 7,
+      "image_archive_bytes": 148172288,
+      "image_archive_path": "image-extism.tar",
+      "image_archive_sha256": "428d5760a4ee1b1c47dcf62bc2d31259005d4b7797ac3fb3affa5eb60ce59694",
+      "image_config_sha256": "23eb8741e073f8b2f72e4ccbe47524b18d6f0048ba3fbf3903ce8286ecca5daf",
+      "image_id": "sha256:23eb8741e073f8b2f72e4ccbe47524b18d6f0048ba3fbf3903ce8286ecca5daf",
+      "image_uncompressed_layer_bytes": 148140544,
+      "layer_inventory": [
+        {
+          "blob_bytes": 8023552,
+          "blob_sha256": "8ff721756ec0097ba331876f1502858f8849716bdf720516fafa96c72a8d7dac",
+          "diff_id": "sha256:8ff721756ec0097ba331876f1502858f8849716bdf720516fafa96c72a8d7dac",
+          "encoding": "raw",
+          "ordinal": 0,
+          "uncompressed_bytes": 8023552
+        },
+        {
+          "blob_bytes": 2671616,
+          "blob_sha256": "e17934db3496068fce60d9147474a5b3dc016595a1dc336021a39c64b9e5e8dc",
+          "diff_id": "sha256:e17934db3496068fce60d9147474a5b3dc016595a1dc336021a39c64b9e5e8dc",
+          "encoding": "raw",
+          "ordinal": 1,
+          "uncompressed_bytes": 2671616
+        },
+        {
+          "blob_bytes": 11264,
+          "blob_sha256": "478177c57d21efecc0bd0538afa5e793e8a82a02b56307213fff11a3ecae008b",
+          "diff_id": "sha256:478177c57d21efecc0bd0538afa5e793e8a82a02b56307213fff11a3ecae008b",
+          "encoding": "raw",
+          "ordinal": 2,
+          "uncompressed_bytes": 11264
+        },
+        {
+          "blob_bytes": 67504640,
+          "blob_sha256": "155b613be40e6e55a005455a14c93932e03c485e28af89bd7436bc46feaada41",
+          "diff_id": "sha256:155b613be40e6e55a005455a14c93932e03c485e28af89bd7436bc46feaada41",
+          "encoding": "raw",
+          "ordinal": 3,
+          "uncompressed_bytes": 67504640
+        },
+        {
+          "blob_bytes": 1199616,
+          "blob_sha256": "943d3b1fa71d55db281c4542f8de70f8d92092717eaa068be4808fd45ed75e55",
+          "diff_id": "sha256:943d3b1fa71d55db281c4542f8de70f8d92092717eaa068be4808fd45ed75e55",
+          "encoding": "raw",
+          "ordinal": 4,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 12800,
+          "blob_sha256": "75897de003607231c13749ac41bc4d4daf1773f20318a09170921f8ace888d07",
+          "diff_id": "sha256:75897de003607231c13749ac41bc4d4daf1773f20318a09170921f8ace888d07",
+          "encoding": "raw",
+          "ordinal": 5,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 68717056,
+          "blob_sha256": "913e2dd28fb1a76b956ec250a10334c845d2b913823f6aafcbe9caebdd6667b6",
+          "diff_id": "sha256:913e2dd28fb1a76b956ec250a10334c845d2b913823f6aafcbe9caebdd6667b6",
+          "encoding": "raw",
+          "ordinal": 6,
+          "uncompressed_bytes": 68717056
+        }
+      ],
+      "manifest_digest": "sha256:9d1682a0e410124b911ba68476024aee8252b63f3625d653b11521deb073386b",
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466366,
+      "packed_sha256": "f18911159109e51af7a6a0cf781b2af83d5e0b85f09cbd45b251e7839f9f98db",
+      "repo_digests": [
+        "localhost/openetl-baseline-7b9d5180e71e@sha256:9d1682a0e410124b911ba68476024aee8252b63f3625d653b11521deb073386b"
+      ],
+      "tag": "localhost/openetl-baseline-7b9d5180e71e:extism",
+      "unit": "bytes"
+    },
+    "extism-nolua": {
+      "architecture": "arm64",
+      "archive_format": "docker-save",
+      "binary_bytes": 66781368,
+      "binary_sha256": "bf8d6a772ebdb23a475e6556784541874d22dc90f71eb02614ca4a14c8ea168b",
+      "build_tags": "extism,nolua",
+      "bytes": 146705788,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 146705788,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 7,
+      "image_archive_bytes": 146730496,
+      "image_archive_path": "image-extism-nolua.tar",
+      "image_archive_sha256": "1b4e661c576543624d66f9ffd877be619422d36925e93b24de39decfb0ecf399",
+      "image_config_sha256": "3ae8665311fa67f2aea9e6f904c0000f586dc594c608627890da6a3da5d1e316",
+      "image_id": "sha256:3ae8665311fa67f2aea9e6f904c0000f586dc594c608627890da6a3da5d1e316",
+      "image_uncompressed_layer_bytes": 146698752,
+      "layer_inventory": [
+        {
+          "blob_bytes": 8023552,
+          "blob_sha256": "8ff721756ec0097ba331876f1502858f8849716bdf720516fafa96c72a8d7dac",
+          "diff_id": "sha256:8ff721756ec0097ba331876f1502858f8849716bdf720516fafa96c72a8d7dac",
+          "encoding": "raw",
+          "ordinal": 0,
+          "uncompressed_bytes": 8023552
+        },
+        {
+          "blob_bytes": 2671616,
+          "blob_sha256": "e17934db3496068fce60d9147474a5b3dc016595a1dc336021a39c64b9e5e8dc",
+          "diff_id": "sha256:e17934db3496068fce60d9147474a5b3dc016595a1dc336021a39c64b9e5e8dc",
+          "encoding": "raw",
+          "ordinal": 1,
+          "uncompressed_bytes": 2671616
+        },
+        {
+          "blob_bytes": 11264,
+          "blob_sha256": "478177c57d21efecc0bd0538afa5e793e8a82a02b56307213fff11a3ecae008b",
+          "diff_id": "sha256:478177c57d21efecc0bd0538afa5e793e8a82a02b56307213fff11a3ecae008b",
+          "encoding": "raw",
+          "ordinal": 2,
+          "uncompressed_bytes": 11264
+        },
+        {
+          "blob_bytes": 66783744,
+          "blob_sha256": "98be0058d600268b776020c73b804efeb255fb500208385683dbbe79cc2241eb",
+          "diff_id": "sha256:98be0058d600268b776020c73b804efeb255fb500208385683dbbe79cc2241eb",
+          "encoding": "raw",
+          "ordinal": 3,
+          "uncompressed_bytes": 66783744
+        },
+        {
+          "blob_bytes": 1199616,
+          "blob_sha256": "5414e89f98a45160a45c2d1b8844855b5d41bc9aabe6f39cd87e6c81d5689b67",
+          "diff_id": "sha256:5414e89f98a45160a45c2d1b8844855b5d41bc9aabe6f39cd87e6c81d5689b67",
+          "encoding": "raw",
+          "ordinal": 4,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 12800,
+          "blob_sha256": "400a58b954f51f3040533e3c73738e3d197ae57fd66e32166649ca841cb13a88",
+          "diff_id": "sha256:400a58b954f51f3040533e3c73738e3d197ae57fd66e32166649ca841cb13a88",
+          "encoding": "raw",
+          "ordinal": 5,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 67996160,
+          "blob_sha256": "ff97bda9e75eaa4cfd7458233097b4937635c1b6345f9aea670818b4c05db225",
+          "diff_id": "sha256:ff97bda9e75eaa4cfd7458233097b4937635c1b6345f9aea670818b4c05db225",
+          "encoding": "raw",
+          "ordinal": 6,
+          "uncompressed_bytes": 67996160
+        }
+      ],
+      "manifest_digest": "sha256:9162b5cea42a35ba7ba8d41e42918b82e8c9477c1afd82002392cc9fe3ba144b",
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466366,
+      "packed_sha256": "f18911159109e51af7a6a0cf781b2af83d5e0b85f09cbd45b251e7839f9f98db",
+      "repo_digests": [
+        "localhost/openetl-baseline-7b9d5180e71e@sha256:9162b5cea42a35ba7ba8d41e42918b82e8c9477c1afd82002392cc9fe3ba144b"
+      ],
+      "tag": "localhost/openetl-baseline-7b9d5180e71e:extism-nolua",
+      "unit": "bytes"
+    },
+    "nolua": {
+      "architecture": "arm64",
+      "archive_format": "docker-save",
+      "binary_bytes": 63176888,
+      "binary_sha256": "95d2dc74422dd63e977f19eda17fab5762b91c68a088a8e46cc4ee15fa6668c2",
+      "build_tags": "nolua",
+      "bytes": 139496827,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 139496827,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 7,
+      "image_archive_bytes": 139521536,
+      "image_archive_path": "image-nolua.tar",
+      "image_archive_sha256": "afca02c1f7ad510a33df4de38cd1a0e7b9e243c29dac79ff416940ab3142e1a7",
+      "image_config_sha256": "b6606c8a96ea5121239f42be54eed6c4bb12ae4a67bf183403870b5b0fc0bc05",
+      "image_id": "sha256:b6606c8a96ea5121239f42be54eed6c4bb12ae4a67bf183403870b5b0fc0bc05",
+      "image_uncompressed_layer_bytes": 139489792,
+      "layer_inventory": [
+        {
+          "blob_bytes": 8023552,
+          "blob_sha256": "8ff721756ec0097ba331876f1502858f8849716bdf720516fafa96c72a8d7dac",
+          "diff_id": "sha256:8ff721756ec0097ba331876f1502858f8849716bdf720516fafa96c72a8d7dac",
+          "encoding": "raw",
+          "ordinal": 0,
+          "uncompressed_bytes": 8023552
+        },
+        {
+          "blob_bytes": 2671616,
+          "blob_sha256": "e17934db3496068fce60d9147474a5b3dc016595a1dc336021a39c64b9e5e8dc",
+          "diff_id": "sha256:e17934db3496068fce60d9147474a5b3dc016595a1dc336021a39c64b9e5e8dc",
+          "encoding": "raw",
+          "ordinal": 1,
+          "uncompressed_bytes": 2671616
+        },
+        {
+          "blob_bytes": 11264,
+          "blob_sha256": "478177c57d21efecc0bd0538afa5e793e8a82a02b56307213fff11a3ecae008b",
+          "diff_id": "sha256:478177c57d21efecc0bd0538afa5e793e8a82a02b56307213fff11a3ecae008b",
+          "encoding": "raw",
+          "ordinal": 2,
+          "uncompressed_bytes": 11264
+        },
+        {
+          "blob_bytes": 63179264,
+          "blob_sha256": "1a72e4d45e97962e2fea43947b7f8fb22cfc19771522f28d729d9c950f0f2f23",
+          "diff_id": "sha256:1a72e4d45e97962e2fea43947b7f8fb22cfc19771522f28d729d9c950f0f2f23",
+          "encoding": "raw",
+          "ordinal": 3,
+          "uncompressed_bytes": 63179264
+        },
+        {
+          "blob_bytes": 1199616,
+          "blob_sha256": "5142403c3ed7e86a09265cc70dfba2bd04a96e90487868f3c6c3781aab4e9907",
+          "diff_id": "sha256:5142403c3ed7e86a09265cc70dfba2bd04a96e90487868f3c6c3781aab4e9907",
+          "encoding": "raw",
+          "ordinal": 4,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 12800,
+          "blob_sha256": "3bd71cfe792c9a8739d035dff3df8f208720777e678c0f69e056d6eace092d0c",
+          "diff_id": "sha256:3bd71cfe792c9a8739d035dff3df8f208720777e678c0f69e056d6eace092d0c",
+          "encoding": "raw",
+          "ordinal": 5,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 64391680,
+          "blob_sha256": "4568e7f2a60ca2f05a1643e01f93a0b9ec61398aed3fc7ceb28de639d8a9a743",
+          "diff_id": "sha256:4568e7f2a60ca2f05a1643e01f93a0b9ec61398aed3fc7ceb28de639d8a9a743",
+          "encoding": "raw",
+          "ordinal": 6,
+          "uncompressed_bytes": 64391680
+        }
+      ],
+      "manifest_digest": "sha256:48460d7fa957dec99ace109ec026338ef9f79dba0789bca198367987fff4933a",
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466366,
+      "packed_sha256": "f18911159109e51af7a6a0cf781b2af83d5e0b85f09cbd45b251e7839f9f98db",
+      "repo_digests": [
+        "localhost/openetl-baseline-7b9d5180e71e@sha256:48460d7fa957dec99ace109ec026338ef9f79dba0789bca198367987fff4933a"
+      ],
+      "tag": "localhost/openetl-baseline-7b9d5180e71e:nolua",
+      "unit": "bytes"
+    }
+  },
+  "limitations": [
+    "Fresh process and SQLite volume, cached image/OS pages; not a host reboot cold start.",
+    "Start timer includes container start, port discovery and health polling overhead.",
+    "Runtime image uses Dockerfile, not a published GoReleaser release asset.",
+    "CGO/QuickJS is not published by .goreleaser.yml and is not measured here.",
+    "Loaded control-plane peak is not sustained pipeline throughput/concurrency evidence.",
+    "ClickHouse specialty scope is pending; no specialty benchmark is run.",
+    "Image bytes is a legacy diagnostic alias of engine_reported_image_bytes, never the v3 image budget.",
+    "Uncompressed image layer bytes includes layer tar headers/whiteouts/overwritten content; not merged rootfs or process memory.",
+    "Saved archive bytes depends on transport/compression; compare the selected uncompressed layer metric."
+  ],
+  "measured_at": "2026-11-27T14:36:16Z",
+  "parameters": {
+    "container_log_driver": "k8s-file",
+    "cpus": 2,
+    "gomaxprocs": 2,
+    "idle_samples": 5,
+    "memory_bytes": 1073741824,
+    "records_per_pipeline": 100,
+    "restore_pipelines": 16,
+    "sample_interval_seconds": 1,
+    "settle_seconds": 10,
+    "trials": 3
+  },
+  "runtime": {
+    "backup": {
+      "bytes": 52732,
+      "container_start_to_exit_seconds": 0.27824054201482795,
+      "counts": {
+        "audit_logs": 48,
+        "checkpoints": 16,
+        "connections": 0,
+        "dead_letters": 0,
+        "pipeline_versions": 16,
+        "pipelines": 16,
+        "plugins": 0,
+        "recovery_events": 0,
+        "recovery_operations": 0,
+        "run_history": 16,
+        "settings": 0,
+        "task_assignments": 0,
+        "workers": 1
+      },
+      "elapsed_seconds": 0.037063477,
+      "exit_code": 0,
+      "method": "wait4.rusage.ru_maxrss",
+      "native_max_rss": 43168,
+      "native_rss_unit": "KiB",
+      "peak_rss_bytes": 44204032,
+      "platform": "linux",
+      "seconds": 0.037063477,
+      "sha256": "8d275ce70118e65b3c3e758abf42165b28f21f351324b8904ccfa767ee469192"
+    },
+    "cold_trials": [
+      {
+        "binary_sha256": "7348603365b6a7cf4c00fbf82001f03e8c68ca71dc8d3b2c13682694f2775541",
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:42:20Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 51625984,
+            "rss_bytes": 51625984
+          },
+          {
+            "peak_rss_bytes": 51625984,
+            "rss_bytes": 51625984
+          },
+          {
+            "peak_rss_bytes": 51625984,
+            "rss_bytes": 51625984
+          },
+          {
+            "peak_rss_bytes": 51625984,
+            "rss_bytes": 51625984
+          },
+          {
+            "peak_rss_bytes": 51625984,
+            "rss_bytes": 51625984
+          }
+        ],
+        "start_to_health_seconds": 0.3901006249943748,
+        "started_at": "2026-11-27T22:42:20.281390697+08:00"
+      },
+      {
+        "binary_sha256": "7348603365b6a7cf4c00fbf82001f03e8c68ca71dc8d3b2c13682694f2775541",
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:42:38Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 51531776,
+            "rss_bytes": 51531776
+          },
+          {
+            "peak_rss_bytes": 51531776,
+            "rss_bytes": 51531776
+          },
+          {
+            "peak_rss_bytes": 51531776,
+            "rss_bytes": 51531776
+          },
+          {
+            "peak_rss_bytes": 51531776,
+            "rss_bytes": 51531776
+          },
+          {
+            "peak_rss_bytes": 51531776,
+            "rss_bytes": 51531776
+          }
+        ],
+        "start_to_health_seconds": 0.3783186249784194,
+        "started_at": "2026-11-27T22:42:38.186673961+08:00"
+      },
+      {
+        "binary_sha256": "7348603365b6a7cf4c00fbf82001f03e8c68ca71dc8d3b2c13682694f2775541",
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:42:56Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 50376704,
+            "rss_bytes": 50376704
+          },
+          {
+            "peak_rss_bytes": 50388992,
+            "rss_bytes": 50388992
+          },
+          {
+            "peak_rss_bytes": 50388992,
+            "rss_bytes": 50388992
+          },
+          {
+            "peak_rss_bytes": 50388992,
+            "rss_bytes": 50388992
+          },
+          {
+            "peak_rss_bytes": 50388992,
+            "rss_bytes": 50388992
+          }
+        ],
+        "start_to_health_seconds": 0.38176625000778586,
+        "started_at": "2026-11-27T22:42:56.087687138+08:00"
+      }
+    ],
+    "fixture": {
+      "identity_sha256": "91c114a15f93b867ecefd04b91eb6d088b1491312b8aa7c65966a8fcc4eb8ab9",
+      "peak_rss_bytes": 60653568,
+      "pipeline_count": 16,
+      "records_verified": 1600,
+      "rss_bytes": 59727872
+    },
+    "image_binary_sha256": "7348603365b6a7cf4c00fbf82001f03e8c68ca71dc8d3b2c13682694f2775541",
+    "image_config_sha256": "119ba32a21ea52384feb67894565960261f2c2f1617696980dcbc6fd241c31ca",
+    "image_id": "sha256:119ba32a21ea52384feb67894565960261f2c2f1617696980dcbc6fd241c31ca",
+    "profile": "production",
+    "restore_trials": [
+      {
+        "binary_sha256": "7348603365b6a7cf4c00fbf82001f03e8c68ca71dc8d3b2c13682694f2775541",
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:43:18Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "91c114a15f93b867ecefd04b91eb6d088b1491312b8aa7c65966a8fcc4eb8ab9",
+        "peak_rss_bytes": 52613120,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.3289157079998404,
+        "restore_peak_rss_bytes": 46555136,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.3289157079998404,
+          "elapsed_seconds": 0.080801316,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 45464,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 46555136,
+          "platform": "linux",
+          "seconds": 0.080801316
+        },
+        "restore_seconds": 0.080801316,
+        "rss_bytes": 52613120,
+        "start_to_health_seconds": 0.3857011660002172,
+        "started_at": "2026-11-27T22:43:18.684208264+08:00"
+      },
+      {
+        "binary_sha256": "7348603365b6a7cf4c00fbf82001f03e8c68ca71dc8d3b2c13682694f2775541",
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:43:21Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "91c114a15f93b867ecefd04b91eb6d088b1491312b8aa7c65966a8fcc4eb8ab9",
+        "peak_rss_bytes": 53673984,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.34093462498276494,
+        "restore_peak_rss_bytes": 45084672,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.34093462498276494,
+          "elapsed_seconds": 0.081353024,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 44028,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 45084672,
+          "platform": "linux",
+          "seconds": 0.081353024
+        },
+        "restore_seconds": 0.081353024,
+        "rss_bytes": 53673984,
+        "start_to_health_seconds": 0.38741724999272265,
+        "started_at": "2026-11-27T22:43:21.345990749+08:00"
+      },
+      {
+        "binary_sha256": "7348603365b6a7cf4c00fbf82001f03e8c68ca71dc8d3b2c13682694f2775541",
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:43:24Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "91c114a15f93b867ecefd04b91eb6d088b1491312b8aa7c65966a8fcc4eb8ab9",
+        "peak_rss_bytes": 52883456,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.32973800000036135,
+        "restore_peak_rss_bytes": 45805568,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.32973800000036135,
+          "elapsed_seconds": 0.083449478,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 44732,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 45805568,
+          "platform": "linux",
+          "seconds": 0.083449478
+        },
+        "restore_seconds": 0.083449478,
+        "rss_bytes": 52883456,
+        "start_to_health_seconds": 0.37815104200853966,
+        "started_at": "2026-11-27T22:43:23.979153575+08:00"
+      }
+    ],
+    "tls_verified": true,
+    "uid": 1001
+  },
+  "schema_version": 3,
+  "scope": "packaging-startup-restore",
+  "source": {
+    "commit": "d2d7c1d40dd8e124b97076ab306077426866d8e1",
+    "dirty": false,
+    "files": 551,
+    "sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f"
+  },
+  "status": "passed",
+  "toolchain": {
+    "binary_build_info": "/app/main: go1.24.13\n\tpath\tgithub.com/a8851625/openetl-go\n\tmod\tgithub.com/a8851625/openetl-go\t(devel)\t\n\tdep\tfilippo.io/edwards25519\tv1.2.0\th1:crnVqOiS4jqYleHd9vaKZ+HKtHfllngJIiOpNpoJsjo=\n\tdep\tgithub.com/BurntSushi/toml\tv1.5.0\th1:W5quZX/G/csjUnuI8SUYlsHs9M38FC7znL0lIO+DvMg=\n\tdep\tgithub.com/ClickHouse/ch-go\tv0.61.5\th1:zwR8QbYI0tsMiEcze/uIMK+Tz1D3XZXLdNrlaOpeEI4=\n\tdep\tgithub.com/ClickHouse/clickhouse-go/v2\tv2.23.0\th1:srmRrkS0BR8gEut87u8jpcZ7geOob6nGj9ifrb+aKmg=\n\tdep\tgithub.com/IBM/sarama\tv1.43.3\th1:Yj6L2IaNvb2mRBop39N7mmJAHBVY3dTPncr3qGVkxPA=\n\tdep\tgithub.com/Masterminds/semver\tv1.5.0\th1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3QEww=\n\tdep\tgithub.com/alibabacloud-go/debug\tv1.0.1\th1:MsW9SmUtbb1Fnt3ieC6NNZi6aEwrXfDksD4QA6GSbPg=\n\tdep\tgithub.com/alibabacloud-go/tea\tv1.2.2\th1:aTsR6Rl3ANWPfqeQugPglfurloyBJY85eFy7Gc1+8oU=\n\tdep\tgithub.com/aliyun/aliyun-odps-go-sdk\tv0.4.23\th1:c8p3S9Fw3bmOwXOdyWzK7jPSRhMjCJCvVQAf9xSzQkQ=\n\tdep\tgithub.com/aliyun/credentials-go\tv1.3.10\th1:45Xxrae/evfzQL9V10zL3xX31eqgLWEaIdCoPipOEQA=\n\tdep\tgithub.com/andybalholm/brotli\tv1.1.1\th1:PR2pgnyFznKEugtsUo0xLdDop5SKXd5Qf5ysW+7XdTA=\n\tdep\tgithub.com/cespare/xxhash/v2\tv2.3.0\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\n\tdep\tgithub.com/clbanning/mxj/v2\tv2.7.0\th1:WA/La7UGCanFe5NpHF0Q3DNtnCsVoxbPKuyBNHWRyME=\n\tdep\tgithub.com/cznic/mathutil\tv0.0.0-20181122101859-297441e03548\th1:iwZdTE0PVqJCos1vaoKsclOGD3ADKpshg3SRtYBbwso=\n\tdep\tgithub.com/davecgh/go-spew\tv1.1.1\th1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=\n\tdep\tgithub.com/dustin/go-humanize\tv1.0.1\th1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=\n\tdep\tgithub.com/eapache/go-resiliency\tv1.7.0\th1:n3NRTnBn5N0Cbi/IeOHuQn9s2UwVUH7Ga0ZWcP+9JTA=\n\tdep\tgithub.com/eapache/go-xerial-snappy\tv0.0.0-20230731223053-c322873962e3\th1:Oy0F4ALJ04o5Qqpdz8XLIpNA3WM/iSIXqxtqo7UGVws=\n\tdep\tgithub.com/eapache/queue\tv1.1.0\th1:YOEu7KNc61ntiQlcEeUIoDTJ2o8mQznoNvUhiigpIqc=\n\tdep\tgithub.com/emirpasic/gods/v2\tv2.0.0-alpha\th1:dwFlh8pBg1VMOXWGipNMRt8v96dKAIvBehtCt6OtunU=\n\tdep\tgithub.com/fatih/color\tv1.18.0\th1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=\n\tdep\tgithub.com/fsnotify/fsnotify\tv1.9.0\th1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=\n\tdep\tgithub.com/go-faster/city\tv1.0.1\th1:4WAxSZ3V2Ws4QRDrscLEDcibJY8uf41H6AhXDrNDcGw=\n\tdep\tgithub.com/go-faster/errors\tv0.7.1\th1:MkJTnDoEdi9pDabt1dpWf7AA8/BaSYZqibYyhZ20AYg=\n\tdep\tgithub.com/go-ini/ini\tv1.67.0\th1:z6ZrTEZqSWOTyH2FlglNbNgARyHG8oLW9gMELqKr06A=\n\tdep\tgithub.com/go-logr/logr\tv1.4.3\th1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=\n\tdep\tgithub.com/go-logr/stdr\tv1.2.2\th1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=\n\tdep\tgithub.com/go-mysql-org/go-mysql\tv1.9.1\th1:W2ZKkHkoM4mmkasJCoSYfaE4RQNxXTb6VqiaMpKFrJc=\n\tdep\tgithub.com/go-sql-driver/mysql\tv1.9.3\th1:U/N249h2WzJ3Ukj8SowVFjdtZKfu9vlLZxjPXV1aweo=\n\tdep\tgithub.com/goccy/go-json\tv0.10.3\th1:KZ5WoDbxAIgm2HNbYckL0se1fHD6rz5j4ywS6ebzDqA=\n\tdep\tgithub.com/gogf/gf/v2\tv2.10.0\th1:rzDROlyqGMe/eM6dCalSR8dZOuMIdLhmxKSH1DGhbFs=\n\tdep\tgithub.com/golang/snappy\tv0.0.4\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\n\tdep\tgithub.com/google/flatbuffers\tv23.5.26+incompatible\th1:M9dgRyhJemaM4Sw8+66GHBu8ioaQmyPLg1b8VwK5WJg=\n\tdep\tgithub.com/google/uuid\tv1.6.0\th1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n\tdep\tgithub.com/gorilla/websocket\tv1.5.3\th1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=\n\tdep\tgithub.com/grokify/html-strip-tags-go\tv0.1.0\th1:03UrQLjAny8xci+R+qjCce/MYnpNXCtgzltlQbOBae4=\n\tdep\tgithub.com/hashicorp/errwrap\tv1.1.0\th1:OxrOeh75EUXMY8TBjag2fzXGZ40LB6IKw45YeGUDY2I=\n\tdep\tgithub.com/hashicorp/go-multierror\tv1.1.1\th1:H5DkEtf6CXdFp0N0Em5UCwQpXMWke8IA0+lD48awMYo=\n\tdep\tgithub.com/hashicorp/go-uuid\tv1.0.3\th1:2gKiV6YVmrJ1i2CKKa9obLvRieoRGviZFL26PcT/Co8=\n\tdep\tgithub.com/jackc/pgio\tv1.0.0\th1:g12B9UwVnzGhueNavwioyEEpAmqMe1E/BN9ES+8ovkE=\n\tdep\tgithub.com/jackc/pglogrepl\tv0.0.0-20250509230407-a9884f6bd75a\th1:f2a1BtfxAaGSs+kI2MfZjNf9KiHzynJKqOPLTkF8L4Y=\n\tdep\tgithub.com/jackc/pgpassfile\tv1.0.0\th1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=\n\tdep\tgithub.com/jackc/pgservicefile\tv0.0.0-20240606120523-5a60cdf6a761\th1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=\n\tdep\tgithub.com/jackc/pgx/v5\tv5.7.4\th1:9wKznZrhWa2QiHL+NjTSPP6yjl3451BX3imWDnokYlg=\n\tdep\tgithub.com/jackc/puddle/v2\tv2.2.2\th1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=\n\tdep\tgithub.com/jcmturner/aescts/v2\tv2.0.0\th1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8=\n\tdep\tgithub.com/jcmturner/dnsutils/v2\tv2.0.0\th1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo=\n\tdep\tgithub.com/jcmturner/gofork\tv1.7.6\th1:QH0l3hzAU1tfT3rZCnW5zXl+orbkNMMRGJfdJjHVETg=\n\tdep\tgithub.com/jcmturner/gokrb5/v8\tv8.4.4\th1:x1Sv4HaTpepFkXbt2IkL29DXRf8sOfZXo8eRKh687T8=\n\tdep\tgithub.com/jcmturner/rpc/v2\tv2.0.3\th1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY=\n\tdep\tgithub.com/json-iterator/go\tv1.1.12\th1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=\n\tdep\tgithub.com/klauspost/compress\tv1.17.9\th1:6KIumPrER1LHsvBVuDa0r5xaG0Es51mhhB9BQB2qeMA=\n\tdep\tgithub.com/magiconair/properties\tv1.8.10\th1:s31yESBquKXCV9a/ScB3ESkOjUYYv+X0rg8SYxI99mE=\n\tdep\tgithub.com/mattn/go-colorable\tv0.1.13\th1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=\n\tdep\tgithub.com/mattn/go-isatty\tv0.0.20\th1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=\n\tdep\tgithub.com/mattn/go-runewidth\tv0.0.16\th1:E5ScNMtiwvlvB5paMFdw9p4kSQzbXFikJ5SQO6TULQc=\n\tdep\tgithub.com/minio/md5-simd\tv1.1.2\th1:Gdi1DZK69+ZVMoNHRXJyNcxrMA4dSxoYHZSQbirFg34=\n\tdep\tgithub.com/minio/minio-go/v7\tv7.0.74\th1:fTo/XlPBTSpo3BAMshlwKL5RspXRv9us5UeHEGYCFe0=\n\tdep\tgithub.com/modern-go/concurrent\tv0.0.0-20180306012644-bacd9c7ef1dd\th1:TRLaZ9cD/w8PVh93nsPXa1VrQ6jlwL5oN8l14QlcNfg=\n\tdep\tgithub.com/modern-go/reflect2\tv1.0.2\th1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=\n\tdep\tgithub.com/olekukonko/errors\tv1.1.0\th1:RNuGIh15QdDenh+hNvKrJkmxxjV4hcS50Db478Ou5sM=\n\tdep\tgithub.com/olekukonko/ll\tv0.0.9\th1:Y+1YqDfVkqMWuEQMclsF9HUR5+a82+dxJuL1HHSRpxI=\n\tdep\tgithub.com/olekukonko/tablewriter\tv1.1.0\th1:N0LHrshF4T39KvI96fn6GT8HEjXRXYNDrDjKFDB7RIY=\n\tdep\tgithub.com/parquet-go/bitpack\tv1.0.0\th1:AUqzlKzPPXf2bCdjfj4sTeacrUwsT7NlcYDMUQxPcQA=\n\tdep\tgithub.com/parquet-go/jsonlite\tv1.0.0\th1:87QNdi56wOfsE5bdgas0vRzHPxfJgzrXGml1zZdd7VU=\n\tdep\tgithub.com/parquet-go/parquet-go\tv0.30.1\th1:Oy6ganNrAdFiVwy7wNmWagfPTWA2X9Z3tVHBc7JtuX8=\n\tdep\tgithub.com/paulmach/orb\tv0.11.1\th1:3koVegMC4X/WeiXYz9iswopaTwMem53NzTJuTF20JzU=\n\tdep\tgithub.com/pierrec/lz4/v4\tv4.1.21\th1:yOVMLb6qSIDP67pl/5F7RepeKYu/VmTyEXvuMI5d9mQ=\n\tdep\tgithub.com/pingcap/errors\tv0.11.5-0.20221009092201-b66cddb77c32\th1:m5ZsBa5o/0CkzZXfXLaThzKuR85SnHHetqBCpzQ30h8=\n\tdep\tgithub.com/pingcap/failpoint\tv0.0.0-20220801062533-2eaa32854a6c\th1:CgbKAHto5CQgWM9fSBIvaxsJHuGP0uM74HXtv3MyyGQ=\n\tdep\tgithub.com/pingcap/log\tv1.1.1-0.20230317032135-a0d097d16e22\th1:2SOzvGvE8beiC1Y4g9Onkvu6UmuBBOeWRGQEjJaT/JY=\n\tdep\tgithub.com/pingcap/tidb/pkg/parser\tv0.0.0-20231103042308-035ad5ccbe67\th1:m0RZ583HjzG3NweDi4xAcK54NBBPJh+zXp5Fp60dHtw=\n\tdep\tgithub.com/pkg/errors\tv0.9.1\th1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=\n\tdep\tgithub.com/rcrowley/go-metrics\tv0.0.0-20201227073835-cf1acfcdf475\th1:N/ElC8H3+5XpJzTSTfLsJV/mx9Q9g7kxmchpfZyxgzM=\n\tdep\tgithub.com/redis/go-redis/v9\tv9.20.1\th1:sfCU6A8P3dXbKyWes02uxA2baehGux9dZHfEKtsTB1w=\n\tdep\tgithub.com/remyoudompheng/bigfft\tv0.0.0-20230129092748-24d4a6f8daec\th1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=\n\tdep\tgithub.com/rivo/uniseg\tv0.2.0\th1:S1pD9weZBuJdFmowNwbpi7BJ8TNftyUImj/0WQi72jY=\n\tdep\tgithub.com/robfig/cron/v3\tv3.0.1\th1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=\n\tdep\tgithub.com/rs/xid\tv1.5.0\th1:mKX4bl4iPYJtEIxp6CYiUuLQ/8DYMoz0PUdtGgMFRVc=\n\tdep\tgithub.com/segmentio/asm\tv1.2.0\th1:9BQrFxC+YOHJlTlHGkTrFWf59nbL3XnCoFLTwDCI7ys=\n\tdep\tgithub.com/shopspring/decimal\tv1.3.1\th1:2Usl1nmF/WZucqkFZhnfFYxxxu8LG21F6nPQBE5gKV8=\n\tdep\tgithub.com/siddontang/go\tv0.0.0-20180604090527-bdc77568d726\th1:xT+JlYxNGqyT+XcU8iUrN18JYed2TvG9yN5ULG2jATM=\n\tdep\tgithub.com/siddontang/go-log\tv0.0.0-20180807004314-8d05993dda07\th1:oI+RNwuC9jF2g2lP0u0cVEEZrc/AYBCuFdvwrLWM/6Q=\n\tdep\tgithub.com/twpayne/go-geom\tv1.6.1\th1:iLE+Opv0Ihm/ABIcvQFGIiFBXd76oBIar9drAwHFhR4=\n\tdep\tgithub.com/yuin/gopher-lua\tv1.1.2\th1:yF/FjE3hD65tBbt0VXLE13HWS9h34fdzJmrWRXwobGA=\n\tdep\tgo.opentelemetry.io/auto/sdk\tv1.1.0\th1:cH53jehLUN6UFLY71z+NDOiNJqDdPRaXzTel0sJySYA=\n\tdep\tgo.opentelemetry.io/otel\tv1.38.0\th1:RkfdswUDRimDg0m2Az18RKOsnI8UDzppJAtj01/Ymk8=\n\tdep\tgo.opentelemetry.io/otel/metric\tv1.38.0\th1:Kl6lzIYGAh5M159u9NgiRkmoMKjvbsKtYRwgfrA6WpA=\n\tdep\tgo.opentelemetry.io/otel/sdk\tv1.38.0\th1:l48sr5YbNf2hpCUj/FoGhW9yDkl+Ma+LrVl8qaM5b+E=\n\tdep\tgo.opentelemetry.io/otel/trace\tv1.38.0\th1:Fxk5bKrDZJUH+AMyyIXGcFAPah0oRcT+LuNtJrmcNLE=\n\tdep\tgo.uber.org/atomic\tv1.11.0\th1:ZvwS0R+56ePWxUNi+Atn9dWONBPp/AUETXlHW0DxSjE=\n\tdep\tgo.uber.org/multierr\tv1.11.0\th1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=\n\tdep\tgo.uber.org/zap\tv1.27.0\th1:aJMhYGrd5QSmlpLMr2MftRKl7t8J8PTZPA732ud/XR8=\n\tdep\tgolang.org/x/crypto\tv0.38.0\th1:jt+WWG8IZlBnVbomuhg2Mdq0+BBQaHbtqHEFEigjUV8=\n\tdep\tgolang.org/x/exp\tv0.0.0-20250620022241-b7579e27df2b\th1:M2rDM6z3Fhozi9O7NWsxAkg/yqS/lQJ6PmkyIV3YP+o=\n\tdep\tgolang.org/x/net\tv0.40.0\th1:79Xs7wF06Gbdcg4kdCCIQArK11Z1hr5POQ6+fIYHNuY=\n\tdep\tgolang.org/x/sync\tv0.15.0\th1:KWH3jNZsfyT6xfAfKiz6MRNmd46ByHDYaZ7KSkCtdW8=\n\tdep\tgolang.org/x/sys\tv0.38.0\th1:3yZWxaJjBmCWXqhN1qh02AkOnCQ1poK6oF+a7xWL6Gc=\n\tdep\tgolang.org/x/text\tv0.25.0\th1:qVyWApTSYLk/drJRO5mDlNYskwQznZmkpV2c8q9zls4=\n\tdep\tgolang.org/x/xerrors\tv0.0.0-20220907171357-04be3eba64a2\th1:H2TDz8ibqkAF6YGhCdN3jS9O0/s90v0rJh3X/OLHEUk=\n\tdep\tgoogle.golang.org/protobuf\tv1.34.2\th1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6hg=\n\tdep\tgopkg.in/ini.v1\tv1.67.0\th1:Dgnx+6+nfE+IfzjUEISNeydPJh9AXNNsWbGP9KzCsOA=\n\tdep\tgopkg.in/natefinch/lumberjack.v2\tv2.2.1\th1:bBRl1b0OH9s/DuPhuXpNl+VtCaJXFZ5/uEFST95x9zc=\n\tdep\tgopkg.in/yaml.v3\tv3.0.1\th1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=\n\tdep\tmodernc.org/libc\tv1.66.3\th1:cfCbjTUcdsKyyZZfEUKfoHcP3S0Wkvz3jgSzByEWVCQ=\n\tdep\tmodernc.org/mathutil\tv1.7.1\th1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=\n\tdep\tmodernc.org/memory\tv1.11.0\th1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=\n\tdep\tmodernc.org/sqlite\tv1.38.2\th1:Aclu7+tgjgcQVShZqim41Bbw9Cho0y/7WzYptXqkEek=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-ldflags=\"-s -w\"\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=linux\n\tbuild\tGOARM64=v8.0\n",
+    "builder": {
+      "architecture": "arm64",
+      "bytes": 2164080528,
+      "engine_reported_image_bytes": 2164080528,
+      "healthcheck": null,
+      "image_id": "sha256:b477f112b69c6f9de8762a6372a1dde8c7955b98db34a44c0f815fbc67d14ca0",
+      "manifest_digest": "sha256:2ebafecbcb67c803a1588e3640e0a6c54e5d1b5818d3a9a6aac40e2fc908e22c",
+      "os": "linux",
+      "repo_digests": [
+        "localhost/openetl-baseline-7b9d5180e71e@sha256:2ebafecbcb67c803a1588e3640e0a6c54e5d1b5818d3a9a6aac40e2fc908e22c"
+      ]
+    },
+    "container_client_version": "{\"APIVersion\":\"5.8.2\",\"Version\":\"5.8.2\",\"GoVersion\":\"go1.26.2\",\"GitCommit\":\"\",\"BuiltTime\":\"Tue Apr 14 06:06:58 2026\",\"Built\":1776118018,\"BuildOrigin\":\"brew\",\"OsArch\":\"darwin/arm64\",\"Os\":\"darwin\"}",
+    "gf_default_download_version": "v2.10.0",
+    "go_version": "go version go1.24.13 linux/arm64",
+    "pack_recipe": "Dockerfile: SKIP_UI=1 hack/pack.sh; gf URL/output are in build logs",
+    "process_measure": {
+      "binary_sha256": "5d2d620abf8988734d2ab8fcce5540294e16f8c8be45fa1b65404d8d7991d8f4",
+      "linux_native_rss_unit": "KiB",
+      "method": "wait4.rusage.ru_maxrss",
+      "source_sha256": "5d57185945f5b95717a39d8e5b3fd8117d3b0166f6672893a9a16da3e99f01dc"
+    },
+    "python_version": "3.15.2"
+  },
+  "warnings": []
+}

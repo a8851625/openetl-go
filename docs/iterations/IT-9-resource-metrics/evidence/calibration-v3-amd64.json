@@ -1,0 +1,888 @@
+{
+  "base_images": {
+    "docker.io/library/alpine:3.19": {
+      "architecture": "amd64",
+      "bytes": 3429495,
+      "engine_reported_image_bytes": 3429495,
+      "healthcheck": null,
+      "image_id": "sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1",
+      "manifest_digest": null,
+      "os": "linux",
+      "repo_digests": [
+        "alpine@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1"
+      ]
+    },
+    "docker.io/library/golang:1.24-alpine": {
+      "architecture": "amd64",
+      "bytes": 83301112,
+      "engine_reported_image_bytes": 83301112,
+      "healthcheck": null,
+      "image_id": "sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191",
+      "manifest_digest": null,
+      "os": "linux",
+      "repo_digests": [
+        "golang@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191"
+      ]
+    },
+    "docker.io/library/node:20-alpine": {
+      "architecture": "amd64",
+      "bytes": 48372061,
+      "engine_reported_image_bytes": 48372061,
+      "healthcheck": null,
+      "image_id": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+      "manifest_digest": null,
+      "os": "linux",
+      "repo_digests": [
+        "node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293"
+      ]
+    }
+  },
+  "cleanup": {
+    "errors": [],
+    "images_retained": false,
+    "passed": true
+  },
+  "hardware": {
+    "architecture": "amd64",
+    "client_platform": "Linux-7.0.0-1020-azure-x86_64-with-glibc2.43",
+    "container_engine": "docker",
+    "cpus": 4,
+    "kernel": "7.0.0-1020-azure",
+    "memory_bytes": 16759431168,
+    "os": "linux",
+    "other_running_containers": 0,
+    "runtime_version": "29.4.2"
+  },
+  "harness_sha256": {
+    "bench-baseline.sh": "a31f48a90218e9fbfb32d5619832125c84276e8bc949100191a8fa047d9facad",
+    "bench_baseline.py": "166428036b99a2f347a109277066fa0e89a64ea594464c31a782760360963f31",
+    "cmd/process-measure/main.go": "5d57185945f5b95717a39d8e5b3fd8117d3b0166f6672893a9a16da3e99f01dc",
+    "cmd/process-measure/main_test.go": "93488f9eedad227b8460fc5dbc968298e378f766c02c4f08033c08d3fd70d601"
+  },
+  "images": {
+    "default": {
+      "architecture": "amd64",
+      "archive_format": "docker-save",
+      "binary_bytes": 67285176,
+      "binary_sha256": "0ec55ad50b9d7996d7776fc19fc767cacc7bfb7c7700eb810978d6187577b627",
+      "build_tags": "",
+      "bytes": 47609218,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 47609218,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 0,
+      "image_archive_bytes": 47628288,
+      "image_archive_path": "image-default.tar",
+      "image_archive_sha256": "0ff28a14a5405278eb820c1511ce666a49c3f32d06e58e20f67f3a97d64d3528",
+      "image_config_sha256": "561c5d594b40918373af76411c00e4b5d431ba1fc3d584a74b20e3d56b1238be",
+      "image_id": "sha256:97b1f7015f26d226ea9bc35644144ed6925a70e147b4acb26f828ab8a111e107",
+      "image_uncompressed_layer_bytes": 147265024,
+      "layer_inventory": [
+        {
+          "blob_bytes": 3419815,
+          "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+          "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+          "encoding": "gzip",
+          "ordinal": 0,
+          "uncompressed_bytes": 7688192
+        },
+        {
+          "blob_bytes": 93,
+          "blob_sha256": "9512efe81002561803beb28a751d9a58676d339ede68c14373ed75c935ca5f66",
+          "diff_id": "sha256:e7a1fcbbb2dc46b6ff0a4bce3cebf240ec748f29b108c13c88a02743c02e66c3",
+          "encoding": "gzip",
+          "ordinal": 1,
+          "uncompressed_bytes": 1536
+        },
+        {
+          "blob_bytes": 566788,
+          "blob_sha256": "7a6eb75d167d391004aabe10b95d88053324200791ae7475b3bda5b3ae36cfb9",
+          "diff_id": "sha256:53a111b74ea837fdc7a1c676ddf9493656d3a8fe48554cfae5a07f88127bb565",
+          "encoding": "gzip",
+          "ordinal": 2,
+          "uncompressed_bytes": 2564096
+        },
+        {
+          "blob_bytes": 1236,
+          "blob_sha256": "576089c730c4b089264f87438d1bf12b2b06d3df18d73375317378c69f24eaed",
+          "diff_id": "sha256:00db8599db83418e3b2b29109783ca756397bf9129c22ae4336ee2dd2fe5237c",
+          "encoding": "gzip",
+          "ordinal": 3,
+          "uncompressed_bytes": 11776
+        },
+        {
+          "blob_bytes": 21455741,
+          "blob_sha256": "22221be03ea989ad720e5f701dd574d5eef4cf37162ba13eb081551a7da69115",
+          "diff_id": "sha256:8983cb971e7cb77187dc546f6fa1d29c2226217417bbbb4296e509b67c84e03c",
+          "encoding": "gzip",
+          "ordinal": 4,
+          "uncompressed_bytes": 67287552
+        },
+        {
+          "blob_bytes": 347571,
+          "blob_sha256": "52281c4418267faded86ef7c242a1daf0b1679d8e1ad7a603b24b2202b1b0d8b",
+          "diff_id": "sha256:fbb234498c728eda112eff4d4203f19cfede79e6dbba4507bada3fb42efdd02b",
+          "encoding": "gzip",
+          "ordinal": 5,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 3691,
+          "blob_sha256": "c7799f7d5f6a3c3b39fde38be1b2c3307b5add6aa9c906fb501816b1c9938e84",
+          "diff_id": "sha256:d2893319da81f86236d4d5bc9e72dc683798579da18c542346eeff4024691424",
+          "encoding": "gzip",
+          "ordinal": 6,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 21808264,
+          "blob_sha256": "a2ddc7262ffbe5e0a20dad51473fd045f8b5b3ee66698c04936f566a4fc72237",
+          "diff_id": "sha256:604ee9a19ac0810a71e14d1adbe49a6dee5370914d56bb858c783d587fde94df",
+          "encoding": "gzip",
+          "ordinal": 7,
+          "uncompressed_bytes": 68499456
+        }
+      ],
+      "manifest_digest": null,
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466354,
+      "packed_sha256": "f54c2427cbef95e8a05c701e8a6fe125d5ab53e0f64acc13c1a7a4dca08f1f90",
+      "repo_digests": [
+        "localhost/openetl-baseline-afc1f7cc288d@sha256:97b1f7015f26d226ea9bc35644144ed6925a70e147b4acb26f828ab8a111e107"
+      ],
+      "tag": "localhost/openetl-baseline-afc1f7cc288d:default",
+      "unit": "bytes"
+    },
+    "extism": {
+      "architecture": "amd64",
+      "archive_format": "docker-save",
+      "binary_bytes": 70955192,
+      "binary_sha256": "97e95a9d454c38e601f689a014980f13ab1ccdccd6d87d00bba557dde850d9c6",
+      "build_tags": "extism",
+      "bytes": 50228060,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 50228060,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 0,
+      "image_archive_bytes": 50247168,
+      "image_archive_path": "image-extism.tar",
+      "image_archive_sha256": "14b055465432f0441a17fa777905ff35f37b2b5c66cff406889aac707d51e7fa",
+      "image_config_sha256": "5b850e613ea2a1e11aa4f0a85cddf6a52e304fe8cadca4fef327b13d3b8494cf",
+      "image_id": "sha256:86e34321b3f4654a8a8c09dd9186b87381633bfe56f2a16c1e1273e970a4e3e7",
+      "image_uncompressed_layer_bytes": 154605056,
+      "layer_inventory": [
+        {
+          "blob_bytes": 3419815,
+          "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+          "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+          "encoding": "gzip",
+          "ordinal": 0,
+          "uncompressed_bytes": 7688192
+        },
+        {
+          "blob_bytes": 93,
+          "blob_sha256": "9512efe81002561803beb28a751d9a58676d339ede68c14373ed75c935ca5f66",
+          "diff_id": "sha256:e7a1fcbbb2dc46b6ff0a4bce3cebf240ec748f29b108c13c88a02743c02e66c3",
+          "encoding": "gzip",
+          "ordinal": 1,
+          "uncompressed_bytes": 1536
+        },
+        {
+          "blob_bytes": 566788,
+          "blob_sha256": "7a6eb75d167d391004aabe10b95d88053324200791ae7475b3bda5b3ae36cfb9",
+          "diff_id": "sha256:53a111b74ea837fdc7a1c676ddf9493656d3a8fe48554cfae5a07f88127bb565",
+          "encoding": "gzip",
+          "ordinal": 2,
+          "uncompressed_bytes": 2564096
+        },
+        {
+          "blob_bytes": 1236,
+          "blob_sha256": "576089c730c4b089264f87438d1bf12b2b06d3df18d73375317378c69f24eaed",
+          "diff_id": "sha256:00db8599db83418e3b2b29109783ca756397bf9129c22ae4336ee2dd2fe5237c",
+          "encoding": "gzip",
+          "ordinal": 3,
+          "uncompressed_bytes": 11776
+        },
+        {
+          "blob_bytes": 22765236,
+          "blob_sha256": "c22d036fea21912230343ad782bb56a8f8266b71fc350370ab55f1c865d19350",
+          "diff_id": "sha256:507be5384b856ff2430666929e0c5d48a5f22efd04c0c7cfd2ae5b872ab31e0c",
+          "encoding": "gzip",
+          "ordinal": 4,
+          "uncompressed_bytes": 70957568
+        },
+        {
+          "blob_bytes": 347572,
+          "blob_sha256": "f73bb86fcf88a777ca815e622c59764a2ddad5ecc2e9ef01e91eea5514f64424",
+          "diff_id": "sha256:657ace7f4570a9d9e95a0b4c8578671620014ce2aea100f4e59c6d82b44f7d08",
+          "encoding": "gzip",
+          "ordinal": 5,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 3689,
+          "blob_sha256": "6154dbdf32fc93d4a48e9afd7aec2755d4f4e813166e07865afc8f5099424d33",
+          "diff_id": "sha256:5642abc9af5f6cc6ab194377e85ce3ba7f48238a483a33643601b679db1a35cf",
+          "encoding": "gzip",
+          "ordinal": 6,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 23117612,
+          "blob_sha256": "2b1c20aba6eb1ea86404f8648f2b169af1c2bf86100fccd7decd3cb3a64c5d6a",
+          "diff_id": "sha256:de174eedaeda9b74b398e9538b836384cc441c682750417039eed0edb4b41a13",
+          "encoding": "gzip",
+          "ordinal": 7,
+          "uncompressed_bytes": 72169472
+        }
+      ],
+      "manifest_digest": null,
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466354,
+      "packed_sha256": "f54c2427cbef95e8a05c701e8a6fe125d5ab53e0f64acc13c1a7a4dca08f1f90",
+      "repo_digests": [
+        "localhost/openetl-baseline-afc1f7cc288d@sha256:86e34321b3f4654a8a8c09dd9186b87381633bfe56f2a16c1e1273e970a4e3e7"
+      ],
+      "tag": "localhost/openetl-baseline-afc1f7cc288d:extism",
+      "unit": "bytes"
+    },
+    "extism-nolua": {
+      "architecture": "amd64",
+      "archive_format": "docker-save",
+      "binary_bytes": 70156472,
+      "binary_sha256": "6f690e9eb2a09424ac06934121c650698d544b9ee9e69e2b5b0018c2288d13f7",
+      "build_tags": "extism,nolua",
+      "bytes": 49553726,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 49553726,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 0,
+      "image_archive_bytes": 49572864,
+      "image_archive_path": "image-extism-nolua.tar",
+      "image_archive_sha256": "da6f4ba84ff5364178b012d284eab40fb427ee53644de925cb05f42cace6ec39",
+      "image_config_sha256": "4337a208df9646e17ab3d9cfec105d093aba686ad084b2c3fb7fbe411617184a",
+      "image_id": "sha256:57e7e5f456224b733992064ad28d580660f341b87b80ecdb2b25d8122534cfcb",
+      "image_uncompressed_layer_bytes": 153007616,
+      "layer_inventory": [
+        {
+          "blob_bytes": 3419815,
+          "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+          "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+          "encoding": "gzip",
+          "ordinal": 0,
+          "uncompressed_bytes": 7688192
+        },
+        {
+          "blob_bytes": 93,
+          "blob_sha256": "9512efe81002561803beb28a751d9a58676d339ede68c14373ed75c935ca5f66",
+          "diff_id": "sha256:e7a1fcbbb2dc46b6ff0a4bce3cebf240ec748f29b108c13c88a02743c02e66c3",
+          "encoding": "gzip",
+          "ordinal": 1,
+          "uncompressed_bytes": 1536
+        },
+        {
+          "blob_bytes": 566788,
+          "blob_sha256": "7a6eb75d167d391004aabe10b95d88053324200791ae7475b3bda5b3ae36cfb9",
+          "diff_id": "sha256:53a111b74ea837fdc7a1c676ddf9493656d3a8fe48554cfae5a07f88127bb565",
+          "encoding": "gzip",
+          "ordinal": 2,
+          "uncompressed_bytes": 2564096
+        },
+        {
+          "blob_bytes": 1236,
+          "blob_sha256": "576089c730c4b089264f87438d1bf12b2b06d3df18d73375317378c69f24eaed",
+          "diff_id": "sha256:00db8599db83418e3b2b29109783ca756397bf9129c22ae4336ee2dd2fe5237c",
+          "encoding": "gzip",
+          "ordinal": 3,
+          "uncompressed_bytes": 11776
+        },
+        {
+          "blob_bytes": 22427922,
+          "blob_sha256": "39c4061391004b5a8e3e96c9b4bde71de414594f3f6d27b5c51a6ba7819701b1",
+          "diff_id": "sha256:f1c00eb879b3478fec43a67dad8f578ab1dcb91e1b1ec035c0686034603c9c4f",
+          "encoding": "gzip",
+          "ordinal": 4,
+          "uncompressed_bytes": 70158848
+        },
+        {
+          "blob_bytes": 347571,
+          "blob_sha256": "efe54b9f93ad22d0df3560c9f57d29aec12952c179ad868475c8d64c156749ee",
+          "diff_id": "sha256:fd2279d5702ce79f15be6eb179447beae90bab7f07916eba2fdc9112db7cc9f4",
+          "encoding": "gzip",
+          "ordinal": 5,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 3692,
+          "blob_sha256": "e554f516f5967b555d5779cb779ca6429051d471d834b3e6862fc55c172a077f",
+          "diff_id": "sha256:ddedf3f615563264a38e26e21769495ff3d0f3aa47459ce1e9f63d24c42409bb",
+          "encoding": "gzip",
+          "ordinal": 6,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 22780590,
+          "blob_sha256": "4d46d2997d9f650d481192f7384386405eb6ec1be908f878fd21baeed4edfef6",
+          "diff_id": "sha256:a4950f608ac97b8296c487f87c145abd89f58bb9e5ba719aa1a0662d85021cc0",
+          "encoding": "gzip",
+          "ordinal": 7,
+          "uncompressed_bytes": 71370752
+        }
+      ],
+      "manifest_digest": null,
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466354,
+      "packed_sha256": "f54c2427cbef95e8a05c701e8a6fe125d5ab53e0f64acc13c1a7a4dca08f1f90",
+      "repo_digests": [
+        "localhost/openetl-baseline-afc1f7cc288d@sha256:57e7e5f456224b733992064ad28d580660f341b87b80ecdb2b25d8122534cfcb"
+      ],
+      "tag": "localhost/openetl-baseline-afc1f7cc288d:extism-nolua",
+      "unit": "bytes"
+    },
+    "nolua": {
+      "architecture": "amd64",
+      "archive_format": "docker-save",
+      "binary_bytes": 66482360,
+      "binary_sha256": "acbda1d1072d18a7bc2087095f604f687f05880a98d79990fd8e5c862222d07f",
+      "build_tags": "nolua",
+      "bytes": 46932970,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 46932970,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 0,
+      "image_archive_bytes": 46952448,
+      "image_archive_path": "image-nolua.tar",
+      "image_archive_sha256": "7df1197ac389cdc4a24cde4981f23e3a4f5a50f83353fa42f484f0a42da9afb5",
+      "image_config_sha256": "6ae738fdf4efff03cad3fb303b7f870e049af5a7ea17e3220e1405ea541e704c",
+      "image_id": "sha256:d44c1a809700738025433fc796f7e774629efeaefd023731bd786188023af934",
+      "image_uncompressed_layer_bytes": 145659392,
+      "layer_inventory": [
+        {
+          "blob_bytes": 3419815,
+          "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+          "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+          "encoding": "gzip",
+          "ordinal": 0,
+          "uncompressed_bytes": 7688192
+        },
+        {
+          "blob_bytes": 93,
+          "blob_sha256": "9512efe81002561803beb28a751d9a58676d339ede68c14373ed75c935ca5f66",
+          "diff_id": "sha256:e7a1fcbbb2dc46b6ff0a4bce3cebf240ec748f29b108c13c88a02743c02e66c3",
+          "encoding": "gzip",
+          "ordinal": 1,
+          "uncompressed_bytes": 1536
+        },
+        {
+          "blob_bytes": 566788,
+          "blob_sha256": "7a6eb75d167d391004aabe10b95d88053324200791ae7475b3bda5b3ae36cfb9",
+          "diff_id": "sha256:53a111b74ea837fdc7a1c676ddf9493656d3a8fe48554cfae5a07f88127bb565",
+          "encoding": "gzip",
+          "ordinal": 2,
+          "uncompressed_bytes": 2564096
+        },
+        {
+          "blob_bytes": 1236,
+          "blob_sha256": "576089c730c4b089264f87438d1bf12b2b06d3df18d73375317378c69f24eaed",
+          "diff_id": "sha256:00db8599db83418e3b2b29109783ca756397bf9129c22ae4336ee2dd2fe5237c",
+          "encoding": "gzip",
+          "ordinal": 3,
+          "uncompressed_bytes": 11776
+        },
+        {
+          "blob_bytes": 21117982,
+          "blob_sha256": "449ee52278eaa85cc3922f31a3bb096dfcce27413cc23debd9ab6a8e30fc8c16",
+          "diff_id": "sha256:c3a60dbc14fcfe6fa2643f53e2f5a4837ada3ce55830f4d0630ce5db6274b01b",
+          "encoding": "gzip",
+          "ordinal": 4,
+          "uncompressed_bytes": 66484736
+        },
+        {
+          "blob_bytes": 347571,
+          "blob_sha256": "89d7e8ca79d57a9d9cce39b182bfcc8ea756db51a917d48ff313682f03dada16",
+          "diff_id": "sha256:0f20c3eca9b70db92ecca7a0427eb75bb6ad96b6f09d71214b8780d5c0441046",
+          "encoding": "gzip",
+          "ordinal": 5,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 3691,
+          "blob_sha256": "89d2ec6e2f3fc5bddb745e64dcf8c6bdfd8a05fcf56c24c6d9b487ce7e6f69fc",
+          "diff_id": "sha256:f4b8c1010631f59f9990e09e7b9bc29c3e7b414f03c978e1ce7bb2370ac59c58",
+          "encoding": "gzip",
+          "ordinal": 6,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 21469781,
+          "blob_sha256": "f38e5d9cb4fcd2ca24449ee1cd553c734bb630c40944bccd7f40ece627143871",
+          "diff_id": "sha256:ed2d18f3c9352af5571dec895ebe09016bc628fe48916d689ec5303974f18dc7",
+          "encoding": "gzip",
+          "ordinal": 7,
+          "uncompressed_bytes": 67696640
+        }
+      ],
+      "manifest_digest": null,
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466354,
+      "packed_sha256": "f54c2427cbef95e8a05c701e8a6fe125d5ab53e0f64acc13c1a7a4dca08f1f90",
+      "repo_digests": [
+        "localhost/openetl-baseline-afc1f7cc288d@sha256:d44c1a809700738025433fc796f7e774629efeaefd023731bd786188023af934"
+      ],
+      "tag": "localhost/openetl-baseline-afc1f7cc288d:nolua",
+      "unit": "bytes"
+    }
+  },
+  "limitations": [
+    "Fresh process and SQLite volume, cached image/OS pages; not a host reboot cold start.",
+    "Start timer includes container start, port discovery and health polling overhead.",
+    "Runtime image uses Dockerfile, not a published GoReleaser release asset.",
+    "CGO/QuickJS is not published by .goreleaser.yml and is not measured here.",
+    "Loaded control-plane peak is not sustained pipeline throughput/concurrency evidence.",
+    "ClickHouse specialty scope is pending; no specialty benchmark is run.",
+    "Image bytes is a legacy diagnostic alias of engine_reported_image_bytes, never the v3 image budget.",
+    "Uncompressed image layer bytes includes layer tar headers/whiteouts/overwritten content; not merged rootfs or process memory.",
+    "Saved archive bytes depends on transport/compression; compare the selected uncompressed layer metric."
+  ],
+  "measured_at": "2026-11-27T14:35:49Z",
+  "parameters": {
+    "container_log_driver": "json-file",
+    "cpus": 2,
+    "gomaxprocs": 2,
+    "idle_samples": 5,
+    "memory_bytes": 1073741824,
+    "records_per_pipeline": 100,
+    "restore_pipelines": 16,
+    "sample_interval_seconds": 1,
+    "settle_seconds": 10,
+    "trials": 3
+  },
+  "runtime": {
+    "backup": {
+      "bytes": 52737,
+      "container_start_to_exit_seconds": 0.26455615199995464,
+      "counts": {
+        "audit_logs": 48,
+        "checkpoints": 16,
+        "connections": 0,
+        "dead_letters": 0,
+        "pipeline_versions": 16,
+        "pipelines": 16,
+        "plugins": 0,
+        "recovery_events": 0,
+        "recovery_operations": 0,
+        "run_history": 16,
+        "settings": 0,
+        "task_assignments": 0,
+        "workers": 1
+      },
+      "elapsed_seconds": 0.042269876,
+      "exit_code": 0,
+      "method": "wait4.rusage.ru_maxrss",
+      "native_max_rss": 46368,
+      "native_rss_unit": "KiB",
+      "peak_rss_bytes": 47480832,
+      "platform": "linux",
+      "seconds": 0.042269876,
+      "sha256": "c1429095f618884062e3d44876c812eab732a062ef42c8d4106c9002fec6e22e"
+    },
+    "cold_trials": [
+      {
+        "binary_sha256": "0ec55ad50b9d7996d7776fc19fc767cacc7bfb7c7700eb810978d6187577b627",
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:44:33Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 53616640,
+            "rss_bytes": 53616640
+          },
+          {
+            "peak_rss_bytes": 53616640,
+            "rss_bytes": 53616640
+          },
+          {
+            "peak_rss_bytes": 53620736,
+            "rss_bytes": 53620736
+          },
+          {
+            "peak_rss_bytes": 53620736,
+            "rss_bytes": 53620736
+          },
+          {
+            "peak_rss_bytes": 53620736,
+            "rss_bytes": 53620736
+          }
+        ],
+        "start_to_health_seconds": 0.3114129849999472,
+        "started_at": "2026-11-27T14:44:32.951618616Z"
+      },
+      {
+        "binary_sha256": "0ec55ad50b9d7996d7776fc19fc767cacc7bfb7c7700eb810978d6187577b627",
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:44:49Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 54050816,
+            "rss_bytes": 54050816
+          },
+          {
+            "peak_rss_bytes": 54050816,
+            "rss_bytes": 54050816
+          },
+          {
+            "peak_rss_bytes": 54050816,
+            "rss_bytes": 54050816
+          },
+          {
+            "peak_rss_bytes": 54050816,
+            "rss_bytes": 54050816
+          },
+          {
+            "peak_rss_bytes": 54050816,
+            "rss_bytes": 54050816
+          }
+        ],
+        "start_to_health_seconds": 0.3011001340000803,
+        "started_at": "2026-11-27T14:44:49.351158126Z"
+      },
+      {
+        "binary_sha256": "0ec55ad50b9d7996d7776fc19fc767cacc7bfb7c7700eb810978d6187577b627",
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:45:05Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 53710848,
+            "rss_bytes": 53710848
+          },
+          {
+            "peak_rss_bytes": 53714944,
+            "rss_bytes": 53714944
+          },
+          {
+            "peak_rss_bytes": 53714944,
+            "rss_bytes": 53714944
+          },
+          {
+            "peak_rss_bytes": 53714944,
+            "rss_bytes": 53714944
+          },
+          {
+            "peak_rss_bytes": 53739520,
+            "rss_bytes": 53739520
+          }
+        ],
+        "start_to_health_seconds": 0.28770311499999934,
+        "started_at": "2026-11-27T14:45:05.72707597Z"
+      }
+    ],
+    "fixture": {
+      "identity_sha256": "73aa95ac9eb0724d5140e8165eb8e8acfaedf198559a97872144bc8571aa2580",
+      "peak_rss_bytes": 63795200,
+      "pipeline_count": 16,
+      "records_verified": 1600,
+      "rss_bytes": 63795200
+    },
+    "image_binary_sha256": "0ec55ad50b9d7996d7776fc19fc767cacc7bfb7c7700eb810978d6187577b627",
+    "image_config_sha256": "561c5d594b40918373af76411c00e4b5d431ba1fc3d584a74b20e3d56b1238be",
+    "image_id": "sha256:97b1f7015f26d226ea9bc35644144ed6925a70e147b4acb26f828ab8a111e107",
+    "profile": "production",
+    "restore_trials": [
+      {
+        "binary_sha256": "0ec55ad50b9d7996d7776fc19fc767cacc7bfb7c7700eb810978d6187577b627",
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:45:25Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "73aa95ac9eb0724d5140e8165eb8e8acfaedf198559a97872144bc8571aa2580",
+        "peak_rss_bytes": 54595584,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.915791506000005,
+        "restore_peak_rss_bytes": 47812608,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.915791506000005,
+          "elapsed_seconds": 0.589720101,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 46692,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 47812608,
+          "platform": "linux",
+          "seconds": 0.589720101
+        },
+        "restore_seconds": 0.589720101,
+        "rss_bytes": 54595584,
+        "start_to_health_seconds": 0.49849756600008277,
+        "started_at": "2026-11-27T14:45:25.183710178Z"
+      },
+      {
+        "binary_sha256": "0ec55ad50b9d7996d7776fc19fc767cacc7bfb7c7700eb810978d6187577b627",
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:45:27Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "73aa95ac9eb0724d5140e8165eb8e8acfaedf198559a97872144bc8571aa2580",
+        "peak_rss_bytes": 55480320,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.3147751100000278,
+        "restore_peak_rss_bytes": 46919680,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.3147751100000278,
+          "elapsed_seconds": 0.074353723,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 45820,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 46919680,
+          "platform": "linux",
+          "seconds": 0.074353723
+        },
+        "restore_seconds": 0.074353723,
+        "rss_bytes": 55480320,
+        "start_to_health_seconds": 0.2911916629999496,
+        "started_at": "2026-11-27T14:45:26.969349864Z"
+      },
+      {
+        "binary_sha256": "0ec55ad50b9d7996d7776fc19fc767cacc7bfb7c7700eb810978d6187577b627",
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T14:45:28Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "73aa95ac9eb0724d5140e8165eb8e8acfaedf198559a97872144bc8571aa2580",
+        "peak_rss_bytes": 55209984,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.2648100679999743,
+        "restore_peak_rss_bytes": 46563328,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.2648100679999743,
+          "elapsed_seconds": 0.067623321,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 45472,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 46563328,
+          "platform": "linux",
+          "seconds": 0.067623321
+        },
+        "restore_seconds": 0.067623321,
+        "rss_bytes": 55209984,
+        "start_to_health_seconds": 0.2961024259999476,
+        "started_at": "2026-11-27T14:45:28.523795292Z"
+      }
+    ],
+    "tls_verified": true,
+    "uid": 1001
+  },
+  "schema_version": 3,
+  "scope": "packaging-startup-restore",
+  "source": {
+    "commit": "653ce1712b2898f19ad130ca140abd3333179aa1",
+    "dirty": false,
+    "files": 551,
+    "sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f"
+  },
+  "status": "passed",
+  "toolchain": {
+    "binary_build_info": "/app/main: go1.24.13\n\tpath\tgithub.com/a8851625/openetl-go\n\tmod\tgithub.com/a8851625/openetl-go\t(devel)\t\n\tdep\tfilippo.io/edwards25519\tv1.2.0\th1:crnVqOiS4jqYleHd9vaKZ+HKtHfllngJIiOpNpoJsjo=\n\tdep\tgithub.com/BurntSushi/toml\tv1.5.0\th1:W5quZX/G/csjUnuI8SUYlsHs9M38FC7znL0lIO+DvMg=\n\tdep\tgithub.com/ClickHouse/ch-go\tv0.61.5\th1:zwR8QbYI0tsMiEcze/uIMK+Tz1D3XZXLdNrlaOpeEI4=\n\tdep\tgithub.com/ClickHouse/clickhouse-go/v2\tv2.23.0\th1:srmRrkS0BR8gEut87u8jpcZ7geOob6nGj9ifrb+aKmg=\n\tdep\tgithub.com/IBM/sarama\tv1.43.3\th1:Yj6L2IaNvb2mRBop39N7mmJAHBVY3dTPncr3qGVkxPA=\n\tdep\tgithub.com/Masterminds/semver\tv1.5.0\th1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3QEww=\n\tdep\tgithub.com/alibabacloud-go/debug\tv1.0.1\th1:MsW9SmUtbb1Fnt3ieC6NNZi6aEwrXfDksD4QA6GSbPg=\n\tdep\tgithub.com/alibabacloud-go/tea\tv1.2.2\th1:aTsR6Rl3ANWPfqeQugPglfurloyBJY85eFy7Gc1+8oU=\n\tdep\tgithub.com/aliyun/aliyun-odps-go-sdk\tv0.4.23\th1:c8p3S9Fw3bmOwXOdyWzK7jPSRhMjCJCvVQAf9xSzQkQ=\n\tdep\tgithub.com/aliyun/credentials-go\tv1.3.10\th1:45Xxrae/evfzQL9V10zL3xX31eqgLWEaIdCoPipOEQA=\n\tdep\tgithub.com/andybalholm/brotli\tv1.1.1\th1:PR2pgnyFznKEugtsUo0xLdDop5SKXd5Qf5ysW+7XdTA=\n\tdep\tgithub.com/cespare/xxhash/v2\tv2.3.0\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\n\tdep\tgithub.com/clbanning/mxj/v2\tv2.7.0\th1:WA/La7UGCanFe5NpHF0Q3DNtnCsVoxbPKuyBNHWRyME=\n\tdep\tgithub.com/cznic/mathutil\tv0.0.0-20181122101859-297441e03548\th1:iwZdTE0PVqJCos1vaoKsclOGD3ADKpshg3SRtYBbwso=\n\tdep\tgithub.com/davecgh/go-spew\tv1.1.1\th1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=\n\tdep\tgithub.com/dustin/go-humanize\tv1.0.1\th1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=\n\tdep\tgithub.com/eapache/go-resiliency\tv1.7.0\th1:n3NRTnBn5N0Cbi/IeOHuQn9s2UwVUH7Ga0ZWcP+9JTA=\n\tdep\tgithub.com/eapache/go-xerial-snappy\tv0.0.0-20230731223053-c322873962e3\th1:Oy0F4ALJ04o5Qqpdz8XLIpNA3WM/iSIXqxtqo7UGVws=\n\tdep\tgithub.com/eapache/queue\tv1.1.0\th1:YOEu7KNc61ntiQlcEeUIoDTJ2o8mQznoNvUhiigpIqc=\n\tdep\tgithub.com/emirpasic/gods/v2\tv2.0.0-alpha\th1:dwFlh8pBg1VMOXWGipNMRt8v96dKAIvBehtCt6OtunU=\n\tdep\tgithub.com/fatih/color\tv1.18.0\th1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=\n\tdep\tgithub.com/fsnotify/fsnotify\tv1.9.0\th1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=\n\tdep\tgithub.com/go-faster/city\tv1.0.1\th1:4WAxSZ3V2Ws4QRDrscLEDcibJY8uf41H6AhXDrNDcGw=\n\tdep\tgithub.com/go-faster/errors\tv0.7.1\th1:MkJTnDoEdi9pDabt1dpWf7AA8/BaSYZqibYyhZ20AYg=\n\tdep\tgithub.com/go-ini/ini\tv1.67.0\th1:z6ZrTEZqSWOTyH2FlglNbNgARyHG8oLW9gMELqKr06A=\n\tdep\tgithub.com/go-logr/logr\tv1.4.3\th1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=\n\tdep\tgithub.com/go-logr/stdr\tv1.2.2\th1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=\n\tdep\tgithub.com/go-mysql-org/go-mysql\tv1.9.1\th1:W2ZKkHkoM4mmkasJCoSYfaE4RQNxXTb6VqiaMpKFrJc=\n\tdep\tgithub.com/go-sql-driver/mysql\tv1.9.3\th1:U/N249h2WzJ3Ukj8SowVFjdtZKfu9vlLZxjPXV1aweo=\n\tdep\tgithub.com/goccy/go-json\tv0.10.3\th1:KZ5WoDbxAIgm2HNbYckL0se1fHD6rz5j4ywS6ebzDqA=\n\tdep\tgithub.com/gogf/gf/v2\tv2.10.0\th1:rzDROlyqGMe/eM6dCalSR8dZOuMIdLhmxKSH1DGhbFs=\n\tdep\tgithub.com/golang/snappy\tv0.0.4\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\n\tdep\tgithub.com/google/flatbuffers\tv23.5.26+incompatible\th1:M9dgRyhJemaM4Sw8+66GHBu8ioaQmyPLg1b8VwK5WJg=\n\tdep\tgithub.com/google/uuid\tv1.6.0\th1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n\tdep\tgithub.com/gorilla/websocket\tv1.5.3\th1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=\n\tdep\tgithub.com/grokify/html-strip-tags-go\tv0.1.0\th1:03UrQLjAny8xci+R+qjCce/MYnpNXCtgzltlQbOBae4=\n\tdep\tgithub.com/hashicorp/errwrap\tv1.1.0\th1:OxrOeh75EUXMY8TBjag2fzXGZ40LB6IKw45YeGUDY2I=\n\tdep\tgithub.com/hashicorp/go-multierror\tv1.1.1\th1:H5DkEtf6CXdFp0N0Em5UCwQpXMWke8IA0+lD48awMYo=\n\tdep\tgithub.com/hashicorp/go-uuid\tv1.0.3\th1:2gKiV6YVmrJ1i2CKKa9obLvRieoRGviZFL26PcT/Co8=\n\tdep\tgithub.com/jackc/pgio\tv1.0.0\th1:g12B9UwVnzGhueNavwioyEEpAmqMe1E/BN9ES+8ovkE=\n\tdep\tgithub.com/jackc/pglogrepl\tv0.0.0-20250509230407-a9884f6bd75a\th1:f2a1BtfxAaGSs+kI2MfZjNf9KiHzynJKqOPLTkF8L4Y=\n\tdep\tgithub.com/jackc/pgpassfile\tv1.0.0\th1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=\n\tdep\tgithub.com/jackc/pgservicefile\tv0.0.0-20240606120523-5a60cdf6a761\th1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=\n\tdep\tgithub.com/jackc/pgx/v5\tv5.7.4\th1:9wKznZrhWa2QiHL+NjTSPP6yjl3451BX3imWDnokYlg=\n\tdep\tgithub.com/jackc/puddle/v2\tv2.2.2\th1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=\n\tdep\tgithub.com/jcmturner/aescts/v2\tv2.0.0\th1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8=\n\tdep\tgithub.com/jcmturner/dnsutils/v2\tv2.0.0\th1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo=\n\tdep\tgithub.com/jcmturner/gofork\tv1.7.6\th1:QH0l3hzAU1tfT3rZCnW5zXl+orbkNMMRGJfdJjHVETg=\n\tdep\tgithub.com/jcmturner/gokrb5/v8\tv8.4.4\th1:x1Sv4HaTpepFkXbt2IkL29DXRf8sOfZXo8eRKh687T8=\n\tdep\tgithub.com/jcmturner/rpc/v2\tv2.0.3\th1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY=\n\tdep\tgithub.com/json-iterator/go\tv1.1.12\th1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=\n\tdep\tgithub.com/klauspost/compress\tv1.17.9\th1:6KIumPrER1LHsvBVuDa0r5xaG0Es51mhhB9BQB2qeMA=\n\tdep\tgithub.com/klauspost/cpuid/v2\tv2.2.10\th1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=\n\tdep\tgithub.com/magiconair/properties\tv1.8.10\th1:s31yESBquKXCV9a/ScB3ESkOjUYYv+X0rg8SYxI99mE=\n\tdep\tgithub.com/mattn/go-colorable\tv0.1.13\th1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=\n\tdep\tgithub.com/mattn/go-isatty\tv0.0.20\th1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=\n\tdep\tgithub.com/mattn/go-runewidth\tv0.0.16\th1:E5ScNMtiwvlvB5paMFdw9p4kSQzbXFikJ5SQO6TULQc=\n\tdep\tgithub.com/minio/md5-simd\tv1.1.2\th1:Gdi1DZK69+ZVMoNHRXJyNcxrMA4dSxoYHZSQbirFg34=\n\tdep\tgithub.com/minio/minio-go/v7\tv7.0.74\th1:fTo/XlPBTSpo3BAMshlwKL5RspXRv9us5UeHEGYCFe0=\n\tdep\tgithub.com/modern-go/concurrent\tv0.0.0-20180306012644-bacd9c7ef1dd\th1:TRLaZ9cD/w8PVh93nsPXa1VrQ6jlwL5oN8l14QlcNfg=\n\tdep\tgithub.com/modern-go/reflect2\tv1.0.2\th1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=\n\tdep\tgithub.com/olekukonko/errors\tv1.1.0\th1:RNuGIh15QdDenh+hNvKrJkmxxjV4hcS50Db478Ou5sM=\n\tdep\tgithub.com/olekukonko/ll\tv0.0.9\th1:Y+1YqDfVkqMWuEQMclsF9HUR5+a82+dxJuL1HHSRpxI=\n\tdep\tgithub.com/olekukonko/tablewriter\tv1.1.0\th1:N0LHrshF4T39KvI96fn6GT8HEjXRXYNDrDjKFDB7RIY=\n\tdep\tgithub.com/parquet-go/bitpack\tv1.0.0\th1:AUqzlKzPPXf2bCdjfj4sTeacrUwsT7NlcYDMUQxPcQA=\n\tdep\tgithub.com/parquet-go/jsonlite\tv1.0.0\th1:87QNdi56wOfsE5bdgas0vRzHPxfJgzrXGml1zZdd7VU=\n\tdep\tgithub.com/parquet-go/parquet-go\tv0.30.1\th1:Oy6ganNrAdFiVwy7wNmWagfPTWA2X9Z3tVHBc7JtuX8=\n\tdep\tgithub.com/paulmach/orb\tv0.11.1\th1:3koVegMC4X/WeiXYz9iswopaTwMem53NzTJuTF20JzU=\n\tdep\tgithub.com/pierrec/lz4/v4\tv4.1.21\th1:yOVMLb6qSIDP67pl/5F7RepeKYu/VmTyEXvuMI5d9mQ=\n\tdep\tgithub.com/pingcap/errors\tv0.11.5-0.20221009092201-b66cddb77c32\th1:m5ZsBa5o/0CkzZXfXLaThzKuR85SnHHetqBCpzQ30h8=\n\tdep\tgithub.com/pingcap/failpoint\tv0.0.0-20220801062533-2eaa32854a6c\th1:CgbKAHto5CQgWM9fSBIvaxsJHuGP0uM74HXtv3MyyGQ=\n\tdep\tgithub.com/pingcap/log\tv1.1.1-0.20230317032135-a0d097d16e22\th1:2SOzvGvE8beiC1Y4g9Onkvu6UmuBBOeWRGQEjJaT/JY=\n\tdep\tgithub.com/pingcap/tidb/pkg/parser\tv0.0.0-20231103042308-035ad5ccbe67\th1:m0RZ583HjzG3NweDi4xAcK54NBBPJh+zXp5Fp60dHtw=\n\tdep\tgithub.com/pkg/errors\tv0.9.1\th1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=\n\tdep\tgithub.com/rcrowley/go-metrics\tv0.0.0-20201227073835-cf1acfcdf475\th1:N/ElC8H3+5XpJzTSTfLsJV/mx9Q9g7kxmchpfZyxgzM=\n\tdep\tgithub.com/redis/go-redis/v9\tv9.20.1\th1:sfCU6A8P3dXbKyWes02uxA2baehGux9dZHfEKtsTB1w=\n\tdep\tgithub.com/remyoudompheng/bigfft\tv0.0.0-20230129092748-24d4a6f8daec\th1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=\n\tdep\tgithub.com/rivo/uniseg\tv0.2.0\th1:S1pD9weZBuJdFmowNwbpi7BJ8TNftyUImj/0WQi72jY=\n\tdep\tgithub.com/robfig/cron/v3\tv3.0.1\th1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=\n\tdep\tgithub.com/rs/xid\tv1.5.0\th1:mKX4bl4iPYJtEIxp6CYiUuLQ/8DYMoz0PUdtGgMFRVc=\n\tdep\tgithub.com/segmentio/asm\tv1.2.0\th1:9BQrFxC+YOHJlTlHGkTrFWf59nbL3XnCoFLTwDCI7ys=\n\tdep\tgithub.com/shopspring/decimal\tv1.3.1\th1:2Usl1nmF/WZucqkFZhnfFYxxxu8LG21F6nPQBE5gKV8=\n\tdep\tgithub.com/siddontang/go\tv0.0.0-20180604090527-bdc77568d726\th1:xT+JlYxNGqyT+XcU8iUrN18JYed2TvG9yN5ULG2jATM=\n\tdep\tgithub.com/siddontang/go-log\tv0.0.0-20180807004314-8d05993dda07\th1:oI+RNwuC9jF2g2lP0u0cVEEZrc/AYBCuFdvwrLWM/6Q=\n\tdep\tgithub.com/twpayne/go-geom\tv1.6.1\th1:iLE+Opv0Ihm/ABIcvQFGIiFBXd76oBIar9drAwHFhR4=\n\tdep\tgithub.com/yuin/gopher-lua\tv1.1.2\th1:yF/FjE3hD65tBbt0VXLE13HWS9h34fdzJmrWRXwobGA=\n\tdep\tgo.opentelemetry.io/auto/sdk\tv1.1.0\th1:cH53jehLUN6UFLY71z+NDOiNJqDdPRaXzTel0sJySYA=\n\tdep\tgo.opentelemetry.io/otel\tv1.38.0\th1:RkfdswUDRimDg0m2Az18RKOsnI8UDzppJAtj01/Ymk8=\n\tdep\tgo.opentelemetry.io/otel/metric\tv1.38.0\th1:Kl6lzIYGAh5M159u9NgiRkmoMKjvbsKtYRwgfrA6WpA=\n\tdep\tgo.opentelemetry.io/otel/sdk\tv1.38.0\th1:l48sr5YbNf2hpCUj/FoGhW9yDkl+Ma+LrVl8qaM5b+E=\n\tdep\tgo.opentelemetry.io/otel/trace\tv1.38.0\th1:Fxk5bKrDZJUH+AMyyIXGcFAPah0oRcT+LuNtJrmcNLE=\n\tdep\tgo.uber.org/atomic\tv1.11.0\th1:ZvwS0R+56ePWxUNi+Atn9dWONBPp/AUETXlHW0DxSjE=\n\tdep\tgo.uber.org/multierr\tv1.11.0\th1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=\n\tdep\tgo.uber.org/zap\tv1.27.0\th1:aJMhYGrd5QSmlpLMr2MftRKl7t8J8PTZPA732ud/XR8=\n\tdep\tgolang.org/x/crypto\tv0.38.0\th1:jt+WWG8IZlBnVbomuhg2Mdq0+BBQaHbtqHEFEigjUV8=\n\tdep\tgolang.org/x/exp\tv0.0.0-20250620022241-b7579e27df2b\th1:M2rDM6z3Fhozi9O7NWsxAkg/yqS/lQJ6PmkyIV3YP+o=\n\tdep\tgolang.org/x/net\tv0.40.0\th1:79Xs7wF06Gbdcg4kdCCIQArK11Z1hr5POQ6+fIYHNuY=\n\tdep\tgolang.org/x/sync\tv0.15.0\th1:KWH3jNZsfyT6xfAfKiz6MRNmd46ByHDYaZ7KSkCtdW8=\n\tdep\tgolang.org/x/sys\tv0.38.0\th1:3yZWxaJjBmCWXqhN1qh02AkOnCQ1poK6oF+a7xWL6Gc=\n\tdep\tgolang.org/x/text\tv0.25.0\th1:qVyWApTSYLk/drJRO5mDlNYskwQznZmkpV2c8q9zls4=\n\tdep\tgolang.org/x/xerrors\tv0.0.0-20220907171357-04be3eba64a2\th1:H2TDz8ibqkAF6YGhCdN3jS9O0/s90v0rJh3X/OLHEUk=\n\tdep\tgoogle.golang.org/protobuf\tv1.34.2\th1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6hg=\n\tdep\tgopkg.in/ini.v1\tv1.67.0\th1:Dgnx+6+nfE+IfzjUEISNeydPJh9AXNNsWbGP9KzCsOA=\n\tdep\tgopkg.in/natefinch/lumberjack.v2\tv2.2.1\th1:bBRl1b0OH9s/DuPhuXpNl+VtCaJXFZ5/uEFST95x9zc=\n\tdep\tgopkg.in/yaml.v3\tv3.0.1\th1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=\n\tdep\tmodernc.org/libc\tv1.66.3\th1:cfCbjTUcdsKyyZZfEUKfoHcP3S0Wkvz3jgSzByEWVCQ=\n\tdep\tmodernc.org/mathutil\tv1.7.1\th1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=\n\tdep\tmodernc.org/memory\tv1.11.0\th1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=\n\tdep\tmodernc.org/sqlite\tv1.38.2\th1:Aclu7+tgjgcQVShZqim41Bbw9Cho0y/7WzYptXqkEek=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-ldflags=\"-s -w\"\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1\n",
+    "builder": {
+      "architecture": "amd64",
+      "bytes": 683997638,
+      "engine_reported_image_bytes": 683997638,
+      "healthcheck": null,
+      "image_id": "sha256:f51a0bf580d5b6a28a7f662d476e35d647aa6cbed78bea9edfeef548950dde0d",
+      "manifest_digest": null,
+      "os": "linux",
+      "repo_digests": [
+        "localhost/openetl-baseline-afc1f7cc288d@sha256:f51a0bf580d5b6a28a7f662d476e35d647aa6cbed78bea9edfeef548950dde0d"
+      ]
+    },
+    "container_client_version": "{\"Platform\":{\"Name\":\"Docker Engine - Community\"},\"Version\":\"29.4.2\",\"ApiVersion\":\"1.54\",\"DefaultAPIVersion\":\"1.54\",\"GitCommit\":\"055a478\",\"GoVersion\":\"go1.26.2\",\"Os\":\"linux\",\"Arch\":\"amd64\",\"BuildTime\":\"Fri May  1 10:24:04 2026\",\"Context\":\"default\"}",
+    "gf_default_download_version": "v2.10.0",
+    "go_version": "go version go1.24.13 linux/amd64",
+    "pack_recipe": "Dockerfile: SKIP_UI=1 hack/pack.sh; gf URL/output are in build logs",
+    "process_measure": {
+      "binary_sha256": "baa9d6729b24a875d1a9efe8bfadc1f936ef5cdc32bacdf2421de31c0c3e8e0c",
+      "linux_native_rss_unit": "KiB",
+      "method": "wait4.rusage.ru_maxrss",
+      "source_sha256": "5d57185945f5b95717a39d8e5b3fd8117d3b0166f6672893a9a16da3e99f01dc"
+    },
+    "python_version": "3.14.4"
+  },
+  "warnings": []
+}

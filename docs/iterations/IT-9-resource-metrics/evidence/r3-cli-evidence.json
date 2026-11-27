@@ -1,0 +1,491 @@
+{
+  "cases": [
+    {
+      "case": "amd64-normal-enforce",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-r2-ci-baseline/.bench-out/current/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/amd64-normal-enforce",
+        "--budgets",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench-budgets.json",
+        "--enforce-budgets"
+      ],
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "report": {
+        "baseline_sha256": "c9e3fcda1acd6692834054ddc657e8ccf1d6818abe72f3ec2b73a2f4adff1a67",
+        "data_valid": true,
+        "eligible_for_enforcement": true,
+        "errors": [],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [
+          {
+            "architecture": "amd64",
+            "blocking": true,
+            "exceeded": false,
+            "id": "default-amd64-binary",
+            "max_bytes": 84934656,
+            "method": "file-bytes/v1",
+            "metric": "binary_bytes",
+            "os": "linux",
+            "unit": "bytes",
+            "value_bytes": 67285176,
+            "variant": "default"
+          },
+          {
+            "architecture": "amd64",
+            "blocking": true,
+            "exceeded": false,
+            "id": "default-amd64-image",
+            "max_bytes": 184549376,
+            "method": "uncompressed-layer-bytes/v1",
+            "metric": "image_uncompressed_layer_bytes",
+            "os": "linux",
+            "unit": "bytes",
+            "value_bytes": 147265024,
+            "variant": "default"
+          }
+        ],
+        "mode": "enforce",
+        "policy_format": "openetl-resource-budgets/v1",
+        "policy_sha256": "428718897d185407fb745dc9b58b85ec099373b5488acb8e853ba8cfae7ae7d0",
+        "policy_version": "2026-11-27.1",
+        "source_commit": "653ce1712b2898f19ad130ca140abd3333179aa1",
+        "source_sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f",
+        "status": "passed",
+        "unbudgeted_variants": [
+          "extism",
+          "extism-nolua",
+          "nolua"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "case": "arm64-normal-enforce",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-native-d2d7c1d/.bench-out/it9-native/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/arm64-normal-enforce",
+        "--budgets",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench-budgets.json",
+        "--enforce-budgets"
+      ],
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "report": {
+        "baseline_sha256": "424701c8e30d9ef6fffd0e0f4aa6d08c3de6dc45b2895c8ebd103bbf3a83627e",
+        "data_valid": true,
+        "eligible_for_enforcement": true,
+        "errors": [],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [
+          {
+            "architecture": "arm64",
+            "blocking": true,
+            "exceeded": false,
+            "id": "default-arm64-binary",
+            "max_bytes": 80740352,
+            "method": "file-bytes/v1",
+            "metric": "binary_bytes",
+            "os": "linux",
+            "unit": "bytes",
+            "value_bytes": 63963320,
+            "variant": "default"
+          },
+          {
+            "architecture": "arm64",
+            "blocking": true,
+            "exceeded": false,
+            "id": "default-arm64-image",
+            "max_bytes": 177209344,
+            "method": "uncompressed-layer-bytes/v1",
+            "metric": "image_uncompressed_layer_bytes",
+            "os": "linux",
+            "unit": "bytes",
+            "value_bytes": 141062656,
+            "variant": "default"
+          }
+        ],
+        "mode": "enforce",
+        "policy_format": "openetl-resource-budgets/v1",
+        "policy_sha256": "428718897d185407fb745dc9b58b85ec099373b5488acb8e853ba8cfae7ae7d0",
+        "policy_version": "2026-11-27.1",
+        "source_commit": "d2d7c1d40dd8e124b97076ab306077426866d8e1",
+        "source_sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f",
+        "status": "passed",
+        "unbudgeted_variants": [
+          "extism",
+          "extism-nolua",
+          "nolua"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "case": "low-observation",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-r2-ci-baseline/.bench-out/current/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/low-observation",
+        "--budgets",
+        "/private/tmp/openetl-it9-r3-cli/low-policy.json"
+      ],
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "report": {
+        "baseline_sha256": "c9e3fcda1acd6692834054ddc657e8ccf1d6818abe72f3ec2b73a2f4adff1a67",
+        "data_valid": true,
+        "eligible_for_enforcement": true,
+        "errors": [],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [
+          {
+            "architecture": "amd64",
+            "blocking": false,
+            "exceeded": false,
+            "id": "default-amd64-binary",
+            "max_bytes": 84934656,
+            "method": "file-bytes/v1",
+            "metric": "binary_bytes",
+            "os": "linux",
+            "unit": "bytes",
+            "value_bytes": 67285176,
+            "variant": "default"
+          },
+          {
+            "architecture": "amd64",
+            "blocking": false,
+            "exceeded": true,
+            "id": "default-amd64-image",
+            "max_bytes": 147265023,
+            "method": "uncompressed-layer-bytes/v1",
+            "metric": "image_uncompressed_layer_bytes",
+            "os": "linux",
+            "unit": "bytes",
+            "value_bytes": 147265024,
+            "variant": "default"
+          }
+        ],
+        "mode": "observation",
+        "policy_format": "openetl-resource-budgets/v1",
+        "policy_sha256": "f69c6b7fb9f48f8692099f5e08a96358641335b7f467ba3cbccc76c8a2ebd3cc",
+        "policy_version": "2026-11-27.1-negative",
+        "source_commit": "653ce1712b2898f19ad130ca140abd3333179aa1",
+        "source_sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f",
+        "status": "warning",
+        "unbudgeted_variants": [
+          "extism",
+          "extism-nolua",
+          "nolua"
+        ],
+        "warnings": [
+          "default-amd64-image: 147265024 bytes exceeds budget 147265023 bytes"
+        ]
+      }
+    },
+    {
+      "case": "low-enforce",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-r2-ci-baseline/.bench-out/current/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/low-enforce",
+        "--budgets",
+        "/private/tmp/openetl-it9-r3-cli/low-policy.json",
+        "--enforce-budgets"
+      ],
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "report": {
+        "baseline_sha256": "c9e3fcda1acd6692834054ddc657e8ccf1d6818abe72f3ec2b73a2f4adff1a67",
+        "data_valid": true,
+        "eligible_for_enforcement": true,
+        "errors": [
+          "default-amd64-image: 147265024 bytes exceeds budget 147265023 bytes"
+        ],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [
+          {
+            "architecture": "amd64",
+            "blocking": true,
+            "exceeded": false,
+            "id": "default-amd64-binary",
+            "max_bytes": 84934656,
+            "method": "file-bytes/v1",
+            "metric": "binary_bytes",
+            "os": "linux",
+            "unit": "bytes",
+            "value_bytes": 67285176,
+            "variant": "default"
+          },
+          {
+            "architecture": "amd64",
+            "blocking": true,
+            "exceeded": true,
+            "id": "default-amd64-image",
+            "max_bytes": 147265023,
+            "method": "uncompressed-layer-bytes/v1",
+            "metric": "image_uncompressed_layer_bytes",
+            "os": "linux",
+            "unit": "bytes",
+            "value_bytes": 147265024,
+            "variant": "default"
+          }
+        ],
+        "mode": "enforce",
+        "policy_format": "openetl-resource-budgets/v1",
+        "policy_sha256": "f69c6b7fb9f48f8692099f5e08a96358641335b7f467ba3cbccc76c8a2ebd3cc",
+        "policy_version": "2026-11-27.1-negative",
+        "source_commit": "653ce1712b2898f19ad130ca140abd3333179aa1",
+        "source_sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f",
+        "status": "failed",
+        "unbudgeted_variants": [
+          "extism",
+          "extism-nolua",
+          "nolua"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "case": "legacy-v2-observation",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/Users/Admin/Documents/workspace/sync-canal-go/docs/evidence/it3-baseline-20260909/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/legacy-v2-observation"
+      ],
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "report": {
+        "baseline_sha256": "5a2602a2545754937372e8f6a69bb33d0bbbf68344c17189d170dd8e70cc32ea",
+        "data_valid": true,
+        "eligible_for_enforcement": false,
+        "errors": [],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [],
+        "mode": "observation",
+        "reason": "No explicit size policy supplied; measurements and historical observation checks only",
+        "source_commit": "387daf07a3f38ea3f24b72060be16c16c59bcea5",
+        "source_sha256": "ab64d73d7bab31cbfedf108bb81207a5abc31d7524c5df67eb028237f064229a",
+        "status": "not_evaluated",
+        "warnings": []
+      }
+    },
+    {
+      "case": "legacy-v2-enforce",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/Users/Admin/Documents/workspace/sync-canal-go/docs/evidence/it3-baseline-20260909/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/legacy-v2-enforce",
+        "--budgets",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench-budgets.json",
+        "--enforce-budgets"
+      ],
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "report": {
+        "baseline_sha256": "5a2602a2545754937372e8f6a69bb33d0bbbf68344c17189d170dd8e70cc32ea",
+        "data_valid": true,
+        "eligible_for_enforcement": false,
+        "errors": [
+          "size enforcement requires schema v3; v2 is historical observation only"
+        ],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [],
+        "mode": "enforce",
+        "policy_format": "openetl-resource-budgets/v1",
+        "policy_sha256": "428718897d185407fb745dc9b58b85ec099373b5488acb8e853ba8cfae7ae7d0",
+        "policy_version": "2026-11-27.1",
+        "source_commit": "387daf07a3f38ea3f24b72060be16c16c59bcea5",
+        "source_sha256": "ab64d73d7bab31cbfedf108bb81207a5abc31d7524c5df67eb028237f064229a",
+        "status": "failed",
+        "warnings": []
+      }
+    },
+    {
+      "case": "missing-policy-enforce",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-r2-ci-baseline/.bench-out/current/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/missing-policy-enforce",
+        "--enforce-budgets"
+      ],
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "report": {
+        "baseline_sha256": "c9e3fcda1acd6692834054ddc657e8ccf1d6818abe72f3ec2b73a2f4adff1a67",
+        "data_valid": true,
+        "eligible_for_enforcement": false,
+        "errors": [
+          "size enforcement requires explicit --budgets policy"
+        ],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [],
+        "mode": "enforce",
+        "source_commit": "653ce1712b2898f19ad130ca140abd3333179aa1",
+        "source_sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f",
+        "status": "failed",
+        "warnings": []
+      }
+    },
+    {
+      "case": "wrong-method-observation",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-r3-cli/wrong-method/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/wrong-method-observation",
+        "--budgets",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench-budgets.json"
+      ],
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "report": {
+        "data_valid": false,
+        "errors": [
+          "image metric method or units differ"
+        ],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [],
+        "mode": "observation",
+        "status": "failed",
+        "warnings": []
+      }
+    },
+    {
+      "case": "wrong-method-enforce",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-r3-cli/wrong-method/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/wrong-method-enforce",
+        "--budgets",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench-budgets.json",
+        "--enforce-budgets"
+      ],
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "report": {
+        "data_valid": false,
+        "errors": [
+          "image metric method or units differ"
+        ],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [],
+        "mode": "enforce",
+        "status": "failed",
+        "warnings": []
+      }
+    },
+    {
+      "case": "rollback-retains-validity",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-r3-cli/wrong-method/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/rollback-retains-validity"
+      ],
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "report": {
+        "data_valid": false,
+        "errors": [
+          "image metric method or units differ"
+        ],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [],
+        "mode": "observation",
+        "status": "failed",
+        "warnings": []
+      }
+    },
+    {
+      "case": "missing-archives-observation",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-r3-cli/missing-archives/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/missing-archives-observation",
+        "--budgets",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench-budgets.json"
+      ],
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "report": {
+        "data_valid": false,
+        "errors": [
+          "image archive must be a regular file"
+        ],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [],
+        "mode": "observation",
+        "status": "failed",
+        "warnings": []
+      }
+    },
+    {
+      "case": "missing-archives-enforce",
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench_baseline.py",
+        "--check",
+        "/private/tmp/openetl-it9-r3-cli/missing-archives/result.json",
+        "--out",
+        "/private/tmp/openetl-it9-r3-cli/missing-archives-enforce",
+        "--budgets",
+        "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench-budgets.json",
+        "--enforce-budgets"
+      ],
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "report": {
+        "data_valid": false,
+        "errors": [
+          "image archive must be a regular file"
+        ],
+        "format": "openetl-budget-evaluation/v1",
+        "metrics": [],
+        "mode": "enforce",
+        "status": "failed",
+        "warnings": []
+      }
+    }
+  ],
+  "harness_sha256": "daa43504719a60251dd633410b15af7029a7e5dab2ddd52a7387a2f10d50b703",
+  "input_sha256": {
+    "/Users/Admin/Documents/workspace/sync-canal-go/docs/evidence/it3-baseline-20260909/result.json": "5a2602a2545754937372e8f6a69bb33d0bbbf68344c17189d170dd8e70cc32ea",
+    "/Users/Admin/Documents/workspace/sync-canal-go/hack/bench-budgets.json": "428718897d185407fb745dc9b58b85ec099373b5488acb8e853ba8cfae7ae7d0",
+    "/private/tmp/openetl-it9-native-d2d7c1d/.bench-out/it9-native/result.json": "424701c8e30d9ef6fffd0e0f4aa6d08c3de6dc45b2895c8ebd103bbf3a83627e",
+    "/private/tmp/openetl-it9-r2-ci-baseline/.bench-out/current/result.json": "c9e3fcda1acd6692834054ddc657e8ccf1d6818abe72f3ec2b73a2f4adff1a67"
+  },
+  "scope": "actual v3 calibration / historical v2 CLI; controlled low policy and invalid-method/missing-artifact copies are labeled negatives"
+}

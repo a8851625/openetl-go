@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1238,6 +1239,15 @@ func (e *DAGExecutor) handleFailed(ctx context.Context, rec core.Record, err err
 		// First capture; the storage upsert increments attempt when the same
 		// record is captured again. Never zero.
 		Attempt: 1,
+	}
+	if node := e.spec.DAG.GetNode(dagNodeID); node != nil {
+		entry.RecoveryContext = core.RecoveryCaptureContext{
+			Endpoint: "dag_node", NodeID: node.ID, ConnectionKnown: true,
+			ConnectionName: strings.TrimSpace(node.Connection),
+		}
+		if entry.RecoveryContext.ConnectionName == "" {
+			entry.RecoveryContext.ConnectionName = strings.TrimSpace(node.ConnectionRef)
+		}
 	}
 	if dlqErr := e.dlqWriter.WriteDLQ(ctx, entry); dlqErr != nil {
 		// DLQ write itself failed — this is a potential data-loss event.

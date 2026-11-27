@@ -1,0 +1,48 @@
+{
+  "baseline_sha256": "424701c8e30d9ef6fffd0e0f4aa6d08c3de6dc45b2895c8ebd103bbf3a83627e",
+  "data_valid": true,
+  "eligible_for_enforcement": true,
+  "errors": [],
+  "format": "openetl-budget-evaluation/v1",
+  "metrics": [
+    {
+      "architecture": "arm64",
+      "blocking": true,
+      "exceeded": false,
+      "id": "default-arm64-binary",
+      "max_bytes": 80740352,
+      "method": "file-bytes/v1",
+      "metric": "binary_bytes",
+      "os": "linux",
+      "unit": "bytes",
+      "value_bytes": 63963320,
+      "variant": "default"
+    },
+    {
+      "architecture": "arm64",
+      "blocking": true,
+      "exceeded": false,
+      "id": "default-arm64-image",
+      "max_bytes": 177209344,
+      "method": "uncompressed-layer-bytes/v1",
+      "metric": "image_uncompressed_layer_bytes",
+      "os": "linux",
+      "unit": "bytes",
+      "value_bytes": 141062656,
+      "variant": "default"
+    }
+  ],
+  "mode": "enforce",
+  "policy_format": "openetl-resource-budgets/v1",
+  "policy_sha256": "428718897d185407fb745dc9b58b85ec099373b5488acb8e853ba8cfae7ae7d0",
+  "policy_version": "2026-11-27.1",
+  "source_commit": "d2d7c1d40dd8e124b97076ab306077426866d8e1",
+  "source_sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f",
+  "status": "passed",
+  "unbudgeted_variants": [
+    "extism",
+    "extism-nolua",
+    "nolua"
+  ],
+  "warnings": []
+}

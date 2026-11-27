@@ -89,7 +89,8 @@ type PipelineMetrics struct {
 	// CircuitBreakerState: 0=closed, 1=open, 2=half_open
 	CircuitBreakerState int `json:"circuit_breaker_state"`
 	// Derived business health (healthy/degraded/failed/…); mirrors UI rules.
-	Health string `json:"health,omitempty"`
+	Health           string           `json:"health,omitempty"`
+	HealthThresholds HealthThresholds `json:"health_thresholds"`
 	// Per-sink metrics: sink name → metrics snapshot
 	SinkMetrics []SinkMetric `json:"sink_metrics,omitempty"`
 	// Per-stateful-node metrics: node id → durable state size/freshness.
