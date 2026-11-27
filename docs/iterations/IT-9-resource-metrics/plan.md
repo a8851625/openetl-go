@@ -180,6 +180,13 @@ P1 文档／证据等指定路径。IT-9 的验收和交付文档不在允许列
 resource-baseline 与 release-checklist 等本项 bookkeeping；代码／脚本／workflow 仍需重新认证。
 这是 A7/A9 的必要前置，不新增 roadmap 项；改动后跑 targeted Go race、strict descendant 负向和完整当前 candidate/CI。
 
+实际旧证据负向已执行：`-strict -commit 191683e` 使用旧 P1 manifest 因 `_gate.yml` 改变而拒绝。
+当前 CI run 46024237806 的 36 jobs 与 23-case 候选已全部通过，收口须同步该候选的实际
+`connector-evidence.json` 到 `internal/etl/server/evidence/connector-evidence.json`，以及它的七份
+`results/tagged/paths/*.json` 到既有 `docs/evidence/` canonical files。此为 A7/A9 的必要证据回填，
+追加到本轮允许范围；不改 connector/runtime 代码或 maturity，不手填执行窗口、SHA 或 pass。
+拷贝后以真实 candidate source/config ID 跑 strict，再以只含指定 bookkeeping 的 descendant 验证绑定。
+
 ## EV-3.4 的已证实有界测试前置
 
 首次 PR #14 run `46017295606` 的 source storage/race/frontend/connector gates 已通过，

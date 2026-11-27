@@ -1,7 +1,7 @@
 # IT-9：可信资源度量与预算控制
 
-> 状态：`active`；归属：EV-3。规划日期：2026-11-27；代码基线：`ee3797c`。
-> 用户选择：1 位实现者、两周参考窗口。用户已授权实施；Round: 4/5，EV-3.1–.3 delivered，EV-3.4 active。
+> 状态：`delivered`；归属：EV-3。规划日期：2026-11-27；代码基线：`ee3797c`。
+> 用户选择：1 位实现者、两周参考窗口。用户已授权实施；Round: 4/5，EV-3.1–.4 delivered，第五轮缓冲未使用。
 > 正式验收以 [ROADMAP](../../ROADMAP.zh.md) EV-3 为准；技术方案见 [plan.md](./plan.md)，领取顺序见 [tasks.md](./tasks.md)。
 
 ## 问题与用户结果
@@ -62,9 +62,9 @@ EV-3 原先标为 `blocked_external`，主要原因实际是内部度量缺陷�
 | --- | --- | --- |
 | 已有测量 harness、12 个边界测试、四变体构建、default 恢复流程 | 已定位 | 实现者按当前文件 preflight；不改旧数据语义 |
 | EV-3.1 固定归档 fixtures、Python CLI | 可准备，首项不依赖远端服务 | 实现者生成小型确定性 fixtures，先核对期望字节／hash |
-| 完整 baseline 的构建镜像、网络、容器服务 | 开始实施时实测可用性；规划不算已认证 | 实现者／CI 维护者提供标准 runtime 与固定输入；缺失记录具体镜像／错误 |
-| 双引擎 image-only 验证 | 需要实际 Docker Engine 与 Podman Engine；不能用两个别名冒充 | CI 维护者提供两个 provider 与同一归档；以 `EV-3.2` probe 解除 |
-| 预算数值与噪声范围 | 新口径尚未测量，数值不预填 | `EV-3.2`／完整 v3 报告后记录基线与余量，`EV-3.4` 回填灰度决定 |
+| 完整 baseline 的构建镜像、网络、容器服务 | 当前 CI native baseline passed；实际 raw archive 与 metadata 已复核 | 实现者／CI 维护者提供标准 runtime 与固定输入；缺失记录具体镜像／错误 |
+| 双引擎 image-only 验证 | 实际 Docker 29.4.2／Podman 5.7.0 CI 对账 passed；本地 Podman 5.8.4 另有真实证据 | CI 维护者提供两个 provider 与同一归档；以 `EV-3.2` probe 解除 |
+| 预算数值与噪声范围 | 两个 clean native v3 校准与 versioned policy 已通过；默认体积已进入 CI 灰度 | `EV-3.2`／完整 v3 报告后记录基线与余量，`EV-3.4` 回填灰度决定 |
 | 用户研究参与者 | UI-E 仍 blocked_external | 不属于本轮依赖或交付 |
 
 真实应用测量必须 native；image-only 对账只证明同一镜像／架构的内容与度量，可以不执行镜像内应用。
@@ -80,3 +80,10 @@ EV-3／IT-9 置 `delivered` 必须：全部必需验收 passed；四个增量 de
 预算灰度与时间／RSS warning 边界已记录；文档和 Roadmap 已回填；当前 PR 聚合通过。
 缺服务／镜像／网络时保留 active 或记录精确 blocked_external，不以 fixture 或 unit test 替代真实验证。
 两周耗尽或 Round 5/5 后做安全交接；不扩大验收范围，不因时间不足宣布交付。
+
+## 交付记录 — 2026-11-27
+
+冻结实现 `191683e`；run 46024237806 的 36/36 jobs success，source＋exact-candidate＋Delivery Passed 全部通过。
+A1–A9 全部证据见 [acceptance.md](./evidence/acceptance.md)；四个增量按序 delivered，Round 4/5 收口，未领取第五轮或第二个主任务。
+实施参考窗口起点 2026-11-27、两周参考终点 2026-12-11；实际技术验收闭合日 2026-11-27。
+没有将参考窗口或估算工时当作完成条件。当前原始归档、source/harness/policy、CLI 负向与 strict binding 都已实际核对。

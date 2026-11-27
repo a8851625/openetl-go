@@ -60,3 +60,12 @@ CLI 原始 argv、exit code、输出 verdict 和 SHA 在 `r3-cli-evidence.json`�
 均有实际命令／负向证据。生产 checkpoint、DLQ、sink ack 或 schema 未改变。
 
 VERDICT: DELIVERABLE
+
+## EV-3.4 CI 灰度结果
+
+Run 46024237806 / frozen implementation 191683e 的 Resource Baseline job success；完整 36 jobs success。
+正常 policy SHA `428718897d185407fb745dc9b58b85ec099373b5488acb8e853ba8cfae7ae7d0`，selected 2、enforce passed、exit 0。
+同一实际 default image 147265024 bytes，对受控 limit 147265023 bytes：enforce failed/exit 1、data_valid true；
+移除 enforce flag 后 observation warning/exit 0。三份原始 audit 和 `baseline-v3.json` 保存该结果。
+时间/RSS 没有进入 blocking，Docker29.4.2 + native Podman5.7.0 conformance 实际 passed。
+最终接受矩阵及原始 archive/candidate artifact 在 [acceptance.md](./acceptance.md)。

@@ -1,0 +1,935 @@
+{
+  "base_images": {
+    "docker.io/library/alpine:3.19": {
+      "architecture": "amd64",
+      "bytes": 3429495,
+      "engine_reported_image_bytes": 3429495,
+      "healthcheck": null,
+      "image_id": "sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1",
+      "manifest_digest": null,
+      "os": "linux",
+      "repo_digests": [
+        "alpine@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1"
+      ]
+    },
+    "docker.io/library/golang:1.24-alpine": {
+      "architecture": "amd64",
+      "bytes": 83301112,
+      "engine_reported_image_bytes": 83301112,
+      "healthcheck": null,
+      "image_id": "sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191",
+      "manifest_digest": null,
+      "os": "linux",
+      "repo_digests": [
+        "golang@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191"
+      ]
+    },
+    "docker.io/library/node:20-alpine": {
+      "architecture": "amd64",
+      "bytes": 48372061,
+      "engine_reported_image_bytes": 48372061,
+      "healthcheck": null,
+      "image_id": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+      "manifest_digest": null,
+      "os": "linux",
+      "repo_digests": [
+        "node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293"
+      ]
+    }
+  },
+  "budget": {
+    "data_valid": true,
+    "eligible_for_enforcement": true,
+    "errors": [],
+    "format": "openetl-budget-evaluation/v1",
+    "metrics": [
+      {
+        "architecture": "amd64",
+        "blocking": true,
+        "exceeded": false,
+        "id": "default-amd64-binary",
+        "max_bytes": 84934656,
+        "method": "file-bytes/v1",
+        "metric": "binary_bytes",
+        "os": "linux",
+        "unit": "bytes",
+        "value_bytes": 67285176,
+        "variant": "default"
+      },
+      {
+        "architecture": "amd64",
+        "blocking": true,
+        "exceeded": false,
+        "id": "default-amd64-image",
+        "max_bytes": 184549376,
+        "method": "uncompressed-layer-bytes/v1",
+        "metric": "image_uncompressed_layer_bytes",
+        "os": "linux",
+        "unit": "bytes",
+        "value_bytes": 147265024,
+        "variant": "default"
+      }
+    ],
+    "mode": "enforce",
+    "policy_format": "openetl-resource-budgets/v1",
+    "policy_sha256": "428718897d185407fb745dc9b58b85ec099373b5488acb8e853ba8cfae7ae7d0",
+    "policy_version": "2026-11-27.1",
+    "source_commit": "1f5b1d6e8187a789c70823c2f6dc45c1d7d81de8",
+    "source_sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f",
+    "status": "passed",
+    "unbudgeted_variants": [
+      "extism",
+      "extism-nolua",
+      "nolua"
+    ],
+    "warnings": []
+  },
+  "cleanup": {
+    "errors": [],
+    "images_retained": false,
+    "passed": true
+  },
+  "hardware": {
+    "architecture": "amd64",
+    "client_platform": "Linux-7.0.0-1020-azure-x86_64-with-glibc2.43",
+    "container_engine": "docker",
+    "cpus": 4,
+    "kernel": "7.0.0-1020-azure",
+    "memory_bytes": 16759431168,
+    "os": "linux",
+    "other_running_containers": 0,
+    "runtime_version": "29.4.2"
+  },
+  "harness_sha256": {
+    "bench-baseline.sh": "a31f48a90218e9fbfb32d5619832125c84276e8bc949100191a8fa047d9facad",
+    "bench_baseline.py": "c087e098b8ca6609c14e05c092fc9dd8b9b6f4ae8c715659baf9b49fce2b9848",
+    "cmd/process-measure/main.go": "5d57185945f5b95717a39d8e5b3fd8117d3b0166f6672893a9a16da3e99f01dc",
+    "cmd/process-measure/main_test.go": "93488f9eedad227b8460fc5dbc968298e378f766c02c4f08033c08d3fd70d601"
+  },
+  "images": {
+    "default": {
+      "architecture": "amd64",
+      "archive_format": "docker-save",
+      "binary_bytes": 67285176,
+      "binary_sha256": "77632034d75253fa888b5202f938698c43fbdffe9393d6e1f5b38f5b954ad5a2",
+      "build_tags": "",
+      "bytes": 47609245,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 47609245,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 0,
+      "image_archive_bytes": 47628288,
+      "image_archive_path": "image-default.tar",
+      "image_archive_sha256": "a12ffaaae16bb6edbedefc6c9d1086e1785e4f8d8a94571545626ec66b8c1649",
+      "image_config_sha256": "c84fa8a19484f48b79c3f21c15ea7bca239c76633966a0039b8bcab90b878b79",
+      "image_id": "sha256:0c942bc5b27ec8084f5a16be37f5061e40f84a47120ad75199ed521ed217fdca",
+      "image_uncompressed_layer_bytes": 147265024,
+      "layer_inventory": [
+        {
+          "blob_bytes": 3419815,
+          "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+          "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+          "encoding": "gzip",
+          "ordinal": 0,
+          "uncompressed_bytes": 7688192
+        },
+        {
+          "blob_bytes": 93,
+          "blob_sha256": "b70859e965c65f12cc571f8dc10386e734c0010981792f8eb845b9d704305245",
+          "diff_id": "sha256:c6951958a0250e1afb2e41c6efd7ea0155681a80689b7cc34ef277bb4cc49303",
+          "encoding": "gzip",
+          "ordinal": 1,
+          "uncompressed_bytes": 1536
+        },
+        {
+          "blob_bytes": 566791,
+          "blob_sha256": "89e5246353c7321fc4981ac889c8720142cc57ccc3780a1ceb862afb98bf31b8",
+          "diff_id": "sha256:2bbb5474955e1dfe09987a1c9e9646fafb28752d5e5d6ed3e785fa77eaa3f924",
+          "encoding": "gzip",
+          "ordinal": 2,
+          "uncompressed_bytes": 2564096
+        },
+        {
+          "blob_bytes": 1235,
+          "blob_sha256": "9df86316c83809c85db59dc40b20ece25c4e52e8f0ea8ad5a3a6f13903d0c9ac",
+          "diff_id": "sha256:a0f032fdfa227a3d8641f4d27e2e44ce3e5260e45ca6e53039c47d8494559755",
+          "encoding": "gzip",
+          "ordinal": 3,
+          "uncompressed_bytes": 11776
+        },
+        {
+          "blob_bytes": 21455742,
+          "blob_sha256": "4c690e0199b97ffbaa81fb755245ee3da0800edd56f2b7e0a7c40625aa651f87",
+          "diff_id": "sha256:abeb915164ab91c4213ce1056d4cb05c75e01d6d903f20dd689e39ed9dab951a",
+          "encoding": "gzip",
+          "ordinal": 4,
+          "uncompressed_bytes": 67287552
+        },
+        {
+          "blob_bytes": 347578,
+          "blob_sha256": "422a7b8bc59b5c47eae537b8d3e591d6d975ed400101b6bd2b49021418c6fcde",
+          "diff_id": "sha256:74bd773405025a72363fb26f5ef3a5237b0a4f179d1141d9751283331dc27942",
+          "encoding": "gzip",
+          "ordinal": 5,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 3690,
+          "blob_sha256": "ad428b0bd17ac94d458a90b2130ad07d9e5349acc3b8fdd185b83a8f0c45c29d",
+          "diff_id": "sha256:961504d1cf143129b52e7fe82e9663de75175bb2be0e6cf7a15fe067acd732d6",
+          "encoding": "gzip",
+          "ordinal": 6,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 21808283,
+          "blob_sha256": "93328d7af3cd6b9d9d7dda36172993763260e8af2d65eb311f427866e17556a3",
+          "diff_id": "sha256:4af00313bc3688ce1fad3770cbf280a11012481c25cf6dd480b4f893189cd90a",
+          "encoding": "gzip",
+          "ordinal": 7,
+          "uncompressed_bytes": 68499456
+        }
+      ],
+      "manifest_digest": null,
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466354,
+      "packed_sha256": "bad7ceb323c9d338c6b8d93d41d35fe15f0c78d8f3833466b5e7ccd9268e8484",
+      "repo_digests": [
+        "localhost/openetl-baseline-4c83731ac1af@sha256:0c942bc5b27ec8084f5a16be37f5061e40f84a47120ad75199ed521ed217fdca"
+      ],
+      "tag": "localhost/openetl-baseline-4c83731ac1af:default",
+      "unit": "bytes"
+    },
+    "extism": {
+      "architecture": "amd64",
+      "archive_format": "docker-save",
+      "binary_bytes": 70955192,
+      "binary_sha256": "d2db6015c65a380a718a3a5bf326ff4be265ba8fe82a819bf26abc65971ad833",
+      "build_tags": "extism",
+      "bytes": 50228121,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 50228121,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 0,
+      "image_archive_bytes": 50247168,
+      "image_archive_path": "image-extism.tar",
+      "image_archive_sha256": "67e71d09d1e37aef4bfcc905aac78823d14a046fb1757d2960405749d3d832fb",
+      "image_config_sha256": "b4a399ffcfe0b5eb04e65d516d3af21142c16dbfb6fea83f326057d2563fdb22",
+      "image_id": "sha256:572d1cbc38c9019abbbb1f9d7d89575709951a8fdcf822463eecb5649e9eef2e",
+      "image_uncompressed_layer_bytes": 154605056,
+      "layer_inventory": [
+        {
+          "blob_bytes": 3419815,
+          "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+          "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+          "encoding": "gzip",
+          "ordinal": 0,
+          "uncompressed_bytes": 7688192
+        },
+        {
+          "blob_bytes": 93,
+          "blob_sha256": "b70859e965c65f12cc571f8dc10386e734c0010981792f8eb845b9d704305245",
+          "diff_id": "sha256:c6951958a0250e1afb2e41c6efd7ea0155681a80689b7cc34ef277bb4cc49303",
+          "encoding": "gzip",
+          "ordinal": 1,
+          "uncompressed_bytes": 1536
+        },
+        {
+          "blob_bytes": 566791,
+          "blob_sha256": "89e5246353c7321fc4981ac889c8720142cc57ccc3780a1ceb862afb98bf31b8",
+          "diff_id": "sha256:2bbb5474955e1dfe09987a1c9e9646fafb28752d5e5d6ed3e785fa77eaa3f924",
+          "encoding": "gzip",
+          "ordinal": 2,
+          "uncompressed_bytes": 2564096
+        },
+        {
+          "blob_bytes": 1235,
+          "blob_sha256": "9df86316c83809c85db59dc40b20ece25c4e52e8f0ea8ad5a3a6f13903d0c9ac",
+          "diff_id": "sha256:a0f032fdfa227a3d8641f4d27e2e44ce3e5260e45ca6e53039c47d8494559755",
+          "encoding": "gzip",
+          "ordinal": 3,
+          "uncompressed_bytes": 11776
+        },
+        {
+          "blob_bytes": 22765273,
+          "blob_sha256": "94a3196c14a7a3c6105266d0cb79f3aa60b4ceb04482b1c04bbbf67455e0aed2",
+          "diff_id": "sha256:114664ba27d6d5c538ccc46932a2d0173e47ad4ba7f93f639b686e285f8076ec",
+          "encoding": "gzip",
+          "ordinal": 4,
+          "uncompressed_bytes": 70957568
+        },
+        {
+          "blob_bytes": 347575,
+          "blob_sha256": "b566199cfd096f1814a080fdc9955d9b3324e1a78a19f6d40e3d24941c25a5a5",
+          "diff_id": "sha256:294e207345ca38c775bd418ace1876fe352e2d9493e7f6a77cdbd76a0df33d39",
+          "encoding": "gzip",
+          "ordinal": 5,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 3689,
+          "blob_sha256": "909066030bc90c631039591e9136f71f05e06d826adb71649f1a1040809f2ab4",
+          "diff_id": "sha256:ca53dc88fd5e121dfc83f8346ce0967ff27e15cbcb090196d50c1d87abc50064",
+          "encoding": "gzip",
+          "ordinal": 6,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 23117632,
+          "blob_sha256": "2c58699ceb78ccd28f15b3c7ac172d6c487a9aa06b722ef7e02e9500f71388eb",
+          "diff_id": "sha256:9a55c871e07bf8960b9b5388ff9c62b50a5cbfb4fb8832976cd6a8bbf00c6e30",
+          "encoding": "gzip",
+          "ordinal": 7,
+          "uncompressed_bytes": 72169472
+        }
+      ],
+      "manifest_digest": null,
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466354,
+      "packed_sha256": "bad7ceb323c9d338c6b8d93d41d35fe15f0c78d8f3833466b5e7ccd9268e8484",
+      "repo_digests": [
+        "localhost/openetl-baseline-4c83731ac1af@sha256:572d1cbc38c9019abbbb1f9d7d89575709951a8fdcf822463eecb5649e9eef2e"
+      ],
+      "tag": "localhost/openetl-baseline-4c83731ac1af:extism",
+      "unit": "bytes"
+    },
+    "extism-nolua": {
+      "architecture": "amd64",
+      "archive_format": "docker-save",
+      "binary_bytes": 70156472,
+      "binary_sha256": "dd89846915daa8c29b3ae8a2e30b79000865735c381bac245fdc069379cb0894",
+      "build_tags": "extism,nolua",
+      "bytes": 49553718,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 49553718,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 0,
+      "image_archive_bytes": 49572864,
+      "image_archive_path": "image-extism-nolua.tar",
+      "image_archive_sha256": "ec8de0dd13e7e090a0dbea6b45c0941d178aa9e251a0aea39ad7e5ceef2a55b0",
+      "image_config_sha256": "27440479a536806447d28c43fdfa5502e5b91f205b1275c9d550e2fd06f7892e",
+      "image_id": "sha256:22c44c7d54ad60a4a82ee3ff9ebf29f5fc6eaaf21d5374fb9ca3b18c1d89f4d0",
+      "image_uncompressed_layer_bytes": 153007616,
+      "layer_inventory": [
+        {
+          "blob_bytes": 3419815,
+          "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+          "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+          "encoding": "gzip",
+          "ordinal": 0,
+          "uncompressed_bytes": 7688192
+        },
+        {
+          "blob_bytes": 93,
+          "blob_sha256": "b70859e965c65f12cc571f8dc10386e734c0010981792f8eb845b9d704305245",
+          "diff_id": "sha256:c6951958a0250e1afb2e41c6efd7ea0155681a80689b7cc34ef277bb4cc49303",
+          "encoding": "gzip",
+          "ordinal": 1,
+          "uncompressed_bytes": 1536
+        },
+        {
+          "blob_bytes": 566791,
+          "blob_sha256": "89e5246353c7321fc4981ac889c8720142cc57ccc3780a1ceb862afb98bf31b8",
+          "diff_id": "sha256:2bbb5474955e1dfe09987a1c9e9646fafb28752d5e5d6ed3e785fa77eaa3f924",
+          "encoding": "gzip",
+          "ordinal": 2,
+          "uncompressed_bytes": 2564096
+        },
+        {
+          "blob_bytes": 1235,
+          "blob_sha256": "9df86316c83809c85db59dc40b20ece25c4e52e8f0ea8ad5a3a6f13903d0c9ac",
+          "diff_id": "sha256:a0f032fdfa227a3d8641f4d27e2e44ce3e5260e45ca6e53039c47d8494559755",
+          "encoding": "gzip",
+          "ordinal": 3,
+          "uncompressed_bytes": 11776
+        },
+        {
+          "blob_bytes": 22427924,
+          "blob_sha256": "fd67bd385fb6c679fea92792ea50b55efff83ac97cb396b242f19d3baaa1fcb1",
+          "diff_id": "sha256:ab0fabe9a9492e114a1d407870fb8220aaafde67b75069e015213ebd779004da",
+          "encoding": "gzip",
+          "ordinal": 4,
+          "uncompressed_bytes": 70158848
+        },
+        {
+          "blob_bytes": 347579,
+          "blob_sha256": "8a962b37553b7755bcfe90c507efd7b94dcf1406a9aa9d8cccc9ead18ed0e380",
+          "diff_id": "sha256:740224504c47883935b34f462f0eb366f39d2fbb533e8d1abc51a969e66b6d57",
+          "encoding": "gzip",
+          "ordinal": 5,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 3691,
+          "blob_sha256": "df6f2f6f16aa1b5a379ef1e2391a4ff741acef96bde354e9302101b66d884e48",
+          "diff_id": "sha256:4840cd238fe96afde50158e56911693cf6512b457fa9ec7c465becb3a4186b8f",
+          "encoding": "gzip",
+          "ordinal": 6,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 22780572,
+          "blob_sha256": "6570f570331e1115c16090ee70db33c7101ce9beedf21fb9d7ff0e34d6609204",
+          "diff_id": "sha256:7f9745a4597e06171c9283bc12d2dfadc14a319c8b7f10bc2de014a3284aab46",
+          "encoding": "gzip",
+          "ordinal": 7,
+          "uncompressed_bytes": 71370752
+        }
+      ],
+      "manifest_digest": null,
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466354,
+      "packed_sha256": "bad7ceb323c9d338c6b8d93d41d35fe15f0c78d8f3833466b5e7ccd9268e8484",
+      "repo_digests": [
+        "localhost/openetl-baseline-4c83731ac1af@sha256:22c44c7d54ad60a4a82ee3ff9ebf29f5fc6eaaf21d5374fb9ca3b18c1d89f4d0"
+      ],
+      "tag": "localhost/openetl-baseline-4c83731ac1af:extism-nolua",
+      "unit": "bytes"
+    },
+    "nolua": {
+      "architecture": "amd64",
+      "archive_format": "docker-save",
+      "binary_bytes": 66482360,
+      "binary_sha256": "ea02d4cc67e628ad6e3eea112ce62b706d7631dc24c9a04767470d20863eb87c",
+      "build_tags": "nolua",
+      "bytes": 46932957,
+      "cgo_enabled": false,
+      "engine_reported_image_bytes": 46932957,
+      "frontend_bytes": 1193345,
+      "frontend_sha256": "fc9501137af4f0686188075abf6e75ee7184050ba56159b12e4af99cea03120e",
+      "healthcheck": {
+        "Interval": 30000000000,
+        "Retries": 3,
+        "StartPeriod": 10000000000,
+        "Test": [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8000/api/v2/health >/dev/null 2>&1 ||       wget --no-check-certificate -qO- https://localhost:8000/api/v2/health >/dev/null 2>&1 || exit 1"
+        ],
+        "Timeout": 5000000000
+      },
+      "ignored_legacy_layer_aliases": 0,
+      "image_archive_bytes": 46952448,
+      "image_archive_path": "image-nolua.tar",
+      "image_archive_sha256": "85cfd92884d114e6d7038e82c3ad019125bc81166b0cfdd7f1b1b0cdcfd48736",
+      "image_config_sha256": "46fe4e318c7c0144632648effbadaf605e140738b9a5b893e4639c2d7924460c",
+      "image_id": "sha256:a1b7babb29c8f90305222074bb647908ea4180726dbe3993c9781cd4366c6be8",
+      "image_uncompressed_layer_bytes": 145659392,
+      "layer_inventory": [
+        {
+          "blob_bytes": 3419815,
+          "blob_sha256": "17a39c0ba978cc27001e9c56a480f98106e1ab74bd56eb302f9fd4cf758ea43f",
+          "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+          "encoding": "gzip",
+          "ordinal": 0,
+          "uncompressed_bytes": 7688192
+        },
+        {
+          "blob_bytes": 93,
+          "blob_sha256": "b70859e965c65f12cc571f8dc10386e734c0010981792f8eb845b9d704305245",
+          "diff_id": "sha256:c6951958a0250e1afb2e41c6efd7ea0155681a80689b7cc34ef277bb4cc49303",
+          "encoding": "gzip",
+          "ordinal": 1,
+          "uncompressed_bytes": 1536
+        },
+        {
+          "blob_bytes": 566791,
+          "blob_sha256": "89e5246353c7321fc4981ac889c8720142cc57ccc3780a1ceb862afb98bf31b8",
+          "diff_id": "sha256:2bbb5474955e1dfe09987a1c9e9646fafb28752d5e5d6ed3e785fa77eaa3f924",
+          "encoding": "gzip",
+          "ordinal": 2,
+          "uncompressed_bytes": 2564096
+        },
+        {
+          "blob_bytes": 1235,
+          "blob_sha256": "9df86316c83809c85db59dc40b20ece25c4e52e8f0ea8ad5a3a6f13903d0c9ac",
+          "diff_id": "sha256:a0f032fdfa227a3d8641f4d27e2e44ce3e5260e45ca6e53039c47d8494559755",
+          "encoding": "gzip",
+          "ordinal": 3,
+          "uncompressed_bytes": 11776
+        },
+        {
+          "blob_bytes": 21117968,
+          "blob_sha256": "792b3ec1fbec563354bc62385e88a760eaad1a8ed65f57bdd541d2e64f7924a2",
+          "diff_id": "sha256:a4a04393b8701458ee1fbf793e0524c0cf1f75db9146b69bcc724aaa359d938d",
+          "encoding": "gzip",
+          "ordinal": 4,
+          "uncompressed_bytes": 66484736
+        },
+        {
+          "blob_bytes": 347578,
+          "blob_sha256": "68304ff775b0671b2dbfa150ec87c01da8f195b398dfeb085ded6242dec0750d",
+          "diff_id": "sha256:3f74ea974743f7baf3fbe8d6b649dd7b86fe9f7e27751d4c1ca5f95ae175a853",
+          "encoding": "gzip",
+          "ordinal": 5,
+          "uncompressed_bytes": 1199616
+        },
+        {
+          "blob_bytes": 3691,
+          "blob_sha256": "9402a602734e4eaad54dca615d3e625b2f8b38c8bed9674de7051b01d5592c3a",
+          "diff_id": "sha256:2e0ac25d6e4209df86fd729849f8c6d11a3ebc08490c762584aa466f56e8a4ff",
+          "encoding": "gzip",
+          "ordinal": 6,
+          "uncompressed_bytes": 12800
+        },
+        {
+          "blob_bytes": 21469770,
+          "blob_sha256": "9b2735ba01f7584fe4a1d5f35a6493bd08469faa3b53fa65d63474f11b74777e",
+          "diff_id": "sha256:edc3007f63812e2c3d5468f88a887b48f1e1843a51f1eab6c4ba176218ec5582",
+          "encoding": "gzip",
+          "ordinal": 7,
+          "uncompressed_bytes": 67696640
+        }
+      ],
+      "manifest_digest": null,
+      "method": "uncompressed-layer-bytes/v1",
+      "os": "linux",
+      "packed_bytes": 466354,
+      "packed_sha256": "bad7ceb323c9d338c6b8d93d41d35fe15f0c78d8f3833466b5e7ccd9268e8484",
+      "repo_digests": [
+        "localhost/openetl-baseline-4c83731ac1af@sha256:a1b7babb29c8f90305222074bb647908ea4180726dbe3993c9781cd4366c6be8"
+      ],
+      "tag": "localhost/openetl-baseline-4c83731ac1af:nolua",
+      "unit": "bytes"
+    }
+  },
+  "limitations": [
+    "Fresh process and SQLite volume, cached image/OS pages; not a host reboot cold start.",
+    "Start timer includes container start, port discovery and health polling overhead.",
+    "Runtime image uses Dockerfile, not a published GoReleaser release asset.",
+    "CGO/QuickJS is not published by .goreleaser.yml and is not measured here.",
+    "Loaded control-plane peak is not sustained pipeline throughput/concurrency evidence.",
+    "ClickHouse specialty scope is pending; no specialty benchmark is run.",
+    "Image bytes is a legacy diagnostic alias of engine_reported_image_bytes, never the v3 image budget.",
+    "Uncompressed image layer bytes includes layer tar headers/whiteouts/overwritten content; not merged rootfs or process memory.",
+    "Saved archive bytes depends on transport/compression; compare the selected uncompressed layer metric."
+  ],
+  "measured_at": "2026-11-27T15:22:10Z",
+  "parameters": {
+    "container_log_driver": "json-file",
+    "cpus": 2,
+    "gomaxprocs": 2,
+    "idle_samples": 5,
+    "memory_bytes": 1073741824,
+    "records_per_pipeline": 100,
+    "restore_pipelines": 16,
+    "sample_interval_seconds": 1,
+    "settle_seconds": 10,
+    "trials": 3
+  },
+  "runtime": {
+    "backup": {
+      "bytes": 52742,
+      "container_start_to_exit_seconds": 0.21420221200003198,
+      "counts": {
+        "audit_logs": 48,
+        "checkpoints": 16,
+        "connections": 0,
+        "dead_letters": 0,
+        "pipeline_versions": 16,
+        "pipelines": 16,
+        "plugins": 0,
+        "recovery_events": 0,
+        "recovery_operations": 0,
+        "run_history": 16,
+        "settings": 0,
+        "task_assignments": 0,
+        "workers": 1
+      },
+      "elapsed_seconds": 0.041127599,
+      "exit_code": 0,
+      "method": "wait4.rusage.ru_maxrss",
+      "native_max_rss": 46240,
+      "native_rss_unit": "KiB",
+      "peak_rss_bytes": 47349760,
+      "platform": "linux",
+      "seconds": 0.041127599,
+      "sha256": "54f6ca3dbefdd9db4815d244d485c34c45a061431a954dcc08ebca8db0abe54f"
+    },
+    "cold_trials": [
+      {
+        "binary_sha256": "77632034d75253fa888b5202f938698c43fbdffe9393d6e1f5b38f5b954ad5a2",
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T15:31:17Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 54108160,
+            "rss_bytes": 54108160
+          },
+          {
+            "peak_rss_bytes": 54108160,
+            "rss_bytes": 54108160
+          },
+          {
+            "peak_rss_bytes": 54108160,
+            "rss_bytes": 54108160
+          },
+          {
+            "peak_rss_bytes": 54108160,
+            "rss_bytes": 54108160
+          },
+          {
+            "peak_rss_bytes": 54108160,
+            "rss_bytes": 54108160
+          }
+        ],
+        "start_to_health_seconds": 0.42658906899998783,
+        "started_at": "2026-11-27T15:31:16.800500089Z"
+      },
+      {
+        "binary_sha256": "77632034d75253fa888b5202f938698c43fbdffe9393d6e1f5b38f5b954ad5a2",
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T15:31:33Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 53821440,
+            "rss_bytes": 53821440
+          },
+          {
+            "peak_rss_bytes": 53821440,
+            "rss_bytes": 53821440
+          },
+          {
+            "peak_rss_bytes": 53821440,
+            "rss_bytes": 53821440
+          },
+          {
+            "peak_rss_bytes": 53821440,
+            "rss_bytes": 53821440
+          },
+          {
+            "peak_rss_bytes": 53821440,
+            "rss_bytes": 53821440
+          }
+        ],
+        "start_to_health_seconds": 0.27599655900007747,
+        "started_at": "2026-11-27T15:31:33.280631715Z"
+      },
+      {
+        "binary_sha256": "77632034d75253fa888b5202f938698c43fbdffe9393d6e1f5b38f5b954ad5a2",
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T15:31:49Z",
+          "workers": "ok: 1 online"
+        },
+        "idle_samples": [
+          {
+            "peak_rss_bytes": 53985280,
+            "rss_bytes": 53985280
+          },
+          {
+            "peak_rss_bytes": 53985280,
+            "rss_bytes": 53985280
+          },
+          {
+            "peak_rss_bytes": 53985280,
+            "rss_bytes": 53985280
+          },
+          {
+            "peak_rss_bytes": 53985280,
+            "rss_bytes": 53985280
+          },
+          {
+            "peak_rss_bytes": 53985280,
+            "rss_bytes": 53985280
+          }
+        ],
+        "start_to_health_seconds": 0.28459862200008956,
+        "started_at": "2026-11-27T15:31:49.595384946Z"
+      }
+    ],
+    "fixture": {
+      "identity_sha256": "20d518c490446746d48457c8822a2540c704099c10eba9ea9dd1e72e6f83a4b2",
+      "peak_rss_bytes": 63078400,
+      "pipeline_count": 16,
+      "records_verified": 1600,
+      "rss_bytes": 63078400
+    },
+    "image_binary_sha256": "77632034d75253fa888b5202f938698c43fbdffe9393d6e1f5b38f5b954ad5a2",
+    "image_config_sha256": "c84fa8a19484f48b79c3f21c15ea7bca239c76633966a0039b8bcab90b878b79",
+    "image_id": "sha256:0c942bc5b27ec8084f5a16be37f5061e40f84a47120ad75199ed521ed217fdca",
+    "profile": "production",
+    "restore_trials": [
+      {
+        "binary_sha256": "77632034d75253fa888b5202f938698c43fbdffe9393d6e1f5b38f5b954ad5a2",
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T15:32:07Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "20d518c490446746d48457c8822a2540c704099c10eba9ea9dd1e72e6f83a4b2",
+        "peak_rss_bytes": 55267328,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.264447859000029,
+        "restore_peak_rss_bytes": 46694400,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.264447859000029,
+          "elapsed_seconds": 0.06648906,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 45600,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 46694400,
+          "platform": "linux",
+          "seconds": 0.06648906
+        },
+        "restore_seconds": 0.06648906,
+        "rss_bytes": 55267328,
+        "start_to_health_seconds": 0.28908050400002594,
+        "started_at": "2026-11-27T15:32:07.639032859Z"
+      },
+      {
+        "binary_sha256": "77632034d75253fa888b5202f938698c43fbdffe9393d6e1f5b38f5b954ad5a2",
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T15:32:09Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "20d518c490446746d48457c8822a2540c704099c10eba9ea9dd1e72e6f83a4b2",
+        "peak_rss_bytes": 54943744,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.2643831030000001,
+        "restore_peak_rss_bytes": 47288320,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.2643831030000001,
+          "elapsed_seconds": 0.06632343,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 46180,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 47288320,
+          "platform": "linux",
+          "seconds": 0.06632343
+        },
+        "restore_seconds": 0.06632343,
+        "rss_bytes": 54943744,
+        "start_to_health_seconds": 0.28126925799995206,
+        "started_at": "2026-11-27T15:32:09.170100696Z"
+      },
+      {
+        "binary_sha256": "77632034d75253fa888b5202f938698c43fbdffe9393d6e1f5b38f5b954ad5a2",
+        "checkpoint_count": 16,
+        "health": {
+          "alert_queue": "ok",
+          "cdc_lag_threshold_ms": "60000",
+          "checkpoint_stale_threshold_sec": "300",
+          "janitor": "disabled",
+          "pipeline_restore-000": "stopped",
+          "pipeline_restore-001": "stopped",
+          "pipeline_restore-002": "stopped",
+          "pipeline_restore-003": "stopped",
+          "pipeline_restore-004": "stopped",
+          "pipeline_restore-005": "stopped",
+          "pipeline_restore-006": "stopped",
+          "pipeline_restore-007": "stopped",
+          "pipeline_restore-008": "stopped",
+          "pipeline_restore-009": "stopped",
+          "pipeline_restore-010": "stopped",
+          "pipeline_restore-011": "stopped",
+          "pipeline_restore-012": "stopped",
+          "pipeline_restore-013": "stopped",
+          "pipeline_restore-014": "stopped",
+          "pipeline_restore-015": "stopped",
+          "profile": "production",
+          "redis_state": "skipped: not configured",
+          "restore_failed_count": "0",
+          "role": "standalone",
+          "scheduler": "ok",
+          "secret_encryption": "ok",
+          "status": "ok",
+          "storage": "ok",
+          "timestamp": "2026-11-27T15:32:10Z",
+          "workers": "ok: 1 online"
+        },
+        "identity_sha256": "20d518c490446746d48457c8822a2540c704099c10eba9ea9dd1e72e6f83a4b2",
+        "peak_rss_bytes": 54349824,
+        "pipeline_count": 16,
+        "restore_container_seconds": 0.26436853699999574,
+        "restore_peak_rss_bytes": 46764032,
+        "restore_resource": {
+          "container_start_to_exit_seconds": 0.26436853699999574,
+          "elapsed_seconds": 0.068349566,
+          "exit_code": 0,
+          "method": "wait4.rusage.ru_maxrss",
+          "native_max_rss": 45668,
+          "native_rss_unit": "KiB",
+          "peak_rss_bytes": 46764032,
+          "platform": "linux",
+          "seconds": 0.068349566
+        },
+        "restore_seconds": 0.068349566,
+        "rss_bytes": 54349824,
+        "start_to_health_seconds": 0.28847301899998,
+        "started_at": "2026-11-27T15:32:10.703039699Z"
+      }
+    ],
+    "tls_verified": true,
+    "uid": 1001
+  },
+  "schema_version": 3,
+  "scope": "packaging-startup-restore",
+  "source": {
+    "commit": "1f5b1d6e8187a789c70823c2f6dc45c1d7d81de8",
+    "dirty": false,
+    "files": 551,
+    "sha256": "1d8d2668f7d4bee84f1b194fda64f7b5ba8fcb0a1903608bd133d98e7de3245f"
+  },
+  "status": "passed",
+  "toolchain": {
+    "binary_build_info": "/app/main: go1.24.13\n\tpath\tgithub.com/a8851625/openetl-go\n\tmod\tgithub.com/a8851625/openetl-go\t(devel)\t\n\tdep\tfilippo.io/edwards25519\tv1.2.0\th1:crnVqOiS4jqYleHd9vaKZ+HKtHfllngJIiOpNpoJsjo=\n\tdep\tgithub.com/BurntSushi/toml\tv1.5.0\th1:W5quZX/G/csjUnuI8SUYlsHs9M38FC7znL0lIO+DvMg=\n\tdep\tgithub.com/ClickHouse/ch-go\tv0.61.5\th1:zwR8QbYI0tsMiEcze/uIMK+Tz1D3XZXLdNrlaOpeEI4=\n\tdep\tgithub.com/ClickHouse/clickhouse-go/v2\tv2.23.0\th1:srmRrkS0BR8gEut87u8jpcZ7geOob6nGj9ifrb+aKmg=\n\tdep\tgithub.com/IBM/sarama\tv1.43.3\th1:Yj6L2IaNvb2mRBop39N7mmJAHBVY3dTPncr3qGVkxPA=\n\tdep\tgithub.com/Masterminds/semver\tv1.5.0\th1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3QEww=\n\tdep\tgithub.com/alibabacloud-go/debug\tv1.0.1\th1:MsW9SmUtbb1Fnt3ieC6NNZi6aEwrXfDksD4QA6GSbPg=\n\tdep\tgithub.com/alibabacloud-go/tea\tv1.2.2\th1:aTsR6Rl3ANWPfqeQugPglfurloyBJY85eFy7Gc1+8oU=\n\tdep\tgithub.com/aliyun/aliyun-odps-go-sdk\tv0.4.23\th1:c8p3S9Fw3bmOwXOdyWzK7jPSRhMjCJCvVQAf9xSzQkQ=\n\tdep\tgithub.com/aliyun/credentials-go\tv1.3.10\th1:45Xxrae/evfzQL9V10zL3xX31eqgLWEaIdCoPipOEQA=\n\tdep\tgithub.com/andybalholm/brotli\tv1.1.1\th1:PR2pgnyFznKEugtsUo0xLdDop5SKXd5Qf5ysW+7XdTA=\n\tdep\tgithub.com/cespare/xxhash/v2\tv2.3.0\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\n\tdep\tgithub.com/clbanning/mxj/v2\tv2.7.0\th1:WA/La7UGCanFe5NpHF0Q3DNtnCsVoxbPKuyBNHWRyME=\n\tdep\tgithub.com/cznic/mathutil\tv0.0.0-20181122101859-297441e03548\th1:iwZdTE0PVqJCos1vaoKsclOGD3ADKpshg3SRtYBbwso=\n\tdep\tgithub.com/davecgh/go-spew\tv1.1.1\th1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=\n\tdep\tgithub.com/dustin/go-humanize\tv1.0.1\th1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=\n\tdep\tgithub.com/eapache/go-resiliency\tv1.7.0\th1:n3NRTnBn5N0Cbi/IeOHuQn9s2UwVUH7Ga0ZWcP+9JTA=\n\tdep\tgithub.com/eapache/go-xerial-snappy\tv0.0.0-20230731223053-c322873962e3\th1:Oy0F4ALJ04o5Qqpdz8XLIpNA3WM/iSIXqxtqo7UGVws=\n\tdep\tgithub.com/eapache/queue\tv1.1.0\th1:YOEu7KNc61ntiQlcEeUIoDTJ2o8mQznoNvUhiigpIqc=\n\tdep\tgithub.com/emirpasic/gods/v2\tv2.0.0-alpha\th1:dwFlh8pBg1VMOXWGipNMRt8v96dKAIvBehtCt6OtunU=\n\tdep\tgithub.com/fatih/color\tv1.18.0\th1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=\n\tdep\tgithub.com/fsnotify/fsnotify\tv1.9.0\th1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=\n\tdep\tgithub.com/go-faster/city\tv1.0.1\th1:4WAxSZ3V2Ws4QRDrscLEDcibJY8uf41H6AhXDrNDcGw=\n\tdep\tgithub.com/go-faster/errors\tv0.7.1\th1:MkJTnDoEdi9pDabt1dpWf7AA8/BaSYZqibYyhZ20AYg=\n\tdep\tgithub.com/go-ini/ini\tv1.67.0\th1:z6ZrTEZqSWOTyH2FlglNbNgARyHG8oLW9gMELqKr06A=\n\tdep\tgithub.com/go-logr/logr\tv1.4.3\th1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=\n\tdep\tgithub.com/go-logr/stdr\tv1.2.2\th1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=\n\tdep\tgithub.com/go-mysql-org/go-mysql\tv1.9.1\th1:W2ZKkHkoM4mmkasJCoSYfaE4RQNxXTb6VqiaMpKFrJc=\n\tdep\tgithub.com/go-sql-driver/mysql\tv1.9.3\th1:U/N249h2WzJ3Ukj8SowVFjdtZKfu9vlLZxjPXV1aweo=\n\tdep\tgithub.com/goccy/go-json\tv0.10.3\th1:KZ5WoDbxAIgm2HNbYckL0se1fHD6rz5j4ywS6ebzDqA=\n\tdep\tgithub.com/gogf/gf/v2\tv2.10.0\th1:rzDROlyqGMe/eM6dCalSR8dZOuMIdLhmxKSH1DGhbFs=\n\tdep\tgithub.com/golang/snappy\tv0.0.4\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\n\tdep\tgithub.com/google/flatbuffers\tv23.5.26+incompatible\th1:M9dgRyhJemaM4Sw8+66GHBu8ioaQmyPLg1b8VwK5WJg=\n\tdep\tgithub.com/google/uuid\tv1.6.0\th1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n\tdep\tgithub.com/gorilla/websocket\tv1.5.3\th1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=\n\tdep\tgithub.com/grokify/html-strip-tags-go\tv0.1.0\th1:03UrQLjAny8xci+R+qjCce/MYnpNXCtgzltlQbOBae4=\n\tdep\tgithub.com/hashicorp/errwrap\tv1.1.0\th1:OxrOeh75EUXMY8TBjag2fzXGZ40LB6IKw45YeGUDY2I=\n\tdep\tgithub.com/hashicorp/go-multierror\tv1.1.1\th1:H5DkEtf6CXdFp0N0Em5UCwQpXMWke8IA0+lD48awMYo=\n\tdep\tgithub.com/hashicorp/go-uuid\tv1.0.3\th1:2gKiV6YVmrJ1i2CKKa9obLvRieoRGviZFL26PcT/Co8=\n\tdep\tgithub.com/jackc/pgio\tv1.0.0\th1:g12B9UwVnzGhueNavwioyEEpAmqMe1E/BN9ES+8ovkE=\n\tdep\tgithub.com/jackc/pglogrepl\tv0.0.0-20250509230407-a9884f6bd75a\th1:f2a1BtfxAaGSs+kI2MfZjNf9KiHzynJKqOPLTkF8L4Y=\n\tdep\tgithub.com/jackc/pgpassfile\tv1.0.0\th1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=\n\tdep\tgithub.com/jackc/pgservicefile\tv0.0.0-20240606120523-5a60cdf6a761\th1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=\n\tdep\tgithub.com/jackc/pgx/v5\tv5.7.4\th1:9wKznZrhWa2QiHL+NjTSPP6yjl3451BX3imWDnokYlg=\n\tdep\tgithub.com/jackc/puddle/v2\tv2.2.2\th1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=\n\tdep\tgithub.com/jcmturner/aescts/v2\tv2.0.0\th1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8=\n\tdep\tgithub.com/jcmturner/dnsutils/v2\tv2.0.0\th1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo=\n\tdep\tgithub.com/jcmturner/gofork\tv1.7.6\th1:QH0l3hzAU1tfT3rZCnW5zXl+orbkNMMRGJfdJjHVETg=\n\tdep\tgithub.com/jcmturner/gokrb5/v8\tv8.4.4\th1:x1Sv4HaTpepFkXbt2IkL29DXRf8sOfZXo8eRKh687T8=\n\tdep\tgithub.com/jcmturner/rpc/v2\tv2.0.3\th1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY=\n\tdep\tgithub.com/json-iterator/go\tv1.1.12\th1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=\n\tdep\tgithub.com/klauspost/compress\tv1.17.9\th1:6KIumPrER1LHsvBVuDa0r5xaG0Es51mhhB9BQB2qeMA=\n\tdep\tgithub.com/klauspost/cpuid/v2\tv2.2.10\th1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=\n\tdep\tgithub.com/magiconair/properties\tv1.8.10\th1:s31yESBquKXCV9a/ScB3ESkOjUYYv+X0rg8SYxI99mE=\n\tdep\tgithub.com/mattn/go-colorable\tv0.1.13\th1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=\n\tdep\tgithub.com/mattn/go-isatty\tv0.0.20\th1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=\n\tdep\tgithub.com/mattn/go-runewidth\tv0.0.16\th1:E5ScNMtiwvlvB5paMFdw9p4kSQzbXFikJ5SQO6TULQc=\n\tdep\tgithub.com/minio/md5-simd\tv1.1.2\th1:Gdi1DZK69+ZVMoNHRXJyNcxrMA4dSxoYHZSQbirFg34=\n\tdep\tgithub.com/minio/minio-go/v7\tv7.0.74\th1:fTo/XlPBTSpo3BAMshlwKL5RspXRv9us5UeHEGYCFe0=\n\tdep\tgithub.com/modern-go/concurrent\tv0.0.0-20180306012644-bacd9c7ef1dd\th1:TRLaZ9cD/w8PVh93nsPXa1VrQ6jlwL5oN8l14QlcNfg=\n\tdep\tgithub.com/modern-go/reflect2\tv1.0.2\th1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=\n\tdep\tgithub.com/olekukonko/errors\tv1.1.0\th1:RNuGIh15QdDenh+hNvKrJkmxxjV4hcS50Db478Ou5sM=\n\tdep\tgithub.com/olekukonko/ll\tv0.0.9\th1:Y+1YqDfVkqMWuEQMclsF9HUR5+a82+dxJuL1HHSRpxI=\n\tdep\tgithub.com/olekukonko/tablewriter\tv1.1.0\th1:N0LHrshF4T39KvI96fn6GT8HEjXRXYNDrDjKFDB7RIY=\n\tdep\tgithub.com/parquet-go/bitpack\tv1.0.0\th1:AUqzlKzPPXf2bCdjfj4sTeacrUwsT7NlcYDMUQxPcQA=\n\tdep\tgithub.com/parquet-go/jsonlite\tv1.0.0\th1:87QNdi56wOfsE5bdgas0vRzHPxfJgzrXGml1zZdd7VU=\n\tdep\tgithub.com/parquet-go/parquet-go\tv0.30.1\th1:Oy6ganNrAdFiVwy7wNmWagfPTWA2X9Z3tVHBc7JtuX8=\n\tdep\tgithub.com/paulmach/orb\tv0.11.1\th1:3koVegMC4X/WeiXYz9iswopaTwMem53NzTJuTF20JzU=\n\tdep\tgithub.com/pierrec/lz4/v4\tv4.1.21\th1:yOVMLb6qSIDP67pl/5F7RepeKYu/VmTyEXvuMI5d9mQ=\n\tdep\tgithub.com/pingcap/errors\tv0.11.5-0.20221009092201-b66cddb77c32\th1:m5ZsBa5o/0CkzZXfXLaThzKuR85SnHHetqBCpzQ30h8=\n\tdep\tgithub.com/pingcap/failpoint\tv0.0.0-20220801062533-2eaa32854a6c\th1:CgbKAHto5CQgWM9fSBIvaxsJHuGP0uM74HXtv3MyyGQ=\n\tdep\tgithub.com/pingcap/log\tv1.1.1-0.20230317032135-a0d097d16e22\th1:2SOzvGvE8beiC1Y4g9Onkvu6UmuBBOeWRGQEjJaT/JY=\n\tdep\tgithub.com/pingcap/tidb/pkg/parser\tv0.0.0-20231103042308-035ad5ccbe67\th1:m0RZ583HjzG3NweDi4xAcK54NBBPJh+zXp5Fp60dHtw=\n\tdep\tgithub.com/pkg/errors\tv0.9.1\th1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=\n\tdep\tgithub.com/rcrowley/go-metrics\tv0.0.0-20201227073835-cf1acfcdf475\th1:N/ElC8H3+5XpJzTSTfLsJV/mx9Q9g7kxmchpfZyxgzM=\n\tdep\tgithub.com/redis/go-redis/v9\tv9.20.1\th1:sfCU6A8P3dXbKyWes02uxA2baehGux9dZHfEKtsTB1w=\n\tdep\tgithub.com/remyoudompheng/bigfft\tv0.0.0-20230129092748-24d4a6f8daec\th1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=\n\tdep\tgithub.com/rivo/uniseg\tv0.2.0\th1:S1pD9weZBuJdFmowNwbpi7BJ8TNftyUImj/0WQi72jY=\n\tdep\tgithub.com/robfig/cron/v3\tv3.0.1\th1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=\n\tdep\tgithub.com/rs/xid\tv1.5.0\th1:mKX4bl4iPYJtEIxp6CYiUuLQ/8DYMoz0PUdtGgMFRVc=\n\tdep\tgithub.com/segmentio/asm\tv1.2.0\th1:9BQrFxC+YOHJlTlHGkTrFWf59nbL3XnCoFLTwDCI7ys=\n\tdep\tgithub.com/shopspring/decimal\tv1.3.1\th1:2Usl1nmF/WZucqkFZhnfFYxxxu8LG21F6nPQBE5gKV8=\n\tdep\tgithub.com/siddontang/go\tv0.0.0-20180604090527-bdc77568d726\th1:xT+JlYxNGqyT+XcU8iUrN18JYed2TvG9yN5ULG2jATM=\n\tdep\tgithub.com/siddontang/go-log\tv0.0.0-20180807004314-8d05993dda07\th1:oI+RNwuC9jF2g2lP0u0cVEEZrc/AYBCuFdvwrLWM/6Q=\n\tdep\tgithub.com/twpayne/go-geom\tv1.6.1\th1:iLE+Opv0Ihm/ABIcvQFGIiFBXd76oBIar9drAwHFhR4=\n\tdep\tgithub.com/yuin/gopher-lua\tv1.1.2\th1:yF/FjE3hD65tBbt0VXLE13HWS9h34fdzJmrWRXwobGA=\n\tdep\tgo.opentelemetry.io/auto/sdk\tv1.1.0\th1:cH53jehLUN6UFLY71z+NDOiNJqDdPRaXzTel0sJySYA=\n\tdep\tgo.opentelemetry.io/otel\tv1.38.0\th1:RkfdswUDRimDg0m2Az18RKOsnI8UDzppJAtj01/Ymk8=\n\tdep\tgo.opentelemetry.io/otel/metric\tv1.38.0\th1:Kl6lzIYGAh5M159u9NgiRkmoMKjvbsKtYRwgfrA6WpA=\n\tdep\tgo.opentelemetry.io/otel/sdk\tv1.38.0\th1:l48sr5YbNf2hpCUj/FoGhW9yDkl+Ma+LrVl8qaM5b+E=\n\tdep\tgo.opentelemetry.io/otel/trace\tv1.38.0\th1:Fxk5bKrDZJUH+AMyyIXGcFAPah0oRcT+LuNtJrmcNLE=\n\tdep\tgo.uber.org/atomic\tv1.11.0\th1:ZvwS0R+56ePWxUNi+Atn9dWONBPp/AUETXlHW0DxSjE=\n\tdep\tgo.uber.org/multierr\tv1.11.0\th1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=\n\tdep\tgo.uber.org/zap\tv1.27.0\th1:aJMhYGrd5QSmlpLMr2MftRKl7t8J8PTZPA732ud/XR8=\n\tdep\tgolang.org/x/crypto\tv0.38.0\th1:jt+WWG8IZlBnVbomuhg2Mdq0+BBQaHbtqHEFEigjUV8=\n\tdep\tgolang.org/x/exp\tv0.0.0-20250620022241-b7579e27df2b\th1:M2rDM6z3Fhozi9O7NWsxAkg/yqS/lQJ6PmkyIV3YP+o=\n\tdep\tgolang.org/x/net\tv0.40.0\th1:79Xs7wF06Gbdcg4kdCCIQArK11Z1hr5POQ6+fIYHNuY=\n\tdep\tgolang.org/x/sync\tv0.15.0\th1:KWH3jNZsfyT6xfAfKiz6MRNmd46ByHDYaZ7KSkCtdW8=\n\tdep\tgolang.org/x/sys\tv0.38.0\th1:3yZWxaJjBmCWXqhN1qh02AkOnCQ1poK6oF+a7xWL6Gc=\n\tdep\tgolang.org/x/text\tv0.25.0\th1:qVyWApTSYLk/drJRO5mDlNYskwQznZmkpV2c8q9zls4=\n\tdep\tgolang.org/x/xerrors\tv0.0.0-20220907171357-04be3eba64a2\th1:H2TDz8ibqkAF6YGhCdN3jS9O0/s90v0rJh3X/OLHEUk=\n\tdep\tgoogle.golang.org/protobuf\tv1.34.2\th1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6hg=\n\tdep\tgopkg.in/ini.v1\tv1.67.0\th1:Dgnx+6+nfE+IfzjUEISNeydPJh9AXNNsWbGP9KzCsOA=\n\tdep\tgopkg.in/natefinch/lumberjack.v2\tv2.2.1\th1:bBRl1b0OH9s/DuPhuXpNl+VtCaJXFZ5/uEFST95x9zc=\n\tdep\tgopkg.in/yaml.v3\tv3.0.1\th1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=\n\tdep\tmodernc.org/libc\tv1.66.3\th1:cfCbjTUcdsKyyZZfEUKfoHcP3S0Wkvz3jgSzByEWVCQ=\n\tdep\tmodernc.org/mathutil\tv1.7.1\th1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=\n\tdep\tmodernc.org/memory\tv1.11.0\th1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=\n\tdep\tmodernc.org/sqlite\tv1.38.2\th1:Aclu7+tgjgcQVShZqim41Bbw9Cho0y/7WzYptXqkEek=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-ldflags=\"-s -w\"\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1\n",
+    "builder": {
+      "architecture": "amd64",
+      "bytes": 683993677,
+      "engine_reported_image_bytes": 683993677,
+      "healthcheck": null,
+      "image_id": "sha256:9374d8b8c080aab13e8983a12c953ac050e35a7cd2336d16daef08a11597bde2",
+      "manifest_digest": null,
+      "os": "linux",
+      "repo_digests": [
+        "localhost/openetl-baseline-4c83731ac1af@sha256:9374d8b8c080aab13e8983a12c953ac050e35a7cd2336d16daef08a11597bde2"
+      ]
+    },
+    "container_client_version": "{\"Platform\":{\"Name\":\"Docker Engine - Community\"},\"Version\":\"29.4.2\",\"ApiVersion\":\"1.54\",\"DefaultAPIVersion\":\"1.54\",\"GitCommit\":\"055a478\",\"GoVersion\":\"go1.26.2\",\"Os\":\"linux\",\"Arch\":\"amd64\",\"BuildTime\":\"Fri May  1 10:24:04 2026\",\"Context\":\"default\"}",
+    "gf_default_download_version": "v2.10.0",
+    "go_version": "go version go1.24.13 linux/amd64",
+    "pack_recipe": "Dockerfile: SKIP_UI=1 hack/pack.sh; gf URL/output are in build logs",
+    "process_measure": {
+      "binary_sha256": "baa9d6729b24a875d1a9efe8bfadc1f936ef5cdc32bacdf2421de31c0c3e8e0c",
+      "linux_native_rss_unit": "KiB",
+      "method": "wait4.rusage.ru_maxrss",
+      "source_sha256": "5d57185945f5b95717a39d8e5b3fd8117d3b0166f6672893a9a16da3e99f01dc"
+    },
+    "python_version": "3.14.4"
+  },
+  "warnings": []
+}

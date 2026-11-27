@@ -1,11 +1,11 @@
 # OpenETL-Go Roadmap
 
 > 当前执行快照（2026-11-27，规划代码基线 `ee3797c`；已发布基线 v0.2.12-beta.21）：
-> P1 技术窗口五项全部 `delivered`，原 Round 5/5 已收口；当前唯一 active 主任务为 IT-9 / EV-3。
-> 当前迭代为 IT-9 / EV-3 可信资源度量与预算控制，状态 `active`；用户选择 1 位实现者、两周参考窗口。
-> 用户已明确授权开发直至迭代完整交付；实施 Round: 4/5，EV-3.1–.3 delivered，EV-3.4 active。
+> P1 技术窗口五项全部 `delivered`，原 Round 5/5 已收口；IT-9 / EV-3 亦已交付，当前没有 active 主任务。
+> 当前迭代 IT-9 / EV-3 可信资源度量与预算控制已 `delivered`；用户选择 1 位实现者、两周参考窗口。
+> 用户已明确授权开发直至迭代完整交付；实际 Round: 4/5，EV-3.1–.4 delivered；第五轮未使用。
 > UI-E 的外部用户研究继续 `blocked_external`，用户明确要求先完成技术修复。
-> EV-3 内部度量缺陷已进入实施；真实环境缺口按增量记录。MaxCompute P0 保持 `deferred`。
+> EV-3 规范化计量、真实双引擎、显式体积灰度和全量 CI 已通过。MaxCompute P0 保持 `deferred`。
 >
 > 历史审计基线：`cfbd496`（v0.2.11-beta.3 后续开发，2026-07-24）；复审基线
 > `c2ac396`（v0.2.12-beta.17，2026-08-29），代码级核对结果见
@@ -45,7 +45,7 @@ delivered。EV-3 与运行历史遗留行是本窗口之外的 P2。
 用户在后续 Roadmap 方向讨论后要求规划下一迭代，并选择 1 位实现者、两周参考窗口。
 本轮以既有 EV-3 为唯一主任务，结果是“资源度量可复核、warning／强制预算的退出码可解释”。
 规划文件见 [spec](./iterations/IT-9-resource-metrics/spec.md)、[plan](./iterations/IT-9-resource-metrics/plan.md)、
-[tasks](./iterations/IT-9-resource-metrics/tasks.md)。EV-3.1–.3 已交付，EV-3.4 已领取；用户明确授权开始开发，持续到本迭代全部验收闭合。
+[tasks](./iterations/IT-9-resource-metrics/tasks.md)。EV-3.1–.4 已交付；用户明确授权开始开发，持续到本迭代全部验收闭合。
 
 四个有序增量为归档／v3 口径、真实双引擎对账、显式预算 policy、CI 灰度与证据收口。
 承诺估算 32 理想小时，预留 8 小时（20%）；每天 4 专注小时为容量假设，不代表历史 velocity。
@@ -2703,15 +2703,15 @@ integration job `139341305228` 的 Run integration tests 和 job conclusion 均�
 
 ### EV-3：可信资源度量与预算控制
 
-状态：`active`（2026-11-27 用户明确授权实施 IT-9；Round 4/5；EV-3.1–.3 delivered，EV-3.4 active）
+状态：`delivered`（2026-11-27；IT-9 A1–A9 全部通过，Round 4/5 收口）
 
 **规划与状态纠正**：用户要求规划下一迭代，选择 1 人／两周；沿用本项既有优先级。
 首项以固定归档／CLI 验证内部计量，不依赖远端凭据，因此不继续标为外部阻塞。
-`hardware.runtime_version` 已存在，日志自污染已修复；尚未解决的是 `image_identity` 将 `inspect.Size`
-直接当作统一 bytes，以及缺少明确的预算强制模式。用户已授权实施，EV-3.1 的归档／CLI／兼容验收及 EV-3.2 的实际双引擎对账已通过；EV-3.3 的 policy/CLI 验收已通过；当前只有 EV-3.4 一个 active 增量。
+IT-9 已用所选归档的展开层字节替代跨引擎的 raw.Size 预算，保留引擎原始诊断值；
+schema v3、真实 Docker/Podman、clean native 校准和显式 policy/enforce 已全部验收。四个增量 delivered。
 实际缺 Docker／Podman 服务、镜像／网络或原始归档时，对应必需验收须写明 owner、输入与 unblock probe，不能当作 pass。
 
-详见 [bench-gate-decision.md](./bench-gate-decision.md)。要点：
+本轮实际决策与证据见 [budget-decision.md](./iterations/IT-9-resource-metrics/evidence/budget-decision.md) 和 [acceptance.md](./iterations/IT-9-resource-metrics/evidence/acceptance.md)。以下保留 2026-11-09 的历史 v2 观测：
 
 - `bench-baseline` job 在托管 Actions 上已执行 17 次、其中 14 次产出有效测量，
   跨 beta.19→beta.21（约 59 天），**满足 GA 阻断项 #3 的「一个版本周期」**；
@@ -2721,7 +2721,7 @@ integration job `139341305228` 的 Run integration tests 和 job conclusion 均�
   ② `source.dirty` 恒为 `true`，由 job 自己 tee 的 `baseline-run.log` 造成。
 - **②已于 2026-11-09 修复**：`.gitignore` 补 `/baseline-run.log`，
   `git check-ignore -v baseline-run.log` 现命中 `.gitignore:46`。
-- ①仍未解决；在 Docker 版本被固定或体积口径被重新定义前，体积类阈值不应 blocking。
+- ①当时未解决，因此历史决定维持 warning；IT-9 现已重新定义并验证规范化口径，只有选定体积进入显式灰度。
 
 **本迭代收口条件**：保留历史观测与已记录的 warning 决策，先完成引擎无关度量、真实版本／内容对账与新的可信基线，
 再用显式 `--enforce-budgets` 灰度应用有依据的体积预算。不能把 v2 raw.Size 补造为 v3 数据或直接调紧旧常量。
@@ -2747,12 +2747,17 @@ integration job `139341305228` 的 Run integration tests 和 job conclusion 均�
 | EV-3.1 | 归档经 CLI 输出可复核规范化体积，完整 harness 支持 v3 与 v2 历史读取 | `delivered` | 1/5 |
 | EV-3.2 | 真实不同引擎读取同一 default 镜像后可对账 | `delivered` | 2/5 |
 | EV-3.3 | policy／warning／enforce 的适用范围与退出码明确 | `delivered` | 3/5 |
-| EV-3.4 | 当前 CI、体积灰度、文档与接受矩阵收口 | `active` | 4/5 |
+| EV-3.4 | 当前 CI、体积灰度、文档与接受矩阵收口 | `delivered` | 4/5 |
 
 EV-3.1 证据见 [archive-fixtures.md](./iterations/IT-9-resource-metrics/evidence/archive-fixtures.md)：本机／Linux Python 3.12 各 25 tests 和四种固定归档 CLI 通过；真实保存归档 parser 通过。fixture 不算 native runtime 或双引擎认证。全部必需验收通过后才将 EV-3／IT-9 置 delivered。
 EV-3.2 证据见 [image-conformance.md](./iterations/IT-9-resource-metrics/evidence/image-conformance.md)：实际 Docker 29.4.2 与 Podman 5.8.4 对账同一 default 保存镜像，六层共 147,265,024 bytes，comparison exit 0；两个干净 native v3 校准也已通过。首次完整 CI 有 daemonless metadata 与 MySQL fixture readiness 失败，明确留给 EV-3.4，不计 aggregate pass。
-EV-3.3 证据见 [budget-decision.md](./iterations/IT-9-resource-metrics/evidence/budget-decision.md)：38 tests 在本机和 Linux Python 3.12 通过，12 个实际 CLI 正负／回滚检查符合 exit 0/1；default binary/image 按方法、单位、架构限定，policy 基于两个 clean native v3 校准加 25% 余量。CI 灰度与完整聚合仍是当前 EV-3.4 必需验收。
+EV-3.3 证据见 [budget-decision.md](./iterations/IT-9-resource-metrics/evidence/budget-decision.md)：38 tests 在本机和 Linux Python 3.12 通过，12 个实际 CLI 正负／回滚检查符合 exit 0/1；default binary/image 按方法、单位、架构限定，policy 基于两个 clean native v3 校准加 25% 余量。EV-3.4 当前 CI 灰度与完整聚合亦已通过。
 第五轮只用于当前残余；若必需环境缺失，按该增量的 owner／unblock test 交接，不能以测试存在或 fixture 通过宣称闭合。
+
+**实际交付**：freeze `191683e4a2ddcd65a7a5c7463d9c6708892ef3c8`，run [46024237806](https://github.com/a8851625/openetl-go/actions/runs/46024237806) 的 36/36 jobs success，含 source、三 storage/frontend、exact-candidate 与 Delivery Passed。
+当前原生 v3 四 variant、3 cold/3 restore/15 RSS/16×100、Docker29.4.2/Podman5.7.0 对账，正常预算 0、受控低预算 1／回滚观测 0 全部通过；38 Python tests、Go checker race、raw archive/source/policy/secret/strict 复核已记录。
+同一候选的 23 cases、七份 tagged / 28 checks 和 canonical manifest 已回填；无新增 GATE_ALLOWLIST 或 maturity。
+四增量与 A1–A9 全部 delivered/passed，第五轮未领取；不自动领取 CH-C5 或其他主任务。原始历史数据与失败 run 保留，用户已有修改已保持。
 
 ## 有界后续
 

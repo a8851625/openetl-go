@@ -1,0 +1,519 @@
+{
+  "format": "openetl-candidate-certification/v1",
+  "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+  "candidate_sha256": "3457e6bc2d4fc5372f571c2f62a2a1dfc36857c4f4fbe6d867cd0e0e47ae5e66",
+  "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+  "image_binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+  "result": "passed",
+  "started_at": "2026-11-27T15:30:15Z",
+  "finished_at": "2026-11-27T15:35:07Z",
+  "cases": [
+    {
+      "name": "hack/e2e.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:37Z",
+      "finished_at": "2026-11-27T15:31:07Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "5612d4a8a4e79383cab21b89af713f283664851c61ef01f4e352c71b0b23bc50",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+      }
+    },
+    {
+      "name": "hack/e2e-http-source.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:31:40Z",
+      "finished_at": "2026-11-27T15:31:50Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "f209c74ef8476d82664ebae0be86942975f9a489ee787ee015105c04f29a66c0",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {}
+    },
+    {
+      "name": "hack/e2e-mysql-postgres.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:22Z",
+      "finished_at": "2026-11-27T15:30:55Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "8b33d296f551dce6b6695d83495b75dea5e97593954950334468ebe65df8fa1c",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/library/postgres:16-alpine": "sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d"
+      }
+    },
+    {
+      "name": "hack/e2e-cdc-mysql.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:29Z",
+      "finished_at": "2026-11-27T15:30:57Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "3a9d06f85d1a18cbe7168b7d86749cdcdd7b0da858e7918b3e7776dd5921e384",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+      }
+    },
+    {
+      "name": "hack/e2e-cdc-postgres.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:23Z",
+      "finished_at": "2026-11-27T15:31:06Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "28dc96c4d953c49907aa23df0a5eeb46efca80ee16e772108f4378d7d9f57c37",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/library/postgres:16-alpine": "sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d"
+      }
+    },
+    {
+      "name": "hack/e2e-snapshot-cdc.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:22Z",
+      "finished_at": "2026-11-27T15:30:52Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "63354946ca3cdab0087c4d4a990f68b0e4e5775d79c6e4d4f46d703b4868ae35",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+      }
+    },
+    {
+      "name": "hack/e2e-clickhouse.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:54Z",
+      "finished_at": "2026-11-27T15:31:22Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "5e235e1b118ec1a0f9cfdcb05eb52ac17726476a21657087477f763fe1422547",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/clickhouse/clickhouse-server:24.3-alpine": "sha256:c3f166f4a80098480463d897a63f6867d24e3a7661fc1fe72e889788115a25f1"
+      }
+    },
+    {
+      "name": "hack/e2e-snapshot-cdc-clickhouse.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:31Z",
+      "finished_at": "2026-11-27T15:31:21Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "c33061cff1fe159e0dca9e9f37f1d143e9297ea1eeb977d98094608b149f98a5",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/clickhouse/clickhouse-server:24.3-alpine": "sha256:c3f166f4a80098480463d897a63f6867d24e3a7661fc1fe72e889788115a25f1"
+      }
+    },
+    {
+      "name": "hack/e2e-kafka.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:32:06Z",
+      "finished_at": "2026-11-27T15:32:47Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "cecd0e36a1641f89f197e9b7dab7f588d03f6c3c01a333e1d1f5972a08b1526b",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/redpandadata/redpanda:v24.1.1": "sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d"
+      }
+    },
+    {
+      "name": "hack/e2e-kafka-raw-ods.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:46Z",
+      "finished_at": "2026-11-27T15:31:31Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "0f12cbd6b9669b22186461499fa8fc613add03046f748b45e5f462ee7989ceb8",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/redpandadata/redpanda:v24.1.1": "sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d"
+      }
+    },
+    {
+      "name": "hack/e2e-kafka-multitable-clickhouse.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:37Z",
+      "finished_at": "2026-11-27T15:31:31Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "665953da188966e46adfee9452f84f8baccacba7ed0bf32e4c317bb7df4cf1f6",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/redpandadata/redpanda:v24.1.1": "sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d",
+        "docker.io/clickhouse/clickhouse-server:24.3-alpine": "sha256:c3f166f4a80098480463d897a63f6867d24e3a7661fc1fe72e889788115a25f1"
+      }
+    },
+    {
+      "name": "hack/e2e-debezium-mysql.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:31Z",
+      "finished_at": "2026-11-27T15:31:23Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "c4452c8ab6cab52b936ba84d9bd1c578cf58fc00f58ee47e2b8b91de792e4f66",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/redpandadata/redpanda:v24.1.1": "sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d"
+      }
+    },
+    {
+      "name": "hack/e2e-postgres-cdc.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:39Z",
+      "finished_at": "2026-11-27T15:32:49Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "dee9715eafa8b145d134c80c94a045d51157f45a315e7567136e09d01b568e24",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/library/postgres:16-alpine": "sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d"
+      }
+    },
+    {
+      "name": "hack/e2e-s3-minio.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:32:31Z",
+      "finished_at": "2026-11-27T15:33:18Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "b1bf719a810c9ea5e377bd202a7cffb609d924b83835c9603bf106a50fed67a3",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "quay.io/minio/minio:RELEASE.2024-07-16T23-46-41Z": "sha256:f2ecab1b6c3fcbcabb17c1b25f6825e93e871dbaa185d06c2a89c6ef67a2d09e"
+      }
+    },
+    {
+      "name": "hack/e2e-doris.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:32Z",
+      "finished_at": "2026-11-27T15:33:15Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "9b68928916262720a772eed17dee65a823992721e059c20fdbbf7bd879a1b4a1",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/apache/doris:fe-2.1.11": "sha256:f0d54ae0e7ca21e93cafcc0324c1b153fd15eb6a77e9bd5f3d239557940b9fb8",
+        "docker.io/apache/doris:be-2.1.11": "sha256:835a4cc7bc26c682a2ea1641328f5decdc98f8e661f7b955cdf579afb86f50f5"
+      }
+    },
+    {
+      "name": "hack/e2e-doris-source-order.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:31:42Z",
+      "finished_at": "2026-11-27T15:33:28Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "a1a1ddf50c2daf51b65ecbd905d19ac61d792d7aaaae954d749ec82895b49c81",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/apache/doris:fe-2.1.11": "sha256:f0d54ae0e7ca21e93cafcc0324c1b153fd15eb6a77e9bd5f3d239557940b9fb8",
+        "docker.io/apache/doris:be-2.1.11": "sha256:835a4cc7bc26c682a2ea1641328f5decdc98f8e661f7b955cdf579afb86f50f5"
+      }
+    },
+    {
+      "name": "hack/e2e-path-mysql-cdc-mysql.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:30Z",
+      "finished_at": "2026-11-27T15:31:05Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "51a3d200d276d71b01c73219443a3a6926e2491a45ac6b58d0b6b86bc5e07ce6",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+      }
+    },
+    {
+      "name": "hack/e2e-clickhouse-replay-ordering.sh",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:33Z",
+      "finished_at": "2026-11-27T15:31:33Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "6d8e2db8da4ca79729283baabc419bbed85b188b4441061960818d6bd76f6bdf",
+      "artifact_sha256": {},
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/redpandadata/redpanda:v24.1.1": "sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d",
+        "docker.io/clickhouse/clickhouse-server:24.3-alpine": "sha256:c3f166f4a80098480463d897a63f6867d24e3a7661fc1fe72e889788115a25f1"
+      }
+    },
+    {
+      "name": "tagged",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:30Z",
+      "finished_at": "2026-11-27T15:33:24Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "84f5017baa1be86c86c3e3d2fa609ee6359cd1bb37417ab4ddd151a83908f990",
+      "artifact_sha256": {
+        "paths/ch_dedup_crash_window.json": "6a24ce70e1dac0c876163a22174b797ea769d22678d07bda09883caf9ee3a878",
+        "paths/ch_dedup_crash_window_multitable.json": "93de306d65adba4a2b2339125a944f505b88c1987ea40bec13ca842b934a3912",
+        "paths/kafka_envelope_roundtrip.json": "6df93512d48973581fd03ba19815127d1d729500f8ed087ce0603fea628e2f13",
+        "paths/mysql_cdc__mysql_upsert.json": "b77f1699b7ff081a5dbbaaab7d34ffc85df4a8d85e48f35364c8aeb0a0c2bee6",
+        "paths/mysql_snap_cdc__ch_rmt.json": "73f922d02452148e4518b105e56d081aefc05378534984475c3c6edcfd30aea5",
+        "paths/mysql_snap_cdc__ch_rmt_composite_pk.json": "7eae118c591a9dbed9889ba3ff8bf6a48c06c33f6fc928ece9b9a9163dc5ac73",
+        "paths/schema_contract_enforcement.json": "9a4d71931c653aa40d01431c25d1e9c294578f9304feafa5cece81c841ec7887"
+      },
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+        "docker.io/redpandadata/redpanda:v24.1.1": "sha256:3387a7ac6b2307129032562bf957653de13373a2748f82de7ab588a39d50b88d",
+        "docker.io/clickhouse/clickhouse-server:24.3": "sha256:85b97f63dcfff47790d26bb5d5801637aaddb2b93e5e9aee27a686c2fb2b9916"
+      }
+    },
+    {
+      "name": "p1-health",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:23Z",
+      "finished_at": "2026-11-27T15:31:47Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "85370ea4ceb87880081e0a41fb20f2598f4444a662d0d40f142e651e62e8dfe5",
+      "artifact_sha256": {
+        "probe/degraded-detail.js": "bc32aab35bec6ce8ed2fe0359b9a0024e4a097526dac0135f54f03ce531bac80",
+        "probe/degraded-issues.js": "d186bb080f7ad6c013decd98c64bb8ff65514ccba0e7fba0ccbb013b9d288afa",
+        "probe/degraded-list.js": "c3269e4759b9cd65e7d9b2ff72a01da2ec4fef352483de29719da143841cf4c9",
+        "probe/degraded-overview.js": "6111980344d1b918449cefb08a83ab60be58f1a7c49ab4c396d9b6f7edbf8a76",
+        "probe/failed-detail.js": "600c3049504db5028cc0bde664386d7797dad582ba925ecec593c8c8c1b7eb12",
+        "probe/failed-issues.js": "84c27278c3ead7f5a52bbfc0703f4c2075f01797f06dd667d7edcc0d928c5069",
+        "probe/failed-list.js": "f2c14c1f84b3a85f0d3db907282910cf2ae2d1e3f9ebeb3cb6fc75bcf2d61d19",
+        "probe/failed-overview.js": "3c3533a7c3ed4c7b8ccaa10333e1305dc6bf63478fedecb9d5c75f5d4122156e",
+        "probe/openetl-health-2425-app.log": "b3b334ccbad80ba00c9c5fe5c90acde9372fd04c996ac10ee20be18bc3455492",
+        "probe/openetl-health-2425-mysql.log": "c159d1b1d916720e4abc55fe824004d523b25197d8501a21f656ccebfb979790",
+        "probe/openetl-health-2425-sqlite.log": "e6a885a90602332f2f575f16f98d9e9093ebf0b73b75f09f5c9eafc0304efe53",
+        "probe/restoration-failure.png": "cd5095f7415f602a2af22c7d62b567b96ca24f18adf9de283ddd2a1e556d8271",
+        "probe/result.json": "180d345ec7af0b0567bc0ca5fbee2c4ea3b277c452a85c61da558320a6400e7a",
+        "probe/unknown-detail.js": "75541763c62fe16c0cf66502386f0824f606ead80c330ec95c0b4a4092a51ff3",
+        "probe/unknown-issues.js": "e478f10be94ce1b1a48ef212cbe97924d789aca04ae299601f5a5d7dca68cc74",
+        "probe/unknown-list.js": "333f3e35a4f173996053cc0865cb742e50999823494d257541b188634af8d935",
+        "probe/unknown-overview.js": "c7d4e4fe27990fc839bbdc462ce2dd0495439b588982cdca9e99155ac6e5792b"
+      },
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+      }
+    },
+    {
+      "name": "p1-references",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:22Z",
+      "finished_at": "2026-11-27T15:31:06Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "3d31241f14c6e9b11421743d074f13fee2835449eceb09921a728491a3bdc6b5",
+      "artifact_sha256": {
+        "probe/blocked-reference.png": "199e18bdba5eb7dd1d6695125a3e1840c994b6806aa39b3965615be9d8c63f5a",
+        "probe/openetl-health-2473-app.log": "08e123d9e854fcf9d072bfe648c9e67b6eb4aed72428fb5aac928ebae679436a",
+        "probe/openetl-health-2473-mysql.log": "9960366c2448458b408f4d5ddfa5b9a0bdae6a5f7926c0460723b520dfe425c9",
+        "probe/openetl-health-2473-sqlite.log": "e6a885a90602332f2f575f16f98d9e9093ebf0b73b75f09f5c9eafc0304efe53",
+        "probe/references-blocked.js": "91da83723f33ce465cdd830aa900f5bce22ef37b7151b31698e99014da6458eb",
+        "probe/references-clear.js": "81f21c61e92db0d7d09b6d231c1045f96f90c8610efd6de75c7979ca398fe1c7",
+        "probe/result.json": "00439bc0b2ba8e05024bf6d8bb719d854801e7fb4c2bbe9256e47c2c35612f6b"
+      },
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+      }
+    },
+    {
+      "name": "p1-recovery",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:30:15Z",
+      "finished_at": "2026-11-27T15:31:19Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "4ba23692e82c8643e3cf5dcf12af2e0170bd21f25fb5317cc34f0786abbad444",
+      "artifact_sha256": {
+        "probe/deleted-pipeline-keeps-recovery-facts.js": "96e78938b81054b3fee16e5e5a5a386c7a790276f8e3e0477a661ffe8818656b",
+        "probe/detail-tabs-preserve-context.js": "78373d513c009588b1ad81afbf341409410f42693498ffac48d5052685ba0714",
+        "probe/legacy-association-visible.js": "645b5aa52df5923e0d523727f0bdb1516c6c68f8b9170469c908f3d4dafe6b4a",
+        "probe/mismatched-node-is-explicit.js": "eec5c200ef38c3fd4fc5cde49e9f70c55ade7fc4a64d35a85d4d84758ae34077",
+        "probe/missing-connection-is-explicit.js": "210020d63f9d9f897b8c04967f1e9a3862ca30adb7c4c0e586df0d55adce5913",
+        "probe/missing-pipeline-disables-DLQ-actions.js": "27e6e86f6947ae415fa9cc0bccd57167ee617845babf40992929bb27a87e5aba",
+        "probe/missing-recovery-does-not-select-another-record.js": "4bf452a54ecccd9651aed9c2262d1ac079dadb5be4b8af6f296dcfd1d299981f",
+        "probe/open-connections-recovery-context.js": "ebed679df5d1fa7131d5753af6b1bad94573753a5e1d93060b0d4e362bd521af",
+        "probe/open-dlq-recovery-context.js": "b050a6623df66484bdca2b1616234a8eca0285074e77b0298f7362f186ae8e74",
+        "probe/open-issues-recovery-context.js": "f14d9d159fcc66cf17ee8b104997f674db07d4b577ea77e2f8480fe940b48933",
+        "probe/openetl-health-2439-app.log": "ab3df5b85fc66347fb52461417f136cbd6503bcfdfd0a50b44a8a62b936047f3",
+        "probe/openetl-health-2439-mysql.log": "7e784b23ed132da89d388bbd3f37c6df3506b9a3dbb19686de9c7ac6d9119924",
+        "probe/openetl-health-2439-sqlite.log": "e6a885a90602332f2f575f16f98d9e9093ebf0b73b75f09f5c9eafc0304efe53",
+        "probe/pipeline-switch-clears-previous-task-scope.js": "46e33003f9eda28e32261192244f3b99579c9380226d1c87932780d7642b1e94",
+        "probe/purge-keeps-exact-row-scope.js": "661af60f9b98d53924f2426ef33679a53a5387ecce8df29c17249c4701e4e9db",
+        "probe/result.json": "762fa5d340089607d1581d86ecab6908c82db0b5300aee40ff4aaf69046d192a",
+        "probe/retained-recovery.png": "572bd09e3f8e50acd3533e0fd50c566935efb73580505787e6e0002645cd59b4",
+        "probe/retained-result-after-restart-and-row-removal.js": "acfe8783d3294a101c16724d8d3d576e9dd8bb80981acda1238ab71279ac14e9",
+        "probe/sensitive-link-cleared.js": "3b1bbccbf316e0496087ca7bf6576deab76392cbc82ecccce7b4f6f77f959c9d"
+      },
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {
+        "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+      }
+    },
+    {
+      "name": "readiness",
+      "source_commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
+      "image_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "execution_image_id": "sha256:004a49f97f582a538049a0da273e07cc3bd7451f9e8cee5f85ce53c5c70beb1f",
+      "execution_config_id": "sha256:1102254a899dd174deea527417c25c50b115adb7c4167895c3093c1f10e33d68",
+      "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9",
+      "started_at": "2026-11-27T15:34:37Z",
+      "finished_at": "2026-11-27T15:34:44Z",
+      "result": "passed",
+      "exit_code": 0,
+      "error": "",
+      "log_sha256": "62c6ee22990a43b0c21a5374677c8c5ec61ed1665bb9bc7a44c6f0c3dd75d4ec",
+      "artifact_sha256": {
+        "probe/openetl-health-2688-app.log": "552d727a550179a5117c747f5a3610f1f8892bb7aa62a2a0e8c845c5b1c3fd97",
+        "probe/result.json": "8994d52044e79c38f6a7216628eb1513be05d18c0b6f173c9fbc22dafc08018e"
+      },
+      "container_runtime": "Docker version 29.4.2, build 055a478",
+      "dependency_images": {}
+    }
+  ],
+  "connector_evidence_sha256": "40068686e09e8d6134f5ad795778876cd03375afad1d5c56618dd77888585fae"
+}

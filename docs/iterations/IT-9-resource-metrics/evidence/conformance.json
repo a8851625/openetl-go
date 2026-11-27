@@ -1,0 +1,147 @@
+{
+  "content": {
+    "architecture": "amd64",
+    "image_config_sha256": "c84fa8a19484f48b79c3f21c15ea7bca239c76633966a0039b8bcab90b878b79",
+    "image_uncompressed_layer_bytes": 147265024,
+    "layers": [
+      {
+        "diff_id": "sha256:0b44b2151d78267ab6f2c76208c3be18688f49b2b0afd6852a9533f2cce121c5",
+        "ordinal": 0,
+        "uncompressed_bytes": 7688192
+      },
+      {
+        "diff_id": "sha256:c6951958a0250e1afb2e41c6efd7ea0155681a80689b7cc34ef277bb4cc49303",
+        "ordinal": 1,
+        "uncompressed_bytes": 1536
+      },
+      {
+        "diff_id": "sha256:2bbb5474955e1dfe09987a1c9e9646fafb28752d5e5d6ed3e785fa77eaa3f924",
+        "ordinal": 2,
+        "uncompressed_bytes": 2564096
+      },
+      {
+        "diff_id": "sha256:a0f032fdfa227a3d8641f4d27e2e44ce3e5260e45ca6e53039c47d8494559755",
+        "ordinal": 3,
+        "uncompressed_bytes": 11776
+      },
+      {
+        "diff_id": "sha256:abeb915164ab91c4213ce1056d4cb05c75e01d6d903f20dd689e39ed9dab951a",
+        "ordinal": 4,
+        "uncompressed_bytes": 67287552
+      },
+      {
+        "diff_id": "sha256:74bd773405025a72363fb26f5ef3a5237b0a4f179d1141d9751283331dc27942",
+        "ordinal": 5,
+        "uncompressed_bytes": 1199616
+      },
+      {
+        "diff_id": "sha256:961504d1cf143129b52e7fe82e9663de75175bb2be0e6cf7a15fe067acd732d6",
+        "ordinal": 6,
+        "uncompressed_bytes": 12800
+      },
+      {
+        "diff_id": "sha256:4af00313bc3688ce1fad3770cbf280a11012481c25cf6dd480b4f893189cd90a",
+        "ordinal": 7,
+        "uncompressed_bytes": 68499456
+      }
+    ],
+    "method": "uncompressed-layer-bytes/v1",
+    "os": "linux",
+    "unit": "bytes"
+  },
+  "format": "openetl-image-conformance/v1",
+  "harness_sha256": "c087e098b8ca6609c14e05c092fc9dd8b9b6f4ae8c715659baf9b49fce2b9848",
+  "input_archive_sha256": "a12ffaaae16bb6edbedefc6c9d1086e1785e4f8d8a94571545626ec66b8c1649",
+  "limitations": [
+    "Image-only conformance; neither image is started by this probe.",
+    "Archive bytes, encodings and engine-reported sizes are diagnostic, not equal-size criteria."
+  ],
+  "providers": [
+    {
+      "engine_diagnostics": {
+        "architecture": "amd64",
+        "engine_reported_image_bytes": 47608140,
+        "image_id": "sha256:3fd15b8d335e4723806d72a03cddbc575844c2e66a8d73f00773e1b778ef65ca",
+        "os": "linux"
+      },
+      "image_archive_bytes": 47622144,
+      "image_archive_sha256": "14e0049a556267483ebda0ac21e233eae50e1f6f8ff2999ead8f0471908a9758",
+      "provider": {
+        "client": {
+          "ApiVersion": "1.54",
+          "Arch": "amd64",
+          "GitCommit": "055a478",
+          "Os": "linux",
+          "Platform": {
+            "Name": "Docker Engine - Community"
+          },
+          "Version": "29.4.2"
+        },
+        "connection": "engine-api",
+        "id": "docker",
+        "instance": "a6d3115e-9d26-40a8-b55a-6b18da56de28",
+        "server": {
+          "ApiVersion": "1.54",
+          "Arch": "amd64",
+          "Components": [
+            {
+              "Name": "Engine",
+              "Version": "29.4.2"
+            },
+            {
+              "Name": "containerd",
+              "Version": "v2.4.2"
+            },
+            {
+              "Name": "runc",
+              "Version": "1.5.3"
+            },
+            {
+              "Name": "docker-init",
+              "Version": "0.19.0"
+            }
+          ],
+          "GitCommit": "d329809",
+          "Os": "linux",
+          "Platform": {
+            "Name": "Docker Engine - Community"
+          },
+          "Version": "29.4.2"
+        },
+        "server_version": "29.4.2"
+      }
+    },
+    {
+      "engine_diagnostics": {
+        "architecture": "amd64",
+        "engine_reported_image_bytes": 147271514,
+        "image_id": "sha256:c84fa8a19484f48b79c3f21c15ea7bca239c76633966a0039b8bcab90b878b79",
+        "os": "linux"
+      },
+      "image_archive_bytes": 147297792,
+      "image_archive_sha256": "be83d63befa58e0f86cf6083c4632e0172378b07111298948c4b415b27d024f1",
+      "provider": {
+        "client": {
+          "APIVersion": "5.7.0",
+          "GitCommit": "",
+          "Os": "linux",
+          "OsArch": "linux/amd64",
+          "Version": "5.7.0"
+        },
+        "connection": "daemonless-local",
+        "id": "podman",
+        "instance": "runnervm3lb7s",
+        "server": {
+          "APIVersion": "5.7.0",
+          "Arch": "amd64",
+          "GitCommit": "",
+          "Os": "linux",
+          "Version": "5.7.0"
+        },
+        "server_version": "5.7.0"
+      }
+    }
+  ],
+  "scope": "image-only",
+  "status": "passed"
+}
