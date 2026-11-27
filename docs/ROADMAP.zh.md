@@ -1,18 +1,18 @@
 # OpenETL-Go Roadmap
 
-> 当前执行快照（2026-11-26，代码基线 `e28a740` / v0.2.12-beta.21）：
-> 本次 P1 技术窗口五项全部 `delivered`，Round 5/5 已收口；无新增 active 主任务。
-> 用户已授权本轮评估的全部 P1 技术修复，新增四个有界后续，
-> 按依赖排为健康事实、连接引用保护、恢复事实契约、最终候选资产认证。
+> 当前执行快照（2026-11-27，规划代码基线 `ee3797c`；已发布基线 v0.2.12-beta.21）：
+> P1 技术窗口五项全部 `delivered`，原 Round 5/5 已收口；当前无 active 主任务。
+> 当前迭代为 IT-9 / EV-3 可信资源度量与预算控制，状态 `active`；用户选择 1 位实现者、两周参考窗口。
+> 用户已明确授权开发直至迭代完整交付；实施 Round: 1/5，EV-3.1 active。
 > UI-E 的外部用户研究继续 `blocked_external`，用户明确要求先完成技术修复。
-> EV-3 保持原状态，MaxCompute P0 保持 `deferred`。
+> EV-3 内部度量缺陷已进入实施；真实环境缺口按增量记录。MaxCompute P0 保持 `deferred`。
 >
 > 历史审计基线：`cfbd496`（v0.2.11-beta.3 后续开发，2026-07-24）；复审基线
 > `c2ac396`（v0.2.12-beta.17，2026-08-29），代码级核对结果见
 > [Production Ready 复审缺口（RA）](#production-ready-复审缺口ra2026-08-29-代码核对)。
 > 该复审只登记当时实测仍打开的缺口，不改变 P0 与既有 backlog 的优先级。
 >
-> 迭代编排：已进入当前执行 backlog 的未实现条目按依赖与伤害组织为 IT-1..IT-8 与 UI-A..UI-G 迭代，
+> 迭代编排：已进入当前执行 backlog 的未实现条目按依赖与伤害组织为 IT-1..IT-9 与 UI-A..UI-G 迭代，
 > 见 [docs/iterations/](./iterations/README.md)。该目录提供 spec/plan/tasks 三件套与
 > 技术方案、交付约束，**不改变本文的验收标准**；两者冲突时以本文为准。
 >
@@ -39,6 +39,18 @@
 
 UI-E 的 3–5 人首次任务/恢复任务研究仍按原验收标准另行记录，技术修复不将该研究置为
 delivered。EV-3 与运行历史遗留行是本窗口之外的 P2。
+
+## 2026-11-27 当前迭代：IT-9
+
+用户在后续 Roadmap 方向讨论后要求规划下一迭代，并选择 1 位实现者、两周参考窗口。
+本轮以既有 EV-3 为唯一主任务，结果是“资源度量可复核、warning／强制预算的退出码可解释”。
+规划文件见 [spec](./iterations/IT-9-resource-metrics/spec.md)、[plan](./iterations/IT-9-resource-metrics/plan.md)、
+[tasks](./iterations/IT-9-resource-metrics/tasks.md)。EV-3.1 已领取；用户后续明确授权开始开发，持续到本迭代全部验收闭合。
+
+四个有序增量为归档／v3 口径、真实双引擎对账、显式预算 policy、CI 灰度与证据收口。
+承诺估算 32 理想小时，预留 8 小时（20%）；每天 4 专注小时为容量假设，不代表历史 velocity。
+第五轮仅补本项验收／安全交接。CH-C5–C8 仍是候选，UI-E 保留参与者 blocker；不在本迭代纳入吞吐、
+生产资源准入、运行历史 P2、connector 扩展或用户研究，也不改变这些事项的相对优先级。
 
 ## 产品定位与边界
 
@@ -2691,7 +2703,13 @@ integration job `139341305228` 的 Run integration tests 和 job conclusion 均�
 
 ### EV-3：resource-baseline 的 CI 阈值决策（数据已足，结论为「暂维持 warning」）
 
-状态：`blocked_external`（阻塞项是指标口径缺陷，非缺观测）
+状态：`active`（2026-11-27 用户明确授权实施 IT-9；Round 1/5 领取 EV-3.1，其他增量仍 queued）
+
+**规划与状态纠正**：用户要求规划下一迭代，选择 1 人／两周；沿用本项既有优先级。
+首项以固定归档／CLI 验证内部计量，不依赖远端凭据，因此不继续标为外部阻塞。
+`hardware.runtime_version` 已存在，日志自污染已修复；尚未解决的是 `image_identity` 将 `inspect.Size`
+直接当作统一 bytes，以及缺少明确的预算强制模式。用户已授权实施，当前只有 EV-3.1 一个 active 增量。
+实际缺 Docker／Podman 服务、镜像／网络或原始归档时，对应必需验收须写明 owner、输入与 unblock probe，不能当作 pass。
 
 详见 [bench-gate-decision.md](./bench-gate-decision.md)。要点：
 
@@ -2705,8 +2723,34 @@ integration job `139341305228` 的 Run integration tests 和 job conclusion 均�
   `git check-ignore -v baseline-run.log` 现命中 `.gitignore:46`。
 - ①仍未解决；在 Docker 版本被固定或体积口径被重新定义前，体积类阈值不应 blocking。
 
-**解除条件**：固定 Docker engine 版本（或在 `bench_baseline.py` 里记录 engine 版本并按版本
-分别设阈值），然后按该文件 §6 的路径用 `--enforce-budgets` 开关灰度升级，而非直接调紧常量。
+**本迭代收口条件**：保留历史观测与已记录的 warning 决策，先完成引擎无关度量、真实版本／内容对账与新的可信基线，
+再用显式 `--enforce-budgets` 灰度应用有依据的体积预算。不能把 v2 raw.Size 补造为 v3 数据或直接调紧旧常量。
+具体定义与原始证据由 IT-9 三件套承接，下列必需验收为本项的执行标准：
+
+| # | EV-3 必需验收 | 证据范围 |
+| --- | --- | --- |
+| A1 | v3 明确 configuration／archive hashes、归档大小、所选层解压 tar 流字节总和、方法／单位与 engine.Size 诊断值；预算不用 engine.Size fallback | 固定 Docker-save／OCI fixtures、逐层 diff ID／尺寸与 CLI；EV-3.1 |
+| A2 | default、extism、nolua、extism-nolua 四变体完整；default native Linux production／SQLite／TLS／UID 1001／audit／2 CPU／1 GiB／GOMAXPROCS=2，3 trials、16×100 数据及恢复身份／checkpoint 对账保留 | 当前完整 baseline；EV-3.4 |
+| A3 | 至少 default 的同一保存镜像在真实 Docker 与 Podman 两个不同 provider 下，configuration／architecture／diff IDs／展开层体积一致；区分 image-only 与 native 应用运行证据 | server versions、原始 JSON／archive hashes／conformance；EV-3.2 |
+| A4 | v2 历史只读兼容，v1 旧计时格式仍拒绝；v2、dirty、缺方法或缺适用 policy 不能通过新的强制判定 | 历史文件不改写，compatibility／negative CLI；EV-3.1／.3 |
+| A5 | 默认有效超预算 warning/exit 0，选定预算 enforce 超限 exit 1；缺失／失败／错误测量任何模式都 exit 1 | positive、超限、缺字段、错误单位／policy／选择器；EV-3.3 |
+| A6 | policy 按方法／单位／架构／variant 限定并记录基线／余量与 SHA；至少 default binary 和规范化 image 两个稳定体积项可灰度强制；时间／RSS warning、其他变体完整观测 | 当前 v3 基线与预算决定；EV-3.3／.4 |
+| A7 | 当前 CI 真实测量与选定体积灰度 enforce 正常/受控超限可复验；原 source＋三 storage／frontend＋exact-candidate＋Delivery Passed 不被放宽，不增 allowlist | 当前提交完整 CI 和相关负向证据；EV-3.4 |
+| A8 | 不暴露临时 token、私钥、config.Env、层内容或业务 payload；只清理任务资源，cleanup 失败影响结果 | 秘密哨兵／异常归档／cleanup 负向；EV-3.1／.2／.4 |
+| A9 | 文档、policy、格式、实际源码／构建／引擎与原始证据一致；灰度回滚后有效性检查仍必过 | 接受矩阵、决策、回滚与 diff；EV-3.4 |
+
+本项不扩张至运行时容量准入、吞吐／并发、ClickHouse 专项、竞品基准、distributed、CGO 或新连接器。
+仍遵守 at-least-once，生产源位置／checkpoint／sink ack／DLQ 和存储 schema 不修改。
+
+| 增量 | 一个可观察结果 | 状态 | 规划 Round |
+| --- | --- | --- | --- |
+| EV-3.1 | 归档经 CLI 输出可复核规范化体积，完整 harness 支持 v3 与 v2 历史读取 | `active` | 1/5 |
+| EV-3.2 | 真实不同引擎读取同一 default 镜像后可对账 | `queued` | 2/5 |
+| EV-3.3 | policy／warning／enforce 的适用范围与退出码明确 | `queued` | 3/5 |
+| EV-3.4 | 当前 CI、体积灰度、文档与接受矩阵收口 | `queued` | 4/5 |
+
+规划完成不算实现交付；全部必需验收通过后才将 EV-3／IT-9 置 delivered。
+第五轮只用于当前残余；若必需环境缺失，按该增量的 owner／unblock test 交接，不能以测试存在或 fixture 通过宣称闭合。
 
 ## 有界后续
 
