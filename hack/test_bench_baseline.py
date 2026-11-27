@@ -15,7 +15,8 @@ import unittest
 from unittest import mock
 
 import bench_baseline as baseline_module
-from bench_baseline import (Baseline, ImageProbe, IMAGE_METHOD, MeasurementError, VARIANTS, canonical_image_content,
+from bench_baseline import (BINARY_METHOD, BUDGET_FORMAT, Baseline, ImageProbe, IMAGE_METHOD, MeasurementError, VARIANTS, canonical_image_content,
+                            evaluate_size_budgets, json_hash, validate_budget_policy,
                             compare_image_probes, image_identity, prepare_owned_image_archive, provider_identity,
                             measure_image_archive, parse_proc_status, sanitize_image_inspect,
                             sanitize_engine_info, sanitize_engine_version,
@@ -137,6 +138,12 @@ def v3_result(root):
     result["hardware"].update({"container_engine": "docker", "runtime_version": "29.fixture"})
     result["toolchain"].update({"container_client_version": "29.fixture", "python_version": "3.fixture"})
     result["cleanup"] = {"passed": True, "errors": [], "images_retained": False}
+    result["parameters"].update(cpus=2, memory_bytes=1024**3, gomaxprocs=2)
+    result["harness_sha256"] = {name: "1" * 64 for name in
+                                ("bench-baseline.sh", "bench_baseline.py", "cmd/process-measure/main.go", "cmd/process-measure/main_test.go")}
+    source_files = [{"path": "main.go", "sha256": sha(b"source-fixture"), "bytes": len(b"source-fixture"), "mode": 0o644}]
+    (root / "source-files.json").write_text(json.dumps(source_files))
+    result["source"]["sha256"] = json_hash(source_files)
     for variant, tags in VARIANTS.items():
         image = image_fixture(payload=("fixture-" + variant).encode(), compressed=True)
         path = root / ("image-" + variant + ".tar")
@@ -153,6 +160,18 @@ def v3_result(root):
         for trial in result["runtime"][key]:
             trial["binary_sha256"] = default["binary_sha256"]
     return result
+
+
+def fixture_policy(result):
+    arch = result["hardware"]["architecture"]
+    return {"format": BUDGET_FORMAT, "version": "test-fixture-1", "rationale": "Synthetic CLI boundary fixture only",
+            "calibrations": [{"architecture": arch, "schema_version": 3, "source_dirty": False,
+                              "scope": result["scope"], "source_commit": result["source"]["commit"],
+                              "source_sha256": result["source"]["sha256"], "report_sha256": "1" * 64}],
+            "rules": [{"id": "fixture-" + metric, "metric": metric, "method": method, "unit": "bytes",
+                       "os": "linux", "architecture": arch, "variant": "default", "mode": "enforce",
+                       "baseline_bytes": result["images"]["default"][metric], "max_bytes": 1024**2}
+                      for metric, method in [("binary_bytes", BINARY_METHOD), ("image_uncompressed_layer_bytes", IMAGE_METHOD)]]}
 
 
 class ReadinessTests(unittest.TestCase):
@@ -485,7 +504,7 @@ class V3EvidenceTests(unittest.TestCase):
             root = Path(directory); out = root / "out"; out.mkdir(); private = root / "private"; private.mkdir()
             args = SimpleNamespace(root=root, out=out, trials=3, settle_seconds=10, idle_samples=5, restore_pipelines=16)
             baseline = Baseline(args, private)
-            with mock.patch.object(baseline_module.subprocess, "run", return_value=SimpleNamespace(stdout=raw, stderr="", returncode=0)):
+            with mock.patch.object(baseline_module.subprocess, "run", return_value=SimpleNamespace(stdout=raw, stderr="secret-inspect-sentinel", returncode=0)):
                 baseline.run(["fixture", "image", "inspect"], sanitizer=sanitize_image_inspect)
             self.assertNotIn("secret-inspect-sentinel", (out / "command-001.log").read_text())
 
@@ -630,6 +649,175 @@ class EngineProbeTests(unittest.TestCase):
                     self.assertRaisesRegex(MeasurementError, "cleanup failed"):
                 probe.cleanup()
             self.assertFalse(probe.report["cleanup"]["passed"])
+
+
+class BudgetTests(unittest.TestCase):
+    def run_check(self, root, result, policy=None, *, enforce=False, output=None):
+        path = root / "result.json"; path.write_text(json.dumps(result))
+        command = [sys.executable, baseline_module.__file__, "--check", str(path)]
+        if policy is not None:
+            policy_path = root / "policy.json"; policy_path.write_text(json.dumps(policy))
+            command += ["--budgets", str(policy_path)]
+        if enforce:
+            command += ["--enforce-budgets"]
+        if output is not None:
+            command += ["--out", str(output)]
+        return subprocess.run(command, capture_output=True, text=True)
+
+    def test_positive_and_low_budgets_have_distinct_exit_codes_and_preserve_measurements(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); result = v3_result(root); policy = fixture_policy(result)
+            for metric in ("binary_bytes", "image_uncompressed_layer_bytes"):
+                low = copy.deepcopy(policy)
+                for rule in low["rules"]:
+                    if rule["metric"] == metric:
+                        rule["max_bytes"] = result["images"]["default"][metric] - 1
+                before = sha((root / "image-default.tar").read_bytes())
+                observed = self.run_check(root, result, low, output=root / (metric + "-warn"))
+                self.assertEqual(observed.returncode, 0, observed.stderr)
+                self.assertIn("::warning::", observed.stdout)
+                audit = json.loads((root / (metric + "-warn") / "budget-result.json").read_text())
+                self.assertEqual(audit["status"], "warning"); self.assertTrue(audit["data_valid"])
+                enforced = self.run_check(root, result, low, enforce=True, output=root / (metric + "-enforce"))
+                self.assertEqual(enforced.returncode, 1, enforced.stderr)
+                self.assertIn("::error::", enforced.stderr)
+                audit = json.loads((root / (metric + "-enforce") / "budget-result.json").read_text())
+                self.assertEqual(audit["status"], "failed"); self.assertTrue(audit["data_valid"])
+                self.assertEqual(before, sha((root / "image-default.tar").read_bytes()))
+                self.assertEqual(json.loads((root / "result.json").read_text()), result)
+            for rule in policy["rules"]:
+                rule["max_bytes"] = result["images"]["default"][rule["metric"]]
+            proc = self.run_check(root, result, policy, enforce=True, output=root / "normal")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            audit = json.loads((root / "normal/budget-result.json").read_text())
+            self.assertEqual(audit["status"], "passed")
+            self.assertEqual(audit["policy_sha256"], sha((root / "policy.json").read_bytes()))
+            self.assertEqual(len(audit["metrics"]), 2)
+
+    def test_normalized_image_budget_never_falls_back_to_engine_size(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); result = v3_result(root); policy = fixture_policy(result)
+            result["images"]["default"].update(bytes=0, engine_reported_image_bytes=0)
+            policy["rules"][1]["max_bytes"] = 1
+            proc = self.run_check(root, result, policy, enforce=True)
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn(str(result["images"]["default"]["image_uncompressed_layer_bytes"]), proc.stderr)
+
+    def test_measurement_errors_fail_in_both_modes_and_cannot_be_downgraded_to_warnings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); result = v3_result(root); policy = fixture_policy(result)
+            mutations = [lambda r: r["images"]["default"].pop("method"),
+                         lambda r: r["images"]["default"].update(unit="MiB"),
+                         lambda r: r["images"]["default"].update(binary_bytes=True),
+                         lambda r: r["images"]["default"].update(binary_bytes=0),
+                         lambda r: r["images"]["default"].update(binary_bytes=2**100),
+                         lambda r: r.update(status="failed"),
+                         lambda r: r["parameters"].update(memory_bytes=2 * 1024**3),
+                         lambda r: r["harness_sha256"].pop("bench_baseline.py")]
+            for change in mutations:
+                candidate = copy.deepcopy(result); change(candidate)
+                for enforce in (False, True):
+                    with self.subTest(change=change, enforce=enforce):
+                        proc = self.run_check(root, candidate, policy, enforce=enforce)
+                        self.assertEqual(proc.returncode, 1, proc.stdout)
+                        self.assertIn("::error::", proc.stderr)
+            (root / "source-files.json").write_text('[]')
+            for enforce in (False, True):
+                proc = self.run_check(root, result, policy, enforce=enforce)
+                self.assertEqual(proc.returncode, 1)
+                self.assertIn("source inventory fingerprint", proc.stderr)
+
+    def test_v2_dirty_missing_policy_and_uncovered_architecture_cannot_enforce(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); result = v3_result(root); policy = fixture_policy(result)
+            legacy = valid_result()
+            self.assertEqual(self.run_check(root, legacy).returncode, 0)
+            self.assertEqual(self.run_check(root, legacy, policy).returncode, 0)
+            self.assertEqual(self.run_check(root, legacy, policy, enforce=True).returncode, 1)
+            dirty = copy.deepcopy(result); dirty["source"]["dirty"] = True
+            observed = self.run_check(root, dirty, policy, output=root / "dirty")
+            self.assertEqual(observed.returncode, 0, observed.stderr)
+            self.assertFalse(json.loads((root / "dirty/budget-result.json").read_text())["eligible_for_enforcement"])
+            self.assertEqual(self.run_check(root, dirty, policy, enforce=True).returncode, 1)
+            self.assertEqual(self.run_check(root, result, enforce=True).returncode, 1)
+            policy["calibrations"][0]["architecture"] = "amd64"
+            for rule in policy["rules"]:
+                rule["architecture"] = "amd64"
+            observed = self.run_check(root, result, policy, output=root / "uncovered")
+            self.assertEqual(observed.returncode, 0, observed.stderr)
+            self.assertEqual(json.loads((root / "uncovered/budget-result.json").read_text())["status"], "not_applicable")
+            self.assertEqual(self.run_check(root, result, policy, enforce=True).returncode, 1)
+
+    def test_malformed_policy_selectors_methods_limits_and_duplicate_fields_fail(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); result = v3_result(root); policy = fixture_policy(result)
+            mutations = [lambda p: p.update(format="v2"), lambda p: p["rules"][0].update(method="engine.Size"),
+                         lambda p: p["rules"][0].update(unit="MiB"), lambda p: p["rules"][0].update(variant="extism"),
+                         lambda p: p["rules"][0].update(os="windows"), lambda p: p["rules"].pop(),
+                         lambda p: p["rules"].append(copy.deepcopy(p["rules"][0]))]
+            for value in (None, True, 0, -1, 1.5, float("nan"), float("inf"), 2**100):
+                mutations.append(lambda p, value=value: p["rules"][0].update(max_bytes=value))
+            for change in mutations:
+                candidate = copy.deepcopy(policy); change(candidate)
+                for enforce in (False, True):
+                    with self.subTest(change=change, enforce=enforce):
+                        proc = self.run_check(root, result, candidate, enforce=enforce)
+                        self.assertEqual(proc.returncode, 1, proc.stdout)
+            path = root / "result.json"; path.write_text(json.dumps(result))
+            bad = root / "invalid-policy.json"
+            bad.write_text('{"format":"private-policy-sentinel","format":"duplicate"}')
+            proc = subprocess.run([sys.executable, baseline_module.__file__, "--check", str(path), "--budgets", str(bad)],
+                                  capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 1)
+            self.assertNotIn("private-policy-sentinel", proc.stdout + proc.stderr)
+
+    def test_time_and_rss_warnings_do_not_become_size_enforcement_failures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); result = v3_result(root); policy = fixture_policy(result)
+            result["runtime"]["cold_trials"][0]["start_to_health_seconds"] = 6
+            result["runtime"]["restore_trials"][0]["start_to_health_seconds"] = 6
+            for sample in result["runtime"]["cold_trials"][0]["idle_samples"]:
+                sample.update(rss_bytes=300 * 1024**2, peak_rss_bytes=310 * 1024**2)
+            proc = self.run_check(root, result, policy, enforce=True, output=root / "timing")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("::warning::", proc.stdout)
+            audit = json.loads((root / "timing/budget-result.json").read_text())
+            self.assertEqual(audit["status"], "passed"); self.assertEqual(len(audit["warnings"]), 3)
+            self.assertEqual(audit["unbudgeted_variants"], sorted(set(VARIANTS) - {"default"}))
+
+    def test_check_output_never_writes_to_existing_or_symlinked_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); result = v3_result(root); policy = fixture_policy(result)
+            existing = root / "existing"; existing.mkdir(); (existing / "unrelated.txt").write_text("preserve me")
+            proc = self.run_check(root, result, policy, output=existing)
+            self.assertEqual(proc.returncode, 1)
+            self.assertEqual((existing / "unrelated.txt").read_text(), "preserve me")
+            self.assertFalse((existing / "budget-result.json").exists())
+            target = root / "target"; target.mkdir(); link = root / "link"; link.symlink_to(target, target_is_directory=True)
+            self.assertEqual(self.run_check(root, result, policy, output=link).returncode, 1)
+            self.assertFalse(list(target.iterdir()))
+
+    def test_full_writer_preserves_data_validity_and_returns_failed_budget_status(self):
+        class FixtureBaseline:
+            def __init__(self, args, private): self.result = v3_result(args.out)
+            def snapshot(self): pass
+            def hardware(self): pass
+            def build(self): pass
+            def measure(self): pass
+            def cleanup(self): pass
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); fixture_root = root / "fixture"; fixture_root.mkdir()
+            policy = fixture_policy(v3_result(fixture_root)); policy["rules"][1]["max_bytes"] = 1
+            path = root / "policy.json"; path.write_text(json.dumps(policy))
+            for enforce in (False, True):
+                out = root / str(enforce)
+                argv = ["bench", "--out", str(out), "--budgets", str(path)] + (["--enforce-budgets"] if enforce else [])
+                with mock.patch.object(baseline_module, "Baseline", FixtureBaseline), mock.patch.object(sys, "argv", argv):
+                    self.assertEqual(baseline_module.main(), 1 if enforce else 0)
+                report = json.loads((out / "result.json").read_text())
+                self.assertEqual(report["status"], "passed")
+                self.assertTrue(report["budget"]["data_valid"])
+                self.assertEqual(report["budget"]["status"], "failed" if enforce else "warning")
 
 
 if __name__ == "__main__":

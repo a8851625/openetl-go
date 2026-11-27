@@ -41,6 +41,9 @@ EXCLUDED_PARTS = {".git", "node_modules", "data", "logs", "log", ".pi", ".pi-sub
                   ".bench-out", "screenshots", "__pycache__"}
 MIB = 1024 * 1024
 IMAGE_METHOD = "uncompressed-layer-bytes/v1"
+BINARY_METHOD = "file-bytes/v1"
+BUDGET_FORMAT = "openetl-resource-budgets/v1"
+BUDGET_METRICS = {"binary_bytes": BINARY_METHOD, "image_uncompressed_layer_bytes": IMAGE_METHOD}
 READ_CHUNK = MIB
 MAX_METADATA_BYTES = 8 * MIB
 MAX_ARCHIVE_BYTES = 8 * 1024 * MIB
@@ -84,6 +87,12 @@ def write_json(path, value):
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n")
     temporary.replace(path)
+
+
+def new_output_directory(path):
+    require(not path.is_symlink() and (not path.exists() or path.is_dir() and not any(path.iterdir())),
+            "output directory must be new or empty and not a symlink")
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
 def positive(value, label):
@@ -174,7 +183,7 @@ def _metadata_json(body):
     try:
         return json.loads(body.decode("utf-8"), object_pairs_hook=_unique_object,
                           parse_constant=invalid_constant)
-    except (ValueError, UnicodeError) as exc:
+    except (ValueError, UnicodeError, RecursionError) as exc:
         raise MeasurementError("invalid image metadata JSON") from exc
 
 
@@ -645,7 +654,7 @@ def parse_proc_status(raw):
 
 
 def validate_result(result, artifact_root=None):
-    """Check v2 historical observations or v3 measurements; no enforce policy yet."""
+    """Check measurement validity independently of the selected budget mode."""
     try:
         version = result["schema_version"]
         require(type(version) is int and version in (2, 3) and result["status"] == "passed",
@@ -669,6 +678,27 @@ def validate_result(result, artifact_root=None):
                     and result["toolchain"]["python_version"], "missing actual measurement tool versions")
             require(result["cleanup"]["passed"] is True and result["cleanup"]["errors"] == [],
                     "owned-resource cleanup did not complete")
+            require(result["parameters"]["cpus"] == 2 and result["parameters"]["memory_bytes"] == 1024 * MIB
+                    and result["parameters"]["gomaxprocs"] == 2, "wrong measured runtime limits")
+            harness = result["harness_sha256"]
+            require(set(harness) == {"bench-baseline.sh", "bench_baseline.py", "cmd/process-measure/main.go",
+                                     "cmd/process-measure/main_test.go"}
+                    and all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) for value in harness.values()),
+                    "missing measurement harness fingerprints")
+            if artifact_root is not None:
+                source_files, _ = read_json_evidence(Path(artifact_root) / "source-files.json", "source inventory")
+                require(isinstance(source_files, list) and len(source_files) == result["source"]["files"]
+                        and json_hash(source_files) == result["source"]["sha256"], "source inventory fingerprint differs")
+                paths = []
+                for entry in source_files:
+                    path = entry["path"]
+                    require(path == _member_name(path) and path != "."
+                            and re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]) is not None,
+                            "invalid source inventory entry")
+                    byte_count(entry["bytes"], "source file bytes", allow_zero=True)
+                    require(type(entry["mode"]) is int and 0 <= entry["mode"] <= 0o777, "invalid source file mode")
+                    paths.append(path)
+                require(paths == sorted(set(paths)), "source inventory paths are not ordered and unique")
         images = result["images"]
         require(set(images) == set(VARIANTS), "incomplete build-tag matrix")
         for variant, item in images.items():
@@ -685,6 +715,8 @@ def validate_result(result, artifact_root=None):
             if version == 3:
                 validate_image_metrics(item)
                 byte_count(item["image_uncompressed_layer_bytes"], "application image layers")
+                require(item["binary_bytes"] <= item["image_uncompressed_layer_bytes"],
+                        "packaged binary exceeds the complete expanded image layers")
                 byte_count(item["engine_reported_image_bytes"], "engine-reported image", allow_zero=True)
                 require(item["bytes"] == item["engine_reported_image_bytes"], "legacy image diagnostic alias differs")
                 require(item["build_tags"] == VARIANTS[variant] and item["cgo_enabled"] is False,
@@ -756,6 +788,144 @@ def validate_result(result, artifact_root=None):
         measurements["default image MiB (legacy engine report)"] = (images["default"]["bytes"] / MIB, 200)
     return [f"{name}: {value:.3f} exceeds observation budget {budget}"
             for name, (value, budget) in measurements.items() if value > budget]
+
+
+def read_json_evidence(path, label):
+    with Path(path).open("rb") as source:
+        body = source.read(MAX_METADATA_BYTES + 1)
+    require(len(body) <= MAX_METADATA_BYTES, label + " exceeds metadata limit")
+    try:
+        value = _metadata_json(body)
+    except MeasurementError as exc:
+        raise MeasurementError("invalid " + label + " JSON") from exc
+    return value, digest(body)
+
+
+def read_budget_policy(path):
+    policy, policy_sha = read_json_evidence(path, "budget policy")
+    validate_budget_policy(policy)
+    return policy, policy_sha
+
+
+def validate_budget_policy(policy):
+    try:
+        require(isinstance(policy, dict) and policy["format"] == BUDGET_FORMAT, "unsupported budget policy format")
+        require(isinstance(policy["version"], str) and re.fullmatch(r"[a-zA-Z0-9.-]{1,64}", policy["version"]),
+                "invalid budget policy version")
+        require(isinstance(policy["rationale"], str) and policy["rationale"].strip(), "missing budget rationale")
+        calibrations = policy["calibrations"]
+        require(isinstance(calibrations, list) and 0 < len(calibrations) <= 16, "missing budget calibrations")
+        architectures = set()
+        for calibration in calibrations:
+            arch = calibration["architecture"]
+            require(isinstance(arch, str) and re.fullmatch(r"[a-z][a-z0-9_]{1,15}", arch)
+                    and arch not in architectures, "invalid or duplicate calibrated architecture")
+            architectures.add(arch)
+            require(type(calibration["schema_version"]) is int and calibration["schema_version"] == 3 and calibration["source_dirty"] is False
+                    and calibration["scope"] == "packaging-startup-restore", "budget calibration is not clean v3")
+            require(re.fullmatch(r"[0-9a-f]{40}", calibration["source_commit"]) is not None,
+                    "missing calibration source commit")
+            for key in ("source_sha256", "report_sha256"):
+                require(re.fullmatch(r"[0-9a-f]{64}", calibration[key]) is not None, "missing calibration fingerprint")
+        rules = policy["rules"]
+        require(isinstance(rules, list) and 0 < len(rules) <= 32, "missing budget rules")
+        ids, selectors, scoped = set(), set(), {}
+        for rule in rules:
+            require(isinstance(rule["id"], str) and re.fullmatch(r"[a-z0-9_-]{1,80}", rule["id"])
+                    and rule["id"] not in ids, "invalid or duplicate budget rule ID")
+            ids.add(rule["id"])
+            metric = rule["metric"]
+            require(metric in BUDGET_METRICS and rule["method"] == BUDGET_METRICS[metric]
+                    and rule["unit"] == "bytes", "budget metric method/unit differs")
+            require(rule["os"] == "linux" and rule["architecture"] in architectures
+                    and rule["variant"] == "default" and rule["mode"] == "enforce",
+                    "budget selector or enforcement scope differs")
+            maximum = byte_count(rule["max_bytes"], "budget max_bytes")
+            require(maximum <= MAX_IMAGE_BYTES, "budget max_bytes exceeds supported range")
+            require(byte_count(rule["baseline_bytes"], "calibrated metric bytes") <= MAX_IMAGE_BYTES,
+                    "calibrated metric exceeds supported range")
+            selector = (rule["os"], rule["architecture"], rule["variant"], metric)
+            require(selector not in selectors, "duplicate budget metric selector")
+            selectors.add(selector)
+            scoped.setdefault(rule["architecture"], set()).add(metric)
+        require(set(scoped) == architectures and all(metrics == set(BUDGET_METRICS) for metrics in scoped.values()),
+                "policy must cover both default binary and normalized image sizes for every calibrated architecture")
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise MeasurementError("incomplete or malformed budget policy") from exc
+
+
+def evaluate_size_budgets(result, policy, policy_sha256, *, enforce=False):
+    validate_budget_policy(policy)
+    evaluation = {"policy_format": policy["format"], "policy_version": policy["version"],
+                  "policy_sha256": normalize_sha256(policy_sha256), "mode": "enforce" if enforce else "observation",
+                  "status": "not_applicable", "eligible_for_enforcement": False, "metrics": [],
+                  "warnings": [], "errors": [], "unbudgeted_variants": sorted(set(VARIANTS) - {"default"})}
+    if result["schema_version"] != 3:
+        require(not enforce, "size enforcement requires schema v3; v2 is historical observation only")
+        evaluation["warnings"].append("v2 historical measurements have no applicable v3 size policy")
+        return evaluation
+    require(not enforce or result["source"]["dirty"] is False, "dirty-source measurements cannot pass size enforcement")
+    architecture = result["hardware"]["architecture"]
+    selected = [rule for rule in policy["rules"] if rule["architecture"] == architecture]
+    if not selected:
+        require(not enforce, "no applicable size policy for measured architecture")
+        evaluation["warnings"].append("No size policy applies to measured architecture " + architecture)
+        return evaluation
+    evaluation["eligible_for_enforcement"] = result["source"]["dirty"] is False
+    if not evaluation["eligible_for_enforcement"]:
+        evaluation["warnings"].append("Dirty-source size observations are ineligible for enforcement")
+    for rule in selected:
+        item = result["images"][rule["variant"]]
+        require(item["os"] == rule["os"] and item["architecture"] == rule["architecture"], "budget selector differs from image")
+        if rule["metric"] == "image_uncompressed_layer_bytes":
+            require(item["method"] == rule["method"] and item["unit"] == rule["unit"], "image budget method/unit differs")
+        value = byte_count(item[rule["metric"]], "selected size metric")
+        exceeded = value > rule["max_bytes"]
+        evaluation["metrics"].append({key: rule[key] for key in
+                                       ("id", "metric", "method", "unit", "os", "architecture", "variant", "max_bytes")} |
+                                     {"value_bytes": value, "exceeded": exceeded, "blocking": bool(enforce)})
+        if exceeded:
+            message = f"{rule['id']}: {value} bytes exceeds budget {rule['max_bytes']} bytes"
+            evaluation["errors" if enforce else "warnings"].append(message)
+    evaluation["status"] = "failed" if evaluation["errors"] else "warning" if evaluation["warnings"] else "passed"
+    return evaluation
+
+
+def budget_audit(result, warnings, policy_path=None, *, enforce=False):
+    audit = {"format": "openetl-budget-evaluation/v1", "data_valid": True,
+             "source_commit": result["source"]["commit"], "source_sha256": result["source"]["sha256"],
+             "mode": "enforce" if enforce else "observation", "status": "not_evaluated",
+             "warnings": list(warnings), "errors": [], "metrics": [], "eligible_for_enforcement": False}
+    try:
+        require(not enforce or policy_path is not None, "size enforcement requires explicit --budgets policy")
+        if policy_path is not None:
+            policy, policy_sha = read_budget_policy(policy_path)
+            audit.update(policy_format=policy["format"], policy_version=policy["version"], policy_sha256=policy_sha)
+            evaluation = evaluate_size_budgets(result, policy, policy_sha, enforce=enforce)
+            # A supplied v3 policy owns the binary threshold. The legacy
+            # hard-coded binary observation must not duplicate its warning.
+            if result["schema_version"] == 3 and evaluation["metrics"]:
+                warnings = [warning for warning in warnings if not warning.startswith("default binary MiB:")]
+            audit.update(evaluation)
+            audit["warnings"] = list(warnings) + evaluation["warnings"]
+        else:
+            audit["reason"] = "No explicit size policy supplied; measurements and historical observation checks only"
+    except (MeasurementError, OSError, ValueError) as exc:
+        audit["status"] = "failed"
+        audit["errors"] = [str(exc)]
+    return audit
+
+
+def print_budget_audit(audit):
+    for message in audit["warnings"]:
+        print("::warning::" + message)
+    for message in audit["errors"]:
+        print("::error::" + message, file=sys.stderr)
+    if "policy_sha256" in audit:
+        print(f"Size policy {audit['policy_version']} sha256:{audit['policy_sha256']}; mode={audit['mode']}; "
+              f"selected={len(audit['metrics'])}; status={audit['status']}")
+    print(f"Measurements {'valid' if audit['data_valid'] else 'invalid'}; size budgets {audit['status']}; "
+          f"observation warnings: {len(audit['warnings'])}")
 
 
 class Baseline:
@@ -1263,7 +1433,9 @@ def main():
     parser.add_argument("--restore-pipelines", type=int, default=16)
     parser.add_argument("--ready-timeout", type=float, default=60)
     parser.add_argument("--keep-images", action="store_true", help="retain newly built tags for follow-up measurements")
-    parser.add_argument("--check", type=Path, help="validate a result and print warning-only observation budgets")
+    parser.add_argument("--check", type=Path, help="recompute v3 archive/source evidence or read historical v2; --out saves a separate budget-result.json")
+    parser.add_argument("--budgets", type=Path, help="explicit versioned default binary/image size policy (warning mode by default)")
+    parser.add_argument("--enforce-budgets", action="store_true", help="fail selected size limits; requires explicit v3 policy and clean source")
     parser.add_argument("--image-archive", type=Path, help="measure a selected image in a Docker-save or OCI tar; does not build/start")
     parser.add_argument("--image-config-digest", help="expected configuration SHA256, required for image-archive mode")
     parser.add_argument("--image-architecture", help="optional expected image architecture")
@@ -1275,26 +1447,42 @@ def main():
         parser.error("check, image-archive and compare-image-probes modes are mutually exclusive")
     if args.image_engine_probe and args.image_archive is None:
         parser.error("image-engine-probe requires image-archive")
+    if (args.budgets is not None or args.enforce_budgets) and (args.image_archive or args.compare_image_probes):
+        parser.error("budget flags apply only to packaging-startup-restore measurements/checks")
     if args.image_config_digest is not None and args.image_archive is None:
         parser.error("image-config-digest requires image-archive")
     if args.image_architecture is not None and args.image_archive is None:
         parser.error("image-architecture requires image-archive")
     if args.check:
+        out_ready = False
+        audit = {"format": "openetl-budget-evaluation/v1", "mode": "enforce" if args.enforce_budgets else "observation",
+                 "data_valid": False, "status": "failed", "warnings": [], "errors": [], "metrics": []}
         try:
-            warnings = validate_result(json.loads(args.check.read_text()), artifact_root=args.check.parent)
+            if args.out is not None:
+                new_output_directory(args.out)
+                out_ready = True
+            result, result_sha = read_json_evidence(args.check, "baseline")
+            warnings = validate_result(result, artifact_root=args.check.parent)
+            audit = budget_audit(result, warnings, args.budgets, enforce=args.enforce_budgets)
+            audit["baseline_sha256"] = result_sha
         except (MeasurementError, ValueError, OSError) as exc:
-            print(f"::error::{exc}", file=sys.stderr)
-            return 1
-        for warning in warnings:
-            print("::warning::" + warning)
-        print("Baseline measurements valid; observation budget warnings: " + str(len(warnings)))
-        return 0
+            audit["errors"] = [str(exc)]
+        if out_ready:
+            write_json(args.out / "budget-result.json", audit)
+        print_budget_audit(audit)
+        return 0 if audit["data_valid"] and audit["status"] != "failed" else 1
     if args.trials < 1 or args.idle_samples < 2 or args.restore_pipelines < 1 or args.ready_timeout <= 0 or args.settle_seconds < 0:
         parser.error("positive trials/pipelines/timeout, >=2 idle samples and nonnegative settling time are required")
     if args.out is None:
         args.out = Path(os.environ.get("BENCH_OUT_DIR", str(args.root / ".bench-out" / ("baseline-" + uuid.uuid4().hex[:12]))))
-    require(not args.out.exists() or not any(args.out.iterdir()), "output directory must be new or empty")
-    args.out.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        new_output_directory(args.out)
+        if args.budgets is not None:
+            read_budget_policy(args.budgets)
+        require(not args.enforce_budgets or args.budgets is not None, "size enforcement requires explicit --budgets policy")
+    except (MeasurementError, ValueError, OSError) as exc:
+        print("::error::" + str(exc), file=sys.stderr)
+        return 1
     if args.compare_image_probes:
         report = {"format": "openetl-image-conformance/v1", "scope": "image-only", "status": "failed"}
         try:
@@ -1365,14 +1553,21 @@ def main():
                 bench.result["cleanup_error"] = str(exc)
             if bench.result["status"] == "passed":
                 try:
-                    bench.result["warnings"] = validate_result(bench.result, artifact_root=args.out)
+                    warnings = validate_result(bench.result, artifact_root=args.out)
+                    bench.result["budget"] = budget_audit(bench.result, warnings, args.budgets, enforce=args.enforce_budgets)
+                    bench.result["warnings"] = bench.result["budget"]["warnings"]
+                    print_budget_audit(bench.result["budget"])
                 except (MeasurementError, ValueError, OSError) as exc:
                     bench.result["status"] = "failed"
                     bench.result["error"] = str(exc)
                     print("Baseline validation failed: " + str(exc), file=sys.stderr)
+            if bench.result["status"] != "passed":
+                bench.result["budget"] = {"format": "openetl-budget-evaluation/v1", "data_valid": False,
+                                          "status": "not_evaluated", "reason": "Measurements failed; no budget verdict"}
             write_json(args.out / "result.json", bench.result)
-    print(f"Baseline {bench.result['status']}: {args.out / 'result.json'}", flush=True)
-    return 0 if bench.result["status"] == "passed" else 1
+    print(f"Baseline measurements {bench.result['status']}; size budgets {bench.result['budget']['status']}: "
+          f"{args.out / 'result.json'}", flush=True)
+    return 0 if bench.result["status"] == "passed" and bench.result["budget"]["status"] != "failed" else 1
 
 
 if __name__ == "__main__":

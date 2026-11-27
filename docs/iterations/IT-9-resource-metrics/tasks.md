@@ -1,7 +1,7 @@
 # IT-9 领取任务与迭代容量
 
-> 主任务：EV-3，状态 `active`；1 位实现者、两周参考窗口。实施 Round: 3/5。
-> 用户已明确授权开发直至本迭代交付；EV-3.1–.2 delivered；EV-3.3 已领取，EV-3.4 queued。状态沿用 `queued / active / blocked_external / delivered / deferred`。
+> 主任务：EV-3，状态 `active`；1 位实现者、两周参考窗口。实施 Round: 4/5。
+> 用户已明确授权开发直至本迭代交付；EV-3.1–.3 delivered；EV-3.4 已领取。状态沿用 `queued / active / blocked_external / delivered / deferred`。
 > 同一时间只有一个 EV-3 增量 active。验收见 [spec.md](./spec.md)，技术与允许文件见 [plan.md](./plan.md)。
 
 ## 目标、容量与关键路径
@@ -20,8 +20,8 @@ Sprint Goal：维护者拿到引擎无关、可追溯的资源度量，并能通
 | --- | --- | --- | --- | --- | --- |
 | 1/5 | EV-3.1 | 归档进入 CLI 后输出可复核的规范化体积，完整 harness 支持 v3 与 v2 历史读取 | 8 h | 验收已通过；`delivered` | `evidence/archive-fixtures.md`、parser/CLI logs |
 | 2/5 | EV-3.2 | 同一个 default 镜像在真实不同引擎上结果可对账 | 8 h | .1 已交付；真实 Docker/Podman 归档已对账；`delivered` | `evidence/*-image-metrics.json`、`conformance.json` |
-| 3/5 | EV-3.3 | 用户选择 warning／enforce，预算与错误输入产生明确退出码 | 6 h | .2 与 AMD64/ARM64 原生 v3 校准已通过；`active` | policy／budget-decision、positive/negative CLI logs |
-| 4/5 | EV-3.4 | 当前 CI 执行完整测量和体积灰度，报告、文档、Roadmap 一致 | 10 h | .1–.3；`queued` | baseline-v3、acceptance.md、当前 source＋candidate CI 链接 |
+| 3/5 | EV-3.3 | 用户选择 warning／enforce，预算与错误输入产生明确退出码 | 6 h | .2 与两个 native 校准／policy CLI 已通过；`delivered` | policy／budget-decision、positive/negative CLI logs |
+| 4/5 | EV-3.4 | 当前 CI 执行完整测量和体积灰度，报告、文档、Roadmap 一致 | 10 h | .1–.3 已通过；当前 CI／文档收口 `active` | baseline-v3、acceptance.md、当前 source＋candidate CI 链接 |
 | 5/5 | 本项缓冲／收口 | 只修当前验收暴露的有界问题或补必需 evidence | 8 h buffer | 有具体残余才使用；未领取 | 实际补验收与安全 handoff |
 
 ## EV-3.1：从归档到可信报告
@@ -192,4 +192,28 @@ Acceptance: EV-3.3 1–4 / A4+A5+A6; valid/low/missing/wrong-unit/wrong-policy C
 Evidence: Preserve calibration report hashes; derive limits as measured bytes ×1.25 rounded up to MiB; positive, low-policy, rollback observation and malformed-input outputs
 Result: active
 Residual/follow-up: EV-3.4 explicit CI enforcement, current source/candidate aggregate and documentation/strict source binding
+```
+
+## Round 3 Close / Round 4 Claim — 2026-11-27
+
+```text
+Round: 3/5
+Roadmap item: EV-3 (IT-9 / EV-3.3)
+Evidence: evidence/budget-decision.md, r3-cli-evidence.json, r3-tests.log, r3-python312-tests.log, versioned hack/bench-budgets.json
+Result: delivered (38 tests on local/Linux Python 3.12; 12 actual CLI checks; normal AMD64+ARM64 enforce 0, controlled low observation 0/enforce 1; v2/missing policy/wrong method/missing archives rejected)
+Residual/follow-up: EV-3.4 current CI, static certification descendant paths, bounded MySQL fixture TCP readiness and final docs/acceptance
+```
+
+```text
+Round: 4/5
+Roadmap item: EV-3 (IT-9 / EV-3.4)
+Profile/path: standalone native packaging-startup-restore; image-only dual-provider conformance; source/exact-candidate aggregate unchanged
+Objective: 当前 CI 使用相同 v3 方法和显式 policy 做两项体积灰度强制，所有 A1–A9 证据、文档、Roadmap 一致
+Eligibility: EV-3.1–.3 delivered; normal/controlled-negative policy and actual Docker/Podman/native data available; first-run failures have exact bounded prerequisites in plan.md
+Scope: _gate.yml resource job only; necessary baseline/tests; hack/cmd/check-connector-evidence/{main.go,main_test.go} exact IT-9 bookkeeping paths; hack/e2e-doris-source-order.sh TCP initialization readiness only; resource-baseline/release-checklist; iteration/evidence/Roadmap/index
+Non-goals: GATE_ALLOWLIST, skipped/cancelled-as-pass, fewer variants/trials, connector maturity, runtime capacity or data semantics, automated merge/tag/publish
+Acceptance: A2/A6/A7/A8/A9 and EV-3.4 1–5; current full source+3 storage/frontend+exact-candidate+Delivery Passed, two-provider conformance, actual low limit 1/observation 0, strict descendant negative and secret/user-diff checks
+Evidence: Current CI raw reports/archives/logs, policy SHA, exact frozen source/candidate bundle, acceptance.md, required Go race and shell/CLI checks, final git diff --check
+Result: active
+Residual/follow-up: Round 5 only if a concrete bounded correction remains; no second roadmap item
 ```

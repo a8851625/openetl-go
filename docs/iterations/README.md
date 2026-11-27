@@ -27,7 +27,7 @@
 | 迭代 | 主题 | 归属 roadmap 条目 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
 | [P1 技术修复](./P1-technical-closure-20261126/) | 用户授权的五项 P1 技术闭环 | EV-2、P5-H1、PR-0-C1、UI-E-R1、GA-C1 | 按依赖顺序；外部用户研究另行保留 | delivered（Round 5/5：五项技术验收闭合；23-case 候选、同字节晋升和完整 CI 聚合通过；见 [验收记录](./P1-technical-closure-20261126/tasks.md)） |
-| [IT-9](./IT-9-resource-metrics/) | 可信资源度量与预算控制 | EV-3.1–EV-3.4；唯一主任务 EV-3 | 固定归档／Python 首项可准备；真实引擎／原始镜像缺口按增量记录 | `active`（用户已授权开发；Round 3/5：EV-3.1–.2 delivered，EV-3.3 active；1 人／两周，四增量有序实施） |
+| [IT-9](./IT-9-resource-metrics/) | 可信资源度量与预算控制 | EV-3.1–EV-3.4；唯一主任务 EV-3 | 固定归档／Python 首项可准备；真实引擎／原始镜像缺口按增量记录 | `active`（用户已授权开发；Round 4/5：EV-3.1–.3 delivered，EV-3.4 active；1 人／两周，四增量有序实施） |
 | [IT-1](./IT-1-verification-substrate/) | 验证基座与存量收口 | RA-4、RA-7、BUG-1/2/6、GAP-1/3/4、P4 follow-up | 无 | `complete` |
 | [IT-2](./IT-2-correctness/) | 正确性（控制面真值 + 数据面身份与顺序） | RA-1、RA-2、RA-3、GAP-7.1/.2/.3 | IT-1 | `complete`（2026-09-05；T2.1–T2.8 全部 done，16 项验收 passed） |
 | [IT-3](./IT-3-integrity-capacity/) | 完整性与容量 | RA-5、RA-6、RA-8、PR-1.3 残留 | IT-1 | `complete`（2026-09-16：T3.1–T3.7 全部 done，含 T3.6-B 路径吞吐与三 backend 并发曲线；证据 it3-baseline-20260916） |
@@ -109,7 +109,7 @@ IT-3 集中在 `storage`/`backup`/CI 基准），在满足「同一时间只推�
 | 项目级发布门槛 / 移除 beta 判定 | — | IT-4 |
 | ClickHouse 迭代启发候选 `CH-C1`–`CH-C8` | `CH-C1`/`CH-C3`/`CH-C2` 于 2026-09-17 晋级第一批立项并已由 IT-5 交付；`CH-C4` 主体由 IT-8 交付；`CH-C5`–`CH-C8` 保持候选池 | IT-5（第一批，delivered）；其余未晋级 |
 | EV-1：connector evidence manifest provenance | `delivered`（2026-11-09 同日补齐；当前清单 16 条，发布候选绑定归 GA-C1） | 见 ROADMAP EV-1 与 P1 技术修复窗口 |
-| EV-3：resource-baseline 度量口径与预算灰度 | `active`（2026-11-27：用户授权实施 IT-9，EV-3.1–.2 delivered／EV-3.3 active；真实环境缺口单独记录） | IT-9（./IT-9-resource-metrics/） |
+| EV-3：resource-baseline 度量口径与预算灰度 | `active`（2026-11-27：用户授权实施 IT-9，EV-3.1–.3 delivered／EV-3.4 active；真实环境缺口单独记录） | IT-9（./IT-9-resource-metrics/） |
 | UI-D：实测交互可信度与小屏可用性 | `delivered`（2026-09-26：UI-D.1–D.6；真实 app 容器 209/209） | UI-D |
 | UI-E：首次成功与故障恢复任务闭环 | `blocked_external`（2026-09-26：UI-E.1 缺 3–5 名外部目标用户；研究协议已就绪） | UI-E |
 | UI-F：控制面路由安全与运行状态真实性 | `delivered`（2026-09-27：F.1–F.7，265/265） | UI-F |
