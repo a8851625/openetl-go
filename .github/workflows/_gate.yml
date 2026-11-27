@@ -299,11 +299,11 @@ jobs:
           path: docs/evidence/*.json
           if-no-files-found: error
 
-  # IT-3/T3.7: resource-baseline regression gate. WARNING MODE for the first
-  # version cycle: valid measurements over budget warn. Failed/missing
-  # measurements fail this job and therefore the aggregated gate.
+  # IT-9 / EV-3: v3 validity and actual-engine conformance are mandatory.
+  # Explicit policy enforces default binary/normalized image sizes only.
+  # Startup/RSS remain observation warnings; no gate exemptions are added.
   bench-baseline:
-    name: Resource Baseline (warning)
+    name: Resource Baseline (size budgets enforced)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -317,9 +317,12 @@ jobs:
       - name: Measure packaged images, health-ready startup, RSS and offline restore
         run: |
           set -euo pipefail
-          CONTAINER_CLI=docker ./hack/bench-baseline.sh --out .bench-out/current 2>&1 | tee baseline-run.log
-      - name: Validate complete measurements and apply observation budgets
-        run: python3 hack/bench_baseline.py --check .bench-out/current/result.json
+          CONTAINER_CLI=docker ./hack/bench-baseline.sh --out .bench-out/current \
+            --budgets hack/bench-budgets.json --enforce-budgets 2>&1 | tee baseline-run.log
+      - name: Recompute complete measurements and enforce the explicit size policy
+        run: |
+          python3 hack/bench_baseline.py --check .bench-out/current/result.json \
+            --budgets hack/bench-budgets.json --enforce-budgets --out .bench-out/current/budget-normal
       - name: Verify identical image content on actual Docker and Podman engines
         run: |
           set -euo pipefail
@@ -331,6 +334,46 @@ jobs:
           python3 hack/bench_baseline.py --compare-image-probes \
             .bench-out/current/docker-probe/result.json .bench-out/current/podman-probe/result.json \
             --out .bench-out/current/conformance
+      - name: Verify controlled size rejection and observation rollback on the same real report
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report=json.loads(Path('.bench-out/current/result.json').read_text())
+          policy=json.loads(Path('hack/bench-budgets.json').read_text())
+          policy['version']+='-controlled-low'
+          policy['rationale']='CI negative: the actual normalized image limit is one byte below this measured value'
+          matched=False
+          for rule in policy['rules']:
+              if rule['architecture']==report['hardware']['architecture'] and rule['metric']=='image_uncompressed_layer_bytes':
+                  rule['max_bytes']=report['images']['default']['image_uncompressed_layer_bytes']-1
+                  assert rule['max_bytes']>0
+                  matched=True
+          assert matched, 'no calibrated image rule applies to this native runner'
+          Path('.bench-out/current/low-policy.json').write_text(json.dumps(policy,indent=2,sort_keys=True)+'\n')
+          PY
+          set +e
+          python3 hack/bench_baseline.py --check .bench-out/current/result.json \
+            --budgets .bench-out/current/low-policy.json --enforce-budgets \
+            --out .bench-out/current/budget-low-enforce > .bench-out/current/budget-negative.log 2>&1
+          BUDGET_EXIT=$?
+          set -e
+          cat .bench-out/current/budget-negative.log
+          test "$BUDGET_EXIT" -eq 1
+          python3 hack/bench_baseline.py --check .bench-out/current/result.json \
+            --budgets .bench-out/current/low-policy.json --out .bench-out/current/budget-low-observe
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for mode,status in [('enforce','failed'),('observe','warning')]:
+              audit=json.loads(Path(f'.bench-out/current/budget-low-{mode}/budget-result.json').read_text())
+              assert audit['data_valid'] is True and audit['status']==status and len(audit['metrics'])==2, audit
+              images=[m for m in audit['metrics'] if m['metric']=='image_uncompressed_layer_bytes']
+              assert len(images)==1 and images[0]['exceeded'] is True and images[0]['value_bytes']==images[0]['max_bytes']+1
+              assert images[0]['blocking'] is (mode=='enforce')
+          print('Controlled real image budget: enforce exit 1; observation exit 0; measurement validity retained')
+          PY
       - name: Upload baseline provenance and raw measurement logs
         if: always()
         uses: actions/upload-artifact@v4

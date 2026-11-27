@@ -217,3 +217,11 @@ Evidence: Current CI raw reports/archives/logs, policy SHA, exact frozen source/
 Result: active
 Residual/follow-up: Round 5 only if a concrete bounded correction remains; no second roadmap item
 ```
+
+### Round 4 preflight
+
+- Go 1.24.13 targeted checker `-race`: `ok .../hack/cmd/check-connector-evidence 5.541s`, exit 0. Named IT-9 bookkeeping is accepted; policy/runtime/script/workflow/calibration/unreviewed paths remain rejected.
+- actionlint v1.7.7 `_gate.yml`: exit 0; shell wrappers and Doris source-order `sh -n`: exit 0.
+- Explicit canary + same real low-policy fail/observation rollback steps are wired; actual new CI is pending. The first failed run stays recorded.
+- Resource documentation was staged through an IT-9-only index transform; user v2/history corrections remain uncommitted and preserved in the working-tree diff.
+- No allowlist, connector maturity, pipeline runtime, checkpoint/DLQ or release tag changes.

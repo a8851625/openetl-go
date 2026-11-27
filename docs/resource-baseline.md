@@ -3,6 +3,61 @@
 Record measured baselines for release notes. Update when packaging, connectors,
 or default resource limits change by more than the regression thresholds below.
 
+## Current measurement contract (IT-9, 2026-11-27)
+
+The current writer emits schema v3. Each of the four CGO-disabled Dockerfile
+variants retains a saved image archive, config/archive SHA256, ordered layer
+inventory and the sum of uncompressed layer tar bytes. This method is
+`uncompressed-layer-bytes/v1`, unit bytes. `engine_reported_image_bytes` and its
+legacy `bytes` alias are diagnostic; neither substitutes for the normalized
+image budget. Archive transfer bytes and merged rootfs usage are separate values.
+
+Use an explicit versioned policy for size checks:
+
+```bash
+CONTAINER_CLI=docker ./hack/bench-baseline.sh --out /tmp/openetl-v3-run \
+  --budgets hack/bench-budgets.json --enforce-budgets
+python3 hack/bench_baseline.py --check /tmp/openetl-v3-run/result.json \
+  --budgets hack/bench-budgets.json --enforce-budgets --out /tmp/openetl-v3-check
+```
+
+Remove `--enforce-budgets` for policy observation: valid over-budget sizes warn
+and return 0. Enforced selected size violations return 1. Missing/failed/malformed
+measurements always fail. Enforcing v2, dirty source, missing policy, wrong method
+or an uncalibrated architecture fails. Without an explicit policy, measurements
+and historical observation checks run but size status is `not_evaluated`.
+`--check --out` writes a separate `budget-result.json`; it never rewrites the input.
+A clean CI checkout or isolated checkout is required for enforcement provenance.
+
+Policy `2026-11-27.1` selects only native Linux **default** binary/image sizes:
+
+| Architecture | Binary limit MiB | Uncompressed layer limit MiB |
+| --- | ---: | ---: |
+| amd64 | 81 | 176 |
+| arm64 | 77 | 169 |
+
+Limits use the respective clean v3 measured bytes plus 25% headroom, rounded up
+to MiB. Startup (5 seconds), median idle RSS (250 MiB) and restored startup
+(5 seconds) remain warning checks. Other build variants are fully measured
+without size enforcement. These checks cover Dockerfile packaging and the small
+standalone SQLite/TLS/audit restore profile; they do not certify throughput,
+other storage capacity, distributed mode, CGO or all published release assets.
+
+The CI resource job uses this explicit policy, recomputes all four archives and
+source inventory, probes the same default image on actual Docker and Podman,
+and verifies controlled low-policy enforcement (1) and observation rollback (0).
+Podman Docker-save legacy layer aliases are ignored only when unreferenced and
+strictly bounded inside the archive; no links are followed. Native Linux Podman
+versions are recorded as daemonless engine versions. Raw archives have 14-day CI
+retention; metadata/reports live with the iteration evidence. Temporary runtime
+credentials, TLS private keys and backup payloads remain outside uploaded outputs.
+
+See the [budget decision](./iterations/IT-9-resource-metrics/evidence/budget-decision.md)
+and [IT-9 acceptance record](./iterations/IT-9-resource-metrics/evidence/acceptance.md)
+for exact source refs, report/policy hashes, calibration and current CI status.
+The historical sections below retain their original v2 measurements and decisions;
+legacy engine sizes are not new v3 measurements.
+
 ## How to measure
 
 ```bash
@@ -38,7 +93,8 @@ checkpoints. A separate Go `process-measure` tool records elapsed time and kerne
 `wait4` peak RSS, retaining the native value and units (Linux KiB). A child
 self-report checks the conversion. The local BusyBox `time` reported about four
 times the `/proc` peak; schema v1 measurements using it were withdrawn and the
-validator now requires v2. Loaded fixture `VmHWM` is a control-plane observation, not a
+historical validator required v2. The current writer uses v3 and retains v2
+reading. Loaded fixture `VmHWM` is a control-plane observation, not a
 sustained concurrent-pipeline capacity measurement.
 
 `result.json`, `source-files.json`, `fixture-state.json` and command logs are the
@@ -51,10 +107,10 @@ local Docker builds may have no registry digest before publishing.
 Throughput / checkpoint delay should be measured on the declared production path
 (see `docs/path-contract.md`), not on synthetic no-op pipes alone.
 
-## Current evidence — partial RA-8 baseline
+## Historical RA-8 evidence (schema v2)
 
 The 2026-09-06 IT-3/T3.6 completion claim was withdrawn during revalidation.
-There is currently no complete, reproducible release baseline that meets RA-8.
+At that revalidation, there was no complete reproducible release baseline that met RA-8.
 Historical numbers remain in the withdrawn iteration log for traceability; they
 must not be used as certified capacity limits or release comparisons.
 

@@ -403,6 +403,33 @@ func allowedEvidenceDescendantPath(path string) bool {
 		"docs/iterations/P1-technical-closure-20261126/ga-evidence.md",
 		"docs/iterations/P1-technical-closure-20261126/tasks.md",
 		"docs/iterations/P1-technical-closure-20261126/plan.md",
+		// IT-9 closeout may attach actual reports after the frozen code run.
+		// Only these bookkeeping paths are exempt; calibration files, policy,
+		// runtime, scripts and workflows still require certification again.
+		"docs/resource-baseline.md",
+		"docs/release-checklist.md",
+		"docs/iterations/IT-9-resource-metrics/spec.md",
+		"docs/iterations/IT-9-resource-metrics/plan.md",
+		"docs/iterations/IT-9-resource-metrics/tasks.md",
+		"docs/iterations/IT-9-resource-metrics/evidence/acceptance.md",
+		"docs/iterations/IT-9-resource-metrics/evidence/budget-decision.md",
+		"docs/iterations/IT-9-resource-metrics/evidence/baseline-v3.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/baseline-source-files.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/docker-image-metrics.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/podman-image-metrics.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/conformance.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/budget-enforce.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/budget-low-enforce.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/budget-low-observe.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/ci.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/source-merge.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/candidate.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/certification.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/candidate-connector-evidence.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/candidate-strict.log",
+		"docs/iterations/IT-9-resource-metrics/evidence/r4-secret-check.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/r4-user-changes.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/r4-final-diff.log",
 		"docs/ga-assessment-2026-09-16.md":
 		return true
 	default:

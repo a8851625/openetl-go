@@ -41,6 +41,49 @@ func TestCheckCommitBindingRejectsRuntimeChange(t *testing.T) {
 	}
 }
 
+func TestCheckCommitBindingAllowsOnlyNamedIT9CloseoutFiles(t *testing.T) {
+	root := initEvidenceGitRepo(t)
+	writeEvidenceTestFile(t, root, "runtime.go", "baseline")
+	commitEvidenceTest(t, root, "baseline")
+	certified := mustGitOutput(t, root, "rev-parse", "HEAD")
+	for _, path := range []string{
+		"docs/iterations/IT-9-resource-metrics/tasks.md",
+		"docs/iterations/IT-9-resource-metrics/evidence/acceptance.md",
+		"docs/iterations/IT-9-resource-metrics/evidence/baseline-v3.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/budget-enforce.json",
+		"docs/resource-baseline.md", "docs/release-checklist.md",
+	} {
+		writeEvidenceTestFile(t, root, path, "actual closeout evidence")
+	}
+	commitEvidenceTest(t, root, "attach IT-9 evidence")
+	if err := checkCommitBinding(root, certified, mustGitOutput(t, root, "rev-parse", "HEAD")); err != nil {
+		t.Fatalf("named IT-9 closeout rejected: %v", err)
+	}
+	for _, path := range []string{
+		"hack/bench_baseline.py", "hack/bench-budgets.json", "hack/e2e-doris-source-order.sh",
+		".github/workflows/_gate.yml", "internal/etl/server/server.go",
+		"docs/iterations/IT-9-resource-metrics/evidence/calibration-v3-amd64.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/unreviewed.json",
+		"docs/iterations/IT-9-resource-metrics/evidence/tool.sh", "docs/unrelated.md",
+	} {
+		if allowedEvidenceDescendantPath(path) {
+			t.Errorf("non-bookkeeping path incorrectly allowed: %s", path)
+		}
+	}
+}
+
+func TestCheckCommitBindingRejectsIT9BudgetPolicyChange(t *testing.T) {
+	root := initEvidenceGitRepo(t)
+	writeEvidenceTestFile(t, root, "hack/bench-budgets.json", "calibrated policy")
+	commitEvidenceTest(t, root, "baseline")
+	certified := mustGitOutput(t, root, "rev-parse", "HEAD")
+	writeEvidenceTestFile(t, root, "hack/bench-budgets.json", "changed budget")
+	commitEvidenceTest(t, root, "policy change")
+	if err := checkCommitBinding(root, certified, mustGitOutput(t, root, "rev-parse", "HEAD")); err == nil || !strings.Contains(err.Error(), "bench-budgets.json") {
+		t.Fatalf("policy descendant error = %v, want re-certification", err)
+	}
+}
+
 func TestCheckCommitBindingRejectsNonAncestor(t *testing.T) {
 	root := initEvidenceGitRepo(t)
 	writeEvidenceTestFile(t, root, "internal/etl/server/evidence/connector-evidence.json", "baseline")

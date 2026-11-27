@@ -17,10 +17,25 @@ The table below documents the source gate — it must not be checked by hand.
 | lint | `go vet ./...` | exit 0 |
 | connector-evidence | `hack/check-connector-evidence.sh` (+ `-strict` on main push) | exit 0 |
 | unit-test | `go test -race -count=1 ./internal/etl/... ./internal/logic/...` | exit 0 |
+| frontend-test | `npm test`, typecheck, lint and frontend build | exit 0 |
 | production-gate | telemetry/alert unit tests, release asset scan, production profile / runtime / SQLite backup smokes | exit 0 |
 | storage-mysql | `hack/e2e-storage-mysql.sh` | exit 0 |
 | storage-postgres | `hack/e2e-storage-postgres.sh` | exit 0 |
 | integration-test | `go test -race -tags=integration ./internal/etl/...` (MySQL + ClickHouse services) | exit 0 |
+| connector-e2e | tagged connector path evidence on the current source | exit 0; required evidence is nonempty and passed |
+| bench-baseline | Four Dockerfile variants; default native startup/RSS/restore; v3 archive/source rechecks; actual Docker/Podman image conformance; explicit `hack/bench-budgets.json` size policy and controlled-negative/rollback checks | Valid measurements and conformance required; selected default binary/image sizes enforce; startup/RSS warn |
+
+IT-9 size canary applies only to calibrated native Linux default Dockerfile
+binary and uncompressed image-layer bytes. v2 engine.Size cannot satisfy it.
+The normal measure/check commands use explicit `--budgets` and
+`--enforce-budgets`; a controlled low image limit must yield exit 1 with
+`data_valid=true`, and observation of the same report must yield exit 0.
+Unknown failures do not count as the expected negative case. See
+[the budget decision](./iterations/IT-9-resource-metrics/evidence/budget-decision.md)
+and [resource baseline](./resource-baseline.md). To stop canary enforcement,
+remove the enforce flag from normal measure/check steps while retaining v3
+validity, conformance and policy observation checks. All source and candidate
+aggregation dependencies remain mandatory.
 
 ### 1a. Aggregated verdict (skip is never pass)
 
