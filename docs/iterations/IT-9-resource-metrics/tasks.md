@@ -1,7 +1,7 @@
 # IT-9 领取任务与迭代容量
 
-> 主任务：EV-3，状态 `active`；1 位实现者、两周参考窗口。当前 Round: 5/5，有界 fixture health 补验收。
-> 用户已明确授权开发直至本迭代交付；EV-3.1–.3 delivered；EV-3.4 的当前 HEAD 补验收 active。状态沿用 `queued / active / blocked_external / delivered / deferred`。
+> 主任务：EV-3，状态 `delivered`；1 位实现者、两周参考窗口。实际 Round: 5/5，补验收已收口。
+> 用户已明确授权开发直至本迭代交付；EV-3.1–.4 与有界 fixture health 补验收 delivered；没有 active 增量。状态沿用 `queued / active / blocked_external / delivered / deferred`。
 > 同一时间只有一个 EV-3 增量 active。验收见 [spec.md](./spec.md)，技术与允许文件见 [plan.md](./plan.md)。
 
 ## 目标、容量与关键路径
@@ -270,3 +270,22 @@ Residual/follow-up: close this round only; no sixth increment automatically
 ### Round 5 preflight evidence
 
 Actual native MySQL phase probe passed: temporary initialization socket SQL exit 0, TCP SQL/health nonzero and not healthy; final TCP SQL/health exit 0 and healthy. Owned container/volume cleanup passed; see `evidence/r5-mysql-health-probe.json`. Dev Compose YAML parses, diff check passes. This is a controlled fixture phase probe, not CDC runtime or throughput certification. Corrected-current full CI remains required.
+
+## Round 5 Close — 2026-11-28
+
+```text
+Round: 5/5
+Roadmap item: EV-3 (IT-9 / EV-3.4-F1 bounded acceptance correction)
+Profile/path: dev MySQL final-server health -> actual CDC-MySQL candidate certification; full source/candidate aggregate
+Objective: 初始化 socket SQL 不可被 health 宣称最终服务可用，CDC target setup 等待已认证 TCP server
+Scope: docker-compose.dev.yml mysql-source healthcheck host only; iteration/evidence/roadmap/index and canonical same-candidate metadata
+Non-goals: runtime/CDC/checkpoint/sink semantics, connector/maturity changes, production/release compose, extra roadmap work
+Acceptance: temp socket SQL 0 / TCP SQL+health nonzero; final TCP SQL+health 0/healthy; owned cleanup; actual current CDC case and every source/candidate/Delivery gate pass; strict source/config binding; user changes preserved
+Evidence: r5-mysql-health-probe.json actual phases+cleanup; run46032636182 36/36 success; 4-variant native v3 / real dual-provider / normal and controlled-low policy verdicts; 23 exact-candidate cases / 7 tagged files / 28 checks; same ZIP member CRC/digests; strict frozen 8dfbf84 source/config exit0
+Result: delivered
+Residual/follow-up: none within IT-9; latest evidence-only PR HEAD full gate rechecks; no sixth increment claimed
+```
+
+证据以当前 [acceptance.md](./evidence/acceptance.md) 和 immutable CI artifacts 为准。
+原始 191683e 数据保留于 git e72f9fe／CI46024237806；当前 source/candidate refs 未被互相改写。
+第 5 轮仅关闭同一迭代的精确内部 fixture defect；全部强制验收 actual passed，不扩展 connector family。

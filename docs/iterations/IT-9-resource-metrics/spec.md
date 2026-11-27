@@ -1,7 +1,7 @@
 # IT-9：可信资源度量与预算控制
 
-> 状态：`active`；归属：EV-3。规划日期：2026-11-27；代码基线：`ee3797c`。
-> 用户选择：1 位实现者、两周参考窗口。用户已授权实施；Round: 5/5，EV-3.4 当前 HEAD 的 dev MySQL fixture health 补验收 active。
+> 状态：`delivered`；归属：EV-3。规划日期：2026-11-27；代码基线：`ee3797c`。
+> 用户选择：1 位实现者、两周参考窗口。用户已授权实施；Round: 5/5，EV-3.1–.4 和有界 fixture health 补验收全部 delivered。
 > 正式验收以 [ROADMAP](../../ROADMAP.zh.md) EV-3 为准；技术方案见 [plan.md](./plan.md)，领取顺序见 [tasks.md](./tasks.md)。
 
 ## 问题与用户结果
@@ -87,3 +87,10 @@ EV-3／IT-9 置 `delivered` 必须：全部必需验收 passed；四个增量 de
 A1–A9 全部证据见 [acceptance.md](./evidence/acceptance.md)；四个增量按序 delivered，Round 4/5 收口，未领取第五轮或第二个主任务。
 实施参考窗口起点 2026-11-27、两周参考终点 2026-12-11；实际技术验收闭合日 2026-11-27。
 没有将参考窗口或估算工时当作完成条件。当前原始归档、source/harness/policy、CLI 负向与 strict binding 都已实际核对。
+
+## Round 5 最终补验收 — 2026-11-28
+
+共享 dev MySQL health 只改 authenticated SQL host 为 127.0.0.1，真实 temp/final server phase probe 通过。
+修正 source `8dfbf8438dafd8568a215464fd8c96acb5618b2e` 的 run 46032636182 全部 36 jobs success，
+包括之前失败的 CDC-MySQL、source/candidate/Delivery Passed。A1–A9 当前证据已回填；Round 5/5 关闭，禁止自动第六轮。
+旧 191683e 的原始通过证据和 e72f9fe 的失败事实保留在 git/CI 历史，不改写为新 source。

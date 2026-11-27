@@ -69,3 +69,11 @@ Run 46024237806 / frozen implementation 191683e 的 Resource Baseline job succes
 移除 enforce flag 后 observation warning/exit 0。三份原始 audit 和 `baseline-v3.json` 保存该结果。
 时间/RSS 没有进入 blocking，Docker29.4.2 + native Podman5.7.0 conformance 实际 passed。
 最终接受矩阵及原始 archive/candidate artifact 在 [acceptance.md](./acceptance.md)。
+
+## Round 5 最新 source 复验
+
+Source 8dfbf84 / run46032636182 36/36 success；相同 policy SHA42871889... 与 4-variant native v3、
+actual dual-provider、normal enforce0/controlled-low enforce1/observation0 继续通过。
+当前 baseline source为真实 merge c3c4d8b2...（parent8dfbf84），source inventory SHA7a6dab1d...；
+它不会改写两个原始校准和 policy 值，default仍为67285176 binary /147265024 expanded image bytes。
+共享 dev MySQL TCP health 的有界测试修正已实际关闭，原失败 run46029555087 保留。

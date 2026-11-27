@@ -1,9 +1,9 @@
 # OpenETL-Go Roadmap
 
 > 当前执行快照（2026-11-27，规划代码基线 `ee3797c`；已发布基线 v0.2.12-beta.21）：
-> P1 技术窗口五项全部 `delivered`，原 Round 5/5 已收口；当前唯一 active 主任务为 IT-9 / EV-3 的第 5 轮 fixture health 补验收。
-> 当前迭代 IT-9 / EV-3 可信资源度量与预算控制为 `active`（Round 5/5 补验收）；用户选择 1 位实现者、两周参考窗口。
-> 用户已明确授权开发直至迭代完整交付；当前 Round: 5/5，冻结实现已通过；当前 HEAD 的 MySQL fixture TCP health 补验收 active。
+> P1 技术窗口五项全部 `delivered`，原 Round 5/5 已收口；IT-9 / EV-3 的第 5 轮补验收亦已交付，当前没有 active 主任务。
+> 当前迭代 IT-9 / EV-3 可信资源度量与预算控制已 `delivered`（Round 5/5）；用户选择 1 位实现者、两周参考窗口。
+> 用户已明确授权开发直至迭代完整交付；实际 Round: 5/5；原四增量及共享 MySQL TCP health 补验收全部 delivered。
 > UI-E 的外部用户研究继续 `blocked_external`，用户明确要求先完成技术修复。
 > EV-3 规范化计量、真实双引擎、显式体积灰度和全量 CI 已通过。MaxCompute P0 保持 `deferred`。
 >
@@ -2703,7 +2703,7 @@ integration job `139341305228` 的 Run integration tests 和 job conclusion 均�
 
 ### EV-3：可信资源度量与预算控制
 
-状态：`active`（2026-11-28；Round 5/5 修正当前 HEAD 的 dev MySQL fixture health 竞态，其他已通过证据保留）
+状态：`delivered`（2026-11-28；Round 5/5，有界共享 dev MySQL TCP health 与当前全部 CI 验收闭合）
 
 **规划与状态纠正**：用户要求规划下一迭代，选择 1 人／两周；沿用本项既有优先级。
 首项以固定归档／CLI 验证内部计量，不依赖远端凭据，因此不继续标为外部阻塞。
@@ -2758,6 +2758,12 @@ EV-3.3 证据见 [budget-decision.md](./iterations/IT-9-resource-metrics/evidenc
 当前原生 v3 四 variant、3 cold/3 restore/15 RSS/16×100、Docker29.4.2/Podman5.7.0 对账，正常预算 0、受控低预算 1／回滚观测 0 全部通过；38 Python tests、Go checker race、raw archive/source/policy/secret/strict 复核已记录。
 同一候选的 23 cases、七份 tagged / 28 checks 和 canonical manifest 已回填；无新增 GATE_ALLOWLIST 或 maturity。
 四增量与 A1–A9 全部 delivered/passed，第五轮未领取；不自动领取 CH-C5 或其他主任务。原始历史数据与失败 run 保留，用户已有修改已保持。
+
+**第五轮最终补验收**：收口 HEAD run46029555087 在 CDC-MySQL target setup 前出现初始化 socket 切换竞态，已记录真实失败。
+共享 dev MySQL health 的 `localhost` 改为 `127.0.0.1`，保持同一 authenticated SQL；隔离 temp/final 两阶段及 cleanup 实际通过。
+最终实现 freeze `8dfbf8438dafd8568a215464fd8c96acb5618b2e`，run [46032636182](https://github.com/a8851625/openetl-go/actions/runs/46032636182) **36/36 jobs success**，含当前 CDC case、source、exact-candidate、Delivery Passed。
+当前证书/23cases/7tagged与原始同一ZIP成员CRC和摘要已核对，strict当前source绑定通过；A1–A9 全部 passed，Round5/5 收口，无第六增量或第二主任务。
+旧freeze191683e与其36jobs通过是保留的实际历史；最新证据见 IT-9 acceptance/current metadata，不改写源ref或历史校准。
 
 ## 有界后续
 
@@ -2817,5 +2823,3 @@ EV-3.3 证据见 [budget-decision.md](./iterations/IT-9-resource-metrics/evidenc
 - 安全与维护：生产 profile fail-closed 通过率、明文 secret 检测结果、key rotation 成功率、migration/backup/restore smoke 通过率、升级/回滚耗时、alert dropped 数。
 - 扩展性：descriptor/schema/preflight 覆盖率、path-level production 认证率、production evidence 新鲜度、Plugin ABI 兼容测试通过率。
 - 轻量性：镜像/二进制大小、启动耗时、空闲内存、外部依赖数量、checkpoint 延迟和典型吞吐；发布说明记录基线及回归阈值。
-
-<!-- IT-9 Round 5 actual blocker is an internal fixture readiness defect, not external credentials. -->

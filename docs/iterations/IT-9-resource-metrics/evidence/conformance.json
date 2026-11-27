@@ -1,7 +1,7 @@
 {
   "content": {
     "architecture": "amd64",
-    "image_config_sha256": "c84fa8a19484f48b79c3f21c15ea7bca239c76633966a0039b8bcab90b878b79",
+    "image_config_sha256": "ff850b98ce0a38a8f3761bebed5d25540ffaf5c22fc235f881a4c91738d9d9ad",
     "image_uncompressed_layer_bytes": 147265024,
     "layers": [
       {
@@ -10,37 +10,37 @@
         "uncompressed_bytes": 7688192
       },
       {
-        "diff_id": "sha256:c6951958a0250e1afb2e41c6efd7ea0155681a80689b7cc34ef277bb4cc49303",
+        "diff_id": "sha256:385cde78f1ecb22c07aea425171416130b51199ef4457f36f4ff74b952e83d3a",
         "ordinal": 1,
         "uncompressed_bytes": 1536
       },
       {
-        "diff_id": "sha256:2bbb5474955e1dfe09987a1c9e9646fafb28752d5e5d6ed3e785fa77eaa3f924",
+        "diff_id": "sha256:3247a58f7eb15d0090ebb58f1d12dcee0e5461da14fe8f51d137667263568513",
         "ordinal": 2,
         "uncompressed_bytes": 2564096
       },
       {
-        "diff_id": "sha256:a0f032fdfa227a3d8641f4d27e2e44ce3e5260e45ca6e53039c47d8494559755",
+        "diff_id": "sha256:6a123dc5738654aa160590c30cf7871d8105409a3268c2a71b67001504693923",
         "ordinal": 3,
         "uncompressed_bytes": 11776
       },
       {
-        "diff_id": "sha256:abeb915164ab91c4213ce1056d4cb05c75e01d6d903f20dd689e39ed9dab951a",
+        "diff_id": "sha256:391e218dc642c0983846322643b63bae715a2f2c2332ae20213af1a6e960d472",
         "ordinal": 4,
         "uncompressed_bytes": 67287552
       },
       {
-        "diff_id": "sha256:74bd773405025a72363fb26f5ef3a5237b0a4f179d1141d9751283331dc27942",
+        "diff_id": "sha256:35711df98213bcd270759399032b27928cb9f9b18f3965bef2f3d7a96b931bdf",
         "ordinal": 5,
         "uncompressed_bytes": 1199616
       },
       {
-        "diff_id": "sha256:961504d1cf143129b52e7fe82e9663de75175bb2be0e6cf7a15fe067acd732d6",
+        "diff_id": "sha256:efc71437f94ea4eba9bde065fe9a34174d27c403751d25716602b0a94f8bfbf1",
         "ordinal": 6,
         "uncompressed_bytes": 12800
       },
       {
-        "diff_id": "sha256:4af00313bc3688ce1fad3770cbf280a11012481c25cf6dd480b4f893189cd90a",
+        "diff_id": "sha256:66bc1f54dca4dd9f363d9084b2e74ded4ff36910d6bcd117396421c5adc4ee93",
         "ordinal": 7,
         "uncompressed_bytes": 68499456
       }
@@ -51,7 +51,7 @@
   },
   "format": "openetl-image-conformance/v1",
   "harness_sha256": "c087e098b8ca6609c14e05c092fc9dd8b9b6f4ae8c715659baf9b49fce2b9848",
-  "input_archive_sha256": "a12ffaaae16bb6edbedefc6c9d1086e1785e4f8d8a94571545626ec66b8c1649",
+  "input_archive_sha256": "60a34c2d446f703ceacf865c59d2895ac1ac1e8794542e0234db921609b50c05",
   "limitations": [
     "Image-only conformance; neither image is started by this probe.",
     "Archive bytes, encodings and engine-reported sizes are diagnostic, not equal-size criteria."
@@ -60,12 +60,12 @@
     {
       "engine_diagnostics": {
         "architecture": "amd64",
-        "engine_reported_image_bytes": 47608140,
-        "image_id": "sha256:3fd15b8d335e4723806d72a03cddbc575844c2e66a8d73f00773e1b778ef65ca",
+        "engine_reported_image_bytes": 47608074,
+        "image_id": "sha256:4985e415bec81dcf28016b7e9cec9f577d8ef1bba062056eccc5044530b9ea06",
         "os": "linux"
       },
       "image_archive_bytes": 47622144,
-      "image_archive_sha256": "14e0049a556267483ebda0ac21e233eae50e1f6f8ff2999ead8f0471908a9758",
+      "image_archive_sha256": "97a3fc50d076207985f6fec9c517d960c28628987384dc0ea4e78ba46b0a8d01",
       "provider": {
         "client": {
           "ApiVersion": "1.54",
@@ -114,12 +114,12 @@
     {
       "engine_diagnostics": {
         "architecture": "amd64",
-        "engine_reported_image_bytes": 147271514,
-        "image_id": "sha256:c84fa8a19484f48b79c3f21c15ea7bca239c76633966a0039b8bcab90b878b79",
+        "engine_reported_image_bytes": 147271515,
+        "image_id": "sha256:ff850b98ce0a38a8f3761bebed5d25540ffaf5c22fc235f881a4c91738d9d9ad",
         "os": "linux"
       },
       "image_archive_bytes": 147297792,
-      "image_archive_sha256": "be83d63befa58e0f86cf6083c4632e0172378b07111298948c4b415b27d024f1",
+      "image_archive_sha256": "a251c4cca3e00e47718cb24fdf79eaff0b712c89f273232bf920664a25a7e6eb",
       "provider": {
         "client": {
           "APIVersion": "5.7.0",

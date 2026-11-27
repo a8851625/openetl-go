@@ -1,7 +1,7 @@
 {
   "path_id": "kafka_envelope_roundtrip",
-  "commit": "191683e4a2ddcd65a7a5c7463d9c6708892ef3c8",
-  "run_started_at": "2026-11-27T15:31:57Z",
+  "commit": "8dfbf8438dafd8568a215464fd8c96acb5618b2e",
+  "run_started_at": "2026-11-27T16:31:08Z",
   "runner": "github-actions",
   "deps": {
     "harness": "e2e",
@@ -18,9 +18,9 @@
     }
   ],
   "result": "passed",
-  "finished_at": "2026-11-27T15:32:01Z",
+  "finished_at": "2026-11-27T16:31:16Z",
   "asset": {
     "kind": "binary",
-    "binary_sha256": "b4fed8a674d62ebf9286628425d94553afd5411de0d2e6ea089a568ce41e73a9"
+    "binary_sha256": "d8ebad8021fa5b606a8007166cfc3a56a544cdcfc21a0271da629726efc630c5"
   }
 }
