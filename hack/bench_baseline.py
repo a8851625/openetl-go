@@ -669,6 +669,7 @@ def validate_result(result, artifact_root=None):
         if version == 3:
             require(type(result["source"]["dirty"]) is bool, "missing actual dirty-source status")
             byte_count(result["source"]["files"], "source file count")
+            byte_count(result["hardware"]["memory_bytes"], "host memory bytes")
             require(result["hardware"]["container_engine"] in ("docker", "podman")
                     and isinstance(result["hardware"]["runtime_version"], str)
                     and result["hardware"]["runtime_version"], "missing actual container engine/version")
@@ -678,8 +679,10 @@ def validate_result(result, artifact_root=None):
                     and result["toolchain"]["python_version"], "missing actual measurement tool versions")
             require(result["cleanup"]["passed"] is True and result["cleanup"]["errors"] == [],
                     "owned-resource cleanup did not complete")
-            require(result["parameters"]["cpus"] == 2 and result["parameters"]["memory_bytes"] == 1024 * MIB
-                    and result["parameters"]["gomaxprocs"] == 2, "wrong measured runtime limits")
+            require(type(result["parameters"]["cpus"]) is int and result["parameters"]["cpus"] == 2
+                    and byte_count(result["parameters"]["memory_bytes"], "runtime memory limit") == 1024 * MIB
+                    and type(result["parameters"]["gomaxprocs"]) is int and result["parameters"]["gomaxprocs"] == 2,
+                    "wrong measured runtime limits")
             harness = result["harness_sha256"]
             require(set(harness) == {"bench-baseline.sh", "bench_baseline.py", "cmd/process-measure/main.go",
                                      "cmd/process-measure/main_test.go"}
@@ -718,6 +721,7 @@ def validate_result(result, artifact_root=None):
                 require(item["binary_bytes"] <= item["image_uncompressed_layer_bytes"],
                         "packaged binary exceeds the complete expanded image layers")
                 byte_count(item["engine_reported_image_bytes"], "engine-reported image", allow_zero=True)
+                byte_count(item["bytes"], "legacy image diagnostic", allow_zero=True)
                 require(item["bytes"] == item["engine_reported_image_bytes"], "legacy image diagnostic alias differs")
                 require(item["build_tags"] == VARIANTS[variant] and item["cgo_enabled"] is False,
                         "packaging variant differs")

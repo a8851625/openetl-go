@@ -711,8 +711,11 @@ class BudgetTests(unittest.TestCase):
                          lambda r: r["images"]["default"].update(binary_bytes=True),
                          lambda r: r["images"]["default"].update(binary_bytes=0),
                          lambda r: r["images"]["default"].update(binary_bytes=2**100),
+                         lambda r: r["images"]["default"].update(bytes=False, engine_reported_image_bytes=0),
                          lambda r: r.update(status="failed"),
                          lambda r: r["parameters"].update(memory_bytes=2 * 1024**3),
+                         lambda r: r["parameters"].update(memory_bytes=float(1024**3)),
+                         lambda r: r["hardware"].update(memory_bytes=float(8 * 1024**3)),
                          lambda r: r["harness_sha256"].pop("bench_baseline.py")]
             for change in mutations:
                 candidate = copy.deepcopy(result); change(candidate)

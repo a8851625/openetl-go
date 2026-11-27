@@ -225,3 +225,9 @@ Residual/follow-up: Round 5 only if a concrete bounded correction remains; no se
 - Explicit canary + same real low-policy fail/observation rollback steps are wired; actual new CI is pending. The first failed run stays recorded.
 - Resource documentation was staged through an IT-9-only index transform; user v2/history corrections remain uncommitted and preserved in the working-tree diff.
 - No allowlist, connector maturity, pipeline runtime, checkpoint/DLQ or release tag changes.
+
+### Round 4 final validity correction
+
+Final diff review found Python equality would admit `bytes=false` as the legacy alias of diagnostic 0 and float-valued v3 memory byte counts. A1/A5 require actual integer bytes. Added strict byte-count checks and both-mode negative cases; 38 tests pass on local Python and Linux Python 3.12 after the correction. Scope remains the existing EV-3.4 baseline/test allowance.
+
+Run 46023663634 (ef7da1e) is superseded by this correction and is not final acceptance. Final current CI must use the corrected implementation and the unchanged explicit policy; no skipped/cancelled run counts as pass.
