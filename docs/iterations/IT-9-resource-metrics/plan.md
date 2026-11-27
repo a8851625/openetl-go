@@ -73,6 +73,11 @@ Round 2 实测前置：本机 Podman 5.8.4 的 `save --format docker-archive` �
 报告记录忽略 alias 数量，完整原始 archive hash 保留。此为真实保存格式的必要兼容前置，
 不扩展 codec，不改变 config/layer 身份，也不改变 build 的 Docker format/HEALTHCHECK 契约。
 
+Round 2 的另一实际环境差异：VM 内原生 Linux `podman version` 只有 `Client`，因为该引擎 daemonless；
+macOS remote API 才同时返回 `Server`。本机 SSH 命令已证实该 shape。probe 对 native Linux
+以 `info.version` 记录真实 engine version，必须和 Linux CLI version 一致，标注 `daemonless-local`。
+不同版本或非 Linux 的 client-only 响应不能借此冒充 provider。Docker 仍要求其 Engine component 与 info/server 版本一致。
+
 拟增加 `hack/e2e-bench-image-metrics.sh`，通过现有 CONTAINER_CLI selector 执行一个 provider 的 probe。
 输入为任务拥有的同一保存归档、期望配置摘要和输出目录。仅 load／save／inspect 与归档度量，
 不需要运行该镜像内 Go 程序。
@@ -174,3 +179,15 @@ P1 文档／证据等指定路径。IT-9 的验收和交付文档不在允许列
 再次失败。EV-3.4 允许最小扩展该 checker 和最近的 `main_test.go`：只加入 IT-9 三件套／限定证据文档、
 resource-baseline 与 release-checklist 等本项 bookkeeping；代码／脚本／workflow 仍需重新认证。
 这是 A7/A9 的必要前置，不新增 roadmap 项；改动后跑 targeted Go race、strict descendant 负向和完整当前 candidate/CI。
+
+## EV-3.4 的已证实有界测试前置
+
+首次 PR #14 run `46017295606` 的 source storage/race/frontend/connector gates 已通过，
+但 exact-candidate 的 `hack/e2e-doris-source-order.sh` 在 MySQL 初始化期间的 Unix socket
+`SELECT 1` 返回成功后立即执行 GRANT，遇到临时 mysqld 停止／正式 mysqld 尚未启动的窗口：
+`ERROR 2002 ... Can't connect ... mysqld.sock`。实际 job `140571144753` 的 command.log 和失败 report 保留。
+
+EV-3.4 仅追加该脚本的启动 readiness 为允许文件：通过 TCP `127.0.0.1` 的已认证 SQL
+检查最终 MySQL（初始化临时实例使用 skip-networking），并在超时后明确 fail。
+不修改 Doris/source_order、CDC 位置或候选测量语义，不扩大其他 connector scope。
+以 shell syntax + 同一 mandatory exact-candidate path 的真实通过作为验收，完整 Delivery Passed 仍必需。

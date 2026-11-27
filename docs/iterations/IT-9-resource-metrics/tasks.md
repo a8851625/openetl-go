@@ -1,7 +1,7 @@
 # IT-9 领取任务与迭代容量
 
-> 主任务：EV-3，状态 `active`；1 位实现者、两周参考窗口。实施 Round: 2/5。
-> 用户已明确授权开发直至本迭代交付；EV-3.1 delivered；EV-3.2 已领取，其他增量仍 queued。状态沿用 `queued / active / blocked_external / delivered / deferred`。
+> 主任务：EV-3，状态 `active`；1 位实现者、两周参考窗口。实施 Round: 3/5。
+> 用户已明确授权开发直至本迭代交付；EV-3.1–.2 delivered；EV-3.3 已领取，EV-3.4 queued。状态沿用 `queued / active / blocked_external / delivered / deferred`。
 > 同一时间只有一个 EV-3 增量 active。验收见 [spec.md](./spec.md)，技术与允许文件见 [plan.md](./plan.md)。
 
 ## 目标、容量与关键路径
@@ -19,8 +19,8 @@ Sprint Goal：维护者拿到引擎无关、可追溯的资源度量，并能通
 | Round | Increment | 可观察结果 | 初始估算 | 依赖／状态 | 证据落点（实施时生成） |
 | --- | --- | --- | --- | --- | --- |
 | 1/5 | EV-3.1 | 归档进入 CLI 后输出可复核的规范化体积，完整 harness 支持 v3 与 v2 历史读取 | 8 h | 验收已通过；`delivered` | `evidence/archive-fixtures.md`、parser/CLI logs |
-| 2/5 | EV-3.2 | 同一个 default 镜像在真实不同引擎上结果可对账 | 8 h | .1 已交付；真实 Docker/Podman CI 输入可配置；`active` | `evidence/*-image-metrics.json`、`conformance.json` |
-| 3/5 | EV-3.3 | 用户选择 warning／enforce，预算与错误输入产生明确退出码 | 6 h | .2 的方法验证＋可信 v3 基线；`queued` | policy／budget-decision、positive/negative CLI logs |
+| 2/5 | EV-3.2 | 同一个 default 镜像在真实不同引擎上结果可对账 | 8 h | .1 已交付；真实 Docker/Podman 归档已对账；`delivered` | `evidence/*-image-metrics.json`、`conformance.json` |
+| 3/5 | EV-3.3 | 用户选择 warning／enforce，预算与错误输入产生明确退出码 | 6 h | .2 与 AMD64/ARM64 原生 v3 校准已通过；`active` | policy／budget-decision、positive/negative CLI logs |
 | 4/5 | EV-3.4 | 当前 CI 执行完整测量和体积灰度，报告、文档、Roadmap 一致 | 10 h | .1–.3；`queued` | baseline-v3、acceptance.md、当前 source＋candidate CI 链接 |
 | 5/5 | 本项缓冲／收口 | 只修当前验收暴露的有界问题或补必需 evidence | 8 h buffer | 有具体残余才使用；未领取 | 实际补验收与安全 handoff |
 
@@ -169,3 +169,27 @@ Residual/follow-up: EV-3.3 after actual conformance and trusted native v3 baseli
 - Actual CLI alias comparison and wrong-config probes returned the required exit 1 (`r2-alias-negative.json`, `r2-wrong-config.json`).
 - Two earlier real format failures are retained; the exact prerequisite and safe legacy alias rules are in plan.md.
 - Actual Docker+Podman CI and current native full v3 calibration are still pending; EV-3.2 remains active.
+
+## Round 2 Close / Round 3 Claim — 2026-11-27
+
+```text
+Round: 2/5
+Roadmap item: EV-3 (IT-9 / EV-3.2)
+Evidence: evidence/image-conformance.md, r2-conformance.json, r2-*-image-metrics.json, native calibrations, actual daemonless provider, 30 tests
+Result: delivered (two actual different engines; same original archive/config/6 diff IDs/147265024 expanded bytes; CLI comparison exit 0)
+Residual/follow-up: EV-3.4 current full CI must rerun fixed daemonless provider code and bounded MySQL fixture TCP readiness; original run failed and is preserved
+```
+
+```text
+Round: 3/5
+Roadmap item: EV-3 (IT-9 / EV-3.3)
+Profile/path: standalone packaging-startup-restore; default native linux/amd64 and linux/arm64 sizes
+Objective: 显式 policy 让观测超限 exit 0、体积强制超限 exit 1，错误测量/方法/单位/选择器不被预算警告掩盖
+Eligibility: EV-3.2 passed; clean native AMD64 CI merge 653ce171 and ARM64 branch d2d7c1d full v3 calibrations passed and share the actual build-input fingerprint
+Scope: hack/bench_baseline.py, hack/test_bench_baseline.py, hack/bench-budgets.json, IT-9 budget decision/acceptance/evidence and state
+Non-goals: time/RSS blocking, runtime admission/backpressure, extra connectors, cross-sink delivery guarantees, changes to workflows in this round
+Acceptance: EV-3.3 1–4 / A4+A5+A6; valid/low/missing/wrong-unit/wrong-policy CLI; v2/dirty/no applicable policy cannot enforce
+Evidence: Preserve calibration report hashes; derive limits as measured bytes ×1.25 rounded up to MiB; positive, low-policy, rollback observation and malformed-input outputs
+Result: active
+Residual/follow-up: EV-3.4 explicit CI enforcement, current source/candidate aggregate and documentation/strict source binding
+```

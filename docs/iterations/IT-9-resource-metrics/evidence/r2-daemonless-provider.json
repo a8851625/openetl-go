@@ -1,0 +1,20 @@
+{
+  "client": {
+    "APIVersion": "5.8.4",
+    "GitCommit": "5431df23c742e5edea35bef34eed696f4db0106b",
+    "Os": "linux",
+    "OsArch": "linux/arm64",
+    "Version": "5.8.4"
+  },
+  "connection": "daemonless-local",
+  "id": "podman",
+  "instance": "localhost.localdomain",
+  "server": {
+    "APIVersion": "5.8.4",
+    "Arch": "arm64",
+    "GitCommit": "5431df23c742e5edea35bef34eed696f4db0106b",
+    "Os": "linux",
+    "Version": "5.8.4"
+  },
+  "server_version": "5.8.4"
+}

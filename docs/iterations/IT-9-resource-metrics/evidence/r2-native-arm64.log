@@ -1,0 +1,13 @@
+Building current source: default
+Building current source: extism
+Building current source: nolua
+Building current source: extism-nolua
+Measuring health-ready startup and idle RSS: 1/3
+Measuring health-ready startup and idle RSS: 2/3
+Measuring health-ready startup and idle RSS: 3/3
+Creating and reconciling the offline restore fixture through the API
+Measuring offline restore and restored startup: 1/3
+Measuring offline restore and restored startup: 2/3
+Measuring offline restore and restored startup: 3/3
+Baseline passed: .bench-out/it9-native/result.json
+[exit code: 0]

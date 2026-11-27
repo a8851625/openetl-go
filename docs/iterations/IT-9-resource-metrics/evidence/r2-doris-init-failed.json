@@ -1,0 +1,19 @@
+{
+  "name": "hack/e2e-doris-source-order.sh",
+  "source_commit": "d2d7c1d40dd8e124b97076ab306077426866d8e1",
+  "image_id": "sha256:b7da031fe7e0960aad8c3b80ca8952062c58c058f2e572519319872a3c2b0553",
+  "execution_image_id": "sha256:75874c8b83f1980138e78988251e8e04d0e202eb53c768b362cea3caef896ab6",
+  "execution_config_id": "sha256:b7da031fe7e0960aad8c3b80ca8952062c58c058f2e572519319872a3c2b0553",
+  "binary_sha256": "adb34072b396141a40c3796a9b11000f887c73327ed4cb75dc9f784ef7bef098",
+  "started_at": "2026-11-27T14:43:19Z",
+  "finished_at": "2026-11-27T14:43:35Z",
+  "result": "failed",
+  "exit_code": 1,
+  "error": "mandatory case exited 1",
+  "log_sha256": "de293ad9c8c18e4dda039cb86ec8d8d127c8e53345c095d0511ebd4d3a7c263a",
+  "artifact_sha256": {},
+  "container_runtime": "Docker version 29.4.2, build 055a478",
+  "dependency_images": {
+    "docker.io/library/mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
+  }
+}

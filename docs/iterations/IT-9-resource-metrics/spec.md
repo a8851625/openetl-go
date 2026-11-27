@@ -1,7 +1,7 @@
 # IT-9：可信资源度量与预算控制
 
 > 状态：`active`；归属：EV-3。规划日期：2026-11-27；代码基线：`ee3797c`。
-> 用户选择：1 位实现者、两周参考窗口。用户已授权实施；Round: 2/5，EV-3.1 delivered，EV-3.2 active，其他增量 queued。
+> 用户选择：1 位实现者、两周参考窗口。用户已授权实施；Round: 3/5，EV-3.1–.2 delivered，EV-3.3 active，EV-3.4 queued。
 > 正式验收以 [ROADMAP](../../ROADMAP.zh.md) EV-3 为准；技术方案见 [plan.md](./plan.md)，领取顺序见 [tasks.md](./tasks.md)。
 
 ## 问题与用户结果

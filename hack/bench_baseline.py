@@ -486,17 +486,28 @@ def provider_identity(info, version):
         provider = "podman"
         actual_version = info.get("version", {}).get("Version")
         instance = info["host"].get("hostname")
+        connection = "remote-api"
+        if not server:
+            # Native Linux Podman is daemonless: version has Client only.
+            # Its info.version is the actual local engine, and must agree
+            # with a Linux CLI version, rather than an arbitrary executable.
+            require(client.get("Version") == actual_version
+                    and (client.get("Os") == "linux" or client.get("OsArch", "").startswith("linux/")),
+                    "daemonless Podman engine/client versions or platform disagree")
+            server = {**info["version"], "Os": info["host"].get("os"), "Arch": info["host"].get("arch")}
+            connection = "daemonless-local"
         require(server.get("Version") == actual_version, "Podman server versions disagree")
     else:
         components = server.get("Components", [])
         require(any(c.get("Name") == "Engine" for c in components)
                 and "podman" not in json.dumps(server).lower(), "unrecognized or aliased container engine")
         provider, actual_version, instance = "docker", info.get("ServerVersion"), info.get("ID")
+        connection = "engine-api"
         require(server.get("Version") == actual_version, "Docker server versions disagree")
     require(isinstance(actual_version, str) and actual_version
             and isinstance(client.get("Version"), str) and client["Version"], "missing actual engine versions")
     return {"id": provider, "server_version": actual_version, "server": server,
-            "client": client, "instance": instance}
+            "client": client, "instance": instance, "connection": connection}
 
 
 def canonical_image_content(metrics):

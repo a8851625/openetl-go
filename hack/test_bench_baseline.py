@@ -539,6 +539,11 @@ class EngineProbeTests(unittest.TestCase):
         podman_info = {"host": {"os": "linux", "hostname": "fixture-podman"}, "version": {"Version": "5.fixture"}}
         podman_version = {"Client": {"Version": "5.client"}, "Server": {"Version": "5.fixture"}}
         self.assertEqual(provider_identity(podman_info, podman_version)["id"], "podman")
+        daemonless = {"Client": {"Version": "5.fixture", "Os": "linux"}}
+        self.assertEqual(provider_identity(podman_info, daemonless)["connection"], "daemonless-local")
+        for client in ({"Version": "other", "Os": "linux"}, {"Version": "5.fixture", "Os": "darwin"}):
+            with self.subTest(client=client), self.assertRaisesRegex(MeasurementError, "daemonless"):
+                provider_identity(podman_info, {"Client": client})
         with self.assertRaisesRegex(MeasurementError, "versions disagree"):
             provider_identity(info, {**version, "Server": {**version["Server"], "Version": "different"}})
         with self.assertRaisesRegex(MeasurementError, "unrecognized"):
