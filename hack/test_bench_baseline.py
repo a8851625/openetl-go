@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Failure-boundary checks for the RA-8 measurement and CI parser."""
 import copy
+import gzip
+import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
-from bench_baseline import MeasurementError, VARIANTS, image_identity, parse_proc_status, validate_result, wait_ready
+import bench_baseline as baseline_module
+from bench_baseline import (Baseline, IMAGE_METHOD, MeasurementError, VARIANTS, image_identity,
+                            measure_image_archive, parse_proc_status, sanitize_image_inspect,
+                            validate_image_metrics, validate_result, wait_ready)
 
 
 def valid_result():
@@ -35,6 +44,113 @@ def valid_result():
                                                                  "native_max_rss": 50 * 1024, "peak_rss_bytes": 50 * 1024**2,
                                                                  "elapsed_seconds": 0.1}}],
                         "fixture": {"identity_sha256": "1" * 64, "records_verified": 1600, "peak_rss_bytes": 60 * 1024**2}}}
+
+
+def sha(body):
+    return hashlib.sha256(body).hexdigest()
+
+
+def json_bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def layer_tar(payload):
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        item = tarfile.TarInfo("app/main")
+        item.size, item.mtime, item.mode = len(payload), 0, 0o755
+        archive.addfile(item, io.BytesIO(payload))
+    return stream.getvalue()
+
+
+def write_tar(path, entries):
+    with tarfile.open(path, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for name, body in entries:
+            if isinstance(body, tarfile.TarInfo):
+                archive.addfile(body)
+            else:
+                item = tarfile.TarInfo(name)
+                item.size, item.mtime = len(body), 0
+                archive.addfile(item, io.BytesIO(body))
+
+
+def image_fixture(architecture="arm64", *, compressed=False, oci=False,
+                  payload=b"known-app-fixture", wrong_diff=False, media_type=None):
+    raw = [layer_tar(b"base-fixture"), layer_tar(payload)]
+    encoded = [gzip.compress(body, mtime=0) if compressed else body for body in raw]
+    diff_ids = ["sha256:" + sha(body) for body in raw]
+    config = {"architecture": architecture, "os": "linux", "rootfs": {"type": "layers", "diff_ids": diff_ids},
+              "config": {"Env": ["SECRET_SENTINEL=never_publish_this_value"]}}
+    if wrong_diff:
+        config["rootfs"]["diff_ids"] = ["sha256:" + "0" * 64, *diff_ids[1:]]
+    config_body = json_bytes(config)
+    config_sha = sha(config_body)
+    entries = []
+    if not oci:
+        config_path = config_sha + ".json"
+        entries.append((config_path, config_body))
+        names = []
+        for ordinal, body in enumerate(encoded):
+            name = "blobs/sha256/" + sha(body) if compressed else "layer-" + sha(body) + "/layer.tar"
+            entries.append((name, body))
+            names.append(name)
+        manifest = {"Config": config_path, "RepoTags": ["fixture:current"], "Layers": names}
+    else:
+        config_path = "blobs/sha256/" + config_sha
+        entries.append((config_path, config_body))
+        layers = []
+        for body in encoded:
+            digest = sha(body)
+            entries.append(("blobs/sha256/" + digest, body))
+            layers.append({"mediaType": media_type or "application/vnd.oci.image.layer.v1.tar" + ("+gzip" if compressed else ""),
+                           "digest": "sha256:" + digest, "size": len(body)})
+        image = {"schemaVersion": 2,
+                 "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                            "digest": "sha256:" + config_sha, "size": len(config_body)}, "layers": layers}
+        body = json_bytes(image)
+        image_sha = sha(body)
+        entries.append(("blobs/sha256/" + image_sha, body))
+        manifest = {"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": "sha256:" + image_sha,
+                    "size": len(body), "platform": {"os": "linux", "architecture": architecture}}
+    return {"entries": entries, "manifest": manifest, "config_sha": config_sha,
+            "raw": raw, "encoded": encoded, "payload": payload}
+
+
+def fixture_archive(path, images, *, oci=False, extra=()):
+    entries = {}
+    for image in images:
+        entries.update(image["entries"])
+    if oci:
+        entries["oci-layout"] = json_bytes({"imageLayoutVersion": "1.0.0"})
+        entries["index.json"] = json_bytes({"schemaVersion": 2, "manifests": [i["manifest"] for i in images]})
+    else:
+        entries["manifest.json"] = json_bytes([i["manifest"] for i in images])
+    write_tar(path, [*entries.items(), *extra])
+
+
+def v3_result(root):
+    result = valid_result()
+    result["schema_version"] = 3
+    result["source"].update({"dirty": False, "files": 1})
+    result["hardware"].update({"container_engine": "docker", "runtime_version": "29.fixture"})
+    result["toolchain"].update({"container_client_version": "29.fixture", "python_version": "3.fixture"})
+    result["cleanup"] = {"passed": True, "errors": [], "images_retained": False}
+    for variant, tags in VARIANTS.items():
+        image = image_fixture(payload=("fixture-" + variant).encode(), compressed=True)
+        path = root / ("image-" + variant + ".tar")
+        fixture_archive(path, [image])
+        item = result["images"][variant]
+        item.update(measure_image_archive(path, image["config_sha"]))
+        item.update({"engine_reported_image_bytes": item["bytes"], "image_archive_path": path.name,
+                     "build_tags": tags, "cgo_enabled": False, "binary_bytes": len(image["payload"]),
+                     "binary_sha256": sha(image["payload"])})
+    default = result["images"]["default"]
+    result["runtime"].update({"image_config_sha256": default["image_config_sha256"],
+                              "image_binary_sha256": default["binary_sha256"]})
+    for key in ("cold_trials", "restore_trials"):
+        for trial in result["runtime"][key]:
+            trial["binary_sha256"] = default["binary_sha256"]
+    return result
 
 
 class ReadinessTests(unittest.TestCase):
@@ -134,6 +250,259 @@ class ResultTests(unittest.TestCase):
             failed = subprocess.run(command, capture_output=True, text=True)
             self.assertNotEqual(failed.returncode, 0)
             self.assertIn("::error::", failed.stderr)
+
+
+class ArchiveMetricTests(unittest.TestCase):
+    def test_docker_and_oci_raw_and_gzip_have_the_same_expanded_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            expected = None
+            for oci in (False, True):
+                for compressed in (False, True):
+                    image = image_fixture(oci=oci, compressed=compressed)
+                    path = Path(directory) / f"{oci}-{compressed}.tar"
+                    fixture_archive(path, [image], oci=oci)
+                    result = measure_image_archive(path, "sha256:" + image["config_sha"])
+                    validate_image_metrics(result)
+                    self.assertEqual(result["method"], IMAGE_METHOD)
+                    self.assertEqual(result["unit"], "bytes")
+                    self.assertEqual(result["image_uncompressed_layer_bytes"], sum(len(b) for b in image["raw"]))
+                    self.assertEqual(result["image_archive_sha256"], sha(path.read_bytes()))
+                    self.assertEqual(result["image_archive_bytes"], path.stat().st_size)
+                    self.assertEqual([v["diff_id"] for v in result["layer_inventory"]],
+                                     ["sha256:" + sha(b) for b in image["raw"]])
+                    expected = expected or result["image_uncompressed_layer_bytes"]
+                    self.assertEqual(result["image_uncompressed_layer_bytes"], expected)
+                    self.assertNotIn("never_publish_this_value", json.dumps(result))
+                    self.assertNotIn("Env", json.dumps(result))
+
+    def test_selects_one_platform_and_rejects_unknown_or_ambiguous_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for oci in (False, True):
+                arm = image_fixture(oci=oci)
+                amd = image_fixture("amd64", oci=oci, payload=b"different-platform" * 4000)
+                path = Path(directory) / f"multi-{oci}.tar"
+                fixture_archive(path, [arm, amd], oci=oci)
+                result = measure_image_archive(path, arm["config_sha"])
+                self.assertEqual(result["architecture"], "arm64")
+                self.assertEqual(result["image_uncompressed_layer_bytes"], sum(map(len, arm["raw"])))
+                with self.assertRaisesRegex(MeasurementError, "selection"):
+                    measure_image_archive(path, "0" * 64)
+                with self.assertRaisesRegex(MeasurementError, "selection"):
+                    measure_image_archive(path, arm["config_sha"], "amd64")
+                with self.assertRaises(MeasurementError):
+                    measure_image_archive(path)
+            path = Path(directory) / "ambiguous.tar"
+            arm = image_fixture()
+            fixture_archive(path, [arm, image_fixture(payload=b"second-arm-image")])
+            with self.assertRaisesRegex(MeasurementError, "ambiguous"):
+                measure_image_archive(path, expected_architecture="arm64")
+
+    def test_digest_missing_blob_unsafe_path_and_unknown_encoding_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.tar"
+            wrong = image_fixture(wrong_diff=True)
+            fixture_archive(path, [wrong])
+            with self.assertRaisesRegex(MeasurementError, "diff ID"):
+                measure_image_archive(path, wrong["config_sha"])
+            image = image_fixture()
+            missing = copy.deepcopy(image)
+            missing["entries"] = missing["entries"][:-1]
+            fixture_archive(path, [missing])
+            with self.assertRaisesRegex(MeasurementError, "missing"):
+                measure_image_archive(path, image["config_sha"])
+            for name in ("../escape", "/absolute", "a/../../escape", "a\\escape"):
+                fixture_archive(path, [image], extra=[(name, b"not-extracted")])
+                with self.subTest(name=name), self.assertRaisesRegex(MeasurementError, "unsafe"):
+                    measure_image_archive(path, image["config_sha"])
+            unsupported = image_fixture(oci=True, media_type="application/vnd.oci.image.layer.v1.tar+zstd")
+            fixture_archive(path, [unsupported], oci=True)
+            with self.assertRaisesRegex(MeasurementError, "encoding"):
+                measure_image_archive(path, unsupported["config_sha"])
+            self.assertFalse((Path(directory) / "escape").exists())
+
+    def test_links_duplicates_malformed_metadata_and_size_limits_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.tar"
+            image = image_fixture(compressed=True)
+            link = tarfile.TarInfo("link")
+            link.type, link.linkname = tarfile.SYMTYPE, "../../secret"
+            fixture_archive(path, [image], extra=[("link", link)])
+            with self.assertRaisesRegex(MeasurementError, "links"):
+                measure_image_archive(path, image["config_sha"])
+            fixture_archive(path, [image], extra=[image["entries"][0]])
+            with self.assertRaisesRegex(MeasurementError, "duplicate"):
+                measure_image_archive(path, image["config_sha"])
+            fixture_archive(path, [image])
+            with mock.patch.object(baseline_module, "MAX_LAYER_BYTES", 4096), self.assertRaisesRegex(MeasurementError, "limit"):
+                measure_image_archive(path, image["config_sha"])
+            with mock.patch.object(baseline_module, "MAX_METADATA_BYTES", 64), self.assertRaisesRegex(MeasurementError, "limit"):
+                measure_image_archive(path, image["config_sha"])
+            path.write_bytes(b"not a tar archive")
+            with self.assertRaises(MeasurementError):
+                measure_image_archive(path, image["config_sha"])
+
+    def test_changed_archive_is_rejected_after_reading(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.tar"
+            image = image_fixture()
+            fixture_archive(path, [image])
+            original = baseline_module._hash_file
+            calls = 0
+            def mutate_after_first_hash(source):
+                nonlocal calls
+                result = original(source)
+                calls += 1
+                if calls == 1:
+                    with path.open("r+b") as output:
+                        output.seek(-1, 2)
+                        output.write(b"\x01")
+                return result
+            with mock.patch.object(baseline_module, "_hash_file", side_effect=mutate_after_first_hash), \
+                    self.assertRaisesRegex(MeasurementError, "changed"):
+                measure_image_archive(path, image["config_sha"])
+
+    def test_oci_descriptor_size_and_encoded_digest_mismatches_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.tar"
+            image = image_fixture(oci=True, compressed=True)
+            bad_size = copy.deepcopy(image)
+            bad_size["manifest"]["size"] += 1
+            fixture_archive(path, [bad_size], oci=True)
+            with self.assertRaisesRegex(MeasurementError, "descriptor size"):
+                measure_image_archive(path, image["config_sha"])
+            corrupted = copy.deepcopy(image)
+            name, body = corrupted["entries"][0]
+            corrupted["entries"][0] = (name, body.replace(b"arm64", b"amd64"))
+            fixture_archive(path, [corrupted], oci=True)
+            with self.assertRaisesRegex(MeasurementError, "metadata digest"):
+                measure_image_archive(path, image["config_sha"])
+
+    def test_truncated_and_corrupt_gzip_and_metadata_do_not_leak_contents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.tar"
+            image = image_fixture(compressed=True)
+            for transform in (lambda b: b[:-5], lambda b: b[:-8] + bytes(8)):
+                candidate = copy.deepcopy(image)
+                name, body = candidate["entries"][-1]
+                candidate["entries"][-1] = (name, transform(body))
+                fixture_archive(path, [candidate])
+                with self.subTest(transform=transform), self.assertRaises(MeasurementError) as error:
+                    measure_image_archive(path, image["config_sha"])
+                self.assertNotIn("never_publish_this_value", str(error.exception))
+            body = b'{"config":{"Env":["never_publish_this_value"]},'
+            config_sha = sha(body)
+            write_tar(path, [(config_sha + ".json", body),
+                             ("manifest.json", json_bytes([{"Config": config_sha + ".json", "Layers": []}]))])
+            with self.assertRaisesRegex(MeasurementError, "metadata JSON") as error:
+                measure_image_archive(path, config_sha)
+            self.assertNotIn("never_publish_this_value", str(error.exception))
+
+    def test_pax_metadata_and_directory_counts_are_bounded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.tar"
+            image = image_fixture()
+            directory_entry = tarfile.TarInfo("many-directories")
+            directory_entry.type = tarfile.DIRTYPE
+            fixture_archive(path, [image], extra=[(directory_entry.name, directory_entry)])
+            with mock.patch.object(baseline_module, "MAX_MEMBERS", len(image["entries"]) + 1), \
+                    self.assertRaisesRegex(MeasurementError, "too many"):
+                measure_image_archive(path, image["config_sha"])
+            with tarfile.open(path, mode="w", format=tarfile.PAX_FORMAT) as archive:
+                item = tarfile.TarInfo("large-pax")
+                item.pax_headers = {"comment": "x" * 1024}
+                archive.addfile(item)
+            with mock.patch.object(baseline_module, "MAX_METADATA_BYTES", 512), \
+                    self.assertRaisesRegex(MeasurementError, "metadata exceeds"):
+                measure_image_archive(path, image["config_sha"])
+
+    def test_archive_cli_passes_and_wrong_config_produces_failed_report_without_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "fixture.tar"
+            image = image_fixture(oci=True, compressed=True)
+            fixture_archive(path, [image], oci=True)
+            command = [sys.executable, str(Path(baseline_module.__file__)), "--image-archive", str(path)]
+            good = subprocess.run([*command, "--image-config-digest", image["config_sha"], "--out", str(root / "good")],
+                                  capture_output=True, text=True)
+            self.assertEqual(good.returncode, 0, good.stderr)
+            report = json.loads((root / "good/result.json").read_text())
+            self.assertEqual(report["format"], "openetl-image-metrics/v1")
+            self.assertEqual(report["status"], "passed")
+            self.assertEqual(report["metrics"]["image_uncompressed_layer_bytes"], sum(map(len, image["raw"])))
+            bad = subprocess.run([*command, "--image-config-digest", "0" * 64, "--out", str(root / "bad")],
+                                 capture_output=True, text=True)
+            self.assertEqual(bad.returncode, 1, bad.stderr)
+            failed = (root / "bad/result.json").read_text()
+            self.assertEqual(json.loads(failed)["status"], "failed")
+            self.assertNotIn("never_publish_this_value", failed + good.stdout + bad.stderr)
+            missing = subprocess.run([*command, "--out", str(root / "missing")], capture_output=True, text=True)
+            self.assertEqual(missing.returncode, 1)
+            self.assertEqual(json.loads((root / "missing/result.json").read_text())["status"], "failed")
+
+
+class V3EvidenceTests(unittest.TestCase):
+    def test_v3_checks_preserved_archives_and_v2_remains_readable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = v3_result(root)
+            self.assertEqual(validate_result(result, artifact_root=root), [])
+            (root / "result.json").write_text(json.dumps(result))
+            command = [sys.executable, baseline_module.__file__, "--check", str(root / "result.json")]
+            proc = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            corrupted = root / result["images"]["default"]["image_archive_path"]
+            corrupted.write_bytes(b"missing original bytes")
+            proc = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 1)
+            self.assertEqual(validate_result(valid_result()), [])
+
+    def test_v3_units_inventory_variant_cleanup_and_executable_mismatches_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = v3_result(Path(directory))
+            mutations = [
+                lambda r: r["images"]["default"].update(unit="MiB"),
+                lambda r: r["images"]["default"].update(image_uncompressed_layer_bytes=1),
+                lambda r: r["images"]["default"].update(build_tags="nolua"),
+                lambda r: r["images"]["default"].update(image_archive_path="../escape.tar"),
+                lambda r: r["cleanup"].update(passed=False, errors=["failed"]),
+                lambda r: r["runtime"]["cold_trials"][0].update(binary_sha256="0" * 64),
+                lambda r: r["runtime"].update(image_config_sha256="0" * 64),
+                lambda r: r["hardware"].update(container_engine="fake-engine"),
+            ]
+            for change in mutations:
+                candidate = copy.deepcopy(result)
+                change(candidate)
+                with self.subTest(change=change), self.assertRaises(MeasurementError):
+                    validate_result(candidate)
+
+    def test_inspect_sanitization_and_command_log_never_store_env(self):
+        raw = json.dumps([{"Id": "sha256:" + "a" * 64, "Size": 10, "Architecture": "arm64", "Os": "linux",
+                           "Config": {"Env": ["TOKEN=secret-inspect-sentinel"], "Labels": {"private": "secret-inspect-sentinel"}}}])
+        self.assertNotIn("secret-inspect-sentinel", sanitize_image_inspect(raw))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); out = root / "out"; out.mkdir(); private = root / "private"; private.mkdir()
+            args = SimpleNamespace(root=root, out=out, trials=3, settle_seconds=10, idle_samples=5, restore_pipelines=16)
+            baseline = Baseline(args, private)
+            with mock.patch.object(baseline_module.subprocess, "run", return_value=SimpleNamespace(stdout=raw, stderr="", returncode=0)):
+                baseline.run(["fixture", "image", "inspect"], sanitizer=sanitize_image_inspect)
+            self.assertNotIn("secret-inspect-sentinel", (out / "command-001.log").read_text())
+
+    def test_cleanup_failure_cannot_be_a_successful_baseline(self):
+        class FailedCleanup:
+            def __init__(self, args, private):
+                self.result = valid_result()
+            def snapshot(self): pass
+            def hardware(self): pass
+            def build(self): pass
+            def measure(self): pass
+            def cleanup(self):
+                raise MeasurementError("owned cleanup failed")
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "out"
+            with mock.patch.object(baseline_module, "Baseline", FailedCleanup), \
+                    mock.patch.object(sys, "argv", ["bench", "--out", str(out)]):
+                self.assertEqual(baseline_module.main(), 1)
+            self.assertEqual(json.loads((out / "result.json").read_text())["status"], "failed")
 
 
 if __name__ == "__main__":

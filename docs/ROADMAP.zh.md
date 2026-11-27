@@ -1,9 +1,9 @@
 # OpenETL-Go Roadmap
 
 > 当前执行快照（2026-11-27，规划代码基线 `ee3797c`；已发布基线 v0.2.12-beta.21）：
-> P1 技术窗口五项全部 `delivered`，原 Round 5/5 已收口；当前无 active 主任务。
+> P1 技术窗口五项全部 `delivered`，原 Round 5/5 已收口；当前唯一 active 主任务为 IT-9 / EV-3。
 > 当前迭代为 IT-9 / EV-3 可信资源度量与预算控制，状态 `active`；用户选择 1 位实现者、两周参考窗口。
-> 用户已明确授权开发直至迭代完整交付；实施 Round: 1/5，EV-3.1 active。
+> 用户已明确授权开发直至迭代完整交付；实施 Round: 2/5，EV-3.1 delivered，EV-3.2 active。
 > UI-E 的外部用户研究继续 `blocked_external`，用户明确要求先完成技术修复。
 > EV-3 内部度量缺陷已进入实施；真实环境缺口按增量记录。MaxCompute P0 保持 `deferred`。
 >
@@ -45,7 +45,7 @@ delivered。EV-3 与运行历史遗留行是本窗口之外的 P2。
 用户在后续 Roadmap 方向讨论后要求规划下一迭代，并选择 1 位实现者、两周参考窗口。
 本轮以既有 EV-3 为唯一主任务，结果是“资源度量可复核、warning／强制预算的退出码可解释”。
 规划文件见 [spec](./iterations/IT-9-resource-metrics/spec.md)、[plan](./iterations/IT-9-resource-metrics/plan.md)、
-[tasks](./iterations/IT-9-resource-metrics/tasks.md)。EV-3.1 已领取；用户后续明确授权开始开发，持续到本迭代全部验收闭合。
+[tasks](./iterations/IT-9-resource-metrics/tasks.md)。EV-3.1 已交付，EV-3.2 已领取；用户明确授权开始开发，持续到本迭代全部验收闭合。
 
 四个有序增量为归档／v3 口径、真实双引擎对账、显式预算 policy、CI 灰度与证据收口。
 承诺估算 32 理想小时，预留 8 小时（20%）；每天 4 专注小时为容量假设，不代表历史 velocity。
@@ -2703,12 +2703,12 @@ integration job `139341305228` 的 Run integration tests 和 job conclusion 均�
 
 ### EV-3：resource-baseline 的 CI 阈值决策（数据已足，结论为「暂维持 warning」）
 
-状态：`active`（2026-11-27 用户明确授权实施 IT-9；Round 1/5 领取 EV-3.1，其他增量仍 queued）
+状态：`active`（2026-11-27 用户明确授权实施 IT-9；Round 2/5；EV-3.1 delivered，EV-3.2 active，其他增量仍 queued）
 
 **规划与状态纠正**：用户要求规划下一迭代，选择 1 人／两周；沿用本项既有优先级。
 首项以固定归档／CLI 验证内部计量，不依赖远端凭据，因此不继续标为外部阻塞。
 `hardware.runtime_version` 已存在，日志自污染已修复；尚未解决的是 `image_identity` 将 `inspect.Size`
-直接当作统一 bytes，以及缺少明确的预算强制模式。用户已授权实施，当前只有 EV-3.1 一个 active 增量。
+直接当作统一 bytes，以及缺少明确的预算强制模式。用户已授权实施，EV-3.1 的归档／CLI／兼容验收已通过；当前只有 EV-3.2 一个 active 增量。
 实际缺 Docker／Podman 服务、镜像／网络或原始归档时，对应必需验收须写明 owner、输入与 unblock probe，不能当作 pass。
 
 详见 [bench-gate-decision.md](./bench-gate-decision.md)。要点：
@@ -2744,12 +2744,12 @@ integration job `139341305228` 的 Run integration tests 和 job conclusion 均�
 
 | 增量 | 一个可观察结果 | 状态 | 规划 Round |
 | --- | --- | --- | --- |
-| EV-3.1 | 归档经 CLI 输出可复核规范化体积，完整 harness 支持 v3 与 v2 历史读取 | `active` | 1/5 |
-| EV-3.2 | 真实不同引擎读取同一 default 镜像后可对账 | `queued` | 2/5 |
+| EV-3.1 | 归档经 CLI 输出可复核规范化体积，完整 harness 支持 v3 与 v2 历史读取 | `delivered` | 1/5 |
+| EV-3.2 | 真实不同引擎读取同一 default 镜像后可对账 | `active` | 2/5 |
 | EV-3.3 | policy／warning／enforce 的适用范围与退出码明确 | `queued` | 3/5 |
 | EV-3.4 | 当前 CI、体积灰度、文档与接受矩阵收口 | `queued` | 4/5 |
 
-规划完成不算实现交付；全部必需验收通过后才将 EV-3／IT-9 置 delivered。
+EV-3.1 证据见 [archive-fixtures.md](./iterations/IT-9-resource-metrics/evidence/archive-fixtures.md)：本机／Linux Python 3.12 各 25 tests 和四种固定归档 CLI 通过；真实保存归档 parser 通过。fixture 不算 native runtime 或双引擎认证。全部必需验收通过后才将 EV-3／IT-9 置 delivered。
 第五轮只用于当前残余；若必需环境缺失，按该增量的 owner／unblock test 交接，不能以测试存在或 fixture 通过宣称闭合。
 
 ## 有界后续

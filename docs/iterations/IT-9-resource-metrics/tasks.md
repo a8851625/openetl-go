@@ -1,7 +1,7 @@
 # IT-9 领取任务与迭代容量
 
-> 主任务：EV-3，状态 `active`；1 位实现者、两周参考窗口。实施 Round: 1/5。
-> 用户已明确授权开发直至本迭代交付；EV-3.1 已领取，其他增量仍 queued。状态沿用 `queued / active / blocked_external / delivered / deferred`。
+> 主任务：EV-3，状态 `active`；1 位实现者、两周参考窗口。实施 Round: 2/5。
+> 用户已明确授权开发直至本迭代交付；EV-3.1 delivered；EV-3.2 已领取，其他增量仍 queued。状态沿用 `queued / active / blocked_external / delivered / deferred`。
 > 同一时间只有一个 EV-3 增量 active。验收见 [spec.md](./spec.md)，技术与允许文件见 [plan.md](./plan.md)。
 
 ## 目标、容量与关键路径
@@ -18,8 +18,8 @@ Sprint Goal：维护者拿到引擎无关、可追溯的资源度量，并能通
 
 | Round | Increment | 可观察结果 | 初始估算 | 依赖／状态 | 证据落点（实施时生成） |
 | --- | --- | --- | --- | --- | --- |
-| 1/5 | EV-3.1 | 归档进入 CLI 后输出可复核的规范化体积，完整 harness 支持 v3 与 v2 历史读取 | 8 h | 当前已领取；`active` | `evidence/archive-fixtures.md`、parser/CLI logs |
-| 2/5 | EV-3.2 | 同一个 default 镜像在真实不同引擎上结果可对账 | 8 h | .1＋两个实际 provider／同一归档；`queued` | `evidence/*-image-metrics.json`、`conformance.json` |
+| 1/5 | EV-3.1 | 归档进入 CLI 后输出可复核的规范化体积，完整 harness 支持 v3 与 v2 历史读取 | 8 h | 验收已通过；`delivered` | `evidence/archive-fixtures.md`、parser/CLI logs |
+| 2/5 | EV-3.2 | 同一个 default 镜像在真实不同引擎上结果可对账 | 8 h | .1 已交付；真实 Docker/Podman CI 输入可配置；`active` | `evidence/*-image-metrics.json`、`conformance.json` |
 | 3/5 | EV-3.3 | 用户选择 warning／enforce，预算与错误输入产生明确退出码 | 6 h | .2 的方法验证＋可信 v3 基线；`queued` | policy／budget-decision、positive/negative CLI logs |
 | 4/5 | EV-3.4 | 当前 CI 执行完整测量和体积灰度，报告、文档、Roadmap 一致 | 10 h | .1–.3；`queued` | baseline-v3、acceptance.md、当前 source＋candidate CI 链接 |
 | 5/5 | 本项缓冲／收口 | 只修当前验收暴露的有界问题或补必需 evidence | 8 h buffer | 有具体残余才使用；未领取 | 实际补验收与安全 handoff |
@@ -136,4 +136,28 @@ Acceptance: A1/A4/A8，见 EV-3.1 的四项验收；CLI和内容/路径/单位/�
 Evidence: 待实际 parser/CLI tests 与原始日志；fixture结果不宣称真实runtime认证
 Result: active
 Residual/follow-up: EV-3.2；EV-3.4 strict bookkeeping 前置已在plan记录
+```
+
+## Round 1 Close / Round 2 Claim — 2026-11-27
+
+```text
+Round: 1/5
+Roadmap item: EV-3 (IT-9 / EV-3.1)
+Evidence: evidence/archive-fixtures.md, archive-fixtures.json, r1-parser-tests.log, r1-python312-tests.log, r1-real-archive-metrics.json
+Result: delivered (25 tests on local Python and Linux Python 3.12; 4 deterministic CLI cases; actual preserved archive parser exit 0)
+Residual/follow-up: EV-3.2 actual provider conformance; EV-3.4 native full baseline. No runtime certification claimed by fixtures.
+```
+
+```text
+Round: 2/5
+Roadmap item: EV-3 (IT-9 / EV-3.2)
+Profile/path: image-only Docker/Podman conformance; native baseline is a separate input
+Objective: 同一 default 保存归档经过两个真实 provider 后，config、architecture、diff IDs 与展开层字节一致
+Eligibility: EV-3.1 passed; GitHub Actions Docker Engine and installable Podman available; local docker is Podman alias and is not a second engine
+Scope: hack/e2e-bench-image-metrics.sh, necessary baseline identity/tests, _gate.yml provider tools/probe/retention, IT-9 evidence and status
+Non-goals: 启动跨架构程序、不同主机性能排名、生产依赖、预算阈值或 connector changes
+Acceptance: EV-3.2 checks 1–4 / A3+A8; wrong config, CLI alias, content mutation and cleanup negative cases
+Evidence: Pending actual two-provider JSON, archives and conformance; source baseline may also supply native v3 calibration for EV-3.3
+Result: active
+Residual/follow-up: EV-3.3 after actual conformance and trusted native v3 baseline
 ```
