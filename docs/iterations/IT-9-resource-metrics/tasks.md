@@ -1,7 +1,7 @@
 # IT-9 领取任务与迭代容量
 
-> 主任务：EV-3，状态 `delivered`；1 位实现者、两周参考窗口。实际 Round: 4/5，第五轮未使用。
-> 用户已明确授权开发直至本迭代交付；EV-3.1–.4 delivered；本迭代没有 active 增量。状态沿用 `queued / active / blocked_external / delivered / deferred`。
+> 主任务：EV-3，状态 `active`；1 位实现者、两周参考窗口。当前 Round: 5/5，有界 fixture health 补验收。
+> 用户已明确授权开发直至本迭代交付；EV-3.1–.3 delivered；EV-3.4 的当前 HEAD 补验收 active。状态沿用 `queued / active / blocked_external / delivered / deferred`。
 > 同一时间只有一个 EV-3 增量 active。验收见 [spec.md](./spec.md)，技术与允许文件见 [plan.md](./plan.md)。
 
 ## 目标、容量与关键路径
@@ -250,3 +250,23 @@ Residual/follow-up: none within EV-3; only named evidence/bookkeeping follows fr
 Mandatory proof and complete file inventory: [evidence/acceptance.md](./evidence/acceptance.md).
 原始 CI/native/candidate refs 没有改写成彼此；source merge 与 candidate branch 各自记录。
 旧失败/被替换 run 保留并不计 pass；所有新增代码与脚本在冻结实现的全量 CI 中实际通过。
+
+## Round 5 Claim — 2026-11-28
+
+```text
+Round: 5/5
+Roadmap item: EV-3 (IT-9 / EV-3.4-F1 bounded acceptance correction)
+Profile/path: dev MySQL fixture health -> existing mandatory CDC candidate certification
+Objective: 初始化临时 socket server 不得被 dev MySQL SQL healthcheck 宣称 healthy，CDC target setup 只在最终 TCP server 可用后执行
+Eligibility: current HEAD run 46029555087 case-3 actual ERROR2002 and the shared localhost health probe have been inspected; fifth-round buffer is unused
+Scope: docker-compose.dev.yml mysql-source healthcheck host only; owned temporary fixture/metadata logs; IT-9/Roadmap/index and canonical same-candidate evidence; no runtime or release recipe
+Non-goals: changing CDC delivery/data, source/sink contracts, other connector families, production compose, new budget or allowlist
+Acceptance: actual temp socket SELECT1 pass/TCP SELECT1 fail; final TCP/health pass; current CDC case and every source/candidate/Delivery gate pass; strict source binding and user-change preservation
+Evidence: pending isolated native MySQL phase probe and corrected-current full CI; earlier failed case command.log/result retained
+Result: active
+Residual/follow-up: close this round only; no sixth increment automatically
+```
+
+### Round 5 preflight evidence
+
+Actual native MySQL phase probe passed: temporary initialization socket SQL exit 0, TCP SQL/health nonzero and not healthy; final TCP SQL/health exit 0 and healthy. Owned container/volume cleanup passed; see `evidence/r5-mysql-health-probe.json`. Dev Compose YAML parses, diff check passes. This is a controlled fixture phase probe, not CDC runtime or throughput certification. Corrected-current full CI remains required.

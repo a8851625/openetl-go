@@ -1,0 +1,29 @@
+{
+  "cleanup": {
+    "errors": [],
+    "passed": true
+  },
+  "container": "openetl-it9-r5-health-15c4fdef080c",
+  "finished_at": "2026-11-27T16:17:39Z",
+  "mysql_image_architecture": "arm64",
+  "phases": [
+    {
+      "health_status": "starting",
+      "phase": "temporary initialization server",
+      "result": "passed",
+      "socket_sql_exit": 0,
+      "tcp_health_exit": 1,
+      "tcp_sql_exit": 1
+    },
+    {
+      "health_status": "healthy",
+      "phase": "final server",
+      "result": "passed",
+      "tcp_health_exit": 0,
+      "tcp_sql_exit": 0
+    }
+  ],
+  "scope": "isolated MySQL initialization/final-server TCP health semantics",
+  "started_at": "2026-11-27T16:17:12Z",
+  "status": "passed"
+}

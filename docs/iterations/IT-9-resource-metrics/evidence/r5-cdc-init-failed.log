@@ -1,0 +1,141 @@
+==> Skip image build (E2E_SKIP_BUILD=1, using sha256:ed6d144c40019354a4ee0503bde3b008667a41f4ed35ade174ebb2075dbe8549)
+==> Start MySQL source
+time="2026-11-27T16:07:15Z" level=warning msg="/tmp/openetl-candidate/results/hack__e2e-cdc-mysql.sh/source/docker-compose.dev.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+ Image docker.io/library/mysql:8.0 Pulling 
+ edf85873f64e Pulling fs layer 0B
+ 297d04cfe470 Pulling fs layer 0B
+ 96d30d9fbee8 Pulling fs layer 0B
+ 4c8a3e0d4e4b Pulling fs layer 0B
+ e3e5d1ac74c1 Pulling fs layer 0B
+ 0d74d296605b Pulling fs layer 0B
+ 7534d1db9f8d Pulling fs layer 0B
+ 6ef6c7b50a93 Pulling fs layer 0B
+ 49ec2dab01d9 Pulling fs layer 0B
+ a63160a5eda1 Pulling fs layer 0B
+ ab24264a27e9 Pulling fs layer 0B
+ 297d04cfe470 Download complete 0B
+ 6ef6c7b50a93 Download complete 0B
+ 0d74d296605b Download complete 0B
+ 4c8a3e0d4e4b Download complete 0B
+ 7534d1db9f8d Download complete 0B
+ ab24264a27e9 Download complete 0B
+ e3e5d1ac74c1 Download complete 0B
+ 96d30d9fbee8 Download complete 0B
+ a63160a5eda1 Downloading 20.97MB
+ 49ec2dab01d9 Downloading 17.83MB
+ edf85873f64e Downloading 20.97MB
+ a63160a5eda1 Downloading 42.99MB
+ 49ec2dab01d9 Downloading 33.55MB
+ af166387641d Downloading 15.43MB
+ edf85873f64e Downloading 44.04MB
+ 796812c73292 Downloading 34.91kB
+ a63160a5eda1 Downloading 49.93MB
+ 49ec2dab01d9 Downloading 54.53MB
+ af166387641d Downloading 15.43MB
+ edf85873f64e Downloading 47.31MB
+ 796812c73292 Download complete 0B
+ a63160a5eda1 Downloading 49.93MB
+ 49ec2dab01d9 Downloading 95.42MB
+ af166387641d Downloading 15.43MB
+ edf85873f64e Downloading 47.31MB
+ a63160a5eda1 Downloading 49.93MB
+ 49ec2dab01d9 Downloading 129.4MB
+ af166387641d Downloading 15.43MB
+ edf85873f64e Downloading 47.31MB
+ af166387641d Downloading 15.43MB
+ edf85873f64e Downloading 47.31MB
+ a63160a5eda1 Downloading 49.93MB
+ 49ec2dab01d9 Downloading 129.4MB
+ a63160a5eda1 Downloading 49.93MB
+ 49ec2dab01d9 Downloading 129.4MB
+ edf85873f64e Downloading 47.31MB
+ edf85873f64e Downloading 47.31MB
+ a63160a5eda1 Downloading 49.93MB
+ 49ec2dab01d9 Downloading 129.4MB
+ a63160a5eda1 Downloading 49.93MB
+ 49ec2dab01d9 Downloading 129.4MB
+ af166387641d Download complete 0B
+ edf85873f64e Downloading 47.31MB
+ a63160a5eda1 Downloading 49.93MB
+ 49ec2dab01d9 Downloading 129.4MB
+ a63160a5eda1 Downloading 49.93MB
+ 49ec2dab01d9 Downloading 129.4MB
+ 49ec2dab01d9 Downloading 129.4MB
+ edf85873f64e Download complete 0B
+ edf85873f64e Extracting 1B
+ 49ec2dab01d9 Downloading 129.4MB
+ edf85873f64e Extracting 1B
+ a63160a5eda1 Download complete 0B
+ 49ec2dab01d9 Download complete 0B
+ edf85873f64e Extracting 1B
+ edf85873f64e Extracting 1B
+ edf85873f64e Extracting 1B
+ edf85873f64e Extracting 1B
+ edf85873f64e Extracting 1B
+ edf85873f64e Extracting 1B
+ edf85873f64e Extracting 1B
+ 6ef6c7b50a93 Pull complete 0B
+ e3e5d1ac74c1 Extracting 1B
+ edf85873f64e Pull complete 0B
+ 0d74d296605b Extracting 1B
+ e3e5d1ac74c1 Pull complete 0B
+ 297d04cfe470 Pull complete 0B
+ 0d74d296605b Pull complete 0B
+ 4c8a3e0d4e4b Pull complete 0B
+ a63160a5eda1 Extracting 1B
+ a63160a5eda1 Extracting 1B
+ a63160a5eda1 Extracting 1B
+ a63160a5eda1 Extracting 1B
+ a63160a5eda1 Extracting 1B
+ 7534d1db9f8d Pull complete 0B
+ a63160a5eda1 Pull complete 0B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 1B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 2B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 3B
+ 49ec2dab01d9 Extracting 4B
+ 49ec2dab01d9 Extracting 4B
+ 49ec2dab01d9 Extracting 4B
+ ab24264a27e9 Pull complete 0B
+ 96d30d9fbee8 Pull complete 0B
+ 49ec2dab01d9 Pull complete 0B
+ Image docker.io/library/mysql:8.0 Pulled 
+ Network source_default Creating 
+ Network source_default Created 
+ Volume source_mysql-source-data Creating 
+ Volume source_mysql-source-data Created 
+ Container etl-mysql-source Creating 
+ Container etl-mysql-source Created 
+ Container etl-mysql-source Starting 
+ Container etl-mysql-source Started 
+==> Wait MySQL healthy
+==> Prepare CDC target
+mysql: [Warning] Using a password on the command line interface can be insecure.
+ERROR 2002 (HY000): Can't connect to local MySQL server through socket '/var/run/mysqld/mysqld.sock' (2)

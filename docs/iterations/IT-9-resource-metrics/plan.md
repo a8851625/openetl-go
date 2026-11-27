@@ -198,3 +198,17 @@ EV-3.4 仅追加该脚本的启动 readiness 为允许文件：通过 TCP `127.0
 检查最终 MySQL（初始化临时实例使用 skip-networking），并在超时后明确 fail。
 不修改 Doris/source_order、CDC 位置或候选测量语义，不扩大其他 connector scope。
 以 shell syntax + 同一 mandatory exact-candidate path 的真实通过作为验收，完整 Delivery Passed 仍必需。
+
+## Round 5 有界补验收：dev MySQL final-server health
+
+收口 HEAD e72f9fe 的 run 46029555087 / candidate-case-3 实际在 `e2e-cdc-mysql.sh` 的
+Prepare CDC target 前报 `ERROR 2002 ... mysqld.sock`。该脚本依赖 `docker-compose.dev.yml`
+mysql-source 的 SQL healthcheck；当前 `-h localhost` 仍使用初始化临时 server 的 Unix socket。
+因此追加最小允许文件 `docker-compose.dev.yml`：仅把该 service healthcheck host 改为
+`127.0.0.1`，保持同一已认证 `SELECT 1`。最终 server 才开放 TCP；不会改变 CDC、sink、
+checkpoint、发布/production compose 或其他 service 的配置。
+
+这是 A7/A9 当前 HEAD 认证的具体必要前置，使用原有第 5 轮缓冲，不新增 primary backlog。
+先用新建隔离 MySQL 验证 temp-server 的 socket success/TCP failure 和 final-server TCP success，
+随后跑当前完整 source+exact-candidate+Delivery Passed；更新 canonical evidence 后做 strict descendant。
+此前 frozen 191683e 的通过证据保留，但新 HEAD 的失败不能计为 pass。

@@ -1,6 +1,6 @@
 # IT-9 / EV-3 验收记录
 
-Round: 4/5；EV-3.1–.4 `delivered`；第五轮缓冲未使用。
+Round: 5/5；冻结实现证据仍 passed；当前 HEAD 的 MySQL fixture health 补验收 `active`。
 冻结实现：`191683e4a2ddcd65a7a5c7463d9c6708892ef3c8`；实际完整 CI：
 [46024237806](https://github.com/a8851625/openetl-go/actions/runs/46024237806)，**36/36 jobs success**，含 source、exact-candidate 和 Delivery Passed。
 后续只回填指定 evidence/bookkeeping；PR #14 的最新 HEAD 检查由同一完整 gate 再执行。
@@ -54,3 +54,12 @@ Round: 4/5；EV-3.1–.4 `delivered`；第五轮缓冲未使用。
 失败记录保留：run 46017295606 的 native Podman version shape / MySQL init readiness 及其 aggregate failure；run 46023663634 在类型补查后被替换/取消，不计 final pass。
 
 VERDICT: DELIVERABLE
+
+## 当前 HEAD 补验收 — active
+
+Run 46029555087 的 candidate CDC-MySQL case 在 target setup 前遇到初始化 socket 消失，不能计聚合通过。
+Round 5 只修正 dev Compose mysql-source healthcheck 的 localhost 为 127.0.0.1，保持原已认证 SQL。
+隔离 MySQL 的实际 temp/final 两阶段 probe 和 cleanup 已通过；新 source/candidate/Delivery Passed 尚待执行。
+A7/A9 的当前 HEAD 判定暂为 pending，冻结 191683e 的实际通过数据不改写。
+
+VERDICT: PARTIAL
